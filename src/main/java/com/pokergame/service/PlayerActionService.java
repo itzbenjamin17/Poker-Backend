@@ -4,8 +4,10 @@ import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.event.AutoAdvanceEvent;
 import com.pokergame.event.StartNewHandEvent;
+import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import org.slf4j.Logger;
@@ -24,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PlayerActionService {
 
     private static final Logger logger = LoggerFactory.getLogger(PlayerActionService.class);
+    private static final long ROUND_END_DELAY_MS = 5000;
 
     private final GameLifecycleService gameLifecycleService;
 
@@ -31,7 +34,8 @@ public class PlayerActionService {
 
     private final ApplicationEventPublisher eventPublisher;
 
-    public PlayerActionService(GameLifecycleService gameLifecycleService, GameStateService gameStateService,  ApplicationEventPublisher eventPublisher) {
+    public PlayerActionService(GameLifecycleService gameLifecycleService, GameStateService gameStateService,
+            ApplicationEventPublisher eventPublisher) {
         this.gameLifecycleService = gameLifecycleService;
         this.gameStateService = gameStateService;
         this.eventPublisher = eventPublisher;
@@ -62,6 +66,31 @@ public class PlayerActionService {
         synchronized (game) {
             Player currentPlayer = game.getCurrentPlayer();
 
+            if (actionRequest == null || actionRequest.action() == null) {
+                throw new BadRequestException("Action is required");
+            }
+
+            int requestAmount = actionRequest.amount() != null ? actionRequest.amount() : 0;
+            if (requestAmount < 0) {
+                throw new BadRequestException("Action amount cannot be negative");
+            }
+
+            PlayerAction action = actionRequest.action();
+            int callAmount = Math.max(0, game.getCurrentHighestBet() - currentPlayer.getCurrentBet());
+
+            if ((action == PlayerAction.BET || action == PlayerAction.RAISE) && requestAmount <= 0) {
+                throw new BadRequestException("Bet/raise amount must be greater than 0");
+            }
+
+            if ((action == PlayerAction.BET || action == PlayerAction.RAISE)
+                    && requestAmount > currentPlayer.getChips()) {
+                throw new BadRequestException("Action amount cannot exceed your available chips");
+            }
+
+            if (action == PlayerAction.CALL && callAmount > currentPlayer.getChips()) {
+                throw new BadRequestException("Insufficient chips to call. Use ALL_IN instead.");
+            }
+
             logger.debug("Processing player action - Game: {}, Player: {}, Action: {}",
                     gameId, currentPlayer.getName(), actionRequest.action());
             logger.debug("Game state - Phase: {}, Current bet: {}",
@@ -90,6 +119,12 @@ public class PlayerActionService {
             if (conversionMessage != null) {
                 logger.info("Sending conversion message to player {}: {}", currentPlayer.getName(), conversionMessage);
                 gameStateService.sendPlayerNotification(gameId, currentPlayer.getName(), conversionMessage);
+            }
+
+            // Immediately check and advance to showdown if everyone else just folded.
+            if (game.isHandOver()) {
+                advanceGame(gameId);
+                return;
             }
 
             // After successful processing, handle game progression and broadcasting
@@ -165,7 +200,7 @@ public class PlayerActionService {
             gameStateService.broadcastShowdownResults(gameId, game, winners, winningsPerPlayer);
 
             // Delay before starting the new hand to allow winner display
-            eventPublisher.publishEvent(new StartNewHandEvent(gameId, 5000));
+            eventPublisher.publishEvent(new StartNewHandEvent(gameId, ROUND_END_DELAY_MS));
             return;
         }
 
@@ -213,7 +248,7 @@ public class PlayerActionService {
                 gameStateService.broadcastShowdownResults(gameId, game, winners, winningsPerPlayer);
 
                 // Delay before starting the new hand, on a different thread
-                eventPublisher.publishEvent(new StartNewHandEvent(gameId, 3000));
+                eventPublisher.publishEvent(new StartNewHandEvent(gameId, ROUND_END_DELAY_MS));
                 break;
             case SHOWDOWN:
                 logger.warn("Game {} is already in SHOWDOWN phase", gameId);

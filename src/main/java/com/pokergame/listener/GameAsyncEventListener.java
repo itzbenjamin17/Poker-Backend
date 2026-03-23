@@ -19,9 +19,10 @@ import java.util.List;
 /**
  * Event listener responsible for handling asynchronous game events and timing.
  * <p>
- * This class replaces blocking calls (like {@code Thread.sleep}) with non-blocking
- * scheduled tasks using Spring's {@link TaskScheduler}. It manages the pacing of
- * the game by handling delays between hands, game clean-up, and the automatic
+ * This class replaces blocking calls (like {@code Thread.sleep}) with
+ * non-blocking
+ * scheduled tasks using Spring's {@link TaskScheduler}. It manages the pacing
+ * of the game by handling delays between hands, game clean-up, and the automatic
  * progression of the game during all-in situations.
  * </p>
  */
@@ -29,6 +30,7 @@ import java.util.List;
 public class GameAsyncEventListener {
 
     private static final Logger logger = LoggerFactory.getLogger(GameAsyncEventListener.class);
+    private static final long ROUND_END_DELAY_MS = 5000;
 
     private final GameLifecycleService gameLifecycleService;
     private final GameStateService gameStateService;
@@ -37,20 +39,23 @@ public class GameAsyncEventListener {
     /**
      * Constructs a new GameAsyncEventListener.
      *
-     * @param gameLifecycleService service for managing game lifecycle (starting hands, clean-up)
+     * @param gameLifecycleService service for managing game lifecycle (starting
+     *                             hands, clean-up)
      * @param gameStateService     service for broadcasting game updates to players
-     * @param taskScheduler        the scheduler used to execute tasks in the future without blocking threads
+     * @param taskScheduler        the scheduler used to execute tasks in the future
+     *                             without blocking threads
      */
     public GameAsyncEventListener(GameLifecycleService gameLifecycleService,
-                                  GameStateService gameStateService,
-                                  @Qualifier("taskScheduler") TaskScheduler taskScheduler) {
+            GameStateService gameStateService,
+            @Qualifier("taskScheduler") TaskScheduler taskScheduler) {
         this.gameLifecycleService = gameLifecycleService;
         this.gameStateService = gameStateService;
         this.taskScheduler = taskScheduler;
     }
 
     /**
-     * Handles the {@link StartNewHandEvent} by scheduling the start of a new hand after a specified delay.
+     * Handles the {@link StartNewHandEvent} by scheduling the start of a new hand
+     * after a specified delay.
      *
      * @param event the event containing the game ID and the delay in milliseconds
      */
@@ -68,9 +73,11 @@ public class GameAsyncEventListener {
     }
 
     /**
-     * Handles the {@link GameCleanupEvent} by scheduling the destruction of game resources.
+     * Handles the {@link GameCleanupEvent} by scheduling the destruction of game
+     * resources.
      * <p>
-     * This ensures that when a game ends (e.g. only one player left), the "Game Over" state
+     * This ensures that when a game ends (e.g. only one player left), the "Game
+     * Over" state
      * persists for a few seconds before the room is destroyed.
      * </p>
      *
@@ -93,7 +100,8 @@ public class GameAsyncEventListener {
      * Initiates the auto-advance sequence when all active players are all-in.
      * <p>
      * Unlike simple delays, this event triggers a chain of scheduled tasks that
-     * deal the remaining community cards (Flop, Turn, River) one by one with visual delays,
+     * deal the remaining community cards (Flop, Turn, River) one by one with visual
+     * delays,
      * culminating in a showdown.
      * </p>
      *
@@ -108,8 +116,10 @@ public class GameAsyncEventListener {
     /**
      * Recursively schedules the next step in the auto-advance sequence.
      * <p>
-     * This method checks the current game phase and schedules the appropriate next action
-     * (e.g. dealing the Turn after the Flop) to occur after a delay. If the game reaches
+     * This method checks the current game phase and schedules the appropriate next
+     * action
+     * (e.g. dealing the Turn after the Flop) to occur after a delay. If the game
+     * reaches
      * the end (Showdown), it processes the winners and schedules the next hand.
      * </p>
      *
@@ -117,16 +127,19 @@ public class GameAsyncEventListener {
      */
     private void scheduleNextAutoAdvanceStep(String gameId) {
         Game game = gameLifecycleService.getGame(gameId);
-        if (game == null) return;
+        if (game == null)
+            return;
 
         // Delay between steps (e.g. between Flop and Turn)
         long delay = 2000;
 
         taskScheduler.schedule(() -> {
             try {
-                // Re-fetching the game state inside the scheduled thread ensures we have the latest state
+                // Re-fetching the game state inside the scheduled thread ensures we have the
+                // latest state
                 Game currentGame = gameLifecycleService.getGame(gameId);
-                if (currentGame == null) return;
+                if (currentGame == null)
+                    return;
 
                 GamePhase currentPhase = currentGame.getCurrentPhase();
                 boolean sequenceComplete = false;
@@ -151,7 +164,7 @@ public class GameAsyncEventListener {
 
                     // Schedule the final new hand start
                     taskScheduler.schedule(() -> gameLifecycleService.startNewHand(gameId),
-                            Instant.now().plusMillis(5000));
+                            Instant.now().plusMillis(ROUND_END_DELAY_MS));
                     sequenceComplete = true;
                 }
 

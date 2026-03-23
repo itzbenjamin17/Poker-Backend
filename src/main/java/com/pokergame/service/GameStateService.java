@@ -59,8 +59,13 @@ public class GameStateService {
 
         // Sending a personalised game state to each player
         for (Player targetPlayer : game.getPlayers()) {
+            String encodedPlayerName = java.net.URLEncoder.encode(
+                    targetPlayer.getName(),
+                    java.nio.charset.StandardCharsets.UTF_8);
+
             messagingTemplate.convertAndSend(
-                    "/game/" + gameId + "/player/" + targetPlayer.getPlayerId(), buildPrivatePlayerState(targetPlayer));
+                    "/game/" + gameId + "/player-name/" + encodedPlayerName + "/private",
+                    buildPrivatePlayerState(targetPlayer));
         }
     }
 
@@ -80,7 +85,8 @@ public class GameStateService {
         }
 
         // Get room information
-        @SuppressWarnings("DuplicatedCode") Room room = roomService.getRoom(gameId);
+        @SuppressWarnings("DuplicatedCode")
+        Room room = roomService.getRoom(gameId);
         int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
         // Get current player information
@@ -90,6 +96,10 @@ public class GameStateService {
 
         // Get winner names
         List<String> winnerNames = winners.stream().map(Player::getName).toList();
+
+        // Check if this is an actual showdown (i.e. not a win by fold)
+        boolean isActualShowdown = winners.stream()
+                .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != com.pokergame.enums.HandRank.NO_HAND);
 
         // Convert players to PublicPlayerState DTOs with showdown information
         List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
@@ -110,7 +120,8 @@ public class GameStateService {
                     isActive ? player.getHandRank() : null,
                     isActive ? player.getBestHand() : List.of(),
                     isWinner,
-                    isWinner ? winningsPerPlayer : 0);
+                    isWinner ? winningsPerPlayer : 0,
+                    (isActive && isActualShowdown) ? player.getHoleCards() : null);
         }).toList();
 
         // Create PublicGameStateResponse DTO with showdown information
@@ -154,7 +165,8 @@ public class GameStateService {
         }
 
         // Get room information
-        @SuppressWarnings("DuplicatedCode") Room room = roomService.getRoom(gameId);
+        @SuppressWarnings("DuplicatedCode")
+        Room room = roomService.getRoom(gameId);
         int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
         // Get current player information
@@ -179,6 +191,7 @@ public class GameStateService {
                     player.getHasFolded(),
                     player.getHandRank(),
                     List.of(),
+                    null,
                     null,
                     null);
         }).toList();

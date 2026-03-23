@@ -18,12 +18,13 @@ public record PublicPlayerState(
         HandRank handRank,
         List<Card> bestHand,
         Boolean isWinner,
-        Integer chipsWon
+        Integer chipsWon,
+        List<Card> holeCards
 
 ) {
     // For non-showdown states
-    public PublicPlayerState (String id, String name, int chips, int currentBet, String status,
-                              boolean isAllIn, boolean isCurrentPlayer, boolean hasFolded){
-        this(id, name, chips, currentBet, status, isAllIn, isCurrentPlayer, hasFolded, null, null, null, null);
+    public PublicPlayerState(String id, String name, int chips, int currentBet, String status,
+            boolean isAllIn, boolean isCurrentPlayer, boolean hasFolded) {
+        this(id, name, chips, currentBet, status, isAllIn, isCurrentPlayer, hasFolded, null, null, null, null, null);
     }
 }

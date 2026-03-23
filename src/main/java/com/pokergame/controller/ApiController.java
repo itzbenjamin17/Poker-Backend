@@ -35,7 +35,6 @@ public class ApiController {
         this.roomController = roomController;
     }
 
-
     // ==================== Room Endpoints ====================
 
     /**
@@ -106,7 +105,7 @@ public class ApiController {
     @PostMapping("/game/{gameId}/action")
     public ResponseEntity<Void> performAction(
             @PathVariable String gameId,
-            @RequestBody PlayerActionRequest actionRequest,
+            @Valid @RequestBody PlayerActionRequest actionRequest,
             Principal principal) {
         logger.debug("API: Delegating player action for game: {}", gameId);
         gameController.performAction(gameId, actionRequest, principal);

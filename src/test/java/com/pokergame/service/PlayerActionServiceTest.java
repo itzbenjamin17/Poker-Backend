@@ -2,6 +2,7 @@ package com.pokergame.service;
 
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.*;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,7 +51,8 @@ class PlayerActionServiceTest {
 
     @BeforeEach
     void setUp() {
-        playerActionService = new PlayerActionService(gameLifecycleService, gameStateService, applicationEventPublisher);
+        playerActionService = new PlayerActionService(gameLifecycleService, gameStateService,
+                applicationEventPublisher);
         testPlayers = new ArrayList<>();
         testPlayers.add(new Player("Player1", UUID.randomUUID().toString(), 1000));
         testPlayers.add(new Player("Player2", UUID.randomUUID().toString(), 1000));
@@ -167,6 +169,39 @@ class PlayerActionServiceTest {
         PlayerActionRequest request = new PlayerActionRequest(PlayerAction.RAISE, invalidRaiseAmount);
 
         assertThrows(UnauthorisedActionException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
+    }
+
+    @Test
+    void processPlayerAction_WithRaiseLargerThanStack_ShouldThrowBadRequest() {
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
+
+        Player currentPlayer = testGame.getCurrentPlayer();
+        int overStackRaise = currentPlayer.getChips() + 1;
+        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.RAISE, overStackRaise);
+
+        assertThrows(BadRequestException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
+    }
+
+    @Test
+    void processPlayerAction_WithCallLargerThanStack_ShouldThrowBadRequest() {
+        List<Player> shortStackPlayers = new ArrayList<>();
+        shortStackPlayers.add(new Player("SB", UUID.randomUUID().toString(), 1000));
+        shortStackPlayers.add(new Player("Short", UUID.randomUUID().toString(), 5));
+        shortStackPlayers.add(new Player("BB", UUID.randomUUID().toString(), 1000));
+
+        Game shortStackGame = new Game(GAME_ID, shortStackPlayers, 5, 10, handEvaluator);
+        shortStackGame.resetForNewHand();
+        shortStackGame.dealHoleCards();
+        shortStackGame.postBlinds();
+
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(shortStackGame);
+
+        Player currentPlayer = shortStackGame.getCurrentPlayer();
+        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, null);
+
+        assertThrows(BadRequestException.class,
                 () -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
     }
 
@@ -435,8 +470,7 @@ class PlayerActionServiceTest {
                 playerActionService.processPlayerAction(
                         GAME_ID,
                         new PlayerActionRequest(PlayerAction.FOLD, null),
-                        currentPlayer.getName()
-                );
+                        currentPlayer.getName());
                 successCount.incrementAndGet();
             } catch (UnauthorisedActionException e) {
                 failureCount.incrementAndGet();
@@ -453,8 +487,7 @@ class PlayerActionServiceTest {
                 playerActionService.processPlayerAction(
                         GAME_ID,
                         new PlayerActionRequest(PlayerAction.CALL, null),
-                        otherPlayer.getName()
-                );
+                        otherPlayer.getName());
                 successCount.incrementAndGet();
             } catch (UnauthorisedActionException e) {
                 failureCount.incrementAndGet();
@@ -489,7 +522,8 @@ class PlayerActionServiceTest {
     }
 
     /**
-     * Tests that processing actions on different games concurrently works correctly.
+     * Tests that processing actions on different games concurrently works
+     * correctly.
      * This verifies that synchronization is per-game, not global.
      */
     @Test
@@ -529,8 +563,7 @@ class PlayerActionServiceTest {
                 playerActionService.processPlayerAction(
                         gameId1,
                         new PlayerActionRequest(PlayerAction.FOLD, null),
-                        game1.getCurrentPlayer().getName()
-                );
+                        game1.getCurrentPlayer().getName());
                 successCount.incrementAndGet();
             } catch (Exception e) {
                 fail("Game 1 action failed: " + e.getMessage());
@@ -545,8 +578,7 @@ class PlayerActionServiceTest {
                 playerActionService.processPlayerAction(
                         gameId2,
                         new PlayerActionRequest(PlayerAction.CALL, null),
-                        game2.getCurrentPlayer().getName()
-                );
+                        game2.getCurrentPlayer().getName());
                 successCount.incrementAndGet();
             } catch (Exception e) {
                 fail("Game 2 action failed: " + e.getMessage());
@@ -563,7 +595,8 @@ class PlayerActionServiceTest {
     }
 
     /**
-     * Tests that rapid sequential actions by different players maintain correct game state.
+     * Tests that rapid sequential actions by different players maintain correct
+     * game state.
      * This simulates a fast-paced game where players act quickly one after another.
      */
     @Test
@@ -587,8 +620,7 @@ class PlayerActionServiceTest {
                     playerActionService.processPlayerAction(
                             GAME_ID,
                             new PlayerActionRequest(PlayerAction.CALL, null),
-                            currentPlayer.getName()
-                    );
+                            currentPlayer.getName());
                     successCount.incrementAndGet();
                 } catch (Exception e) {
                     // Some may fail if game advances to next phase
@@ -630,8 +662,7 @@ class PlayerActionServiceTest {
                     playerActionService.processPlayerAction(
                             GAME_ID,
                             new PlayerActionRequest(PlayerAction.ALL_IN, null),
-                            player.getName()
-                    );
+                            player.getName());
                     successCount.incrementAndGet();
                 } catch (Exception e) {
                     // Ignore failures
@@ -653,8 +684,6 @@ class PlayerActionServiceTest {
         long allInCount = testGame.getPlayers().stream().filter(Player::getIsAllIn).count();
         assertEquals(successCount.get(), allInCount, "Game state should match successful actions");
     }
-
-
 
     @Test
     void processPlayerAction_OnSameGame_ShouldBeSynchronized() {

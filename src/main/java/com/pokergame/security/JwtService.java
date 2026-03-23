@@ -10,13 +10,14 @@ import javax.crypto.SecretKey;
 import java.util.Date;
 
 /**
- * Service responsible for generating and validating JWT tokens for stateless authentication.
+ * Service responsible for generating and validating JWT tokens for stateless
+ * authentication.
  * No user accounts are required; the token's subject is the player's name.
  */
 @Service
 public class JwtService {
 
-    @Value("${jwt.secret:change-me-to-a-long-random-string}")
+    @Value("${jwt.secret:dev-only-not-for-production-change-me}")
     private String secretKeyString;
 
     @Value("${jwt.expirationMillis:86400000}") // default 24h

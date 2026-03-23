@@ -96,7 +96,9 @@ public class Game {
         pot = 0;
         currentHighestBet = 0;
         currentPhase = GamePhase.PRE_FLOP;
+        everyoneHasHadInitialTurn = false;
 
+        cleanupAfterHand();
         activePlayers.clear();
         for (Player player : players) {
             if (!player.getIsOut()) {
@@ -107,6 +109,8 @@ public class Game {
 
         if (activePlayers.size() <= 1) {
             gameOver = true;
+        } else {
+            advancePositions();
         }
     }
 
@@ -158,12 +162,20 @@ public class Game {
      * @throws UnauthorisedActionException if a raise amount is invalid
      */
     public String processPlayerDecision(Player player, PlayerDecision decision) {
+        if (decision == null || decision.action() == null) {
+            throw new BadRequestException("Invalid player action");
+        }
+
+        if (decision.amount() < 0) {
+            throw new BadRequestException("Action amount cannot be negative");
+        }
+
         // Check if there are all-in players that would limit raises/all-ins
         boolean hasAllInPlayers = activePlayers.stream()
                 .anyMatch(p -> p.getIsAllIn() && !p.getHasFolded());
 
         // If there are all-in players, convert raises and all-ins to calls (unless
-        //  the player has fewer chips)
+        // the player has fewer chips)
         PlayerDecision actualDecision = decision;
         String conversionMessage = null;
 
@@ -187,6 +199,14 @@ public class Game {
 
         // Validate raise amounts (only if still a raise after conversion)
         if (actualDecision.action() == PlayerAction.RAISE) {
+            if (actualDecision.amount() <= 0) {
+                throw new BadRequestException("Raise amount must be greater than 0");
+            }
+
+            if (actualDecision.amount() > player.getChips()) {
+                throw new BadRequestException("Raise amount cannot exceed available chips");
+            }
+
             int totalBetAfterRaise = player.getCurrentBet() + actualDecision.amount();
             if (totalBetAfterRaise <= currentHighestBet) {
                 logger.warn("[Game] Invalid raise: player {} tried to raise to {}, current highest bet is {}",
@@ -196,6 +216,23 @@ public class Game {
                                 ". Your current bet is " + player.getCurrentBet() +
                                 ", so you need to raise by at least "
                                 + (currentHighestBet - player.getCurrentBet() + 1));
+            }
+        }
+
+        if (actualDecision.action() == PlayerAction.BET) {
+            if (actualDecision.amount() <= 0) {
+                throw new BadRequestException("Bet amount must be greater than 0");
+            }
+
+            if (actualDecision.amount() > player.getChips()) {
+                throw new BadRequestException("Bet amount cannot exceed available chips");
+            }
+        }
+
+        if (actualDecision.action() == PlayerAction.CALL) {
+            int requiredCall = Math.max(0, currentHighestBet - player.getCurrentBet());
+            if (requiredCall > player.getChips()) {
+                throw new BadRequestException("Insufficient chips to call. Use ALL_IN instead.");
             }
         }
 
@@ -243,15 +280,23 @@ public class Game {
      * @return true if the betting round is complete, false otherwise
      */
     public boolean isBettingRoundComplete() {
-        if (!everyoneHasHadInitialTurn) {
-            logger.debug("Betting round not complete: Not everyone has had initial turn");
-            return false;
-        }
-
         boolean hasPlayerWhoNeedsToAct = activePlayers.stream()
                 .anyMatch(p -> p.getCurrentBet() < currentHighestBet &&
                         !p.getHasFolded() &&
                         !p.getIsAllIn());
+
+        // In PRE_FLOP, if everyone active has matched the current highest bet, the
+        // round is complete.
+        // This removes option for the Big Blind to check if everyone just called.
+        if (currentPhase == GamePhase.PRE_FLOP && !hasPlayerWhoNeedsToAct) {
+            logger.debug("Pre-flop round complete: all active players have matched the current bet.");
+            return true;
+        }
+
+        if (!everyoneHasHadInitialTurn) {
+            logger.debug("Betting round not complete: Not everyone has had initial turn");
+            return false;
+        }
 
         logger.debug("Checking if betting round complete - Current highest bet: {}, Everyone has had initial turn: {}",
                 currentHighestBet, everyoneHasHadInitialTurn);
@@ -505,6 +550,9 @@ public class Game {
         }
         currentHighestBet = 0;
         everyoneHasHadInitialTurn = false; // Reset for the new betting round
+        // Next player is the first active player after the dealer
+        currentPlayerPosition = dealerPosition;
+        nextPlayer();
     }
 
     /**
@@ -547,7 +595,12 @@ public class Game {
      * Advances to the next player in turn order.
      */
     public void nextPlayer() {
-        currentPlayerPosition = (currentPlayerPosition + 1) % activePlayers.size();
+        int originalPosition = currentPlayerPosition;
+        do {
+            currentPlayerPosition = (currentPlayerPosition + 1) % activePlayers.size();
+        } while ((activePlayers.get(currentPlayerPosition).getHasFolded() ||
+                activePlayers.get(currentPlayerPosition).getIsAllIn()) &&
+                currentPlayerPosition != originalPosition);
     }
 
     /**
