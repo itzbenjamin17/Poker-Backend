@@ -2,7 +2,7 @@ package com.pokergame.dto.request;
 
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.exception.BadRequestException;
-import jakarta.validation.constraints.*;
+import jakarta.validation.constraints.NotNull;
 
 /**
  * DTO for player action requests.
@@ -14,8 +14,6 @@ public record PlayerActionRequest(
         @NotNull(message = "Action is required") PlayerAction action,
 
         // Amount is optional - only needed for BET and RAISE actions
-        @Min(value = 1, message = "Bet/raise amount must be at least 1 chip")
-        @Max(value = 10000, message = "Bet/raise amount cannot exceed 10,000 chips")
         Integer amount
 
 ) {
@@ -24,6 +22,10 @@ public record PlayerActionRequest(
         if ((action == PlayerAction.BET || action == PlayerAction.RAISE)) {
             if (amount == null || amount <= 0) {
                 throw new BadRequestException("Please enter a positive amount for BET or RAISE actions");
+            }
+            // Adding arbitrary max bet limit, maybe remove
+            if (amount > 10000) {
+                throw new BadRequestException("Bet/raise amount cannot exceed 10,000 chips");
             }
         }
 

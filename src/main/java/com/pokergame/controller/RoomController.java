@@ -95,6 +95,11 @@ public class RoomController {
         String playerName = principal.getName();
         logger.info("Player {} requesting to leave room {}", playerName, roomId);
         roomService.leaveRoom(roomId, playerName);
+
+        if (gameLifecycleService.gameExists(roomId)) {
+            gameLifecycleService.leaveGame(roomId, playerName);
+        }
+
         logger.info("Player {} successfully left room {}", playerName, roomId);
         return ResponseEntity.ok(ApiResponse.success("Successfully left room"));
     }
@@ -135,7 +140,8 @@ public class RoomController {
 
         if (!roomService.isRoomHost(roomId, playerName)) {
             logger.warn("Non-host player {} attempted to start game for room {}", playerName, roomId);
-            throw new UnauthorisedActionException("Only the room host can start the game. Please ask the host to start.");
+            throw new UnauthorisedActionException(
+                    "Only the room host can start the game. Please ask the host to start.");
         }
 
         logger.info("Host {} authorized to start game for room {}", playerName, roomId);

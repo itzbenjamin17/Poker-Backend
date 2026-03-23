@@ -21,7 +21,7 @@ import java.util.List;
  *
  */
 public class Player {
-        private static final Logger logger = LoggerFactory.getLogger(Player.class);
+    private static final Logger logger = LoggerFactory.getLogger(Player.class);
     private final String name;
     private final String playerId;
     private List<Card> holeCards;
@@ -138,6 +138,14 @@ public class Player {
      * @return the updated pot value
      */
     public int payChips(int pot, int amount) {
+        if (amount < 0) {
+            throw new BadRequestException("Chip amount cannot be negative");
+        }
+
+        if (amount > this.chips) {
+            throw new BadRequestException("Insufficient chips for this action");
+        }
+
         this.chips -= amount;
         this.currentBet += amount;
         pot += amount;

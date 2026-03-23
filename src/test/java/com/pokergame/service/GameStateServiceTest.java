@@ -19,6 +19,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+
 /**
  * Unit tests for the GameStateService class.
  */
@@ -34,8 +35,6 @@ class GameStateServiceTest {
 
     @Mock
     private HandEvaluatorService handEvaluator;
-
-
 
     private Game testGame;
     private Room testRoom;
@@ -70,7 +69,7 @@ class GameStateServiceTest {
     @Test
     void broadcastGameState_WithNullGame_ShouldNotBroadcast() {
         assertThrows(BadRequestException.class, () -> gameStateService.broadcastGameState(GAME_ID, null));
-        
+
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
 
@@ -89,10 +88,14 @@ class GameStateServiceTest {
 
         gameStateService.broadcastGameState(GAME_ID, testGame);
 
-        // Should send a private message to each player
+        // Should send private messages to each player by encoded name
         for (Player player : testGame.getPlayers()) {
+            String encodedName = java.net.URLEncoder.encode(
+                    player.getName(),
+                    java.nio.charset.StandardCharsets.UTF_8);
+
             verify(messagingTemplate).convertAndSend(
-                    eq("/game/" + GAME_ID + "/player/" + player.getPlayerId()),
+                    eq("/game/" + GAME_ID + "/player-name/" + encodedName + "/private"),
                     any(Object.class));
         }
     }
@@ -107,7 +110,7 @@ class GameStateServiceTest {
 
         gameStateService.broadcastGameState(GAME_ID, testGame);
 
-        // 1 public message + 3 private messages = 4 total
+        // 1 public message + 3 name-private = 4 total
         verify(messagingTemplate, times(4)).convertAndSend(anyString(), any(Object.class));
     }
 
@@ -325,7 +328,7 @@ class GameStateServiceTest {
         gameStateService.broadcastGameState(GAME_ID, testGame);
         gameStateService.broadcastGameState(GAME_ID, testGame);
 
-        // 3 public broadcasts + 3*2 private broadcasts = 9 total
+        // 3 public broadcasts + 3*(2 name-private) = 9 total
         verify(messagingTemplate, times(9)).convertAndSend(anyString(), any(Object.class));
     }
 }
