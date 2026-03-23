@@ -57,7 +57,7 @@ class WebSocketSecurityTest {
 
         // Define handshake headers with the allowed Origin to pass CORS check
         handshakeHeaders = new WebSocketHttpHeaders();
-        handshakeHeaders.add("Origin", "http://localhost:3000");
+        handshakeHeaders.add("Origin", "http://localhost:5173");
 
         // Create STOMP client with SockJS
         List<Transport> transports = new ArrayList<>();
@@ -65,11 +65,12 @@ class WebSocketSecurityTest {
         SockJsClient sockJsClient = new SockJsClient(transports);
 
         stompClient = new WebSocketStompClient(sockJsClient);
-        
+
         // Register converters for String and JSON (Jackson)
         List<MessageConverter> converters = new ArrayList<>();
         converters.add(new StringMessageConverter());
-        // Use JacksonJsonMessageConverter as MappingJackson2MessageConverter is deprecated
+        // Use JacksonJsonMessageConverter as MappingJackson2MessageConverter is
+        // deprecated
         converters.add(new JacksonJsonMessageConverter());
         stompClient.setMessageConverter(new CompositeMessageConverter(converters));
 
@@ -349,6 +350,5 @@ class WebSocketSecurityTest {
         session1.disconnect();
         session2.disconnect();
     }
-
 
 }

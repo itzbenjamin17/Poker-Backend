@@ -246,9 +246,9 @@ class GameStateServiceTest {
 
         Object captured = captor.getValue();
         assertNotNull(captured);
-        assertTrue(captured instanceof Map);
+        assertTrue(captured instanceof Map<?, ?>);
 
-        Map<String, Object> gameEndData = (Map<String, Object>) captured;
+        Map<?, ?> gameEndData = (Map<?, ?>) captured;
         assertEquals("GAME_END", gameEndData.get("type"));
         assertEquals(winner.getName(), gameEndData.get("winner"));
         assertEquals(winner.getChips(), gameEndData.get("winnerChips"));
@@ -264,8 +264,10 @@ class GameStateServiceTest {
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
 
-        Map<String, Object> gameEndData = (Map<String, Object>) captor.getValue();
-        String message = (String) gameEndData.get("message");
+        Map<?, ?> gameEndData = (Map<?, ?>) captor.getValue();
+        Object messageObj = gameEndData.get("message");
+        assertTrue(messageObj instanceof String);
+        String message = (String) messageObj;
         assertTrue(message.contains(winner.getName()));
         assertTrue(message.contains("wins"));
     }

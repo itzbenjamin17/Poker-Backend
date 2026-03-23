@@ -5,6 +5,7 @@ target/
 !**/src/test/**/target/
 todo.txt
 apis.txt
+SECURITY_TODO.md
 
 ### STS ###
 .apt_generated

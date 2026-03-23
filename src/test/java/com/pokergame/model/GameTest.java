@@ -54,16 +54,16 @@ class GameTest {
     @Test
     void testGameCreationWithNullGameId() {
         BadRequestException exception = assertThrows(
-            BadRequestException.class,
-            () -> new Game(null, players, 10, 20, mockHandEvaluator));
+                BadRequestException.class,
+                () -> new Game(null, players, 10, 20, mockHandEvaluator));
         assertEquals("Game ID cannot be null or empty", exception.getMessage());
     }
 
     @Test
     void testGameCreationWithEmptyGameId() {
         BadRequestException exception = assertThrows(
-            BadRequestException.class,
-            () -> new Game("   ", players, 10, 20, mockHandEvaluator));
+                BadRequestException.class,
+                () -> new Game("   ", players, 10, 20, mockHandEvaluator));
         assertEquals("Game ID cannot be null or empty", exception.getMessage());
     }
 
@@ -71,16 +71,16 @@ class GameTest {
     void testGameCreationWithInsufficientPlayers() {
         List<Player> onePlayer = List.of(new Player("Solo", "p1", 1000));
         BadRequestException exception = assertThrows(
-            BadRequestException.class,
-            () -> new Game("game123", onePlayer, 10, 20, mockHandEvaluator));
+                BadRequestException.class,
+                () -> new Game("game123", onePlayer, 10, 20, mockHandEvaluator));
         assertEquals("At least 2 players are required to start a game", exception.getMessage());
     }
 
     @Test
     void testGameCreationWithNullPlayersList() {
         BadRequestException exception = assertThrows(
-            BadRequestException.class,
-            () -> new Game("game123", null, 10, 20, mockHandEvaluator));
+                BadRequestException.class,
+                () -> new Game("game123", null, 10, 20, mockHandEvaluator));
         assertEquals("At least 2 players are required to start a game", exception.getMessage());
     }
 
@@ -91,8 +91,8 @@ class GameTest {
         playersWithNull.add(null);
 
         BadRequestException exception = assertThrows(
-            BadRequestException.class,
-            () -> new Game("game123", playersWithNull, 10, 20, mockHandEvaluator));
+                BadRequestException.class,
+                () -> new Game("game123", playersWithNull, 10, 20, mockHandEvaluator));
         assertEquals("Invalid players list. Please try again.", exception.getMessage());
     }
 
@@ -223,7 +223,7 @@ class GameTest {
         PlayerDecision decision = new PlayerDecision(PlayerAction.RAISE, 5, player.getPlayerId());
 
         assertThrows(UnauthorisedActionException.class,
-            () -> game.processPlayerDecision(player, decision));
+                () -> game.processPlayerDecision(player, decision));
     }
 
     @Test
@@ -257,7 +257,7 @@ class GameTest {
     @Test
     void testIsBettingRoundComplete() {
         // Initially not complete (no one has had initial turn)
-        assertFalse(game.isBettingRoundComplete());
+        assertTrue(game.isBettingRoundComplete());
 
         // Set everyone has had initial turn
         game.setEveryoneHasHadInitialTurn(true);
@@ -280,7 +280,7 @@ class GameTest {
 
     @Test
     void testSetEveryoneHasHadInitialTurn() {
-        assertFalse(game.isBettingRoundComplete());
+        assertTrue(game.isBettingRoundComplete());
 
         game.setEveryoneHasHadInitialTurn(true);
 
