@@ -137,6 +137,9 @@ public class HandEvaluatorService {
             case ONE_PAIR -> {
                 return compareOnePair(sortedCombination, bestHand);
             }
+            case HIGH_CARD -> {
+                return compareHighCard(sortedCombination, bestHand);
+            }
             default -> {
                 return false;
             }
@@ -338,6 +341,19 @@ public class HandEvaluatorService {
         for (int i = 0; i < 5; i++) {
             if (sorted1.get(i).getValue() != sorted2.get(i).getValue()) {
                 return sorted1.get(i).getValue() > sorted2.get(i).getValue();
+            }
+        }
+
+        return false;
+    }
+
+    private boolean compareHighCard(List<Card> sortedCombination, List<Card> bestHand) {
+        for (int i = 4; i >= 0; i--) {
+            int currentValue = sortedCombination.get(i).getValue();
+            int bestValue = bestHand.get(i).getValue();
+
+            if (currentValue != bestValue) {
+                return currentValue > bestValue;
             }
         }
 

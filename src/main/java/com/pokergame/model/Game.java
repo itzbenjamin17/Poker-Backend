@@ -73,9 +73,7 @@ public class Game {
         this.communityCards = new ArrayList<>();
         this.pot = 0;
         this.dealerPosition = 0;
-        this.smallBlindPosition = 1 % players.size();
-        this.bigBlindPosition = 2 % players.size();
-        this.currentPlayerPosition = 3 % players.size();
+        updatePositionsForCurrentTable();
         this.currentHighestBet = 0;
         this.currentPhase = GamePhase.PRE_FLOP;
         this.gameOver = false;
@@ -92,6 +90,8 @@ public class Game {
      * @return true if the game is over after hand cleanup, false otherwise
      */
     public boolean resetForNewHand() {
+        int carryOverPot = currentPhase == GamePhase.SHOWDOWN ? pot : 0;
+
         cleanupAfterHand();
 
         if (gameOver) {
@@ -100,7 +100,7 @@ public class Game {
 
         deck = new Deck();
         communityCards.clear();
-        pot = 0;
+        pot = carryOverPot;
         currentHighestBet = 0;
         currentPhase = GamePhase.PRE_FLOP;
         everyoneHasHadInitialTurn = false;
@@ -142,21 +142,19 @@ public class Game {
             Player smallBlindPlayer = activePlayers.get(smallBlindPosition);
             Player bigBlindPlayer = activePlayers.get(bigBlindPosition);
 
-            if (smallBlindPlayer.getChips() <= smallBlind || bigBlindPlayer.getChips() <= bigBlind) {
-                if (smallBlindPlayer.getChips() <= smallBlind) {
-                    this.pot = smallBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
-                }
-
-                if (bigBlindPlayer.getChips() <= bigBlind) {
-                    this.pot = bigBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
-                }
-
+            if (smallBlindPlayer.getChips() <= smallBlind) {
+                this.pot = smallBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
             } else {
                 this.pot = smallBlindPlayer.doAction(PlayerAction.BET, smallBlind, this.pot);
+            }
+
+            if (bigBlindPlayer.getChips() <= bigBlind) {
+                this.pot = bigBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
+            } else {
                 this.pot = bigBlindPlayer.doAction(PlayerAction.BET, bigBlind, this.pot);
             }
 
-            currentHighestBet = bigBlind;
+            currentHighestBet = Math.max(smallBlindPlayer.getCurrentBet(), bigBlindPlayer.getCurrentBet());
         }
     }
 
@@ -513,9 +511,23 @@ public class Game {
      */
     public void advancePositions() {
         dealerPosition = (dealerPosition + 1) % activePlayers.size();
-        smallBlindPosition = (dealerPosition + 1) % activePlayers.size();
-        bigBlindPosition = (smallBlindPosition + 1) % activePlayers.size();
-        currentPlayerPosition = (bigBlindPosition + 1) % activePlayers.size();
+        updatePositionsForCurrentTable();
+    }
+
+    private void updatePositionsForCurrentTable() {
+        int tableSize = activePlayers.size();
+
+        if (tableSize == 2) {
+            // Heads-up: dealer posts small blind and acts first pre-flop.
+            smallBlindPosition = dealerPosition;
+            bigBlindPosition = (dealerPosition + 1) % tableSize;
+            currentPlayerPosition = dealerPosition;
+            return;
+        }
+
+        smallBlindPosition = (dealerPosition + 1) % tableSize;
+        bigBlindPosition = (smallBlindPosition + 1) % tableSize;
+        currentPlayerPosition = (bigBlindPosition + 1) % tableSize;
     }
 
     /**

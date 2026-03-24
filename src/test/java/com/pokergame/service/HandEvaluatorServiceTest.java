@@ -338,7 +338,7 @@ class HandEvaluatorServiceTest {
         }
 
         @Test
-        void testCompareOnePairHigherWins2(){
+        void testCompareOnePairHigherWins2() {
                 List<Card> hand1 = List.of(
                                 new Card(Rank.THREE, Suit.SPADES),
                                 new Card(Rank.THREE, Suit.DIAMONDS),
@@ -375,7 +375,6 @@ class HandEvaluatorServiceTest {
 
                 assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.ONE_PAIR));
         }
-        
 
         // Test isBetterHandOfSameRank - Two Pair
         @Test
@@ -592,6 +591,66 @@ class HandEvaluatorServiceTest {
 
                 assertFalse(service.isBetterHandOfSameRank(hand1, hand2, HandRank.ONE_PAIR));
                 assertFalse(service.isBetterHandOfSameRank(hand2, hand1, HandRank.ONE_PAIR));
+        }
+
+        @Test
+        void testCompareHighCardAceHighBeatsKingHigh() {
+                List<Card> aceHigh = List.of(
+                                new Card(Rank.TWO, Suit.SPADES),
+                                new Card(Rank.FIVE, Suit.HEARTS),
+                                new Card(Rank.NINE, Suit.DIAMONDS),
+                                new Card(Rank.JACK, Suit.CLUBS),
+                                new Card(Rank.ACE, Suit.SPADES));
+
+                List<Card> kingHigh = List.of(
+                                new Card(Rank.TWO, Suit.HEARTS),
+                                new Card(Rank.FIVE, Suit.CLUBS),
+                                new Card(Rank.NINE, Suit.SPADES),
+                                new Card(Rank.JACK, Suit.DIAMONDS),
+                                new Card(Rank.KING, Suit.HEARTS));
+
+                assertTrue(service.isBetterHandOfSameRank(aceHigh, kingHigh, HandRank.HIGH_CARD));
+                assertFalse(service.isBetterHandOfSameRank(kingHigh, aceHigh, HandRank.HIGH_CARD));
+        }
+
+        @Test
+        void testCompareHighCardSameTopCardUsesNextKicker() {
+                List<Card> betterKicker = List.of(
+                                new Card(Rank.TWO, Suit.SPADES),
+                                new Card(Rank.EIGHT, Suit.HEARTS),
+                                new Card(Rank.TEN, Suit.CLUBS),
+                                new Card(Rank.QUEEN, Suit.DIAMONDS),
+                                new Card(Rank.ACE, Suit.SPADES));
+
+                List<Card> weakerKicker = List.of(
+                                new Card(Rank.TWO, Suit.HEARTS),
+                                new Card(Rank.SEVEN, Suit.CLUBS),
+                                new Card(Rank.TEN, Suit.SPADES),
+                                new Card(Rank.QUEEN, Suit.HEARTS),
+                                new Card(Rank.ACE, Suit.DIAMONDS));
+
+                assertTrue(service.isBetterHandOfSameRank(betterKicker, weakerKicker, HandRank.HIGH_CARD));
+                assertFalse(service.isBetterHandOfSameRank(weakerKicker, betterKicker, HandRank.HIGH_CARD));
+        }
+
+        @Test
+        void testCompareHighCardIdenticalReturnsTieEdgeCase() {
+                List<Card> hand1 = List.of(
+                                new Card(Rank.THREE, Suit.SPADES),
+                                new Card(Rank.SEVEN, Suit.HEARTS),
+                                new Card(Rank.NINE, Suit.DIAMONDS),
+                                new Card(Rank.JACK, Suit.CLUBS),
+                                new Card(Rank.KING, Suit.SPADES));
+
+                List<Card> hand2 = List.of(
+                                new Card(Rank.THREE, Suit.HEARTS),
+                                new Card(Rank.SEVEN, Suit.DIAMONDS),
+                                new Card(Rank.NINE, Suit.SPADES),
+                                new Card(Rank.JACK, Suit.HEARTS),
+                                new Card(Rank.KING, Suit.DIAMONDS));
+
+                assertFalse(service.isBetterHandOfSameRank(hand1, hand2, HandRank.HIGH_CARD));
+                assertFalse(service.isBetterHandOfSameRank(hand2, hand1, HandRank.HIGH_CARD));
         }
 
         @Test
