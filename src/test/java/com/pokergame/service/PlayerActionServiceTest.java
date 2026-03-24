@@ -185,7 +185,7 @@ class PlayerActionServiceTest {
     }
 
     @Test
-    void processPlayerAction_WithCallLargerThanStack_ShouldThrowBadRequest() {
+    void processPlayerAction_WithCallLargerThanStack_ShouldConvertToAllIn() {
         List<Player> shortStackPlayers = new ArrayList<>();
         shortStackPlayers.add(new Player("SB", UUID.randomUUID().toString(), 1000));
         shortStackPlayers.add(new Player("Short", UUID.randomUUID().toString(), 5));
@@ -201,8 +201,11 @@ class PlayerActionServiceTest {
         Player currentPlayer = shortStackGame.getCurrentPlayer();
         PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, null);
 
-        assertThrows(BadRequestException.class,
-                () -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
+        assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
+        assertEquals(0, currentPlayer.getChips());
+        assertTrue(currentPlayer.getIsAllIn());
+        verify(gameStateService, atLeastOnce()).sendPlayerNotification(eq(GAME_ID), eq(currentPlayer.getName()),
+                contains("converted to all-in"));
     }
 
     // ==================== processPlayerAction - All-In Tests ====================

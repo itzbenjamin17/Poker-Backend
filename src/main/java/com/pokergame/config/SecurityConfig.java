@@ -34,7 +34,7 @@ public class SecurityConfig {
     @SuppressWarnings("RedundantThrows")
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        //noinspection Convert2MethodRef
+        // noinspection Convert2MethodRef
         http
                 // Disable CSRF (not needed for stateless JWT)
                 .csrf(csrf -> csrf.disable())
@@ -69,7 +69,9 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowCredentials(true);
-        config.setAllowedOriginPatterns(List.of("http://localhost:5173"));
+        config.setAllowedOriginPatterns(List.of(
+                "http://localhost:5173",
+                "https://*.ngrok-free.app"));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With"));
         config.setExposedHeaders(List.of("Authorization"));

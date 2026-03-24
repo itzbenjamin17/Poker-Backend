@@ -338,6 +338,26 @@ class HandEvaluatorServiceTest {
         }
 
         @Test
+        void testCompareOnePairHigherWins2(){
+                List<Card> hand1 = List.of(
+                                new Card(Rank.THREE, Suit.SPADES),
+                                new Card(Rank.THREE, Suit.DIAMONDS),
+                                new Card(Rank.JACK, Suit.CLUBS),
+                                new Card(Rank.KING, Suit.DIAMONDS),
+                                new Card(Rank.ACE, Suit.SPADES));
+
+                List<Card> hand2 = List.of(
+                                new Card(Rank.EIGHT, Suit.HEARTS),
+                                new Card(Rank.TEN, Suit.CLUBS),
+                                new Card(Rank.JACK, Suit.CLUBS),
+                                new Card(Rank.ACE, Suit.HEARTS),
+                                new Card(Rank.ACE, Suit.SPADES));
+
+                assertTrue(service.isBetterHandOfSameRank(hand2, hand1, HandRank.ONE_PAIR));
+                assertFalse(service.isBetterHandOfSameRank(hand1, hand2, HandRank.ONE_PAIR));
+        }
+
+        @Test
         void testCompareOnePairSamePairBetterKicker() {
                 List<Card> hand1 = List.of(
                                 new Card(Rank.ACE, Suit.SPADES),
@@ -355,6 +375,7 @@ class HandEvaluatorServiceTest {
 
                 assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.ONE_PAIR));
         }
+        
 
         // Test isBetterHandOfSameRank - Two Pair
         @Test

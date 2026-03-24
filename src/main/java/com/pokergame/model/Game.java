@@ -87,10 +87,17 @@ public class Game {
 
     /**
      * Resets the game state for a new hand.
-     * Clears community cards, creates a new deck, resets pot and bets,
-     * and removes players who are out of chips from active play.
+     * Cleans up the finished hand and reports whether the game has ended.
+     *
+     * @return true if the game is over after hand cleanup, false otherwise
      */
-    public void resetForNewHand() {
+    public boolean resetForNewHand() {
+        cleanupAfterHand();
+
+        if (gameOver) {
+            return true;
+        }
+
         deck = new Deck();
         communityCards.clear();
         pot = 0;
@@ -98,7 +105,6 @@ public class Game {
         currentPhase = GamePhase.PRE_FLOP;
         everyoneHasHadInitialTurn = false;
 
-        cleanupAfterHand();
         activePlayers.clear();
         for (Player player : players) {
             if (!player.getIsOut()) {
@@ -109,8 +115,11 @@ public class Game {
 
         if (activePlayers.size() <= 1) {
             gameOver = true;
+            return true;
         } else {
+            gameOver = false;
             advancePositions();
+            return false;
         }
     }
 
@@ -232,7 +241,10 @@ public class Game {
         if (actualDecision.action() == PlayerAction.CALL) {
             int requiredCall = Math.max(0, currentHighestBet - player.getCurrentBet());
             if (requiredCall > player.getChips()) {
-                throw new BadRequestException("Insufficient chips to call. Use ALL_IN instead.");
+                logger.info("Player {} attempted CALL for {} with only {} chips. Converting to ALL_IN",
+                        player.getName(), requiredCall, player.getChips());
+                actualDecision = new PlayerDecision(PlayerAction.ALL_IN, 0, decision.playerId());
+                conversionMessage = "Your call was converted to all-in because the call amount exceeded your available chips.";
             }
         }
 
@@ -441,10 +453,21 @@ public class Game {
         for (int i = 1; i < sortablePlayers.size(); i++) {
             Player currentPlayer = sortablePlayers.get(i);
             if (currentPlayer.getHandRank() == bestPlayer.getHandRank()) {
-                if (!handEvaluator.isBetterHandOfSameRank(bestPlayer.getBestHand(), currentPlayer.getBestHand(),
-                        bestPlayer.getHandRank()) &&
-                        !handEvaluator.isBetterHandOfSameRank(currentPlayer.getBestHand(), bestPlayer.getBestHand(),
-                                bestPlayer.getHandRank())) {
+                boolean challengerBeatsBest = handEvaluator.isBetterHandOfSameRank(
+                        currentPlayer.getBestHand(),
+                        bestPlayer.getBestHand(),
+                        bestPlayer.getHandRank());
+
+                boolean bestBeatsChallenger = handEvaluator.isBetterHandOfSameRank(
+                        bestPlayer.getBestHand(),
+                        currentPlayer.getBestHand(),
+                        bestPlayer.getHandRank());
+
+                if (challengerBeatsBest && !bestBeatsChallenger) {
+                    bestPlayer = currentPlayer;
+                    winners.clear();
+                    winners.add(currentPlayer);
+                } else if (!challengerBeatsBest && !bestBeatsChallenger) {
                     winners.add(currentPlayer);
                 }
             } else {

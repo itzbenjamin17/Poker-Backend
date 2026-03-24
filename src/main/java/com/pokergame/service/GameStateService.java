@@ -210,7 +210,8 @@ public class GameStateService {
                 null, // winningsPerPlayer
                 isAutoAdvancing,
                 message);
-
+        
+        logger.info("Broadcasting auto-advance state for game {}: {}", gameId, message);
         messagingTemplate.convertAndSend("/game/" + gameId, autoAdvanceResponse);
     }
 
@@ -227,6 +228,9 @@ public class GameStateService {
             return;
         }
 
+        logger.info("Broadcasting auto-advance notification for game {}: All players are all-in, advancing to showdown",
+                gameId);
+                
         messagingTemplate.convertAndSend("/game/" + gameId,
                 new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_START.getMessage(),
                         "All players are all-in. Auto-advancing to showdown...", null, gameId));
@@ -245,6 +249,7 @@ public class GameStateService {
             return;
         }
 
+        logger.info("Broadcasting auto-advance complete for game {}: {}", gameId, game.getCommunityCards());
         messagingTemplate.convertAndSend("/game/" + gameId,
                 new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_COMPLETE.getMessage(), "", null, gameId));
     }

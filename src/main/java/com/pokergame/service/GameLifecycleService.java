@@ -27,6 +27,7 @@ import java.util.stream.Collectors;
 public class GameLifecycleService {
 
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
+    private static final long GAME_END_DISPLAY_DELAY_MS = 7000;
 
     private final RoomService roomService;
 
@@ -40,10 +41,10 @@ public class GameLifecycleService {
 
     // Dependency Injection
     GameLifecycleService(RoomService roomService,
-                         HandEvaluatorService handEvaluatorService,
-                         GameStateService gameStateService,
-                         SimpMessagingTemplate messagingTemplate,
-                         ApplicationEventPublisher eventPublisher) {
+            HandEvaluatorService handEvaluatorService,
+            GameStateService gameStateService,
+            SimpMessagingTemplate messagingTemplate,
+            ApplicationEventPublisher eventPublisher) {
         this.roomService = roomService;
         this.handEvaluator = handEvaluatorService;
         this.gameStateService = gameStateService;
@@ -112,15 +113,16 @@ public class GameLifecycleService {
         Game game = getGame(gameId);
         logger.info("Starting new hand for game: {}", gameId);
 
+        // Was having issues with duplicate calls
         if (game.isGameOver()) {
             logger.warn("Cannot start new hand - game {} is over", gameId);
             return;
         }
-
-        game.resetForNewHand();
-
-        if (game.isGameOver()) {
+        // Weird structure here and in resetForNewHand because I wanted the game to hang at the end if the game was over and show the winner message for long
+        boolean gameEnded = game.resetForNewHand();
+        if (gameEnded) {
             logger.warn("Game {} became over after reset", gameId);
+            handleGameEnd(gameId);
             return;
         }
 
@@ -223,8 +225,9 @@ public class GameLifecycleService {
 
         gameStateService.broadcastGameEnd(gameId, winner);
 
-        // Wait a few seconds for players to see the result, then destroy the room and game, on a different thread
-        eventPublisher.publishEvent(new GameCleanupEvent(gameId, 3000));
+        // Wait a few seconds for players to see the result, then destroy the room and
+        // game, on a different thread
+        eventPublisher.publishEvent(new GameCleanupEvent(gameId, GAME_END_DISPLAY_DELAY_MS));
     }
 
     /**

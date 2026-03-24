@@ -146,6 +146,17 @@ class PlayerTest {
     }
 
     @Test
+    void testPayChipsMarksAllInWhenStackReachesZero() {
+        Player shortStack = new Player("Short", "short-1", 50);
+        int newPot = shortStack.payChips(100, 50);
+
+        assertEquals(150, newPot);
+        assertEquals(0, shortStack.getChips());
+        assertTrue(shortStack.getIsAllIn());
+        assertEquals(50, shortStack.getCurrentBet());
+    }
+
+    @Test
     void testAddChips() {
         player.addChips(500);
         assertEquals(1500, player.getChips());

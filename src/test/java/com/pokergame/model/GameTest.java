@@ -369,6 +369,63 @@ class GameTest {
     }
 
     @Test
+    void testConductShowdownRegressionJoshVsBenjaminWithRealEvaluation() {
+        List<Player> headsUpPlayers = new ArrayList<>();
+        headsUpPlayers.add(new Player("josh", "j1", 1000));
+        headsUpPlayers.add(new Player("Benjamin", "b1", 1000));
+
+        Game headsUpGame = new Game(
+                "regression-josh-benjamin",
+                headsUpPlayers,
+                10,
+                20,
+                new HandEvaluatorService());
+
+        Player josh = headsUpGame.getActivePlayers().getFirst();
+        Player benjamin = headsUpGame.getActivePlayers().get(1);
+
+        josh.getHoleCards().clear();
+        josh.getHoleCards().addAll(List.of(
+                new Card(Rank.THREE, Suit.SPADES),
+                new Card(Rank.KING, Suit.DIAMONDS)));
+
+        benjamin.getHoleCards().clear();
+        benjamin.getHoleCards().addAll(List.of(
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.TEN, Suit.CLUBS)));
+
+        headsUpGame.getCommunityCards().clear();
+        headsUpGame.getCommunityCards().addAll(List.of(
+                new Card(Rank.THREE, Suit.DIAMONDS),
+                new Card(Rank.JACK, Suit.CLUBS),
+                new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.EIGHT, Suit.HEARTS),
+                new Card(Rank.TWO, Suit.CLUBS)));
+
+        List<Player> winners = headsUpGame.conductShowdown();
+
+        assertEquals(HandRank.ONE_PAIR, josh.getHandRank());
+        assertEquals(HandRank.ONE_PAIR, benjamin.getHandRank());
+        assertEquals(List.of(
+                new Card(Rank.THREE, Suit.SPADES),
+                new Card(Rank.THREE, Suit.DIAMONDS),
+                new Card(Rank.JACK, Suit.CLUBS),
+                new Card(Rank.KING, Suit.DIAMONDS),
+                new Card(Rank.ACE, Suit.SPADES)),
+                josh.getBestHand());
+        assertEquals(List.of(
+                new Card(Rank.EIGHT, Suit.HEARTS),
+                new Card(Rank.TEN, Suit.CLUBS),
+                new Card(Rank.JACK, Suit.CLUBS),
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.ACE, Suit.SPADES)),
+                benjamin.getBestHand());
+        assertEquals(1, winners.size());
+        assertEquals("Benjamin", winners.getFirst().getName(),
+                "Regression: Benjamin should win with pair of aces over josh's pair of threes");
+    }
+
+    @Test
     void testAdvancePositions() {
         int initialDealer = game.getDealerPosition();
 
@@ -478,6 +535,29 @@ class GameTest {
         assertNotNull(message);
         assertTrue(message.contains("converted to a call"));
         assertEquals(1000, raiser.getCurrentBet()); // Should match all-in amount
+    }
+
+    @Test
+    void testProcessPlayerDecisionConvertsCallToAllInWhenCallExceedsStack() {
+        List<Player> shortPlayers = new ArrayList<>();
+        shortPlayers.add(new Player("P1", "p1", 1000));
+        shortPlayers.add(new Player("Short", "p2", 5));
+        shortPlayers.add(new Player("P3", "p3", 1000));
+
+        Game shortStackGame = new Game("short-call-game", shortPlayers, 5, 10, mockHandEvaluator);
+        shortStackGame.resetForNewHand();
+        shortStackGame.dealHoleCards();
+        shortStackGame.postBlinds();
+
+        Player shortCaller = shortStackGame.getCurrentPlayer();
+        String message = shortStackGame.processPlayerDecision(
+                shortCaller,
+                new PlayerDecision(PlayerAction.CALL, 0, shortCaller.getPlayerId()));
+
+        assertNotNull(message);
+        assertTrue(message.contains("converted to all-in"));
+        assertEquals(0, shortCaller.getChips());
+        assertTrue(shortCaller.getIsAllIn());
     }
 
     @Test
