@@ -692,4 +692,30 @@ public class Game {
     public int getDealerPosition() {
         return dealerPosition;
     }
+
+    /**
+     * Returns the ID of the player currently assigned as small blind.
+     *
+     * @return small blind player ID, or null when no active players exist
+     */
+    public String getSmallBlindPlayerId() {
+        if (activePlayers.isEmpty()) {
+            return null;
+        }
+
+        return activePlayers.get(smallBlindPosition).getPlayerId();
+    }
+
+    /**
+     * Returns the ID of the player currently assigned as big blind.
+     *
+     * @return big blind player ID, or null when no active players exist
+     */
+    public String getBigBlindPlayerId() {
+        if (activePlayers.isEmpty()) {
+            return null;
+        }
+
+        return activePlayers.get(bigBlindPosition).getPlayerId();
+    }
 }

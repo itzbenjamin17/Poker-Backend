@@ -712,7 +712,7 @@ class PlayerActionServiceTest {
 
         // First lookup in processPlayerAction() returns game, second lookup in
         // advanceGame() simulates stale async state.
-        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(twoPlayerGame, null);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(twoPlayerGame, (Game) null);
 
         Player currentPlayer = twoPlayerGame.getCurrentPlayer();
         PlayerActionRequest foldRequest = new PlayerActionRequest(PlayerAction.FOLD, null);

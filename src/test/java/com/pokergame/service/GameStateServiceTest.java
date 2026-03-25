@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.*;
 import com.pokergame.exception.BadRequestException;
@@ -313,6 +314,28 @@ class GameStateServiceTest {
     }
 
     @Test
+    void broadcastGameState_ShouldIncludeSingleSmallBlindAndBigBlindFlags() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testGame.dealHoleCards();
+        testGame.postBlinds();
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+
+        gameStateService.broadcastGameState(GAME_ID, testGame);
+
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        Object payload = captor.getValue();
+        assertInstanceOf(PublicGameStateResponse.class, payload);
+
+        PublicGameStateResponse response = (PublicGameStateResponse) payload;
+        long smallBlindCount = response.players().stream().filter(p -> p.isSmallBlind()).count();
+        long bigBlindCount = response.players().stream().filter(p -> p.isBigBlind()).count();
+
+        assertEquals(1, smallBlindCount);
+        assertEquals(1, bigBlindCount);
+    }
+
+    @Test
     void broadcastGameState_AfterDealingFlop_ShouldBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         testGame.dealHoleCards();
@@ -323,6 +346,29 @@ class GameStateServiceTest {
 
         verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
         assertEquals(3, testGame.getCommunityCards().size());
+    }
+
+    @Test
+    void broadcastGameState_AfterDealingFlop_ShouldKeepBlindFlags() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testGame.dealHoleCards();
+        testGame.postBlinds();
+        testGame.dealFlop();
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+
+        gameStateService.broadcastGameState(GAME_ID, testGame);
+
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        Object payload = captor.getValue();
+        assertInstanceOf(PublicGameStateResponse.class, payload);
+
+        PublicGameStateResponse response = (PublicGameStateResponse) payload;
+        long smallBlindCount = response.players().stream().filter(p -> p.isSmallBlind()).count();
+        long bigBlindCount = response.players().stream().filter(p -> p.isBigBlind()).count();
+
+        assertEquals(1, smallBlindCount);
+        assertEquals(1, bigBlindCount);
     }
 
     // ==================== Multiple Broadcast Tests ====================
