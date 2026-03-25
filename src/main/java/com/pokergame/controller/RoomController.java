@@ -23,7 +23,6 @@ import java.security.Principal;
  */
 @RestController
 @RequestMapping("/room")
-@CrossOrigin(origins = "http://localhost:3000")
 public class RoomController {
     private static final Logger logger = LoggerFactory.getLogger(RoomController.class);
 

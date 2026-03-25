@@ -137,6 +137,100 @@ class GameTest {
     }
 
     @Test
+    void testPostBlindsSmallBlindShortBigBlindStillPosts() {
+        List<Player> playersWithShortSb = new ArrayList<>();
+        playersWithShortSb.add(new Player("Player1", "p1", 1000));
+        playersWithShortSb.add(new Player("ShortSB", "p2", 5));
+        playersWithShortSb.add(new Player("BigBlind", "p3", 1000));
+
+        Game shortSbGame = new Game("short-sb-game", playersWithShortSb, 10, 20, mockHandEvaluator);
+        shortSbGame.postBlinds();
+
+        Player smallBlindPlayer = shortSbGame.getActivePlayers().get(1);
+        Player bigBlindPlayer = shortSbGame.getActivePlayers().get(2);
+
+        assertTrue(smallBlindPlayer.getIsAllIn());
+        assertEquals(0, smallBlindPlayer.getChips());
+        assertEquals(5, smallBlindPlayer.getCurrentBet());
+        assertEquals(20, bigBlindPlayer.getCurrentBet());
+        assertEquals(25, shortSbGame.getPot());
+    }
+
+    @Test
+    void testPostBlindsBigBlindShortSmallBlindStillPosts() {
+        List<Player> playersWithShortBb = new ArrayList<>();
+        playersWithShortBb.add(new Player("Player1", "p1", 1000));
+        playersWithShortBb.add(new Player("SmallBlind", "p2", 1000));
+        playersWithShortBb.add(new Player("ShortBB", "p3", 15));
+
+        Game shortBbGame = new Game("short-bb-game", playersWithShortBb, 10, 20, mockHandEvaluator);
+        shortBbGame.postBlinds();
+
+        Player smallBlindPlayer = shortBbGame.getActivePlayers().get(1);
+        Player bigBlindPlayer = shortBbGame.getActivePlayers().get(2);
+
+        assertEquals(10, smallBlindPlayer.getCurrentBet());
+        assertEquals(990, smallBlindPlayer.getChips());
+        assertTrue(bigBlindPlayer.getIsAllIn());
+        assertEquals(15, bigBlindPlayer.getCurrentBet());
+        assertEquals(0, bigBlindPlayer.getChips());
+        assertEquals(25, shortBbGame.getPot());
+    }
+
+    @Test
+    void testPostBlindsBothShortIncludesBothContributionsEdgeCase() {
+        List<Player> playersWithBothShort = new ArrayList<>();
+        playersWithBothShort.add(new Player("Player1", "p1", 1000));
+        playersWithBothShort.add(new Player("ShortSB", "p2", 7));
+        playersWithBothShort.add(new Player("ShortBB", "p3", 15));
+
+        Game bothShortGame = new Game("both-short-game", playersWithBothShort, 10, 20, mockHandEvaluator);
+        bothShortGame.postBlinds();
+
+        Player smallBlindPlayer = bothShortGame.getActivePlayers().get(1);
+        Player bigBlindPlayer = bothShortGame.getActivePlayers().get(2);
+
+        assertTrue(smallBlindPlayer.getIsAllIn());
+        assertTrue(bigBlindPlayer.getIsAllIn());
+        assertEquals(7, smallBlindPlayer.getCurrentBet());
+        assertEquals(15, bigBlindPlayer.getCurrentBet());
+        assertEquals(22, bothShortGame.getPot());
+    }
+
+    @Test
+    void testPostBlindsCurrentHighestBetUsesActualBigBlindWhenCovered() {
+        game.postBlinds();
+
+        assertEquals(20, game.getCurrentHighestBet());
+    }
+
+    @Test
+    void testPostBlindsCurrentHighestBetUsesActualAllInWhenBigBlindShort() {
+        List<Player> playersWithShortBb = new ArrayList<>();
+        playersWithShortBb.add(new Player("Player1", "p1", 1000));
+        playersWithShortBb.add(new Player("SmallBlind", "p2", 1000));
+        playersWithShortBb.add(new Player("ShortBB", "p3", 15));
+
+        Game shortBbGame = new Game("short-bb-highest-bet", playersWithShortBb, 10, 20, mockHandEvaluator);
+        shortBbGame.postBlinds();
+
+        assertEquals(15, shortBbGame.getCurrentHighestBet());
+    }
+
+    @Test
+    void testPostBlindsCurrentHighestBetBothShortUsesMaxPostedContributionEdgeCase() {
+        List<Player> playersWithBothShort = new ArrayList<>();
+        playersWithBothShort.add(new Player("Player1", "p1", 1000));
+        playersWithBothShort.add(new Player("ShortSB", "p2", 7));
+        playersWithBothShort.add(new Player("ShortBB", "p3", 15));
+
+        Game bothShortGame = new Game("both-short-highest-bet", playersWithBothShort, 10, 20, mockHandEvaluator);
+        bothShortGame.postBlinds();
+
+        assertEquals(15, bothShortGame.getCurrentHighestBet());
+    }
+
+    @Test
     void testProcessPlayerDecisionFold() {
         Player player = game.getCurrentPlayer();
         PlayerDecision decision = new PlayerDecision(PlayerAction.FOLD, 0, player.getPlayerId());
@@ -369,6 +463,180 @@ class GameTest {
     }
 
     @Test
+    void testConductShowdownRegressionJoshVsBenjaminWithRealEvaluation() {
+        List<Player> headsUpPlayers = new ArrayList<>();
+        headsUpPlayers.add(new Player("josh", "j1", 1000));
+        headsUpPlayers.add(new Player("Benjamin", "b1", 1000));
+
+        Game headsUpGame = new Game(
+                "regression-josh-benjamin",
+                headsUpPlayers,
+                10,
+                20,
+                new HandEvaluatorService());
+
+        Player josh = headsUpGame.getActivePlayers().getFirst();
+        Player benjamin = headsUpGame.getActivePlayers().get(1);
+
+        josh.getHoleCards().clear();
+        josh.getHoleCards().addAll(List.of(
+                new Card(Rank.THREE, Suit.SPADES),
+                new Card(Rank.KING, Suit.DIAMONDS)));
+
+        benjamin.getHoleCards().clear();
+        benjamin.getHoleCards().addAll(List.of(
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.TEN, Suit.CLUBS)));
+
+        headsUpGame.getCommunityCards().clear();
+        headsUpGame.getCommunityCards().addAll(List.of(
+                new Card(Rank.THREE, Suit.DIAMONDS),
+                new Card(Rank.JACK, Suit.CLUBS),
+                new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.EIGHT, Suit.HEARTS),
+                new Card(Rank.TWO, Suit.CLUBS)));
+
+        List<Player> winners = headsUpGame.conductShowdown();
+
+        assertEquals(HandRank.ONE_PAIR, josh.getHandRank());
+        assertEquals(HandRank.ONE_PAIR, benjamin.getHandRank());
+        assertEquals(List.of(
+                new Card(Rank.THREE, Suit.SPADES),
+                new Card(Rank.THREE, Suit.DIAMONDS),
+                new Card(Rank.JACK, Suit.CLUBS),
+                new Card(Rank.KING, Suit.DIAMONDS),
+                new Card(Rank.ACE, Suit.SPADES)),
+                josh.getBestHand());
+        assertEquals(List.of(
+                new Card(Rank.EIGHT, Suit.HEARTS),
+                new Card(Rank.TEN, Suit.CLUBS),
+                new Card(Rank.JACK, Suit.CLUBS),
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.ACE, Suit.SPADES)),
+                benjamin.getBestHand());
+        assertEquals(1, winners.size());
+        assertEquals("Benjamin", winners.getFirst().getName(),
+                "Regression: Benjamin should win with pair of aces over josh's pair of threes");
+    }
+
+    @Test
+    void testDistributePotRemainderPreservedAfterShowdownSplit() {
+        List<Card> highCard = List.of(
+                new Card(Rank.TWO, Suit.SPADES),
+                new Card(Rank.FIVE, Suit.HEARTS),
+                new Card(Rank.SEVEN, Suit.DIAMONDS),
+                new Card(Rank.NINE, Suit.CLUBS),
+                new Card(Rank.JACK, Suit.SPADES));
+
+        when(mockHandEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(highCard, HandRank.HIGH_CARD));
+        when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any()))
+                .thenReturn(false);
+
+        game.processPlayerDecision(game.getActivePlayers().get(0),
+                new PlayerDecision(PlayerAction.BET, 100, "p1"));
+
+        game.conductShowdown();
+
+        assertEquals(1, game.getPot());
+    }
+
+    @Test
+    void testResetForNewHandPreservesPotRemainderForNextHand() {
+        List<Card> highCard = List.of(
+                new Card(Rank.TWO, Suit.SPADES),
+                new Card(Rank.FIVE, Suit.HEARTS),
+                new Card(Rank.SEVEN, Suit.DIAMONDS),
+                new Card(Rank.NINE, Suit.CLUBS),
+                new Card(Rank.JACK, Suit.SPADES));
+
+        when(mockHandEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(highCard, HandRank.HIGH_CARD));
+        when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any()))
+                .thenReturn(false);
+
+        game.processPlayerDecision(game.getActivePlayers().get(0),
+                new PlayerDecision(PlayerAction.BET, 100, "p1"));
+        game.conductShowdown();
+
+        assertEquals(1, game.getPot());
+        game.resetForNewHand();
+        assertEquals(1, game.getPot());
+    }
+
+    @Test
+    void testResetForNewHandPreservesRemainderAcrossMultipleHandsEdgeCase() {
+        List<Card> highCard = List.of(
+                new Card(Rank.TWO, Suit.SPADES),
+                new Card(Rank.FIVE, Suit.HEARTS),
+                new Card(Rank.SEVEN, Suit.DIAMONDS),
+                new Card(Rank.NINE, Suit.CLUBS),
+                new Card(Rank.JACK, Suit.SPADES));
+
+        when(mockHandEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(highCard, HandRank.HIGH_CARD));
+        when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any()))
+                .thenReturn(false);
+
+        game.processPlayerDecision(game.getActivePlayers().get(0),
+                new PlayerDecision(PlayerAction.BET, 100, "p1"));
+        game.conductShowdown();
+        assertEquals(1, game.getPot());
+
+        game.resetForNewHand();
+        game.processPlayerDecision(game.getCurrentPlayer(),
+                new PlayerDecision(PlayerAction.BET, 99, game.getCurrentPlayer().getPlayerId()));
+        game.conductShowdown();
+
+        assertEquals(1, game.getPot());
+    }
+
+    @Test
+    void testHeadsUpPostBlindsDealerPostsSmallBlind() {
+        List<Player> headsUpPlayers = new ArrayList<>();
+        headsUpPlayers.add(new Player("Dealer", "d1", 1000));
+        headsUpPlayers.add(new Player("Opponent", "o1", 1000));
+
+        Game headsUpGame = new Game("heads-up-sb", headsUpPlayers, 10, 20, mockHandEvaluator);
+        headsUpGame.postBlinds();
+
+        assertEquals(0, headsUpGame.getDealerPosition());
+        assertEquals(10, headsUpGame.getActivePlayers().get(0).getCurrentBet());
+    }
+
+    @Test
+    void testHeadsUpPostBlindsNonDealerPostsBigBlind() {
+        List<Player> headsUpPlayers = new ArrayList<>();
+        headsUpPlayers.add(new Player("Dealer", "d1", 1000));
+        headsUpPlayers.add(new Player("Opponent", "o1", 1000));
+
+        Game headsUpGame = new Game("heads-up-bb", headsUpPlayers, 10, 20, mockHandEvaluator);
+        headsUpGame.postBlinds();
+
+        assertEquals(20, headsUpGame.getActivePlayers().get(1).getCurrentBet());
+    }
+
+    @Test
+    void testHeadsUpAdvancePositionsBlindsRotateCorrectlyBetweenHandsEdgeCase() {
+        List<Player> headsUpPlayers = new ArrayList<>();
+        headsUpPlayers.add(new Player("Dealer", "d1", 1000));
+        headsUpPlayers.add(new Player("Opponent", "o1", 1000));
+
+        Game headsUpGame = new Game("heads-up-rotate", headsUpPlayers, 10, 20, mockHandEvaluator);
+
+        headsUpGame.postBlinds();
+        assertEquals(10, headsUpGame.getActivePlayers().get(0).getCurrentBet());
+        assertEquals(20, headsUpGame.getActivePlayers().get(1).getCurrentBet());
+
+        headsUpGame.resetForNewHand();
+        headsUpGame.postBlinds();
+
+        assertEquals(1, headsUpGame.getDealerPosition());
+        assertEquals(10, headsUpGame.getActivePlayers().get(1).getCurrentBet());
+        assertEquals(20, headsUpGame.getActivePlayers().get(0).getCurrentBet());
+    }
+
+    @Test
     void testAdvancePositions() {
         int initialDealer = game.getDealerPosition();
 
@@ -478,6 +746,29 @@ class GameTest {
         assertNotNull(message);
         assertTrue(message.contains("converted to a call"));
         assertEquals(1000, raiser.getCurrentBet()); // Should match all-in amount
+    }
+
+    @Test
+    void testProcessPlayerDecisionConvertsCallToAllInWhenCallExceedsStack() {
+        List<Player> shortPlayers = new ArrayList<>();
+        shortPlayers.add(new Player("P1", "p1", 1000));
+        shortPlayers.add(new Player("Short", "p2", 5));
+        shortPlayers.add(new Player("P3", "p3", 1000));
+
+        Game shortStackGame = new Game("short-call-game", shortPlayers, 5, 10, mockHandEvaluator);
+        shortStackGame.resetForNewHand();
+        shortStackGame.dealHoleCards();
+        shortStackGame.postBlinds();
+
+        Player shortCaller = shortStackGame.getCurrentPlayer();
+        String message = shortStackGame.processPlayerDecision(
+                shortCaller,
+                new PlayerDecision(PlayerAction.CALL, 0, shortCaller.getPlayerId()));
+
+        assertNotNull(message);
+        assertTrue(message.contains("converted to all-in"));
+        assertEquals(0, shortCaller.getChips());
+        assertTrue(shortCaller.getIsAllIn());
     }
 
     @Test

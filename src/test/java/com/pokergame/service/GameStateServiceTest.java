@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.*;
 import com.pokergame.exception.BadRequestException;
@@ -272,6 +273,11 @@ class GameStateServiceTest {
         assertTrue(message.contains("wins"));
     }
 
+    @Test
+    void broadcastGameEnd_WithNullWinner_ShouldNotThrow() {
+        assertDoesNotThrow(() -> gameStateService.broadcastGameEnd(GAME_ID, null));
+    }
+
     // ==================== Edge Case Tests ====================
 
     @Test
@@ -308,6 +314,28 @@ class GameStateServiceTest {
     }
 
     @Test
+    void broadcastGameState_ShouldIncludeSingleSmallBlindAndBigBlindFlags() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testGame.dealHoleCards();
+        testGame.postBlinds();
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+
+        gameStateService.broadcastGameState(GAME_ID, testGame);
+
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        Object payload = captor.getValue();
+        assertInstanceOf(PublicGameStateResponse.class, payload);
+
+        PublicGameStateResponse response = (PublicGameStateResponse) payload;
+        long smallBlindCount = response.players().stream().filter(p -> p.isSmallBlind()).count();
+        long bigBlindCount = response.players().stream().filter(p -> p.isBigBlind()).count();
+
+        assertEquals(1, smallBlindCount);
+        assertEquals(1, bigBlindCount);
+    }
+
+    @Test
     void broadcastGameState_AfterDealingFlop_ShouldBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         testGame.dealHoleCards();
@@ -318,6 +346,29 @@ class GameStateServiceTest {
 
         verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
         assertEquals(3, testGame.getCommunityCards().size());
+    }
+
+    @Test
+    void broadcastGameState_AfterDealingFlop_ShouldKeepBlindFlags() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testGame.dealHoleCards();
+        testGame.postBlinds();
+        testGame.dealFlop();
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+
+        gameStateService.broadcastGameState(GAME_ID, testGame);
+
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        Object payload = captor.getValue();
+        assertInstanceOf(PublicGameStateResponse.class, payload);
+
+        PublicGameStateResponse response = (PublicGameStateResponse) payload;
+        long smallBlindCount = response.players().stream().filter(p -> p.isSmallBlind()).count();
+        long bigBlindCount = response.players().stream().filter(p -> p.isBigBlind()).count();
+
+        assertEquals(1, smallBlindCount);
+        assertEquals(1, bigBlindCount);
     }
 
     // ==================== Multiple Broadcast Tests ====================
@@ -332,5 +383,13 @@ class GameStateServiceTest {
 
         // 3 public broadcasts + 3*(2 name-private) = 9 total
         verify(messagingTemplate, times(9)).convertAndSend(anyString(), any(Object.class));
+    }
+
+    @Test
+    void broadcastGameState_WhenCurrentPlayerMissing_ShouldNotThrow() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testGame.getActivePlayers().clear();
+
+        assertDoesNotThrow(() -> gameStateService.broadcastGameState(GAME_ID, testGame));
     }
 }

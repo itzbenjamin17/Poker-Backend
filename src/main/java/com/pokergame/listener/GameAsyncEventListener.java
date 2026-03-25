@@ -22,7 +22,8 @@ import java.util.List;
  * This class replaces blocking calls (like {@code Thread.sleep}) with
  * non-blocking
  * scheduled tasks using Spring's {@link TaskScheduler}. It manages the pacing
- * of the game by handling delays between hands, game clean-up, and the automatic
+ * of the game by handling delays between hands, game clean-up, and the
+ * automatic
  * progression of the game during all-in situations.
  * </p>
  */
@@ -131,7 +132,7 @@ public class GameAsyncEventListener {
             return;
 
         // Delay between steps (e.g. between Flop and Turn)
-        long delay = 2000;
+        long delay = 4000;
 
         taskScheduler.schedule(() -> {
             try {

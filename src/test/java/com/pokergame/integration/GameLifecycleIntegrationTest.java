@@ -224,7 +224,7 @@ class GameLifecycleIntegrationTest {
         assertNotNull(leaveBody);
         assertTrue(leaveBody.contains("Successfully left game"));
 
-        boolean roomDestroyed = awaitRoomDestruction(gameId, hostToken, 8000);
+        boolean roomDestroyed = awaitRoomDestruction(gameId, hostToken, 12000);
         assertTrue(roomDestroyed, "Room should be destroyed after game end cleanup when one player remains");
     }
 

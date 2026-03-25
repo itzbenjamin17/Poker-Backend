@@ -14,6 +14,8 @@ public record PublicPlayerState(
         boolean isAllIn,
         boolean isCurrentPlayer,
         boolean hasFolded,
+        boolean isSmallBlind,
+        boolean isBigBlind,
         // Showdown-specific fields
         HandRank handRank,
         List<Card> bestHand,
@@ -24,7 +26,21 @@ public record PublicPlayerState(
 ) {
     // For non-showdown states
     public PublicPlayerState(String id, String name, int chips, int currentBet, String status,
-            boolean isAllIn, boolean isCurrentPlayer, boolean hasFolded) {
-        this(id, name, chips, currentBet, status, isAllIn, isCurrentPlayer, hasFolded, null, null, null, null, null);
+            boolean isAllIn, boolean isCurrentPlayer, boolean hasFolded, boolean isSmallBlind, boolean isBigBlind) {
+        this(id,
+                name,
+                chips,
+                currentBet,
+                status,
+                isAllIn,
+                isCurrentPlayer,
+                hasFolded,
+                isSmallBlind,
+                isBigBlind,
+                null,
+                null,
+                null,
+                null,
+                null);
     }
 }

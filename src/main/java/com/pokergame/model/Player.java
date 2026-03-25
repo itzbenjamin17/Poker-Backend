@@ -147,6 +147,9 @@ public class Player {
         }
 
         this.chips -= amount;
+        if (this.chips == 0) {
+            this.isAllIn = true;
+        }
         this.currentBet += amount;
         pot += amount;
         return pot;

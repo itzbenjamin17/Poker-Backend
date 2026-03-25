@@ -73,9 +73,7 @@ public class Game {
         this.communityCards = new ArrayList<>();
         this.pot = 0;
         this.dealerPosition = 0;
-        this.smallBlindPosition = 1 % players.size();
-        this.bigBlindPosition = 2 % players.size();
-        this.currentPlayerPosition = 3 % players.size();
+        updatePositionsForCurrentTable();
         this.currentHighestBet = 0;
         this.currentPhase = GamePhase.PRE_FLOP;
         this.gameOver = false;
@@ -87,18 +85,26 @@ public class Game {
 
     /**
      * Resets the game state for a new hand.
-     * Clears community cards, creates a new deck, resets pot and bets,
-     * and removes players who are out of chips from active play.
+     * Cleans up the finished hand and reports whether the game has ended.
+     *
+     * @return true if the game is over after hand cleanup, false otherwise
      */
-    public void resetForNewHand() {
+    public boolean resetForNewHand() {
+        int carryOverPot = currentPhase == GamePhase.SHOWDOWN ? pot : 0;
+
+        cleanupAfterHand();
+
+        if (gameOver) {
+            return true;
+        }
+
         deck = new Deck();
         communityCards.clear();
-        pot = 0;
+        pot = carryOverPot;
         currentHighestBet = 0;
         currentPhase = GamePhase.PRE_FLOP;
         everyoneHasHadInitialTurn = false;
 
-        cleanupAfterHand();
         activePlayers.clear();
         for (Player player : players) {
             if (!player.getIsOut()) {
@@ -109,8 +115,11 @@ public class Game {
 
         if (activePlayers.size() <= 1) {
             gameOver = true;
+            return true;
         } else {
+            gameOver = false;
             advancePositions();
+            return false;
         }
     }
 
@@ -133,21 +142,19 @@ public class Game {
             Player smallBlindPlayer = activePlayers.get(smallBlindPosition);
             Player bigBlindPlayer = activePlayers.get(bigBlindPosition);
 
-            if (smallBlindPlayer.getChips() <= smallBlind || bigBlindPlayer.getChips() <= bigBlind) {
-                if (smallBlindPlayer.getChips() <= smallBlind) {
-                    this.pot = smallBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
-                }
-
-                if (bigBlindPlayer.getChips() <= bigBlind) {
-                    this.pot = bigBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
-                }
-
+            if (smallBlindPlayer.getChips() <= smallBlind) {
+                this.pot = smallBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
             } else {
                 this.pot = smallBlindPlayer.doAction(PlayerAction.BET, smallBlind, this.pot);
+            }
+
+            if (bigBlindPlayer.getChips() <= bigBlind) {
+                this.pot = bigBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
+            } else {
                 this.pot = bigBlindPlayer.doAction(PlayerAction.BET, bigBlind, this.pot);
             }
 
-            currentHighestBet = bigBlind;
+            currentHighestBet = Math.max(smallBlindPlayer.getCurrentBet(), bigBlindPlayer.getCurrentBet());
         }
     }
 
@@ -232,7 +239,10 @@ public class Game {
         if (actualDecision.action() == PlayerAction.CALL) {
             int requiredCall = Math.max(0, currentHighestBet - player.getCurrentBet());
             if (requiredCall > player.getChips()) {
-                throw new BadRequestException("Insufficient chips to call. Use ALL_IN instead.");
+                logger.info("Player {} attempted CALL for {} with only {} chips. Converting to ALL_IN",
+                        player.getName(), requiredCall, player.getChips());
+                actualDecision = new PlayerDecision(PlayerAction.ALL_IN, 0, decision.playerId());
+                conversionMessage = "Your call was converted to all-in because the call amount exceeded your available chips.";
             }
         }
 
@@ -441,10 +451,21 @@ public class Game {
         for (int i = 1; i < sortablePlayers.size(); i++) {
             Player currentPlayer = sortablePlayers.get(i);
             if (currentPlayer.getHandRank() == bestPlayer.getHandRank()) {
-                if (!handEvaluator.isBetterHandOfSameRank(bestPlayer.getBestHand(), currentPlayer.getBestHand(),
-                        bestPlayer.getHandRank()) &&
-                        !handEvaluator.isBetterHandOfSameRank(currentPlayer.getBestHand(), bestPlayer.getBestHand(),
-                                bestPlayer.getHandRank())) {
+                boolean challengerBeatsBest = handEvaluator.isBetterHandOfSameRank(
+                        currentPlayer.getBestHand(),
+                        bestPlayer.getBestHand(),
+                        bestPlayer.getHandRank());
+
+                boolean bestBeatsChallenger = handEvaluator.isBetterHandOfSameRank(
+                        bestPlayer.getBestHand(),
+                        currentPlayer.getBestHand(),
+                        bestPlayer.getHandRank());
+
+                if (challengerBeatsBest && !bestBeatsChallenger) {
+                    bestPlayer = currentPlayer;
+                    winners.clear();
+                    winners.add(currentPlayer);
+                } else if (!challengerBeatsBest && !bestBeatsChallenger) {
                     winners.add(currentPlayer);
                 }
             } else {
@@ -490,9 +511,23 @@ public class Game {
      */
     public void advancePositions() {
         dealerPosition = (dealerPosition + 1) % activePlayers.size();
-        smallBlindPosition = (dealerPosition + 1) % activePlayers.size();
-        bigBlindPosition = (smallBlindPosition + 1) % activePlayers.size();
-        currentPlayerPosition = (bigBlindPosition + 1) % activePlayers.size();
+        updatePositionsForCurrentTable();
+    }
+
+    private void updatePositionsForCurrentTable() {
+        int tableSize = activePlayers.size();
+
+        if (tableSize == 2) {
+            // Heads-up: dealer posts small blind and acts first pre-flop.
+            smallBlindPosition = dealerPosition;
+            bigBlindPosition = (dealerPosition + 1) % tableSize;
+            currentPlayerPosition = dealerPosition;
+            return;
+        }
+
+        smallBlindPosition = (dealerPosition + 1) % tableSize;
+        bigBlindPosition = (smallBlindPosition + 1) % tableSize;
+        currentPlayerPosition = (bigBlindPosition + 1) % tableSize;
     }
 
     /**
@@ -656,5 +691,31 @@ public class Game {
      */
     public int getDealerPosition() {
         return dealerPosition;
+    }
+
+    /**
+     * Returns the ID of the player currently assigned as small blind.
+     *
+     * @return small blind player ID, or null when no active players exist
+     */
+    public String getSmallBlindPlayerId() {
+        if (activePlayers.isEmpty()) {
+            return null;
+        }
+
+        return activePlayers.get(smallBlindPosition).getPlayerId();
+    }
+
+    /**
+     * Returns the ID of the player currently assigned as big blind.
+     *
+     * @return big blind player ID, or null when no active players exist
+     */
+    public String getBigBlindPlayerId() {
+        if (activePlayers.isEmpty()) {
+            return null;
+        }
+
+        return activePlayers.get(bigBlindPosition).getPlayerId();
     }
 }

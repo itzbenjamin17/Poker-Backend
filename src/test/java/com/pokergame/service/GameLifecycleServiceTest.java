@@ -1,6 +1,7 @@
 package com.pokergame.service;
 
 import com.pokergame.enums.GamePhase;
+import com.pokergame.event.GameCleanupEvent;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
@@ -52,7 +53,8 @@ class GameLifecycleServiceTest {
 
     @BeforeEach
     void setUp() {
-        gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,  applicationEventPublisher);
+        gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
+                applicationEventPublisher);
 
         testRoom = new Room(
                 ROOM_ID,
@@ -125,7 +127,8 @@ class GameLifecycleServiceTest {
                 UnauthorisedActionException.class,
                 () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
 
-        assertEquals("Need at least 2 players to start game. Please wait for more players to join.", exception.getMessage());
+        assertEquals("Need at least 2 players to start game. Please wait for more players to join.",
+                exception.getMessage());
     }
 
     @Test
@@ -179,10 +182,13 @@ class GameLifecycleServiceTest {
         game.getActivePlayers().add(game.getPlayers().get(0));
 
         reset(gameStateService);
+        reset(applicationEventPublisher);
         gameLifecycleService.startNewHand(ROOM_ID);
 
-        // Should not broadcast because game became over after reset
+        // Should end the game and schedule cleanup because game became over after reset
         verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class));
+        verify(applicationEventPublisher).publishEvent(any(GameCleanupEvent.class));
     }
 
     @Test
@@ -204,6 +210,12 @@ class GameLifecycleServiceTest {
         Game game = gameLifecycleService.getGame(ROOM_ID);
         assertTrue(game.getPot() > 0);
         assertEquals(10, game.getCurrentHighestBet()); // Big blind is 10
+    }
+
+    @Test
+    void startNewHand_WhenGameMissing_ShouldReturnWithoutThrowing() {
+        assertDoesNotThrow(() -> gameLifecycleService.startNewHand("missing-game-id"));
+        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
     }
 
     // ==================== leaveGame Tests ====================
@@ -316,6 +328,18 @@ class GameLifecycleServiceTest {
         verify(gameStateService, never()).broadcastGameEnd(anyString(), any(Player.class));
     }
 
+    @Test
+    void handleGameEnd_WhenNoPlayersRemain_ShouldNotThrow() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        game.getPlayers().clear();
+        game.getActivePlayers().clear();
+
+        assertDoesNotThrow(() -> gameLifecycleService.handleGameEnd(ROOM_ID));
+    }
+
     // ==================== Integration-like Tests ====================
 
     @Test
@@ -395,7 +419,8 @@ class GameLifecycleServiceTest {
     }
 
     /**
-     * Tests that creating multiple games simultaneously doesn't cause race conditions.
+     * Tests that creating multiple games simultaneously doesn't cause race
+     * conditions.
      * Verifies thread-safe access to activeGames map during game creation.
      */
     @Test
@@ -432,7 +457,6 @@ class GameLifecycleServiceTest {
             });
         }
 
-
         // Wait for all games to be created
         assertTrue(latch.await(10, TimeUnit.SECONDS), "Game creation took too long");
         executor.shutdown();
@@ -446,7 +470,8 @@ class GameLifecycleServiceTest {
     }
 
     /**
-     * Tests that accessing the same game concurrently (read operations) is thread-safe.
+     * Tests that accessing the same game concurrently (read operations) is
+     * thread-safe.
      * Multiple threads reading game state simultaneously should not cause issues.
      */
     @Test
@@ -483,7 +508,8 @@ class GameLifecycleServiceTest {
 
     /**
      * Tests the edge case where game cleanup happens while players are leaving.
-     * This simulates the scenario where async cleanup runs concurrently with player actions.
+     * This simulates the scenario where async cleanup runs concurrently with player
+     * actions.
      */
     @Test
     void leaveGame_DuringGameEnd_ShouldHandleGracefully() throws InterruptedException {
@@ -532,5 +558,3 @@ class GameLifecycleServiceTest {
         }
     }
 }
-
-

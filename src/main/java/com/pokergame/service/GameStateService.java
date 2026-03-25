@@ -90,7 +90,13 @@ public class GameStateService {
         int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
         // Get current player information
-        Player currentPlayer = game.getCurrentPlayer();
+        Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
+        if (currentPlayer != null) {
+            logger.debug("Showdown - current player: {} (ID: {})", currentPlayer.getName(),
+                    currentPlayer.getPlayerId());
+        } else {
+            logger.debug("Showdown - no active players found");
+        }
         String currentPlayerName = currentPlayer != null ? currentPlayer.getName() : null;
         String currentPlayerId = currentPlayer != null ? currentPlayer.getPlayerId() : null;
 
@@ -100,6 +106,8 @@ public class GameStateService {
         // Check if this is an actual showdown (i.e. not a win by fold)
         boolean isActualShowdown = winners.stream()
                 .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != com.pokergame.enums.HandRank.NO_HAND);
+        String smallBlindPlayerId = game.getSmallBlindPlayerId();
+        String bigBlindPlayerId = game.getBigBlindPlayerId();
 
         // Convert players to PublicPlayerState DTOs with showdown information
         List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
@@ -117,6 +125,8 @@ public class GameStateService {
                     player.getIsAllIn(),
                     false, // isCurrentPlayer not relevant during showdown
                     player.getHasFolded(),
+                    player.getPlayerId().equals(smallBlindPlayerId),
+                    player.getPlayerId().equals(bigBlindPlayerId),
                     isActive ? player.getHandRank() : null,
                     isActive ? player.getBestHand() : List.of(),
                     isWinner,
@@ -170,9 +180,17 @@ public class GameStateService {
         int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
         // Get current player information
-        Player currentPlayer = game.getCurrentPlayer();
+        Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
+        if (currentPlayer != null) {
+            logger.debug("Auto-advance - current player: {} (ID: {})", currentPlayer.getName(),
+                    currentPlayer.getPlayerId());
+        } else {
+            logger.debug("Auto-advance - no active players found");
+        }
         String currentPlayerName = currentPlayer != null ? currentPlayer.getName() : null;
         String currentPlayerId = currentPlayer != null ? currentPlayer.getPlayerId() : null;
+        String smallBlindPlayerId = game.getSmallBlindPlayerId();
+        String bigBlindPlayerId = game.getBigBlindPlayerId();
 
         // Convert players to PlayerState DTOs
         List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
@@ -189,6 +207,8 @@ public class GameStateService {
                     player.getIsAllIn(),
                     isCurrentPlayer,
                     player.getHasFolded(),
+                    player.getPlayerId().equals(smallBlindPlayerId),
+                    player.getPlayerId().equals(bigBlindPlayerId),
                     player.getHandRank(),
                     List.of(),
                     null,
@@ -211,6 +231,7 @@ public class GameStateService {
                 isAutoAdvancing,
                 message);
 
+        logger.info("Broadcasting auto-advance state for game {}: {}", gameId, message);
         messagingTemplate.convertAndSend("/game/" + gameId, autoAdvanceResponse);
     }
 
@@ -226,6 +247,9 @@ public class GameStateService {
             logger.warn("Cannot broadcast auto-advance notification - game {} not found", gameId);
             return;
         }
+
+        logger.info("Broadcasting auto-advance notification for game {}: All players are all-in, advancing to showdown",
+                gameId);
 
         messagingTemplate.convertAndSend("/game/" + gameId,
                 new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_START.getMessage(),
@@ -245,6 +269,7 @@ public class GameStateService {
             return;
         }
 
+        logger.info("Broadcasting auto-advance complete for game {}: {}", gameId, game.getCommunityCards());
         messagingTemplate.convertAndSend("/game/" + gameId,
                 new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_COMPLETE.getMessage(), "", null, gameId));
     }
@@ -275,6 +300,11 @@ public class GameStateService {
      * @param winner the Player object representing the game winner
      */
     public void broadcastGameEnd(String gameId, Player winner) {
+        if (winner == null) {
+            logger.warn("Cannot broadcast game end for {} - winner is null", gameId);
+            return;
+        }
+
         Map<String, Object> gameEndData = new HashMap<>();
         gameEndData.put("type", ResponseMessage.GAME_END.getMessage());
         gameEndData.put("winner", winner.getName());
@@ -304,7 +334,15 @@ public class GameStateService {
             throw new ResourceNotFoundException("Room not found");
         }
         List<PublicPlayerState> playerStateList = new ArrayList<>();
-        Player currentPlayer = game.getCurrentPlayer();
+        Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
+        String smallBlindPlayerId = game.getSmallBlindPlayerId();
+        String bigBlindPlayerId = game.getBigBlindPlayerId();
+        if (currentPlayer != null) {
+            logger.debug("Building game state - current player: {} (ID: {})", currentPlayer.getName(),
+                    currentPlayer.getPlayerId());
+        } else {
+            logger.debug("Building game state - no active players found");
+        }
         for (Player player : game.getPlayers()) {
             String status = player.getHasFolded() ? PlayerStatus.FOLDED.getStatus()
                     : player.getIsOut() ? "OUT"
@@ -317,7 +355,9 @@ public class GameStateService {
                     status,
                     player.getIsAllIn(),
                     player.equals(currentPlayer),
-                    player.getHasFolded()));
+                    player.getHasFolded(),
+                    player.getPlayerId().equals(smallBlindPlayerId),
+                    player.getPlayerId().equals(bigBlindPlayerId)));
         }
 
         return new PublicGameStateResponse(
@@ -327,8 +367,8 @@ public class GameStateService {
                 game.getCurrentHighestBet(),
                 game.getCommunityCards(),
                 playerStateList,
-                currentPlayer.getName(),
-                currentPlayer.getPlayerId());
+                currentPlayer != null ? currentPlayer.getName() : null,
+                currentPlayer != null ? currentPlayer.getPlayerId() : null);
 
     }
 

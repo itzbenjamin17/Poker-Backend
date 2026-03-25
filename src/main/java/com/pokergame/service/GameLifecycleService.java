@@ -27,6 +27,7 @@ import java.util.stream.Collectors;
 public class GameLifecycleService {
 
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
+    private static final long GAME_END_DISPLAY_DELAY_MS = 7000;
 
     private final RoomService roomService;
 
@@ -40,10 +41,10 @@ public class GameLifecycleService {
 
     // Dependency Injection
     GameLifecycleService(RoomService roomService,
-                         HandEvaluatorService handEvaluatorService,
-                         GameStateService gameStateService,
-                         SimpMessagingTemplate messagingTemplate,
-                         ApplicationEventPublisher eventPublisher) {
+            HandEvaluatorService handEvaluatorService,
+            GameStateService gameStateService,
+            SimpMessagingTemplate messagingTemplate,
+            ApplicationEventPublisher eventPublisher) {
         this.roomService = roomService;
         this.handEvaluator = handEvaluatorService;
         this.gameStateService = gameStateService;
@@ -110,17 +111,22 @@ public class GameLifecycleService {
      */
     public void startNewHand(String gameId) {
         Game game = getGame(gameId);
+        if (game == null) {
+            logger.warn("Cannot start new hand - game {} not found", gameId);
+            return;
+        }
         logger.info("Starting new hand for game: {}", gameId);
 
+        // Was having issues with duplicate calls
         if (game.isGameOver()) {
             logger.warn("Cannot start new hand - game {} is over", gameId);
             return;
         }
-
-        game.resetForNewHand();
-
-        if (game.isGameOver()) {
+        // Weird structure here and in resetForNewHand because I wanted the game to hang at the end if the game was over and show the winner message for long
+        boolean gameEnded = game.resetForNewHand();
+        if (gameEnded) {
             logger.warn("Game {} became over after reset", gameId);
+            handleGameEnd(gameId);
             return;
         }
 
@@ -208,23 +214,31 @@ public class GameLifecycleService {
         if (game == null)
             return;
 
-        // Find the winner (last remaining player)
-        Player winner = game.getActivePlayers().stream()
-                .findFirst()
-                .orElse(null);
+        Player winner;
+        synchronized (game) {
+            // Find the winner (last remaining player)
+            winner = game.getActivePlayers().stream()
+                    .findFirst()
+                    .orElse(null);
+
+            if (winner == null) {
+                winner = game.getPlayers().stream()
+                        .filter(p -> !p.getIsOut())
+                        .findFirst()
+                        .orElse(game.getPlayers().stream().findFirst().orElse(null));
+            }
+        }
 
         if (winner == null) {
-            // Edge case: no active players (should not happen)
-            winner = game.getPlayers().stream()
-                    .filter(p -> !p.getIsOut())
-                    .findFirst()
-                    .orElse(game.getPlayers().getFirst()); // Fallback to first player
+            logger.warn("Cannot broadcast game end for {} - no winner could be determined", gameId);
+            return;
         }
 
         gameStateService.broadcastGameEnd(gameId, winner);
 
-        // Wait a few seconds for players to see the result, then destroy the room and game, on a different thread
-        eventPublisher.publishEvent(new GameCleanupEvent(gameId, 3000));
+        // Wait a few seconds for players to see the result, then destroy the room and
+        // game, on a different thread
+        eventPublisher.publishEvent(new GameCleanupEvent(gameId, GAME_END_DISPLAY_DELAY_MS));
     }
 
     /**

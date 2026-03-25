@@ -15,6 +15,11 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -135,6 +140,53 @@ class RoomLifecycleIntegrationTest {
 
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
         assertTrue(ex.getResponseBodyAsString().contains("Room not found"));
+    }
+
+    @Test
+    @DisplayName("Concurrent create with same room name allows only one success")
+    void createRoom_concurrentDuplicateName_shouldAllowSingleSuccess() throws InterruptedException {
+        int attempts = 8;
+        String roomName = uniqueName("ConcurrentCreate");
+        ExecutorService executor = Executors.newFixedThreadPool(attempts);
+        CountDownLatch ready = new CountDownLatch(attempts);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(attempts);
+        AtomicInteger successCount = new AtomicInteger(0);
+
+        for (int i = 0; i < attempts; i++) {
+            int idx = i;
+            executor.submit(() -> {
+                try {
+                    CreateRoomRequest request = new CreateRoomRequest(roomName, "Host" + idx, 6, 10, 20, 1000, null);
+                    ready.countDown();
+                    if (!start.await(3, TimeUnit.SECONDS)) {
+                        return;
+                    }
+
+                    restClient.post()
+                            .uri("/api/room/create")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(request)
+                            .retrieve()
+                            .body(String.class);
+                    successCount.incrementAndGet();
+                } catch (HttpClientErrorException ex) {
+                    assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+                    assertTrue(ex.getResponseBodyAsString().contains("already taken"));
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+
+        assertTrue(ready.await(3, TimeUnit.SECONDS));
+        start.countDown();
+        assertTrue(done.await(10, TimeUnit.SECONDS));
+        executor.shutdown();
+
+        assertEquals(1, successCount.get(), "Only one room creation should succeed for identical names");
     }
 
     private JsonNode createRoom(String roomName, String hostName, int maxPlayers) throws Exception {

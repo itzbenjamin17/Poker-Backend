@@ -13,6 +13,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -358,6 +364,53 @@ class RoomServiceTest {
 
         assertTrue(hostPlayer.isHost());
         assertFalse(regularPlayer.isHost());
+    }
+
+    @Test
+    void createRoom_ConcurrentDuplicateName_ShouldAllowSingleSuccess() throws InterruptedException {
+        int attempts = 10;
+        ExecutorService executor = Executors.newFixedThreadPool(attempts);
+        CountDownLatch ready = new CountDownLatch(attempts);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(attempts);
+        AtomicInteger successCount = new AtomicInteger(0);
+        ConcurrentLinkedQueue<Exception> failures = new ConcurrentLinkedQueue<>();
+
+        for (int i = 0; i < attempts; i++) {
+            int idx = i;
+            executor.submit(() -> {
+                try {
+                    CreateRoomRequest request = new CreateRoomRequest(
+                            "Concurrent Name",
+                            "Host" + idx,
+                            6,
+                            5,
+                            10,
+                            100,
+                            null);
+
+                    ready.countDown();
+                    assertTrue(start.await(2, TimeUnit.SECONDS));
+
+                    roomService.createRoom(request);
+                    successCount.incrementAndGet();
+                } catch (com.pokergame.exception.BadRequestException expected) {
+                    // expected for duplicates
+                } catch (Exception ex) {
+                    failures.add(ex);
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+
+        assertTrue(ready.await(2, TimeUnit.SECONDS));
+        start.countDown();
+        assertTrue(done.await(5, TimeUnit.SECONDS));
+        executor.shutdown();
+
+        assertTrue(failures.isEmpty(), "Unexpected failures: " + failures);
+        assertEquals(1, successCount.get(), "Only one concurrent create should succeed for duplicate room name");
     }
 
     // ==================== getRoom Tests ====================

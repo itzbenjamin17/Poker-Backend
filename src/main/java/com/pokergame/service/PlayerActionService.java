@@ -76,7 +76,6 @@ public class PlayerActionService {
             }
 
             PlayerAction action = actionRequest.action();
-            int callAmount = Math.max(0, game.getCurrentHighestBet() - currentPlayer.getCurrentBet());
 
             if ((action == PlayerAction.BET || action == PlayerAction.RAISE) && requestAmount <= 0) {
                 throw new BadRequestException("Bet/raise amount must be greater than 0");
@@ -85,10 +84,6 @@ public class PlayerActionService {
             if ((action == PlayerAction.BET || action == PlayerAction.RAISE)
                     && requestAmount > currentPlayer.getChips()) {
                 throw new BadRequestException("Action amount cannot exceed your available chips");
-            }
-
-            if (action == PlayerAction.CALL && callAmount > currentPlayer.getChips()) {
-                throw new BadRequestException("Insufficient chips to call. Use ALL_IN instead.");
             }
 
             logger.debug("Processing player action - Game: {}, Player: {}, Action: {}",
@@ -187,6 +182,10 @@ public class PlayerActionService {
      */
     private void advanceGame(String gameId) {
         Game game = gameLifecycleService.getGame(gameId);
+        if (game == null) {
+            logger.warn("Cannot advance game {} - game no longer exists", gameId);
+            return;
+        }
         logger.info("Advancing game {} from phase: {}", gameId, game.getCurrentPhase());
 
         if (game.isHandOver()) {
