@@ -90,7 +90,12 @@ public class GameStateService {
         int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
         // Get current player information
-        Player currentPlayer = game.getCurrentPlayer();
+        Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
+        if (currentPlayer != null) {
+            logger.debug("Showdown - current player: {} (ID: {})", currentPlayer.getName(), currentPlayer.getPlayerId());
+        } else {
+            logger.debug("Showdown - no active players found");
+        }
         String currentPlayerName = currentPlayer != null ? currentPlayer.getName() : null;
         String currentPlayerId = currentPlayer != null ? currentPlayer.getPlayerId() : null;
 
@@ -170,7 +175,12 @@ public class GameStateService {
         int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
         // Get current player information
-        Player currentPlayer = game.getCurrentPlayer();
+        Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
+        if (currentPlayer != null) {
+            logger.debug("Auto-advance - current player: {} (ID: {})", currentPlayer.getName(), currentPlayer.getPlayerId());
+        } else {
+            logger.debug("Auto-advance - no active players found");
+        }
         String currentPlayerName = currentPlayer != null ? currentPlayer.getName() : null;
         String currentPlayerId = currentPlayer != null ? currentPlayer.getPlayerId() : null;
 
@@ -280,6 +290,11 @@ public class GameStateService {
      * @param winner the Player object representing the game winner
      */
     public void broadcastGameEnd(String gameId, Player winner) {
+        if (winner == null) {
+            logger.warn("Cannot broadcast game end for {} - winner is null", gameId);
+            return;
+        }
+
         Map<String, Object> gameEndData = new HashMap<>();
         gameEndData.put("type", ResponseMessage.GAME_END.getMessage());
         gameEndData.put("winner", winner.getName());
@@ -309,7 +324,12 @@ public class GameStateService {
             throw new ResourceNotFoundException("Room not found");
         }
         List<PublicPlayerState> playerStateList = new ArrayList<>();
-        Player currentPlayer = game.getCurrentPlayer();
+        Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
+        if (currentPlayer != null) {
+            logger.debug("Building game state - current player: {} (ID: {})", currentPlayer.getName(), currentPlayer.getPlayerId());
+        } else {
+            logger.debug("Building game state - no active players found");
+        }
         for (Player player : game.getPlayers()) {
             String status = player.getHasFolded() ? PlayerStatus.FOLDED.getStatus()
                     : player.getIsOut() ? "OUT"
@@ -332,8 +352,8 @@ public class GameStateService {
                 game.getCurrentHighestBet(),
                 game.getCommunityCards(),
                 playerStateList,
-                currentPlayer.getName(),
-                currentPlayer.getPlayerId());
+            currentPlayer != null ? currentPlayer.getName() : null,
+            currentPlayer != null ? currentPlayer.getPlayerId() : null);
 
     }
 

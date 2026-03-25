@@ -212,6 +212,12 @@ class GameLifecycleServiceTest {
         assertEquals(10, game.getCurrentHighestBet()); // Big blind is 10
     }
 
+    @Test
+    void startNewHand_WhenGameMissing_ShouldReturnWithoutThrowing() {
+        assertDoesNotThrow(() -> gameLifecycleService.startNewHand("missing-game-id"));
+        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
+    }
+
     // ==================== leaveGame Tests ====================
 
     @Test
@@ -320,6 +326,18 @@ class GameLifecycleServiceTest {
         gameLifecycleService.handleGameEnd("nonexistent-id");
 
         verify(gameStateService, never()).broadcastGameEnd(anyString(), any(Player.class));
+    }
+
+    @Test
+    void handleGameEnd_WhenNoPlayersRemain_ShouldNotThrow() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        game.getPlayers().clear();
+        game.getActivePlayers().clear();
+
+        assertDoesNotThrow(() -> gameLifecycleService.handleGameEnd(ROOM_ID));
     }
 
     // ==================== Integration-like Tests ====================

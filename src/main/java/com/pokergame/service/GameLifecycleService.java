@@ -111,6 +111,10 @@ public class GameLifecycleService {
      */
     public void startNewHand(String gameId) {
         Game game = getGame(gameId);
+        if (game == null) {
+            logger.warn("Cannot start new hand - game {} not found", gameId);
+            return;
+        }
         logger.info("Starting new hand for game: {}", gameId);
 
         // Was having issues with duplicate calls
@@ -210,17 +214,24 @@ public class GameLifecycleService {
         if (game == null)
             return;
 
-        // Find the winner (last remaining player)
-        Player winner = game.getActivePlayers().stream()
-                .findFirst()
-                .orElse(null);
+        Player winner;
+        synchronized (game) {
+            // Find the winner (last remaining player)
+            winner = game.getActivePlayers().stream()
+                    .findFirst()
+                    .orElse(null);
+
+            if (winner == null) {
+                winner = game.getPlayers().stream()
+                        .filter(p -> !p.getIsOut())
+                        .findFirst()
+                        .orElse(game.getPlayers().stream().findFirst().orElse(null));
+            }
+        }
 
         if (winner == null) {
-            // Edge case: no active players (should not happen)
-            winner = game.getPlayers().stream()
-                    .filter(p -> !p.getIsOut())
-                    .findFirst()
-                    .orElse(game.getPlayers().getFirst()); // Fallback to first player
+            logger.warn("Cannot broadcast game end for {} - no winner could be determined", gameId);
+            return;
         }
 
         gameStateService.broadcastGameEnd(gameId, winner);

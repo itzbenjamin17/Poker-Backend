@@ -182,6 +182,10 @@ public class PlayerActionService {
      */
     private void advanceGame(String gameId) {
         Game game = gameLifecycleService.getGame(gameId);
+        if (game == null) {
+            logger.warn("Cannot advance game {} - game no longer exists", gameId);
+            return;
+        }
         logger.info("Advancing game {} from phase: {}", gameId, game.getCurrentPhase());
 
         if (game.isHandOver()) {

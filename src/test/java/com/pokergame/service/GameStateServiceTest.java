@@ -272,6 +272,11 @@ class GameStateServiceTest {
         assertTrue(message.contains("wins"));
     }
 
+    @Test
+    void broadcastGameEnd_WithNullWinner_ShouldNotThrow() {
+        assertDoesNotThrow(() -> gameStateService.broadcastGameEnd(GAME_ID, null));
+    }
+
     // ==================== Edge Case Tests ====================
 
     @Test
@@ -332,5 +337,13 @@ class GameStateServiceTest {
 
         // 3 public broadcasts + 3*(2 name-private) = 9 total
         verify(messagingTemplate, times(9)).convertAndSend(anyString(), any(Object.class));
+    }
+
+    @Test
+    void broadcastGameState_WhenCurrentPlayerMissing_ShouldNotThrow() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testGame.getActivePlayers().clear();
+
+        assertDoesNotThrow(() -> gameStateService.broadcastGameState(GAME_ID, testGame));
     }
 }

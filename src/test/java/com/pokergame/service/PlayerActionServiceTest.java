@@ -698,4 +698,25 @@ class PlayerActionServiceTest {
         // This should not cause any issues due to synchronization
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
     }
+
+    @Test
+    void processPlayerAction_WhenGameDeletedDuringAdvance_ShouldNotThrow() {
+        List<Player> players = new ArrayList<>();
+        players.add(new Player("P1", UUID.randomUUID().toString(), 1000));
+        players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
+
+        Game twoPlayerGame = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        twoPlayerGame.resetForNewHand();
+        twoPlayerGame.dealHoleCards();
+        twoPlayerGame.postBlinds();
+
+        // First lookup in processPlayerAction() returns game, second lookup in
+        // advanceGame() simulates stale async state.
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(twoPlayerGame, null);
+
+        Player currentPlayer = twoPlayerGame.getCurrentPlayer();
+        PlayerActionRequest foldRequest = new PlayerActionRequest(PlayerAction.FOLD, null);
+
+        assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, foldRequest, currentPlayer.getName()));
+    }
 }

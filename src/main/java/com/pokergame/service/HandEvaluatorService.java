@@ -31,7 +31,7 @@ public class HandEvaluatorService {
      * @param numOfCards the number of cards in each combination
      * @return list of all possible card combinations
      */
-    public List<List<Card>> generateCombinations(List<Card> cards, int numOfCards) {
+    private List<List<Card>> generateCombinations(List<Card> cards, int numOfCards) {
         List<List<Card>> results = new ArrayList<>();
         if (cards.size() < numOfCards) {
             return results;
@@ -158,7 +158,8 @@ public class HandEvaluatorService {
      */
     private boolean compareOnePair(List<Card> sortedCombination, List<Card> bestHand) {
         // Get pair and kickers for sortedCombination
-        @SuppressWarnings("DuplicatedCode") Map<Rank, List<Card>> groups1 = sortedCombination.stream()
+        @SuppressWarnings("DuplicatedCode")
+        Map<Rank, List<Card>> groups1 = sortedCombination.stream()
                 .collect(Collectors.groupingBy(Card::rank));
 
         List<Card> pair1 = groups1.values().stream()
@@ -171,7 +172,8 @@ public class HandEvaluatorService {
                 .toList();
 
         // Get pair and kickers for bestHand
-        @SuppressWarnings("DuplicatedCode") Map<Rank, List<Card>> groups2 = bestHand.stream()
+        @SuppressWarnings("DuplicatedCode")
+        Map<Rank, List<Card>> groups2 = bestHand.stream()
                 .collect(Collectors.groupingBy(Card::rank));
 
         List<Card> pair2 = groups2.values().stream()
@@ -184,7 +186,7 @@ public class HandEvaluatorService {
                 .toList();
 
         // Compare pair values first
-        //noinspection DuplicatedCode
+        // noinspection DuplicatedCode
         if (pair1.getFirst().getValue() != pair2.getFirst().getValue()) {
             return pair1.getFirst().getValue() > pair2.getFirst().getValue();
         }
@@ -209,7 +211,8 @@ public class HandEvaluatorService {
      */
     private boolean compareTwoPair(List<Card> sortedCombination, List<Card> bestHand) {
         // Get pairs and kicker for sortedCombination
-        @SuppressWarnings("DuplicatedCode") Map<Rank, List<Card>> groups1 = sortedCombination.stream()
+        @SuppressWarnings("DuplicatedCode")
+        Map<Rank, List<Card>> groups1 = sortedCombination.stream()
                 .collect(Collectors.groupingBy(Card::rank));
 
         List<List<Card>> pairs1 = groups1.values().stream()
@@ -222,7 +225,8 @@ public class HandEvaluatorService {
                 .toList().getFirst().getFirst();
 
         // Get pairs and kicker for bestHand
-        @SuppressWarnings("DuplicatedCode") Map<Rank, List<Card>> groups2 = bestHand.stream()
+        @SuppressWarnings("DuplicatedCode")
+        Map<Rank, List<Card>> groups2 = bestHand.stream()
                 .collect(Collectors.groupingBy(Card::rank));
 
         List<List<Card>> pairs2 = groups2.values().stream()
@@ -258,7 +262,8 @@ public class HandEvaluatorService {
      */
     private boolean compareThreeOfAKind(List<Card> sortedCombination, List<Card> bestHand) {
         // Get three-of-a-kind and kickers for sortedCombination
-        @SuppressWarnings("DuplicatedCode") Map<Rank, List<Card>> groups1 = sortedCombination.stream()
+        @SuppressWarnings("DuplicatedCode")
+        Map<Rank, List<Card>> groups1 = sortedCombination.stream()
                 .collect(Collectors.groupingBy(Card::rank));
 
         List<Card> threeOfKind1 = groups1.values().stream()
@@ -271,7 +276,8 @@ public class HandEvaluatorService {
                 .toList();
 
         // Get three-of-a-kind and kickers for bestHand
-        @SuppressWarnings("DuplicatedCode") Map<Rank, List<Card>> groups2 = bestHand.stream()
+        @SuppressWarnings("DuplicatedCode")
+        Map<Rank, List<Card>> groups2 = bestHand.stream()
                 .collect(Collectors.groupingBy(Card::rank));
 
         List<Card> threeOfKind2 = groups2.values().stream()
@@ -284,7 +290,7 @@ public class HandEvaluatorService {
                 .toList();
 
         // Compare three-of-a-kind values first
-        //noinspection DuplicatedCode
+        // noinspection DuplicatedCode
         if (threeOfKind1.getFirst().getValue() != threeOfKind2.getFirst().getValue()) {
             return threeOfKind1.getFirst().getValue() > threeOfKind2.getFirst().getValue();
         }
@@ -370,7 +376,8 @@ public class HandEvaluatorService {
      */
     private boolean compareFullHouse(List<Card> sortedCombination, List<Card> bestHand) {
         // Get three-of-a-kind and pair for sortedCombination
-        @SuppressWarnings("DuplicatedCode") Map<Rank, List<Card>> groups1 = sortedCombination.stream()
+        @SuppressWarnings("DuplicatedCode")
+        Map<Rank, List<Card>> groups1 = sortedCombination.stream()
                 .collect(Collectors.groupingBy(Card::rank));
 
         List<Card> threeOfKind1 = groups1.values().stream()
@@ -382,7 +389,8 @@ public class HandEvaluatorService {
                 .toList().getFirst();
 
         // Get three-of-a-kind and pair for bestHand
-        @SuppressWarnings("DuplicatedCode") Map<Rank, List<Card>> groups2 = bestHand.stream()
+        @SuppressWarnings("DuplicatedCode")
+        Map<Rank, List<Card>> groups2 = bestHand.stream()
                 .collect(Collectors.groupingBy(Card::rank));
 
         List<Card> threeOfKind2 = groups2.values().stream()
@@ -472,11 +480,21 @@ public class HandEvaluatorService {
      * @param cards the list of cards to select from
      * @return the best 5-card high card hand
      */
-    public List<Card> getBestHighCardHand(List<Card> cards) {
+    private List<Card> getBestHighCardHand(List<Card> cards) {
+        if (cards == null) {
+            throw new BadRequestException("Card list cannot be null");
+        }
+
         List<Card> sortedCards = new ArrayList<>(cards);
         sortedCards.sort((c1, c2) -> Integer.compare(c2.getValue(), c1.getValue()));
-
-        return new ArrayList<>(sortedCards.subList(0, 5));
+        // Not crashing if there are less than 5 cards, just return as many as we have
+        // If there are less than 5 cards, something went wrong but just log it and
+        // return what we have instead of crashing
+        if (sortedCards.size() < 5) {
+            logger.warn("Less than 5 cards available for high card hand: {}", sortedCards.size());
+        }
+        int handSize = Math.min(5, sortedCards.size());
+        return new ArrayList<>(sortedCards.subList(0, handSize));
     }
 
     /**

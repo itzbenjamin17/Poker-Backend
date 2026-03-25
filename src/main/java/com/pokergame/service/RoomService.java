@@ -47,15 +47,17 @@ public class RoomService {
      * @throws BadRequestException if the room name is already taken
      */
     public String createRoom(CreateRoomRequest request) {
-        if (isRoomNameTaken(request.getRoomName())) {
+        String roomId;
+        synchronized (this) {
+            if (isRoomNameTaken(request.getRoomName())) {
             logger.warn("Attempted to create room with duplicate name: {}", request.getRoomName());
             throw new BadRequestException(
-                    "Room name '" + request.getRoomName() + "' is already taken. Please choose a different name.");
-        }
+                "Room name '" + request.getRoomName() + "' is already taken. Please choose a different name.");
+            }
 
-        String roomId = UUID.randomUUID().toString();
+            roomId = UUID.randomUUID().toString();
 
-        Room room = new Room(
+            Room room = new Room(
                 roomId,
                 request.getRoomName(),
                 request.getPlayerName(), // Host name
@@ -65,11 +67,12 @@ public class RoomService {
                 request.getBuyIn(),
                 request.getPassword());
 
-        // Add the host as the first player
-        room.addPlayer(request.getPlayerName());
+            // Add the host as the first player
+            room.addPlayer(request.getPlayerName());
 
-        rooms.put(roomId, room);
-        roomHosts.put(roomId, request.getPlayerName());
+            rooms.put(roomId, room);
+            roomHosts.put(roomId, request.getPlayerName());
+        }
 
         messagingTemplate.convertAndSend("/rooms" + roomId,
                 new ApiResponse<>(ResponseMessage.ROOM_CREATED.getMessage(), getRoomData(roomId)));

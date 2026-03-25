@@ -24,58 +24,43 @@ class HandEvaluatorServiceTest {
                 service = new HandEvaluatorService();
         }
 
-        // Test generateCombinations
+        // Indirectly validates internal combination/high-card helpers through public
+        // getBestHand API.
         @Test
-        void testGenerateCombinationsBasic() {
-                List<Card> cards = List.of(
-                                new Card(Rank.ACE, Suit.SPADES),
-                                new Card(Rank.KING, Suit.HEARTS),
-                                new Card(Rank.QUEEN, Suit.DIAMONDS),
-                                new Card(Rank.JACK, Suit.CLUBS));
+        void testGetBestHand_WithInsufficientTotalCards_ShouldReturnSortedAvailableCards() {
+                List<Card> communityCards = List.of(
+                                new Card(Rank.TWO, Suit.SPADES),
+                                new Card(Rank.FOUR, Suit.HEARTS));
 
-                List<List<Card>> combinations = service.generateCombinations(cards, 2);
+                List<Card> holeCards = List.of(
+                                new Card(Rank.KING, Suit.CLUBS),
+                                new Card(Rank.NINE, Suit.DIAMONDS));
 
-                assertEquals(6, combinations.size()); // C(4,2) = 6
+                HandEvaluationResult result = service.getBestHand(communityCards, holeCards);
+
+                assertEquals(HandRank.HIGH_CARD, result.handRank());
+                assertEquals(4, result.bestHand().size());
+                assertEquals(Rank.KING, result.bestHand().get(0).rank());
+                assertEquals(Rank.NINE, result.bestHand().get(1).rank());
+                assertEquals(Rank.FOUR, result.bestHand().get(2).rank());
+                assertEquals(Rank.TWO, result.bestHand().get(3).rank());
         }
 
         @Test
-        void testGenerateCombinationsFiveFromSeven() {
-                List<Card> cards = List.of(
-                                new Card(Rank.ACE, Suit.SPADES),
+        void testGetBestHand_WithExactlyFiveCards_ShouldEvaluateTheOnlyCombination() {
+                List<Card> communityCards = List.of(
+                                new Card(Rank.TEN, Suit.HEARTS),
+                                new Card(Rank.JACK, Suit.HEARTS),
+                                new Card(Rank.QUEEN, Suit.HEARTS));
+
+                List<Card> holeCards = List.of(
                                 new Card(Rank.KING, Suit.HEARTS),
-                                new Card(Rank.QUEEN, Suit.DIAMONDS),
-                                new Card(Rank.JACK, Suit.CLUBS),
-                                new Card(Rank.TEN, Suit.SPADES),
-                                new Card(Rank.NINE, Suit.HEARTS),
-                                new Card(Rank.EIGHT, Suit.DIAMONDS));
+                                new Card(Rank.ACE, Suit.HEARTS));
 
-                List<List<Card>> combinations = service.generateCombinations(cards, 5);
+                HandEvaluationResult result = service.getBestHand(communityCards, holeCards);
 
-                assertEquals(21, combinations.size()); // C(7,5) = 21
-        }
-
-        @Test
-        void testGenerateCombinationsInsufficientCards() {
-                List<Card> cards = List.of(
-                                new Card(Rank.ACE, Suit.SPADES),
-                                new Card(Rank.KING, Suit.HEARTS));
-
-                List<List<Card>> combinations = service.generateCombinations(cards, 5);
-
-                assertEquals(0, combinations.size());
-        }
-
-        @Test
-        void testGenerateCombinationsExactMatch() {
-                List<Card> cards = List.of(
-                                new Card(Rank.ACE, Suit.SPADES),
-                                new Card(Rank.KING, Suit.HEARTS),
-                                new Card(Rank.QUEEN, Suit.DIAMONDS));
-
-                List<List<Card>> combinations = service.generateCombinations(cards, 3);
-
-                assertEquals(1, combinations.size());
-                assertEquals(cards, combinations.get(0));
+                assertEquals(HandRank.ROYAL_FLUSH, result.handRank());
+                assertEquals(5, result.bestHand().size());
         }
 
         // Test evaluateHand - Royal Flush
@@ -294,20 +279,23 @@ class HandEvaluatorServiceTest {
                 assertTrue(result.bestHand().stream().anyMatch(c -> c.rank() == Rank.KING));
         }
 
-        // Test getBestHighCardHand
         @Test
-        void testGetBestHighCardHand() {
-                List<Card> cards = List.of(
+        void testGetBestHand_HighCardSelection_ShouldKeepTopFiveCards() {
+                List<Card> communityCards = List.of(
                                 new Card(Rank.TWO, Suit.SPADES),
                                 new Card(Rank.FIVE, Suit.HEARTS),
                                 new Card(Rank.SEVEN, Suit.DIAMONDS),
                                 new Card(Rank.NINE, Suit.CLUBS),
-                                new Card(Rank.JACK, Suit.SPADES),
+                                new Card(Rank.JACK, Suit.SPADES));
+
+                List<Card> holeCards = List.of(
                                 new Card(Rank.KING, Suit.HEARTS),
                                 new Card(Rank.ACE, Suit.DIAMONDS));
 
-                List<Card> bestHand = service.getBestHighCardHand(cards);
+                HandEvaluationResult result = service.getBestHand(communityCards, holeCards);
+                List<Card> bestHand = result.bestHand();
 
+                assertEquals(HandRank.HIGH_CARD, result.handRank());
                 assertEquals(5, bestHand.size());
                 assertEquals(Rank.ACE, bestHand.get(0).rank());
                 assertEquals(Rank.KING, bestHand.get(1).rank());
