@@ -250,8 +250,13 @@ class PlayerActionServiceTest {
     void processPlayerAction_WithValidBet_ShouldProcess() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
 
+        // BET is only valid when there are no active bets, which requires changing game
+        // phase
+        // The testGame defaults to PRE_FLOP which has blind bets. We advance it to FLOP
+        testGame.dealFlop();
+
         Player currentPlayer = testGame.getCurrentPlayer();
-        // Bet amount should be higher than current highest bet
+        // Bet amount should be valid
         int betAmount = 20;
         PlayerActionRequest request = new PlayerActionRequest(PlayerAction.BET, betAmount);
 
@@ -717,6 +722,7 @@ class PlayerActionServiceTest {
         Player currentPlayer = twoPlayerGame.getCurrentPlayer();
         PlayerActionRequest foldRequest = new PlayerActionRequest(PlayerAction.FOLD, null);
 
-        assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, foldRequest, currentPlayer.getName()));
+        assertDoesNotThrow(
+                () -> playerActionService.processPlayerAction(GAME_ID, foldRequest, currentPlayer.getName()));
     }
 }

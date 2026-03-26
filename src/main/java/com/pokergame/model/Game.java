@@ -227,12 +227,24 @@ public class Game {
         }
 
         if (actualDecision.action() == PlayerAction.BET) {
+            if (currentHighestBet > 0) {
+                throw new UnauthorisedActionException(
+                        "Cannot bet when there is an active bet. You must call, raise, or fold.");
+            }
+
             if (actualDecision.amount() <= 0) {
                 throw new BadRequestException("Bet amount must be greater than 0");
             }
 
             if (actualDecision.amount() > player.getChips()) {
                 throw new BadRequestException("Bet amount cannot exceed available chips");
+            }
+        }
+
+        if (actualDecision.action() == PlayerAction.CHECK) {
+            if (currentHighestBet > player.getCurrentBet()) {
+                throw new UnauthorisedActionException(
+                        "Cannot check when there is an active bet. You must call, raise, or fold.");
             }
         }
 

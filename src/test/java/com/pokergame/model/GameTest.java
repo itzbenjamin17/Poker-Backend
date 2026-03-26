@@ -254,6 +254,19 @@ class GameTest {
     }
 
     @Test
+    void testProcessPlayerDecisionCheckWithActiveBet() {
+        game.postBlinds(); // Sets highest bet to 20
+        Player player = game.getCurrentPlayer();
+        PlayerDecision decision = new PlayerDecision(PlayerAction.CHECK, 0, player.getPlayerId());
+
+        UnauthorisedActionException exception = assertThrows(
+                UnauthorisedActionException.class,
+                () -> game.processPlayerDecision(player, decision));
+
+        assertTrue(exception.getMessage().contains("Cannot check when there is an active bet"));
+    }
+
+    @Test
     void testProcessPlayerDecisionBet() {
         Player player = game.getCurrentPlayer();
         PlayerDecision decision = new PlayerDecision(PlayerAction.BET, 50, player.getPlayerId());
@@ -264,6 +277,19 @@ class GameTest {
         assertEquals(50, player.getCurrentBet());
         assertEquals(950, player.getChips());
         assertEquals(50, game.getCurrentHighestBet());
+    }
+
+    @Test
+    void testProcessPlayerDecisionBetWithActiveBet() {
+        game.postBlinds(); // Sets highest bet to 20
+        Player player = game.getCurrentPlayer();
+        PlayerDecision decision = new PlayerDecision(PlayerAction.BET, 50, player.getPlayerId());
+
+        UnauthorisedActionException exception = assertThrows(
+                UnauthorisedActionException.class,
+                () -> game.processPlayerDecision(player, decision));
+
+        assertTrue(exception.getMessage().contains("Cannot bet when there is an active bet"));
     }
 
     @Test
