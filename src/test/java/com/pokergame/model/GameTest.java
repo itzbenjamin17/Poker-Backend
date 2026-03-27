@@ -1130,20 +1130,30 @@ class GameTest {
     }
 
     @Test
-    void testProcessPlayerDecisionConvertsRaiseToCallWithAllIn() {
-        // First player goes all-in
-        Player allInPlayer = game.getActivePlayers().get(0);
-        game.processPlayerDecision(allInPlayer,
+    void testProcessPlayerDecision_AllowsRaiseWithAllIn() {
+        List<Player> mixedStacks = new ArrayList<>();
+        mixedStacks.add(new Player("Deep1", "deep1", 1000));
+        mixedStacks.add(new Player("Short", "short", 50));
+        mixedStacks.add(new Player("Deep2", "deep2", 1000));
+
+        Game sidePotGame = new Game("all-in-raise-game", mixedStacks, 5, 10, mockHandEvaluator);
+        sidePotGame.resetForNewHand();
+        sidePotGame.dealHoleCards();
+        sidePotGame.postBlinds();
+
+        Player allInPlayer = sidePotGame.getCurrentPlayer();
+        assertEquals("Short", allInPlayer.getName());
+        sidePotGame.processPlayerDecision(allInPlayer,
                 new PlayerDecision(PlayerAction.ALL_IN, 0, allInPlayer.getPlayerId()));
 
-        // Second player tries to raise, should be converted to call
-        Player raiser = game.getActivePlayers().get(1);
-        String message = game.processPlayerDecision(raiser,
-                new PlayerDecision(PlayerAction.RAISE, 500, raiser.getPlayerId()));
+        Player raiser = mixedStacks.get(0);
+        int previousBet = raiser.getCurrentBet();
+        String message = sidePotGame.processPlayerDecision(raiser,
+                new PlayerDecision(PlayerAction.RAISE, 100, raiser.getPlayerId()));
 
-        assertNotNull(message);
-        assertTrue(message.contains("converted to a call"));
-        assertEquals(1000, raiser.getCurrentBet()); // Should match all-in amount
+        assertNull(message);
+        assertTrue(raiser.getCurrentBet() > previousBet);
+        assertEquals(raiser.getCurrentBet(), sidePotGame.getCurrentHighestBet());
     }
 
     @Test

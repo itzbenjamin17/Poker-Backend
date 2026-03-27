@@ -70,12 +70,11 @@ public class Room {
             logger.error("Invalid smallBlind: {}", smallBlind);
             throw new BadRequestException("Small blind must be at least 1.");
         }
-        if (bigBlind < smallBlind) {
+        if (bigBlind < 2 * smallBlind) {
             logger.error("Invalid bigBlind: {}, smallBlind: {}", bigBlind, smallBlind);
-            throw new BadRequestException("Big blind must be greater than or equal to the small blind.");
+            throw new BadRequestException("Big blind must be at least twice the small blind.");
         }
 
-        // Maybe don't allow for a big blind to be less than 2x a small blind
 
         this.roomId = roomId;
         this.roomName = roomName;

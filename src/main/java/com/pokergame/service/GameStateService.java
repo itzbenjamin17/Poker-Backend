@@ -241,7 +241,7 @@ public class GameStateService {
 
     /**
      * Broadcasts a notification that auto-advance to showdown is starting.
-     * Sent when all active players are all-in.
+     * Sent when no further betting actions are possible.
      *
      * @param gameId the unique identifier of the game
      * @param game   the Game object containing the current state
@@ -252,12 +252,13 @@ public class GameStateService {
             return;
         }
 
-        logger.info("Broadcasting auto-advance notification for game {}: All players are all-in, advancing to showdown",
+        logger.info(
+                "Broadcasting auto-advance notification for game {}: No further betting actions are possible, advancing to showdown",
                 gameId);
 
         messagingTemplate.convertAndSend("/game/" + gameId,
                 new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_START.getMessage(),
-                        "All players are all-in. Auto-advancing to showdown...", null, gameId));
+                        "No further betting actions are possible. Auto-advancing to showdown...", null, gameId));
     }
 
     /**

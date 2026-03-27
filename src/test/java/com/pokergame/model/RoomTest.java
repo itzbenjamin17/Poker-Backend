@@ -140,7 +140,7 @@ class RoomTest {
         BadRequestException exception = assertThrows(
                 BadRequestException.class,
                 () -> new Room("room123", "Room", "Host", 6, 20, 10, 1000, null));
-        assertEquals("Big blind must be greater than or equal to the small blind.", exception.getMessage());
+        assertEquals("Big blind must be at least twice the small blind.", exception.getMessage());
     }
 
     @Test

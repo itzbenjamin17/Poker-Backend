@@ -220,8 +220,7 @@ class PlayerActionServiceTest {
 
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
-        // All-in might be converted to call if there are already all-in players
-        // But the action should process without error
+        // Action should process without error even when all-in players are present.
         verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
@@ -447,44 +446,41 @@ class PlayerActionServiceTest {
     // ==================== Conversion Tests ====================
 
     @Test
-    void processPlayerAction_RaiseWithAllInPlayers_ShouldConvertToCall() {
-        // Set up a game where one player is already all-in
+    void processPlayerAction_RaiseWithAllInPlayers_ShouldRemainRaise() {
+        // Set up a game where a short stack can go all-in and action continues.
         List<Player> players = new ArrayList<>();
-        Player allInPlayer = new Player("AllIn", UUID.randomUUID().toString(), 50);
         Player normalPlayer = new Player("Normal", UUID.randomUUID().toString(), 1000);
-        players.add(allInPlayer);
+        Player allInPlayer = new Player("AllIn", UUID.randomUUID().toString(), 50);
+        Player thirdPlayer = new Player("Third", UUID.randomUUID().toString(), 1000);
         players.add(normalPlayer);
+        players.add(allInPlayer);
+        players.add(thirdPlayer);
 
         Game gameWithAllIn = new Game(GAME_ID, players, 5, 10, handEvaluator);
         gameWithAllIn.resetForNewHand();
         gameWithAllIn.dealHoleCards();
         gameWithAllIn.postBlinds();
 
-        // Force the all-in player to be all-in
-        if (!allInPlayer.getIsAllIn()) {
-            allInPlayer.doAction(PlayerAction.ALL_IN, 0, 0);
-        }
-
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(gameWithAllIn);
 
-        Player currentPlayer = gameWithAllIn.getCurrentPlayer();
-        if (currentPlayer.getIsAllIn()) {
-            // If current player is already all-in, get the other player
-            gameWithAllIn.nextPlayer();
-            currentPlayer = gameWithAllIn.getCurrentPlayer();
-        }
+        Player shortStack = gameWithAllIn.getCurrentPlayer();
+        assertEquals("AllIn", shortStack.getName());
+        playerActionService.processPlayerAction(
+                GAME_ID,
+                new PlayerActionRequest(PlayerAction.ALL_IN, null),
+                shortStack.getName());
 
-        // Try to raise - should be converted to call
-        if (!currentPlayer.getIsAllIn()) {
-            PlayerActionRequest raiseRequest = new PlayerActionRequest(PlayerAction.RAISE, 100);
+        Player raiser = gameWithAllIn.getCurrentPlayer();
+        int previousBet = raiser.getCurrentBet();
+        PlayerActionRequest raiseRequest = new PlayerActionRequest(PlayerAction.RAISE, 100);
 
-            final Player finalCurrentPlayer = currentPlayer;
-            assertDoesNotThrow(
-                    () -> playerActionService.processPlayerAction(GAME_ID, raiseRequest, finalCurrentPlayer.getName()));
+        assertDoesNotThrow(
+                () -> playerActionService.processPlayerAction(GAME_ID, raiseRequest, raiser.getName()));
 
-            // Should have sent a notification about conversion
-            verify(gameStateService, atLeast(0)).sendPlayerNotification(anyString(), anyString(), anyString());
-        }
+        assertTrue(raiser.getCurrentBet() > previousBet);
+        assertEquals(raiser.getCurrentBet(), gameWithAllIn.getCurrentHighestBet());
+        verify(gameStateService, never()).sendPlayerNotification(eq(GAME_ID), eq(raiser.getName()),
+                contains("converted to a call"));
     }
 
     // ==================== Pot Updates Tests ====================
