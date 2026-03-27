@@ -36,6 +36,7 @@ public class Game {
     private final HandEvaluatorService handEvaluator;
     private final int smallBlind;
     private final int bigBlind;
+    private final Map<String, Integer> handContributions;
 
     // Track if everyone has had their initial turn in the current betting round
     private boolean everyoneHasHadInitialTurn;
@@ -81,6 +82,7 @@ public class Game {
         this.bigBlind = bigBlind;
         this.handEvaluator = handEvaluator;
         this.everyoneHasHadInitialTurn = false;
+        this.handContributions = new HashMap<>();
     }
 
     /**
@@ -91,6 +93,13 @@ public class Game {
      */
     public boolean resetForNewHand() {
         int carryOverPot = currentPhase == GamePhase.SHOWDOWN ? pot : 0;
+
+        if (logger.isDebugEnabled()) {
+            logger.debug("Resetting hand for game {} | carryOverPot={} | previousContributions={}",
+                    gameId,
+                    carryOverPot,
+                    handContributions);
+        }
 
         cleanupAfterHand();
 
@@ -104,6 +113,9 @@ public class Game {
         currentHighestBet = 0;
         currentPhase = GamePhase.PRE_FLOP;
         everyoneHasHadInitialTurn = false;
+        handContributions.clear();
+
+        logger.debug("Hand reset complete for game {} | contributions cleared", gameId);
 
         activePlayers.clear();
         for (Player player : players) {
@@ -142,19 +154,42 @@ public class Game {
             Player smallBlindPlayer = activePlayers.get(smallBlindPosition);
             Player bigBlindPlayer = activePlayers.get(bigBlindPosition);
 
+            logger.debug("Posting blinds for game {} | SB={} (chips={}) | BB={} (chips={}) | potBefore={}",
+                    gameId,
+                    smallBlindPlayer.getName(),
+                    smallBlindPlayer.getChips(),
+                    bigBlindPlayer.getName(),
+                    bigBlindPlayer.getChips(),
+                    pot);
+
+            int smallBlindBefore = smallBlindPlayer.getCurrentBet();
+
             if (smallBlindPlayer.getChips() <= smallBlind) {
                 this.pot = smallBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
             } else {
                 this.pot = smallBlindPlayer.doAction(PlayerAction.BET, smallBlind, this.pot);
             }
+            trackContribution(smallBlindPlayer, smallBlindPlayer.getCurrentBet() - smallBlindBefore);
+
+            int bigBlindBefore = bigBlindPlayer.getCurrentBet();
 
             if (bigBlindPlayer.getChips() <= bigBlind) {
                 this.pot = bigBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
             } else {
                 this.pot = bigBlindPlayer.doAction(PlayerAction.BET, bigBlind, this.pot);
             }
+            trackContribution(bigBlindPlayer, bigBlindPlayer.getCurrentBet() - bigBlindBefore);
 
             currentHighestBet = Math.max(smallBlindPlayer.getCurrentBet(), bigBlindPlayer.getCurrentBet());
+
+            logger.debug(
+                    "Blinds posted for game {} | sbBet={} | bbBet={} | potAfter={} | currentHighestBet={} | contributions={}",
+                    gameId,
+                    smallBlindPlayer.getCurrentBet(),
+                    bigBlindPlayer.getCurrentBet(),
+                    pot,
+                    currentHighestBet,
+                    handContributions);
         }
     }
 
@@ -176,6 +211,15 @@ public class Game {
         if (decision.amount() < 0) {
             throw new BadRequestException("Action amount cannot be negative");
         }
+
+        logger.debug(
+                "Processing decision in game {} | player={} | decision={} | currentBet={} | currentHighestBet={} | pot={}",
+                gameId,
+                player.getName(),
+                decision,
+                player.getCurrentBet(),
+                currentHighestBet,
+                pot);
 
         // Check if there are all-in players that would limit raises/all-ins
         boolean hasAllInPlayers = activePlayers.stream()
@@ -258,6 +302,8 @@ public class Game {
             }
         }
 
+        int potBeforeDecision = this.pot;
+
         switch (actualDecision.action()) {
             case FOLD, CHECK -> player.doAction(actualDecision.action(), 0, this.pot);
             case CALL, BET, RAISE -> {
@@ -274,6 +320,20 @@ public class Game {
                 }
             }
         }
+
+        trackContribution(player, this.pot - potBeforeDecision);
+
+        logger.debug(
+                "Decision applied in game {} | player={} | action={} | potDelta={} | potNow={} | playerBet={} | playerChips={} | currentHighestBet={} | contributions={}",
+                gameId,
+                player.getName(),
+                actualDecision.action(),
+                (this.pot - potBeforeDecision),
+                this.pot,
+                player.getCurrentBet(),
+                player.getChips(),
+                currentHighestBet,
+                handContributions);
 
         return conversionMessage; // Return null if no conversion, or the message if converted
     }
@@ -306,14 +366,6 @@ public class Game {
                 .anyMatch(p -> p.getCurrentBet() < currentHighestBet &&
                         !p.getHasFolded() &&
                         !p.getIsAllIn());
-
-        // In PRE_FLOP, if everyone active has matched the current highest bet, the
-        // round is complete.
-        // This removes option for the Big Blind to check if everyone just called.
-        if (currentPhase == GamePhase.PRE_FLOP && !hasPlayerWhoNeedsToAct) {
-            logger.debug("Pre-flop round complete: all active players have matched the current bet.");
-            return true;
-        }
 
         if (!everyoneHasHadInitialTurn) {
             logger.debug("Betting round not complete: Not everyone has had initial turn");
@@ -410,11 +462,18 @@ public class Game {
         }
 
         logger.debug("Determining winners from {} players", showdownPlayers.size());
-        List<Player> winners = determineWinners(showdownPlayers);
+        List<Player> winners;
 
-        logger.info("Winners: {}", winners.stream().map(Player::getName).toList());
-        logger.info("Distributing pot of {} to {} winner(s)", pot, winners.size());
-        distributePot(winners);
+        boolean hasAllInShowdownPlayer = showdownPlayers.stream().anyMatch(Player::getIsAllIn);
+        if (!hasAllInShowdownPlayer) {
+            winners = determineWinners(showdownPlayers);
+            logger.info("Winners: {}", winners.stream().map(Player::getName).toList());
+            logger.info("Distributing pot of {} to {} winner(s)", pot, winners.size());
+            distributePot(winners);
+        } else {
+            winners = distributeSidePotsAtShowdown();
+            logger.info("Side-pot winners: {}", winners.stream().map(Player::getName).toList());
+        }
 
         logger.debug("Pot after distribution: {}", pot);
         if (logger.isDebugEnabled()) {
@@ -423,6 +482,289 @@ public class Game {
 
         logger.info("Showdown complete");
         return winners;
+    }
+
+    private void trackContribution(Player player, int amount) {
+        if (player == null || amount <= 0) {
+            return;
+        }
+
+        handContributions.merge(player.getPlayerId(), amount, Integer::sum);
+
+        logger.debug("Tracked contribution in game {} | player={} | added={} | totalContribution={} | contributions={}",
+                gameId,
+                player.getName(),
+                amount,
+                handContributions.getOrDefault(player.getPlayerId(), 0),
+                handContributions);
+    }
+
+    private record PotAllocation(int amount, List<Player> eligiblePlayers) {
+    }
+
+    private record PotComputationResult(List<PotAllocation> allocations,
+            Map<String, Integer> uncalledByPlayer,
+            int uncalledTotal) {
+    }
+
+    private PotComputationResult computePotAllocationsAndUncalled() {
+        List<PotAllocation> allocations = new ArrayList<>();
+        Map<String, Integer> uncalledByPlayer = new HashMap<>();
+
+        logger.debug("Building pot allocations for game {} | pot={} | contributions={}",
+                gameId,
+                pot,
+                handContributions);
+
+        Map<String, Integer> contributions = handContributions.entrySet().stream()
+                .filter(entry -> entry.getValue() > 0)
+                .collect(HashMap::new,
+                        (map, entry) -> map.put(entry.getKey(), entry.getValue()),
+                        HashMap::putAll);
+
+        if (!contributions.isEmpty()) {
+            List<Integer> contributionLevels = contributions.values().stream()
+                    .distinct()
+                    .sorted()
+                    .toList();
+
+            logger.debug("Contribution levels for game {}: {}", gameId, contributionLevels);
+
+            int previousLevel = 0;
+            for (int level : contributionLevels) {
+                int layer = level - previousLevel;
+                previousLevel = level;
+
+                if (layer <= 0) {
+                    continue;
+                }
+
+                List<Player> participants = players.stream()
+                        .filter(player -> contributions.getOrDefault(player.getPlayerId(), 0) >= level)
+                        .toList();
+
+                int amount = layer * participants.size();
+                if (amount <= 0) {
+                    continue;
+                }
+
+                if (participants.size() == 1) {
+                    Player owner = participants.getFirst();
+                    uncalledByPlayer.merge(owner.getPlayerId(), amount, Integer::sum);
+                    logger.debug("Detected uncalled layer for game {} | level={} | owner={} | amount={}",
+                            gameId,
+                            level,
+                            owner.getName(),
+                            amount);
+                    continue;
+                }
+
+                List<Player> eligiblePlayers = participants.stream()
+                        .filter(player -> !player.getHasFolded())
+                        .toList();
+
+                if (!eligiblePlayers.isEmpty()) {
+                    allocations.add(new PotAllocation(amount, eligiblePlayers));
+                    logger.debug(
+                            "Allocation layer for game {} | level={} | layer={} | participants={} | eligible={} | amount={}",
+                            gameId,
+                            level,
+                            layer,
+                            playerNames(participants),
+                            playerNames(eligiblePlayers),
+                            amount);
+                }
+            }
+        } else {
+            logger.debug("No tracked contributions for game {} while building allocations", gameId);
+        }
+
+        int uncalledTotal = uncalledByPlayer.values().stream().mapToInt(Integer::intValue).sum();
+        int allocatedAmount = allocations.stream().mapToInt(PotAllocation::amount).sum();
+        int unallocatedAmount = Math.max(0, pot - allocatedAmount - uncalledTotal);
+
+        logger.debug("Allocation totals for game {} | allocated={} | uncalled={} | unallocated={} | pot={}",
+                gameId,
+                allocatedAmount,
+                uncalledTotal,
+                unallocatedAmount,
+                pot);
+
+        if (unallocatedAmount > 0) {
+            List<Player> eligibleCarryOverPlayers = activePlayers.stream()
+                    .filter(player -> !player.getHasFolded())
+                    .toList();
+
+            if (eligibleCarryOverPlayers.isEmpty()) {
+                eligibleCarryOverPlayers = players.stream()
+                        .filter(player -> !player.getHasFolded())
+                        .toList();
+            }
+
+            if (!eligibleCarryOverPlayers.isEmpty()) {
+                if (allocations.isEmpty()) {
+                    allocations.add(new PotAllocation(unallocatedAmount, eligibleCarryOverPlayers));
+                    logger.debug(
+                            "No base allocation existed, created carry-over allocation for game {} | amount={} | eligible={}",
+                            gameId,
+                            unallocatedAmount,
+                            playerNames(eligibleCarryOverPlayers));
+                } else {
+                    PotAllocation mainPot = allocations.getFirst();
+                    allocations.set(
+                            0,
+                            new PotAllocation(mainPot.amount() + unallocatedAmount, mainPot.eligiblePlayers()));
+                    logger.debug(
+                            "Merged unallocated chips into main allocation for game {} | added={} | newMainAmount={}",
+                            gameId,
+                            unallocatedAmount,
+                            allocations.getFirst().amount());
+                }
+            }
+        }
+
+        if (logger.isDebugEnabled()) {
+            logger.debug("Final allocations for game {}: {}", gameId, allocationSummary(allocations));
+            logger.debug("Uncalled map for game {}: {}", gameId, uncalledByPlayer);
+        }
+
+        return new PotComputationResult(allocations, uncalledByPlayer, uncalledTotal);
+    }
+
+    private List<Player> distributeSidePotsAtShowdown() {
+        logger.info("Distributing side pots for game {}", gameId);
+
+        PotComputationResult computation = computePotAllocationsAndUncalled();
+        List<PotAllocation> allocations = computation.allocations();
+        if (logger.isDebugEnabled()) {
+            logger.debug("Side-pot allocations for game {}: {}", gameId, allocationSummary(allocations));
+        }
+
+        int refundedUncalled = 0;
+        for (Map.Entry<String, Integer> entry : computation.uncalledByPlayer().entrySet()) {
+            Player player = players.stream()
+                    .filter(p -> p.getPlayerId().equals(entry.getKey()))
+                    .findFirst()
+                    .orElse(null);
+
+            if (player == null || entry.getValue() <= 0) {
+                continue;
+            }
+
+            player.addChips(entry.getValue());
+            refundedUncalled += entry.getValue();
+            logger.info("Refunded uncalled chips for game {} | player={} | amount={}",
+                    gameId,
+                    player.getName(),
+                    entry.getValue());
+        }
+
+        if (allocations.isEmpty()) {
+            logger.warn("No side-pot allocations found. Falling back to standard distribution.");
+            List<Player> winners = determineWinners(activePlayers.stream().filter(p -> !p.getHasFolded()).toList());
+            distributePot(winners);
+            return winners;
+        }
+
+        Set<Player> uniqueWinners = new LinkedHashSet<>();
+        int remainder = 0;
+
+        for (int i = 0; i < allocations.size(); i++) {
+            PotAllocation allocation = allocations.get(i);
+            List<Player> potWinners = determineWinners(allocation.eligiblePlayers());
+
+            if (potWinners.isEmpty()) {
+                logger.warn("Pot {} has no winners. Keeping {} chips in pot.", i, allocation.amount());
+                remainder += allocation.amount();
+                continue;
+            }
+
+            int share = allocation.amount() / potWinners.size();
+            int potRemainder = allocation.amount() % potWinners.size();
+            remainder += potRemainder;
+
+            logger.info(
+                    "Resolved side pot {} for game {} | amount={} | eligible={} | winners={} | share={} | remainder={}",
+                    i,
+                    gameId,
+                    allocation.amount(),
+                    playerNames(allocation.eligiblePlayers()),
+                    playerNames(potWinners),
+                    share,
+                    potRemainder);
+
+            for (Player winner : potWinners) {
+                winner.addChips(share);
+            }
+
+            uniqueWinners.addAll(potWinners);
+        }
+
+        pot = remainder;
+        logger.info(
+                "Side-pot distribution complete for game {} | uniqueWinners={} | refundedUncalled={} | potRemainder={}",
+                gameId,
+                playerNames(new ArrayList<>(uniqueWinners)),
+                refundedUncalled,
+                pot);
+
+        return new ArrayList<>(uniqueWinners);
+    }
+
+    public List<Integer> getPotBreakdown() {
+        if (pot <= 0) {
+            logger.debug("Pot breakdown requested for game {} with empty pot", gameId);
+            return List.of();
+        }
+
+        boolean hasAllIn = activePlayers.stream()
+                .anyMatch(player -> player.getIsAllIn() && !player.getHasFolded());
+
+        if (!hasAllIn) {
+            logger.debug("Pot breakdown for game {} without all-ins: [{}]", gameId, pot);
+            return List.of(pot);
+        }
+
+        PotComputationResult computation = computePotAllocationsAndUncalled();
+        List<Integer> breakdown = computation.allocations().stream()
+                .map(PotAllocation::amount)
+                .toList();
+
+        logger.debug("Pot breakdown for game {} with all-ins: {} | uncalled={}",
+                gameId,
+                breakdown,
+                computation.uncalledTotal());
+
+        return breakdown;
+    }
+
+    public int getUncalledAmount() {
+        if (pot <= 0) {
+            return 0;
+        }
+
+        boolean hasAllIn = activePlayers.stream()
+                .anyMatch(player -> player.getIsAllIn() && !player.getHasFolded());
+
+        if (!hasAllIn) {
+            return 0;
+        }
+
+        return computePotAllocationsAndUncalled().uncalledTotal();
+    }
+
+    private List<String> playerNames(List<Player> players) {
+        return players.stream().map(Player::getName).toList();
+    }
+
+    private List<String> allocationSummary(List<PotAllocation> allocations) {
+        List<String> summary = new ArrayList<>();
+        for (int i = 0; i < allocations.size(); i++) {
+            PotAllocation allocation = allocations.get(i);
+            summary.add("pot[" + i + "] amount=" + allocation.amount() + " eligible="
+                    + playerNames(allocation.eligiblePlayers()));
+        }
+        return summary;
     }
 
     /**

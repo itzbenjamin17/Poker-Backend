@@ -138,6 +138,8 @@ public class GameStateService {
         PublicGameStateResponse showdownResponse = new PublicGameStateResponse(
                 maxPlayers,
                 game.getPot(),
+                game.getPotBreakdown(),
+                game.getUncalledAmount(),
                 game.getCurrentPhase(),
                 game.getCurrentHighestBet(),
                 game.getCommunityCards(),
@@ -220,6 +222,8 @@ public class GameStateService {
         PublicGameStateResponse autoAdvanceResponse = new PublicGameStateResponse(
                 maxPlayers,
                 game.getPot(),
+                game.getPotBreakdown(),
+                game.getUncalledAmount(),
                 game.getCurrentPhase(),
                 game.getCurrentHighestBet(),
                 game.getCommunityCards(),
@@ -363,6 +367,8 @@ public class GameStateService {
         return new PublicGameStateResponse(
                 room.getMaxPlayers(),
                 game.getPot(),
+                game.getPotBreakdown(),
+                game.getUncalledAmount(),
                 game.getCurrentPhase(),
                 game.getCurrentHighestBet(),
                 game.getCommunityCards(),

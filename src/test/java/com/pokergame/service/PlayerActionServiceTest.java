@@ -1,6 +1,7 @@
 package com.pokergame.service;
 
 import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
@@ -302,6 +303,96 @@ class PlayerActionServiceTest {
 
         // Game state should be broadcast
         verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+    }
+
+    @Test
+    void processPlayerAction_PreFlop_AllCalls_ShouldReturnActionToBigBlind() {
+        List<Player> players = new ArrayList<>();
+        players.add(new Player("P1", UUID.randomUUID().toString(), 1000));
+        players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
+        players.add(new Player("P3", UUID.randomUUID().toString(), 1000));
+
+        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        game.resetForNewHand();
+        game.dealHoleCards();
+        game.postBlinds();
+
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(game);
+
+        Player firstToAct = game.getCurrentPlayer();
+        playerActionService.processPlayerAction(GAME_ID,
+                new PlayerActionRequest(PlayerAction.CALL, null), firstToAct.getName());
+
+        Player secondToAct = game.getCurrentPlayer();
+        playerActionService.processPlayerAction(GAME_ID,
+                new PlayerActionRequest(PlayerAction.CALL, null), secondToAct.getName());
+
+        assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase(),
+                "Pre-flop should remain active until big blind takes their option");
+        assertEquals(game.getBigBlindPlayerId(), game.getCurrentPlayer().getPlayerId(),
+                "Action should return to the big blind after everyone else calls");
+    }
+
+    @Test
+    void processPlayerAction_PreFlop_BigBlindShouldBeAbleToRaiseAfterCalls() {
+        List<Player> players = new ArrayList<>();
+        players.add(new Player("P1", UUID.randomUUID().toString(), 1000));
+        players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
+        players.add(new Player("P3", UUID.randomUUID().toString(), 1000));
+
+        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        game.resetForNewHand();
+        game.dealHoleCards();
+        game.postBlinds();
+
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(game);
+
+        Player firstToAct = game.getCurrentPlayer();
+        playerActionService.processPlayerAction(GAME_ID,
+                new PlayerActionRequest(PlayerAction.CALL, null), firstToAct.getName());
+
+        Player secondToAct = game.getCurrentPlayer();
+        playerActionService.processPlayerAction(GAME_ID,
+                new PlayerActionRequest(PlayerAction.CALL, null), secondToAct.getName());
+
+        Player bigBlind = game.getCurrentPlayer();
+        assertEquals(game.getBigBlindPlayerId(), bigBlind.getPlayerId());
+
+        int highestBeforeRaise = game.getCurrentHighestBet();
+        assertDoesNotThrow(() -> playerActionService.processPlayerAction(
+                GAME_ID,
+                new PlayerActionRequest(PlayerAction.RAISE, 25),
+                bigBlind.getName()));
+
+        assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase(),
+                "After a big blind raise, action should stay pre-flop");
+        assertTrue(game.getCurrentHighestBet() > highestBeforeRaise,
+                "Big blind raise should increase the highest bet");
+    }
+
+    @Test
+    void processPlayerAction_PreFlop_HeadsUp_CallShouldStillGiveBigBlindOption() {
+        List<Player> players = new ArrayList<>();
+        players.add(new Player("P1", UUID.randomUUID().toString(), 1000));
+        players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
+
+        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        game.resetForNewHand();
+        game.dealHoleCards();
+        game.postBlinds();
+
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(game);
+
+        Player smallBlind = game.getCurrentPlayer();
+        assertDoesNotThrow(() -> playerActionService.processPlayerAction(
+                GAME_ID,
+                new PlayerActionRequest(PlayerAction.CALL, null),
+                smallBlind.getName()));
+
+        assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase(),
+                "Heads-up pre-flop should stay open for the big blind option");
+        assertEquals(game.getBigBlindPlayerId(), game.getCurrentPlayer().getPlayerId(),
+                "In heads-up, action should move to big blind after small blind calls");
     }
 
     // ==================== Multiple Actions Tests ====================

@@ -376,8 +376,8 @@ class GameTest {
 
     @Test
     void testIsBettingRoundComplete() {
-        // Initially not complete (no one has had initial turn)
-        assertTrue(game.isBettingRoundComplete());
+        // Initially not complete because no one has had an initial turn yet.
+        assertFalse(game.isBettingRoundComplete());
 
         // Set everyone has had initial turn
         game.setEveryoneHasHadInitialTurn(true);
@@ -400,7 +400,7 @@ class GameTest {
 
     @Test
     void testSetEveryoneHasHadInitialTurn() {
-        assertTrue(game.isBettingRoundComplete());
+        assertFalse(game.isBettingRoundComplete());
 
         game.setEveryoneHasHadInitialTurn(true);
 
@@ -615,6 +615,378 @@ class GameTest {
         game.conductShowdown();
 
         assertEquals(1, game.getPot());
+    }
+
+    @Test
+    void testConductShowdown_DistributesMainAndSidePotToDifferentWinners() {
+        List<Player> sidePotPlayers = new ArrayList<>();
+        sidePotPlayers.add(new Player("Short", "s1", 50));
+        sidePotPlayers.add(new Player("Mid", "m1", 300));
+        sidePotPlayers.add(new Player("Deep", "d1", 300));
+
+        Game sidePotGame = new Game("side-pot-basic", sidePotPlayers, 10, 20, mockHandEvaluator);
+
+        Player shortStack = sidePotPlayers.get(0);
+        Player midStack = sidePotPlayers.get(1);
+        Player deepStack = sidePotPlayers.get(2);
+
+        sidePotGame.processPlayerDecision(midStack, new PlayerDecision(PlayerAction.BET, 150, midStack.getPlayerId()));
+        sidePotGame.processPlayerDecision(shortStack,
+                new PlayerDecision(PlayerAction.CALL, 0, shortStack.getPlayerId()));
+        sidePotGame.processPlayerDecision(deepStack, new PlayerDecision(PlayerAction.CALL, 0, deepStack.getPlayerId()));
+
+        List<Card> shortBest = List.of(
+                new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.KING, Suit.SPADES),
+                new Card(Rank.QUEEN, Suit.SPADES),
+                new Card(Rank.JACK, Suit.SPADES),
+                new Card(Rank.NINE, Suit.SPADES));
+        List<Card> midBest = List.of(
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.KING, Suit.HEARTS),
+                new Card(Rank.QUEEN, Suit.HEARTS),
+                new Card(Rank.JACK, Suit.HEARTS),
+                new Card(Rank.EIGHT, Suit.HEARTS));
+        List<Card> deepBest = List.of(
+                new Card(Rank.TEN, Suit.CLUBS),
+                new Card(Rank.TEN, Suit.HEARTS),
+                new Card(Rank.FIVE, Suit.CLUBS),
+                new Card(Rank.FOUR, Suit.DIAMONDS),
+                new Card(Rank.TWO, Suit.SPADES));
+
+        when(mockHandEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(shortBest, HandRank.FLUSH))
+                .thenReturn(new HandEvaluationResult(midBest, HandRank.STRAIGHT))
+                .thenReturn(new HandEvaluationResult(deepBest, HandRank.ONE_PAIR));
+
+        sidePotGame.conductShowdown();
+
+        assertEquals(150, shortStack.getChips());
+        assertEquals(350, midStack.getChips());
+        assertEquals(150, deepStack.getChips());
+        assertEquals(0, sidePotGame.getPot());
+    }
+
+    @Test
+    void testConductShowdown_SplitsSidePotBetweenTiedWinners() {
+        List<Player> sidePotPlayers = new ArrayList<>();
+        sidePotPlayers.add(new Player("Short", "s1", 50));
+        sidePotPlayers.add(new Player("Mid", "m1", 300));
+        sidePotPlayers.add(new Player("Deep", "d1", 300));
+
+        Game sidePotGame = new Game("side-pot-split", sidePotPlayers, 10, 20, mockHandEvaluator);
+
+        Player shortStack = sidePotPlayers.get(0);
+        Player midStack = sidePotPlayers.get(1);
+        Player deepStack = sidePotPlayers.get(2);
+
+        sidePotGame.processPlayerDecision(midStack, new PlayerDecision(PlayerAction.BET, 150, midStack.getPlayerId()));
+        sidePotGame.processPlayerDecision(shortStack,
+                new PlayerDecision(PlayerAction.CALL, 0, shortStack.getPlayerId()));
+        sidePotGame.processPlayerDecision(deepStack, new PlayerDecision(PlayerAction.CALL, 0, deepStack.getPlayerId()));
+
+        List<Card> shortBest = List.of(
+                new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.KING, Suit.SPADES),
+                new Card(Rank.QUEEN, Suit.SPADES),
+                new Card(Rank.JACK, Suit.SPADES),
+                new Card(Rank.NINE, Suit.SPADES));
+        List<Card> tiedSideWinner = List.of(
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.KING, Suit.HEARTS),
+                new Card(Rank.QUEEN, Suit.HEARTS),
+                new Card(Rank.JACK, Suit.HEARTS),
+                new Card(Rank.EIGHT, Suit.HEARTS));
+
+        when(mockHandEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(shortBest, HandRank.FLUSH))
+                .thenReturn(new HandEvaluationResult(tiedSideWinner, HandRank.STRAIGHT))
+                .thenReturn(new HandEvaluationResult(tiedSideWinner, HandRank.STRAIGHT));
+        when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
+
+        sidePotGame.conductShowdown();
+
+        assertEquals(150, shortStack.getChips());
+        assertEquals(250, midStack.getChips());
+        assertEquals(250, deepStack.getChips());
+        assertEquals(0, sidePotGame.getPot());
+    }
+
+    @Test
+    void testConductShowdown_DistributesMultipleSidePotLayers() {
+        List<Player> sidePotPlayers = new ArrayList<>();
+        sidePotPlayers.add(new Player("A", "a1", 50));
+        sidePotPlayers.add(new Player("B", "b1", 100));
+        sidePotPlayers.add(new Player("C", "c1", 300));
+        sidePotPlayers.add(new Player("D", "d1", 300));
+
+        Game sidePotGame = new Game("side-pot-multi", sidePotPlayers, 10, 20, mockHandEvaluator);
+
+        Player a = sidePotPlayers.get(0);
+        Player b = sidePotPlayers.get(1);
+        Player c = sidePotPlayers.get(2);
+        Player d = sidePotPlayers.get(3);
+
+        sidePotGame.processPlayerDecision(c, new PlayerDecision(PlayerAction.BET, 200, c.getPlayerId()));
+        sidePotGame.processPlayerDecision(d, new PlayerDecision(PlayerAction.CALL, 0, d.getPlayerId()));
+        sidePotGame.processPlayerDecision(b, new PlayerDecision(PlayerAction.CALL, 0, b.getPlayerId()));
+        sidePotGame.processPlayerDecision(a, new PlayerDecision(PlayerAction.CALL, 0, a.getPlayerId()));
+
+        List<Card> aBest = List.of(
+                new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.KING, Suit.SPADES),
+                new Card(Rank.QUEEN, Suit.SPADES),
+                new Card(Rank.JACK, Suit.SPADES),
+                new Card(Rank.NINE, Suit.SPADES));
+        List<Card> bBest = List.of(
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.KING, Suit.HEARTS),
+                new Card(Rank.QUEEN, Suit.HEARTS),
+                new Card(Rank.JACK, Suit.HEARTS),
+                new Card(Rank.EIGHT, Suit.HEARTS));
+        List<Card> cBest = List.of(
+                new Card(Rank.KING, Suit.CLUBS),
+                new Card(Rank.QUEEN, Suit.CLUBS),
+                new Card(Rank.JACK, Suit.CLUBS),
+                new Card(Rank.TEN, Suit.CLUBS),
+                new Card(Rank.NINE, Suit.CLUBS));
+        List<Card> dBest = List.of(
+                new Card(Rank.TEN, Suit.CLUBS),
+                new Card(Rank.TEN, Suit.HEARTS),
+                new Card(Rank.FIVE, Suit.CLUBS),
+                new Card(Rank.FOUR, Suit.DIAMONDS),
+                new Card(Rank.TWO, Suit.SPADES));
+
+        when(mockHandEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(aBest, HandRank.FLUSH))
+                .thenReturn(new HandEvaluationResult(bBest, HandRank.STRAIGHT))
+                .thenReturn(new HandEvaluationResult(cBest, HandRank.THREE_OF_A_KIND))
+                .thenReturn(new HandEvaluationResult(dBest, HandRank.ONE_PAIR));
+
+        sidePotGame.conductShowdown();
+
+        assertEquals(200, a.getChips());
+        assertEquals(150, b.getChips());
+        assertEquals(300, c.getChips());
+        assertEquals(100, d.getChips());
+        assertEquals(0, sidePotGame.getPot());
+    }
+
+    @Test
+    void testConductShowdown_SidePotIgnoresFoldedContributorsEdgeCase() {
+        List<Player> sidePotPlayers = new ArrayList<>();
+        sidePotPlayers.add(new Player("Short", "s1", 50));
+        sidePotPlayers.add(new Player("Mid", "m1", 300));
+        sidePotPlayers.add(new Player("Folder", "f1", 300));
+
+        Game sidePotGame = new Game("side-pot-folded-edge", sidePotPlayers, 10, 20, mockHandEvaluator);
+
+        Player shortStack = sidePotPlayers.get(0);
+        Player midStack = sidePotPlayers.get(1);
+        Player folder = sidePotPlayers.get(2);
+
+        sidePotGame.processPlayerDecision(midStack, new PlayerDecision(PlayerAction.BET, 150, midStack.getPlayerId()));
+        sidePotGame.processPlayerDecision(shortStack,
+                new PlayerDecision(PlayerAction.CALL, 0, shortStack.getPlayerId()));
+        sidePotGame.processPlayerDecision(folder, new PlayerDecision(PlayerAction.CALL, 0, folder.getPlayerId()));
+        folder.doAction(PlayerAction.FOLD, 0, 0);
+
+        List<Card> shortBest = List.of(
+                new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.KING, Suit.SPADES),
+                new Card(Rank.QUEEN, Suit.SPADES),
+                new Card(Rank.JACK, Suit.SPADES),
+                new Card(Rank.NINE, Suit.SPADES));
+        List<Card> midBest = List.of(
+                new Card(Rank.TEN, Suit.CLUBS),
+                new Card(Rank.TEN, Suit.HEARTS),
+                new Card(Rank.FIVE, Suit.CLUBS),
+                new Card(Rank.FOUR, Suit.DIAMONDS),
+                new Card(Rank.TWO, Suit.SPADES));
+
+        when(mockHandEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(shortBest, HandRank.FLUSH))
+                .thenReturn(new HandEvaluationResult(midBest, HandRank.ONE_PAIR));
+
+        sidePotGame.conductShowdown();
+
+        assertEquals(150, shortStack.getChips());
+        assertEquals(350, midStack.getChips());
+        assertEquals(150, folder.getChips());
+        assertEquals(0, sidePotGame.getPot());
+    }
+
+    @Test
+    void testConductShowdown_ShortStackCannotWinBeyondMainPotEdgeCase() {
+        List<Player> sidePotPlayers = new ArrayList<>();
+        sidePotPlayers.add(new Player("Short", "s1", 50));
+        sidePotPlayers.add(new Player("Mid", "m1", 300));
+        sidePotPlayers.add(new Player("Deep", "d1", 300));
+
+        Game sidePotGame = new Game("side-pot-cap-edge", sidePotPlayers, 10, 20, mockHandEvaluator);
+
+        Player shortStack = sidePotPlayers.get(0);
+        Player midStack = sidePotPlayers.get(1);
+        Player deepStack = sidePotPlayers.get(2);
+
+        sidePotGame.processPlayerDecision(midStack, new PlayerDecision(PlayerAction.BET, 150, midStack.getPlayerId()));
+        sidePotGame.processPlayerDecision(shortStack,
+                new PlayerDecision(PlayerAction.CALL, 0, shortStack.getPlayerId()));
+        sidePotGame.processPlayerDecision(deepStack, new PlayerDecision(PlayerAction.CALL, 0, deepStack.getPlayerId()));
+
+        List<Card> shortBest = List.of(
+                new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.KING, Suit.SPADES),
+                new Card(Rank.QUEEN, Suit.SPADES),
+                new Card(Rank.JACK, Suit.SPADES),
+                new Card(Rank.NINE, Suit.SPADES));
+        List<Card> midBest = List.of(
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.KING, Suit.HEARTS),
+                new Card(Rank.QUEEN, Suit.HEARTS),
+                new Card(Rank.JACK, Suit.HEARTS),
+                new Card(Rank.EIGHT, Suit.HEARTS));
+        List<Card> deepBest = List.of(
+                new Card(Rank.TEN, Suit.CLUBS),
+                new Card(Rank.TEN, Suit.HEARTS),
+                new Card(Rank.FIVE, Suit.CLUBS),
+                new Card(Rank.FOUR, Suit.DIAMONDS),
+                new Card(Rank.TWO, Suit.SPADES));
+
+        when(mockHandEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(shortBest, HandRank.FLUSH))
+                .thenReturn(new HandEvaluationResult(midBest, HandRank.STRAIGHT))
+                .thenReturn(new HandEvaluationResult(deepBest, HandRank.ONE_PAIR));
+
+        sidePotGame.conductShowdown();
+
+        assertEquals(150, shortStack.getChips(),
+                "Short stack should only receive the main pot they were eligible for");
+        assertEquals(350, midStack.getChips());
+        assertEquals(150, deepStack.getChips());
+    }
+
+    @Test
+    void testConductShowdown_SidePotSplitRemainderStaysInPotEdgeCase() {
+        List<Player> sidePotPlayers = new ArrayList<>();
+        sidePotPlayers.add(new Player("A", "a1", 50));
+        sidePotPlayers.add(new Player("B", "b1", 101));
+        sidePotPlayers.add(new Player("C", "c1", 101));
+        sidePotPlayers.add(new Player("D", "d1", 101));
+
+        Game sidePotGame = new Game("side-pot-remainder-edge", sidePotPlayers, 10, 20, mockHandEvaluator);
+
+        Player a = sidePotPlayers.get(0);
+        Player b = sidePotPlayers.get(1);
+        Player c = sidePotPlayers.get(2);
+        Player d = sidePotPlayers.get(3);
+
+        sidePotGame.processPlayerDecision(b, new PlayerDecision(PlayerAction.BET, 101, b.getPlayerId()));
+        sidePotGame.processPlayerDecision(c, new PlayerDecision(PlayerAction.CALL, 0, c.getPlayerId()));
+        sidePotGame.processPlayerDecision(d, new PlayerDecision(PlayerAction.CALL, 0, d.getPlayerId()));
+        sidePotGame.processPlayerDecision(a, new PlayerDecision(PlayerAction.CALL, 0, a.getPlayerId()));
+
+        List<Card> aBest = List.of(
+                new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.KING, Suit.SPADES),
+                new Card(Rank.QUEEN, Suit.SPADES),
+                new Card(Rank.JACK, Suit.SPADES),
+                new Card(Rank.NINE, Suit.SPADES));
+        List<Card> tiedSideBest = List.of(
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.KING, Suit.HEARTS),
+                new Card(Rank.QUEEN, Suit.HEARTS),
+                new Card(Rank.JACK, Suit.HEARTS),
+                new Card(Rank.EIGHT, Suit.HEARTS));
+        List<Card> lowerSideBest = List.of(
+                new Card(Rank.TEN, Suit.CLUBS),
+                new Card(Rank.TEN, Suit.HEARTS),
+                new Card(Rank.FIVE, Suit.CLUBS),
+                new Card(Rank.FOUR, Suit.DIAMONDS),
+                new Card(Rank.TWO, Suit.SPADES));
+
+        when(mockHandEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(aBest, HandRank.FLUSH))
+                .thenReturn(new HandEvaluationResult(tiedSideBest, HandRank.STRAIGHT))
+                .thenReturn(new HandEvaluationResult(tiedSideBest, HandRank.STRAIGHT))
+                .thenReturn(new HandEvaluationResult(lowerSideBest, HandRank.ONE_PAIR));
+        when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
+
+        sidePotGame.conductShowdown();
+
+        assertEquals(200, a.getChips());
+        assertEquals(76, b.getChips());
+        assertEquals(76, c.getChips());
+        assertEquals(0, d.getChips());
+        assertEquals(1, sidePotGame.getPot(),
+                "Odd side-pot split remainder should stay in the pot");
+    }
+
+    @Test
+    void testGetPotBreakdown_TreatsSinglePlayerLayerAsUncalled() {
+        List<Player> playersWithShove = new ArrayList<>();
+        playersWithShove.add(new Player("AllIn", "a1", 480));
+        playersWithShove.add(new Player("SmallBlind", "s1", 1000));
+        playersWithShove.add(new Player("BigBlind", "b1", 1000));
+
+        Game shoveGame = new Game("uncalled-breakdown", playersWithShove, 10, 20, mockHandEvaluator);
+        shoveGame.postBlinds();
+
+        Player allInPlayer = shoveGame.getCurrentPlayer();
+        shoveGame.processPlayerDecision(allInPlayer,
+                new PlayerDecision(PlayerAction.ALL_IN, 0, allInPlayer.getPlayerId()));
+
+        assertEquals(List.of(30, 20), shoveGame.getPotBreakdown());
+        assertEquals(460, shoveGame.getUncalledAmount());
+    }
+
+    @Test
+    void testConductShowdown_RefundsUncalledSinglePlayerLayer() {
+        List<Player> playersWithShove = new ArrayList<>();
+        playersWithShove.add(new Player("AllIn", "a1", 480));
+        playersWithShove.add(new Player("SmallBlind", "s1", 1000));
+        playersWithShove.add(new Player("BigBlind", "b1", 1000));
+
+        Game shoveGame = new Game("uncalled-refund", playersWithShove, 10, 20, mockHandEvaluator);
+        shoveGame.postBlinds();
+
+        Player allInPlayer = shoveGame.getCurrentPlayer();
+        Player smallBlind = shoveGame.getActivePlayers().get(1);
+        Player bigBlind = shoveGame.getActivePlayers().get(2);
+
+        shoveGame.processPlayerDecision(allInPlayer,
+                new PlayerDecision(PlayerAction.ALL_IN, 0, allInPlayer.getPlayerId()));
+
+        List<Card> allInBest = List.of(
+                new Card(Rank.TWO, Suit.SPADES),
+                new Card(Rank.THREE, Suit.HEARTS),
+                new Card(Rank.FOUR, Suit.DIAMONDS),
+                new Card(Rank.FIVE, Suit.CLUBS),
+                new Card(Rank.SEVEN, Suit.SPADES));
+        List<Card> smallBlindBest = List.of(
+                new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.KING, Suit.SPADES),
+                new Card(Rank.QUEEN, Suit.SPADES),
+                new Card(Rank.JACK, Suit.SPADES),
+                new Card(Rank.TEN, Suit.SPADES));
+        List<Card> bigBlindBest = List.of(
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.ACE, Suit.DIAMONDS),
+                new Card(Rank.KING, Suit.CLUBS),
+                new Card(Rank.QUEEN, Suit.HEARTS),
+                new Card(Rank.JACK, Suit.HEARTS));
+
+        when(mockHandEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(allInBest, HandRank.HIGH_CARD))
+                .thenReturn(new HandEvaluationResult(smallBlindBest, HandRank.ROYAL_FLUSH))
+                .thenReturn(new HandEvaluationResult(bigBlindBest, HandRank.ONE_PAIR));
+
+        shoveGame.conductShowdown();
+
+        assertEquals(460, allInPlayer.getChips(), "All-in player should get uncalled portion refunded");
+        assertEquals(1020, smallBlind.getChips(), "Small blind should win contested main pot");
+        assertEquals(1000, bigBlind.getChips(), "Big blind should win contested side pot");
+        assertEquals(0, shoveGame.getPot());
     }
 
     @Test
