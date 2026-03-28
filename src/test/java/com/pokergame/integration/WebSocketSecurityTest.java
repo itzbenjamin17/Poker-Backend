@@ -3,6 +3,7 @@ package com.pokergame.integration;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.RoomService;
+import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -95,18 +96,18 @@ class WebSocketSecurityTest {
         stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
                 new StompSessionHandlerAdapter() {
                     @Override
-                    public void afterConnected(StompSession session, StompHeaders connectedHeaders) {
+                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
                         sessionFuture.complete(session);
                     }
 
                     @Override
-                    public void handleException(StompSession session, StompCommand command,
-                            StompHeaders headers, byte[] payload, Throwable exception) {
+                    public void handleException(@NonNull StompSession session, StompCommand command,
+                                                @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
                         sessionFuture.completeExceptionally(exception);
                     }
 
                     @Override
-                    public void handleTransportError(StompSession session, Throwable exception) {
+                    public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
                         sessionFuture.completeExceptionally(exception);
                     }
                 });
@@ -127,18 +128,18 @@ class WebSocketSecurityTest {
         stompClient.connectAsync(wsUrl, handshakeHeaders, new StompHeaders(),
                 new StompSessionHandlerAdapter() {
                     @Override
-                    public void afterConnected(StompSession session, StompHeaders connectedHeaders) {
+                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
                         sessionFuture.complete(session);
                     }
 
                     @Override
-                    public void handleException(StompSession session, StompCommand command,
-                            StompHeaders headers, byte[] payload, Throwable exception) {
+                    public void handleException(@NonNull StompSession session, StompCommand command,
+                                                @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
                         sessionFuture.completeExceptionally(exception);
                     }
 
                     @Override
-                    public void handleTransportError(StompSession session, Throwable exception) {
+                    public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
                         sessionFuture.completeExceptionally(exception);
                     }
                 });
@@ -162,18 +163,18 @@ class WebSocketSecurityTest {
         stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
                 new StompSessionHandlerAdapter() {
                     @Override
-                    public void afterConnected(StompSession session, StompHeaders connectedHeaders) {
+                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
                         sessionFuture.complete(session);
                     }
 
                     @Override
-                    public void handleException(StompSession session, StompCommand command,
-                            StompHeaders headers, byte[] payload, Throwable exception) {
+                    public void handleException(@NonNull StompSession session, StompCommand command,
+                                                @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
                         sessionFuture.completeExceptionally(exception);
                     }
 
                     @Override
-                    public void handleTransportError(StompSession session, Throwable exception) {
+                    public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
                         sessionFuture.completeExceptionally(exception);
                     }
                 });
@@ -201,13 +202,13 @@ class WebSocketSecurityTest {
         stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
                 new StompSessionHandlerAdapter() {
                     @Override
-                    public void afterConnected(StompSession session, StompHeaders connectedHeaders) {
+                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
                         sessionFuture.complete(session);
                     }
 
                     @Override
-                    public void handleException(StompSession session, StompCommand command,
-                            StompHeaders headers, byte[] payload, Throwable exception) {
+                    public void handleException(@NonNull StompSession session, StompCommand command,
+                                                @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
                         sessionFuture.completeExceptionally(exception);
                     }
                 });
@@ -217,12 +218,12 @@ class WebSocketSecurityTest {
         // Subscribe to a game topic
         session.subscribe("/game/" + roomId, new StompFrameHandler() {
             @Override
-            public Type getPayloadType(StompHeaders headers) {
+            public Type getPayloadType(@NonNull StompHeaders headers) {
                 return Object.class;
             }
 
             @Override
-            public void handleFrame(StompHeaders headers, Object payload) {
+            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
                 subscriptionFuture.complete(true);
             }
         });
@@ -246,7 +247,7 @@ class WebSocketSecurityTest {
         stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
                 new StompSessionHandlerAdapter() {
                     @Override
-                    public void afterConnected(StompSession session, StompHeaders connectedHeaders) {
+                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
                         sessionFuture.complete(session);
                     }
                 });
@@ -256,12 +257,12 @@ class WebSocketSecurityTest {
         // Subscribe to room topic
         StompSession.Subscription subscription = session.subscribe("/room/" + roomId, new StompFrameHandler() {
             @Override
-            public Type getPayloadType(StompHeaders headers) {
+            public Type getPayloadType(@NonNull StompHeaders headers) {
                 return Object.class;
             }
 
             @Override
-            public void handleFrame(StompHeaders headers, Object payload) {
+            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
                 // Handle frame
             }
         });
@@ -285,7 +286,7 @@ class WebSocketSecurityTest {
         stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
                 new StompSessionHandlerAdapter() {
                     @Override
-                    public void afterConnected(StompSession session, StompHeaders connectedHeaders) {
+                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
                         sessionFuture.complete(session);
                     }
                 });
@@ -322,7 +323,7 @@ class WebSocketSecurityTest {
         stompClient.connectAsync(wsUrl, handshakeHeaders, headers1,
                 new StompSessionHandlerAdapter() {
                     @Override
-                    public void afterConnected(StompSession session, StompHeaders connectedHeaders) {
+                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
                         session1Future.complete(session);
                     }
                 });
@@ -334,7 +335,7 @@ class WebSocketSecurityTest {
         stompClient.connectAsync(wsUrl, handshakeHeaders, headers2,
                 new StompSessionHandlerAdapter() {
                     @Override
-                    public void afterConnected(StompSession session, StompHeaders connectedHeaders) {
+                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
                         session2Future.complete(session);
                     }
                 });

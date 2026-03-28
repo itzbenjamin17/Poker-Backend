@@ -97,6 +97,9 @@ public class Room {
         if (!players.contains(playerName)) {
             players.add(playerName);
         }
+        else{
+            throw new BadRequestException(String.format("Cannot add %s to room as they are already in the room", playerName));
+        }
     }
 
     /**
@@ -105,7 +108,14 @@ public class Room {
      * @param playerName the name of the player to remove
      */
     public void removePlayer(String playerName) {
-        players.remove(playerName);
+        if (players.contains(playerName)){
+            players.remove(playerName);
+        }
+        else{
+            throw new BadRequestException(
+                String.format("Cannot remove %s from room as they are not already in the room", playerName));
+        }
+        
     }
 
     /**

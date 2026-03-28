@@ -23,12 +23,13 @@ public record Card(Rank rank, Suit suit) {
      */
     public Card {
     }
+    
     // Needed this for frontend to change card objects to strings in the format "AS", "TD", etc. instead of JSON objects like {"rank":"ACE","suit":"SPADES"}
-
     @JsonValue
     public String toJsonString() {
         String r;
         switch (rank) {
+            case TEN -> r = "T";
             case JACK -> r = "J";
             case QUEEN -> r = "Q";
             case KING -> r = "K";

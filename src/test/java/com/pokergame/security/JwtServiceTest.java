@@ -334,7 +334,7 @@ class JwtServiceTest {
             ReflectionTestUtils.setField(service, "secretKeyString", secret);
             ReflectionTestUtils.setField(service, "expirationMillis", TEST_EXPIRATION);
 
-            assertDoesNotThrow(() -> service.init(), "Init should not throw for secret: " + secret);
+            assertDoesNotThrow(service::init, "Init should not throw for secret: " + secret);
         }
     }
 
@@ -345,7 +345,7 @@ class JwtServiceTest {
         ReflectionTestUtils.setField(service, "expirationMillis", TEST_EXPIRATION);
 
         // Short keys should throw WeakKeyException
-        assertThrows(io.jsonwebtoken.security.WeakKeyException.class, () -> service.init());
+        assertThrows(io.jsonwebtoken.security.WeakKeyException.class, service::init);
     }
 
     @Test

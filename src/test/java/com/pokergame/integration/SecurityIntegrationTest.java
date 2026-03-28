@@ -64,7 +64,7 @@ class SecurityIntegrationTest {
 
         @Test
         @DisplayName("POST /api/room/create - should succeed without token and return JWT")
-        void createRoom_shouldSucceed_withoutToken() throws Exception {
+        void createRoom_shouldSucceed_withoutToken() {
             CreateRoomRequest request = new CreateRoomRequest(
                     "NewRoom" + UUID.randomUUID().toString().substring(0, 8),
                     "NewPlayer",
@@ -85,7 +85,7 @@ class SecurityIntegrationTest {
 
         @Test
         @DisplayName("POST /api/room/join - should succeed without token and return JWT")
-        void joinRoom_shouldSucceed_withoutToken() throws Exception {
+        void joinRoom_shouldSucceed_withoutToken() {
             // First create a room
             String roomName = "JoinTestRoom" + UUID.randomUUID().toString().substring(0, 8);
             CreateRoomRequest createRequest = new CreateRoomRequest(
@@ -121,12 +121,10 @@ class SecurityIntegrationTest {
         @Test
         @DisplayName("POST /api/room/{roomId}/leave - should fail without token (403)")
         void leaveRoom_shouldFail_withoutToken() {
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> {
-                restClient.post()
-                        .uri("/api/room/" + roomId + "/leave")
-                        .retrieve()
-                        .body(String.class);
-            });
+            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
+                    .uri("/api/room/" + roomId + "/leave")
+                    .retrieve()
+                    .body(String.class));
 
             assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
         }
@@ -147,13 +145,11 @@ class SecurityIntegrationTest {
         @Test
         @DisplayName("POST /api/room/{roomId}/leave - should fail with invalid token (403)")
         void leaveRoom_shouldFail_withInvalidToken() {
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> {
-                restClient.post()
-                        .uri("/api/room/" + roomId + "/leave")
-                        .header("Authorization", "Bearer invalid-token-here")
-                        .retrieve()
-                        .body(String.class);
-            });
+            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
+                    .uri("/api/room/" + roomId + "/leave")
+                    .header("Authorization", "Bearer invalid-token-here")
+                    .retrieve()
+                    .body(String.class));
 
             assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
         }
@@ -161,12 +157,10 @@ class SecurityIntegrationTest {
         @Test
         @DisplayName("POST /api/room/{roomId}/start-game - should fail without token (403)")
         void startGame_shouldFail_withoutToken() {
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> {
-                restClient.post()
-                        .uri("/api/room/" + roomId + "/start-game")
-                        .retrieve()
-                        .body(String.class);
-            });
+            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
+                    .uri("/api/room/" + roomId + "/start-game")
+                    .retrieve()
+                    .body(String.class));
 
             assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
         }
@@ -174,12 +168,10 @@ class SecurityIntegrationTest {
         @Test
         @DisplayName("POST /api/game/{gameId}/leave - should fail without token (403)")
         void leaveGame_shouldFail_withoutToken() {
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> {
-                restClient.post()
-                        .uri("/api/game/some-game-id/leave")
-                        .retrieve()
-                        .body(String.class);
-            });
+            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
+                    .uri("/api/game/some-game-id/leave")
+                    .retrieve()
+                    .body(String.class));
 
             assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
         }
@@ -220,13 +212,11 @@ class SecurityIntegrationTest {
             String nonHostToken = jwtService.generateToken("NonHostPlayer");
 
             // Try to start game as non-host - should fail authorization
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> {
-                restClient.post()
-                        .uri("/api/room/" + createdRoomId + "/start-game")
-                        .header("Authorization", "Bearer " + nonHostToken)
-                        .retrieve()
-                        .body(String.class);
-            });
+            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
+                    .uri("/api/room/" + createdRoomId + "/start-game")
+                    .header("Authorization", "Bearer " + nonHostToken)
+                    .retrieve()
+                    .body(String.class));
 
             assertTrue(exception.getStatusCode().is4xxClientError());
         }
@@ -239,14 +229,12 @@ class SecurityIntegrationTest {
             CreateRoomRequest createRequest = new CreateRoomRequest(
                     roomName, "GameHost", 6, 10, 20, 1000, null);
 
-            String createResponse = restClient.post()
+            String responseBody = restClient.post()
                     .uri("/api/room/create")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(createRequest)
                     .retrieve()
                     .body(String.class);
-
-            String responseBody = createResponse;
             String createdRoomId = objectMapper.readTree(responseBody).path("data").path("roomId").asText();
             String hostToken = objectMapper.readTree(responseBody).path("data").path("token").asText();
 

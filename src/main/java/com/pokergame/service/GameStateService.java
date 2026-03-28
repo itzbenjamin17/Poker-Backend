@@ -85,7 +85,6 @@ public class GameStateService {
         }
 
         // Get room information
-        @SuppressWarnings("DuplicatedCode")
         Room room = roomService.getRoom(gameId);
         int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
@@ -177,7 +176,6 @@ public class GameStateService {
         }
 
         // Get room information
-        @SuppressWarnings("DuplicatedCode")
         Room room = roomService.getRoom(gameId);
         int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 

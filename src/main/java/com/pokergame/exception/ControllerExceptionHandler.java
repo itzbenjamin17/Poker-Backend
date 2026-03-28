@@ -3,6 +3,7 @@ package com.pokergame.exception;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.pokergame.dto.response.ErrorResponse;
+import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -49,7 +50,7 @@ public class ControllerExceptionHandler {
     public ResponseEntity<ErrorResponse> handleMethodArgumentNotValidException(MethodArgumentNotValidException ex) {
         String message = ex.getBindingResult().getFieldErrors().stream()
                 .findFirst()
-                .map(fieldError -> fieldError.getDefaultMessage())
+                .map(DefaultMessageSourceResolvable::getDefaultMessage)
                 .orElse("Invalid request payload");
 
         logger.warn("Validation error: {}", message);

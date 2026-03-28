@@ -64,27 +64,7 @@ public class PlayerActionService {
 
         // Synchronise on the game object to prevent concurrent modifications
         synchronized (game) {
-            Player currentPlayer = game.getCurrentPlayer();
-
-            if (actionRequest == null || actionRequest.action() == null) {
-                throw new BadRequestException("Action is required");
-            }
-
-            int requestAmount = actionRequest.amount() != null ? actionRequest.amount() : 0;
-            if (requestAmount < 0) {
-                throw new BadRequestException("Action amount cannot be negative");
-            }
-
-            PlayerAction action = actionRequest.action();
-
-            if ((action == PlayerAction.BET || action == PlayerAction.RAISE) && requestAmount <= 0) {
-                throw new BadRequestException("Bet/raise amount must be greater than 0");
-            }
-
-            if ((action == PlayerAction.BET || action == PlayerAction.RAISE)
-                    && requestAmount > currentPlayer.getChips()) {
-                throw new BadRequestException("Action amount cannot exceed your available chips");
-            }
+            Player currentPlayer = getCurrentPlayer(actionRequest, game);
 
             logger.debug("Processing player action - Game: {}, Player: {}, Action: {}",
                     gameId, currentPlayer.getName(), actionRequest.action());
@@ -169,6 +149,31 @@ public class PlayerActionService {
 
             logger.debug("Player action processing complete for game {}", gameId);
         }
+    }
+
+    private static Player getCurrentPlayer(PlayerActionRequest actionRequest, Game game) {
+        Player currentPlayer = game.getCurrentPlayer();
+
+        if (actionRequest == null || actionRequest.action() == null) {
+            throw new BadRequestException("Action is required");
+        }
+
+        int requestAmount = actionRequest.amount() != null ? actionRequest.amount() : 0;
+        if (requestAmount < 0) {
+            throw new BadRequestException("Action amount cannot be negative");
+        }
+
+        PlayerAction action = actionRequest.action();
+
+        if ((action == PlayerAction.BET || action == PlayerAction.RAISE) && requestAmount == 0) {
+            throw new BadRequestException("Bet/raise amount must be greater than 0");
+        }
+
+        if ((action == PlayerAction.BET || action == PlayerAction.RAISE)
+                && requestAmount > currentPlayer.getChips()) {
+            throw new BadRequestException("Action amount cannot exceed your available chips");
+        }
+        return currentPlayer;
     }
 
     /**

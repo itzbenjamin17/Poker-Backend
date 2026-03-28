@@ -22,7 +22,6 @@ import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
@@ -179,7 +178,7 @@ class GameLifecycleServiceTest {
         // Simulate game over by removing all but one player
         game.getPlayers().subList(1, game.getPlayers().size()).clear();
         game.getActivePlayers().clear();
-        game.getActivePlayers().add(game.getPlayers().get(0));
+        game.getActivePlayers().add(game.getPlayers().getFirst());
 
         reset(gameStateService);
         reset(applicationEventPublisher);
@@ -247,7 +246,7 @@ class GameLifecycleServiceTest {
         gameLifecycleService.createGameFromRoom(ROOM_ID);
 
         Game game = gameLifecycleService.getGame(ROOM_ID);
-        String playerToLeave = game.getPlayers().get(0).getName();
+        String playerToLeave = game.getPlayers().getFirst().getName();
 
         gameLifecycleService.leaveGame(ROOM_ID, playerToLeave);
 

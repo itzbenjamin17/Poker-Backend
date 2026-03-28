@@ -92,6 +92,7 @@ public class Game {
      * @return true if the game is over after hand cleanup, false otherwise
      */
     public boolean resetForNewHand() {
+        // TODO: Need to add carry over to rounds other than showdown
         int carryOverPot = currentPhase == GamePhase.SHOWDOWN ? pot : 0;
 
         if (logger.isDebugEnabled()) {
@@ -162,6 +163,7 @@ public class Game {
                     bigBlindPlayer.getChips(),
                     pot);
 
+            @SuppressWarnings("DuplicatedCode")
             int smallBlindBefore = smallBlindPlayer.getCurrentBet();
 
             if (smallBlindPlayer.getChips() <= smallBlind) {
@@ -171,6 +173,7 @@ public class Game {
             }
             trackContribution(smallBlindPlayer, smallBlindPlayer.getCurrentBet() - smallBlindBefore);
 
+            @SuppressWarnings("DuplicatedCode")
             int bigBlindBefore = bigBlindPlayer.getCurrentBet();
 
             if (bigBlindPlayer.getChips() <= bigBlind) {
@@ -190,6 +193,9 @@ public class Game {
                     pot,
                     currentHighestBet,
                     handContributions);
+        } else {
+            throw new BadRequestException(
+                    String.format("Trying to post blinds for a game %s which has less than 2 players", gameId));
         }
     }
 
@@ -225,7 +231,7 @@ public class Game {
 
         // Validate raise amounts (only if still a raise after conversion)
         if (actualDecision.action() == PlayerAction.RAISE) {
-            if (actualDecision.amount() <= 0) {
+            if (actualDecision.amount() == 0) {
                 throw new BadRequestException("Raise amount must be greater than 0");
             }
 
@@ -251,7 +257,7 @@ public class Game {
                         "Cannot bet when there is an active bet. You must call, raise, or fold.");
             }
 
-            if (actualDecision.amount() <= 0) {
+            if (actualDecision.amount() == 0) {
                 throw new BadRequestException("Bet amount must be greater than 0");
             }
 
@@ -348,7 +354,7 @@ public class Game {
         }
 
         logger.debug("Checking if betting round complete - Current highest bet: {}, Everyone has had initial turn: {}",
-                currentHighestBet, everyoneHasHadInitialTurn);
+                currentHighestBet, true);
 
         if (logger.isDebugEnabled()) {
             activePlayers.forEach(p -> logger.debug("Player {}: bet={}, folded={}, all-in={}, needsToAct={}",
@@ -459,6 +465,14 @@ public class Game {
         return winners;
     }
 
+    /**
+     * Tracks how many chips each player has committed during the current hand.
+     * This contribution map is later used to build main/side pots and detect
+     * uncalled chips.
+     *
+     * @param player the player whose contribution changed
+     * @param amount number of chips newly committed to the pot
+     */
     private void trackContribution(Player player, int amount) {
         if (player == null || amount <= 0) {
             return;
@@ -474,14 +488,30 @@ public class Game {
                 handContributions);
     }
 
+    /**
+     * Represents a single pot layer (main pot or a side pot) and the players
+     * who are eligible to win that layer.
+     */
     private record PotAllocation(int amount, List<Player> eligiblePlayers) {
     }
 
+    /**
+     * Result container for pot decomposition:
+     * - allocations: contested pots to award at showdown
+     * - uncalledByPlayer: chips that must be refunded (single-participant layers)
+     * - uncalledTotal: sum of all uncalled chips
+     */
     private record PotComputationResult(List<PotAllocation> allocations,
             Map<String, Integer> uncalledByPlayer,
             int uncalledTotal) {
     }
 
+    /**
+     * Decomposes the current pot into contested allocation layers and uncalled
+     * layers.
+     *
+     * @return a full breakdown used for payout distribution and UI pot rendering
+     */
     private PotComputationResult computePotAllocationsAndUncalled() {
         List<PotAllocation> allocations = new ArrayList<>();
         Map<String, Integer> uncalledByPlayer = new HashMap<>();
@@ -491,6 +521,7 @@ public class Game {
                 pot,
                 handContributions);
 
+        // Only considering players who contributed chips to the pot.
         Map<String, Integer> contributions = handContributions.entrySet().stream()
                 .filter(entry -> entry.getValue() > 0)
                 .collect(HashMap::new,
@@ -498,6 +529,7 @@ public class Game {
                         HashMap::putAll);
 
         if (!contributions.isEmpty()) {
+            // Side-pot boundaries are the distinct total contribution amounts.
             List<Integer> contributionLevels = contributions.values().stream()
                     .distinct()
                     .sorted()
@@ -507,6 +539,7 @@ public class Game {
 
             int previousLevel = 0;
             for (int level : contributionLevels) {
+                // Processing each incremental layer between adjacent contribution levels.
                 int layer = level - previousLevel;
                 previousLevel = level;
 
@@ -514,6 +547,8 @@ public class Game {
                     continue;
                 }
 
+                // Participants at this level are players who have contributed at least
+                // `level` chips in the hand.
                 List<Player> participants = players.stream()
                         .filter(player -> contributions.getOrDefault(player.getPlayerId(), 0) >= level)
                         .toList();
@@ -524,6 +559,7 @@ public class Game {
                 }
 
                 if (participants.size() == 1) {
+                    // A single-participant layer is uncalled and should be refunded.
                     Player owner = participants.getFirst();
                     uncalledByPlayer.merge(owner.getPlayerId(), amount, Integer::sum);
                     logger.debug("Detected uncalled layer for game {} | level={} | owner={} | amount={}",
@@ -539,6 +575,7 @@ public class Game {
                         .toList();
 
                 if (!eligiblePlayers.isEmpty()) {
+                    // Multi-participant layers become contested allocations.
                     allocations.add(new PotAllocation(amount, eligiblePlayers));
                     logger.debug(
                             "Allocation layer for game {} | level={} | layer={} | participants={} | eligible={} | amount={}",
@@ -566,6 +603,8 @@ public class Game {
                 pot);
 
         if (unallocatedAmount > 0) {
+            // If there are any chips not accounted for in allocations or uncalled layers,
+            // we need to carry them over.
             List<Player> eligibleCarryOverPlayers = activePlayers.stream()
                     .filter(player -> !player.getHasFolded())
                     .toList();
@@ -606,9 +645,15 @@ public class Game {
         return new PotComputationResult(allocations, uncalledByPlayer, uncalledTotal);
     }
 
+    /**
+     * Resolves and distributes all side pots at showdown.
+     *
+     * @return ordered set of unique players who won at least one allocation
+     */
     private List<Player> distributeSidePotsAtShowdown() {
         logger.info("Distributing side pots for game {}", gameId);
 
+        // Build contested allocations and identify uncalled refunds.
         PotComputationResult computation = computePotAllocationsAndUncalled();
         List<PotAllocation> allocations = computation.allocations();
         if (logger.isDebugEnabled()) {
@@ -616,6 +661,7 @@ public class Game {
         }
 
         int refundedUncalled = 0;
+        // Refund single-owner (uncalled) layers before contested awards.
         for (Map.Entry<String, Integer> entry : computation.uncalledByPlayer().entrySet()) {
             Player player = players.stream()
                     .filter(p -> p.getPlayerId().equals(entry.getKey()))
@@ -644,6 +690,7 @@ public class Game {
         Set<Player> uniqueWinners = new LinkedHashSet<>();
         int remainder = 0;
 
+        // Resolve each contested allocation, determine winners, and split chips.
         for (int i = 0; i < allocations.size(); i++) {
             PotAllocation allocation = allocations.get(i);
             List<Player> potWinners = determineWinners(allocation.eligiblePlayers());
@@ -655,6 +702,7 @@ public class Game {
             }
 
             int share = allocation.amount() / potWinners.size();
+            // Keep modulo chips as table remainder.
             int potRemainder = allocation.amount() % potWinners.size();
             remainder += potRemainder;
 
@@ -675,6 +723,7 @@ public class Game {
             uniqueWinners.addAll(potWinners);
         }
 
+        // Keep integer remainders in the table pot for the next hand.
         pot = remainder;
         logger.info(
                 "Side-pot distribution complete for game {} | uniqueWinners={} | refundedUncalled={} | potRemainder={}",
@@ -686,6 +735,14 @@ public class Game {
         return new ArrayList<>(uniqueWinners);
     }
 
+    /**
+     * Returns the contested pot amounts for display (main pot first, then side
+     * pots).
+     * Uncalled amounts are intentionally excluded from this list because they are
+     * refunded, not contested.
+     *
+     * @return list of contested pot amounts in showdown order
+     */
     public List<Integer> getPotBreakdown() {
         if (pot <= 0) {
             logger.debug("Pot breakdown requested for game {} with empty pot", gameId);
@@ -713,6 +770,12 @@ public class Game {
         return breakdown;
     }
 
+    /**
+     * Returns the total uncalled amount currently detected in the pot
+     * decomposition.
+     *
+     * @return total chips that should be refunded to players as uncalled
+     */
     public int getUncalledAmount() {
         if (pot <= 0) {
             return 0;
@@ -728,10 +791,16 @@ public class Game {
         return computePotAllocationsAndUncalled().uncalledTotal();
     }
 
+    /**
+     * Helper for concise player-name logging in side-pot diagnostics.
+     */
     private List<String> playerNames(List<Player> players) {
         return players.stream().map(Player::getName).toList();
     }
 
+    /**
+     * Helper for concise allocation logging in side-pot diagnostics.
+     */
     private List<String> allocationSummary(List<PotAllocation> allocations) {
         List<String> summary = new ArrayList<>();
         for (int i = 0; i < allocations.size(); i++) {

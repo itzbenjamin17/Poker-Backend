@@ -1,6 +1,7 @@
 package com.pokergame.service;
 
 import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.*;
 import com.pokergame.exception.BadRequestException;
@@ -18,7 +19,6 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
@@ -127,7 +127,7 @@ class GameStateServiceTest {
     @Test
     void broadcastShowdownResults_WithValidData_ShouldBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        List<Player> winners = List.of(testPlayers.get(0));
+        List<Player> winners = List.of(testPlayers.getFirst());
 
         gameStateService.broadcastShowdownResults(GAME_ID, testGame, winners, 50);
 
@@ -137,7 +137,7 @@ class GameStateServiceTest {
     @Test
     void broadcastShowdownResults_WithNoRoom_ShouldStillBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(null);
-        List<Player> winners = List.of(testPlayers.get(0));
+        List<Player> winners = List.of(testPlayers.getFirst());
 
         gameStateService.broadcastShowdownResults(GAME_ID, testGame, winners, 50);
 
@@ -236,7 +236,7 @@ class GameStateServiceTest {
 
     @Test
     void broadcastGameEnd_ShouldBroadcastWinnerInfo() {
-        Player winner = testPlayers.get(0);
+        Player winner = testPlayers.getFirst();
         winner.addChips(50); // Winner has more chips
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
@@ -258,7 +258,7 @@ class GameStateServiceTest {
 
     @Test
     void broadcastGameEnd_MessageShouldContainWinnerName() {
-        Player winner = testPlayers.get(0);
+        Player winner = testPlayers.getFirst();
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         gameStateService.broadcastGameEnd(GAME_ID, winner);
@@ -328,8 +328,8 @@ class GameStateServiceTest {
         assertInstanceOf(PublicGameStateResponse.class, payload);
 
         PublicGameStateResponse response = (PublicGameStateResponse) payload;
-        long smallBlindCount = response.players().stream().filter(p -> p.isSmallBlind()).count();
-        long bigBlindCount = response.players().stream().filter(p -> p.isBigBlind()).count();
+        long smallBlindCount = response.players().stream().filter(PublicPlayerState::isSmallBlind).count();
+        long bigBlindCount = response.players().stream().filter(PublicPlayerState::isBigBlind).count();
 
         assertEquals(1, smallBlindCount);
         assertEquals(1, bigBlindCount);
@@ -364,8 +364,8 @@ class GameStateServiceTest {
         assertInstanceOf(PublicGameStateResponse.class, payload);
 
         PublicGameStateResponse response = (PublicGameStateResponse) payload;
-        long smallBlindCount = response.players().stream().filter(p -> p.isSmallBlind()).count();
-        long bigBlindCount = response.players().stream().filter(p -> p.isBigBlind()).count();
+        long smallBlindCount = response.players().stream().filter(PublicPlayerState::isSmallBlind).count();
+        long bigBlindCount = response.players().stream().filter(PublicPlayerState::isBigBlind).count();
 
         assertEquals(1, smallBlindCount);
         assertEquals(1, bigBlindCount);

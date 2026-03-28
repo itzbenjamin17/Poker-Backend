@@ -304,7 +304,7 @@ class RoomTest {
 
         room.addPlayer("Player1");
         assertEquals(1, room.getPlayers().size());
-        assertEquals("Player1", room.getPlayers().get(0));
+        assertEquals("Player1", room.getPlayers().getFirst());
     }
 
     @Test

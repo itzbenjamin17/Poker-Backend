@@ -14,7 +14,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
@@ -296,7 +295,7 @@ class GameTest {
     void testProcessPlayerDecisionCall() {
         // Set up: first player bets
         game.postBlinds(); // Sets highest bet to 20
-        Player caller = game.getActivePlayers().get(0);
+        Player caller = game.getActivePlayers().getFirst();
         PlayerDecision decision = new PlayerDecision(PlayerAction.CALL, 0, caller.getPlayerId());
 
         game.processPlayerDecision(caller, decision);
@@ -309,7 +308,7 @@ class GameTest {
     @Test
     void testProcessPlayerDecisionRaise() {
         game.postBlinds(); // Sets highest bet to 20
-        Player raiser = game.getActivePlayers().get(0);
+        Player raiser = game.getActivePlayers().getFirst();
         PlayerDecision decision = new PlayerDecision(PlayerAction.RAISE, 50, raiser.getPlayerId());
 
         game.processPlayerDecision(raiser, decision);
@@ -336,7 +335,7 @@ class GameTest {
     @Test
     void testProcessPlayerDecisionInvalidRaise() {
         game.postBlinds(); // Sets highest bet to 20
-        Player player = game.getActivePlayers().get(0);
+        Player player = game.getActivePlayers().getFirst();
         player.doAction(PlayerAction.BET, 10, 0); // Player already bet 10
 
         // Try to raise by only 5 (total 15), which is less than current highest (20)
@@ -446,7 +445,7 @@ class GameTest {
         List<Player> winners = game.conductShowdown();
 
         assertEquals(1, winners.size());
-        assertEquals("Player3", winners.get(0).getName());
+        assertEquals("Player3", winners.getFirst().getName());
         assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
     }
 
@@ -479,7 +478,7 @@ class GameTest {
                 .thenReturn(false);
 
         // Add chips to pot
-        game.processPlayerDecision(game.getActivePlayers().get(0),
+        game.processPlayerDecision(game.getActivePlayers().getFirst(),
                 new PlayerDecision(PlayerAction.BET, 100, "p1"));
 
         List<Player> winners = game.conductShowdown();
@@ -559,7 +558,7 @@ class GameTest {
         when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any()))
                 .thenReturn(false);
 
-        game.processPlayerDecision(game.getActivePlayers().get(0),
+        game.processPlayerDecision(game.getActivePlayers().getFirst(),
                 new PlayerDecision(PlayerAction.BET, 100, "p1"));
 
         game.conductShowdown();
@@ -581,7 +580,7 @@ class GameTest {
         when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any()))
                 .thenReturn(false);
 
-        game.processPlayerDecision(game.getActivePlayers().get(0),
+        game.processPlayerDecision(game.getActivePlayers().getFirst(),
                 new PlayerDecision(PlayerAction.BET, 100, "p1"));
         game.conductShowdown();
 
@@ -604,7 +603,7 @@ class GameTest {
         when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any()))
                 .thenReturn(false);
 
-        game.processPlayerDecision(game.getActivePlayers().get(0),
+        game.processPlayerDecision(game.getActivePlayers().getFirst(),
                 new PlayerDecision(PlayerAction.BET, 100, "p1"));
         game.conductShowdown();
         assertEquals(1, game.getPot());
@@ -999,7 +998,7 @@ class GameTest {
         headsUpGame.postBlinds();
 
         assertEquals(0, headsUpGame.getDealerPosition());
-        assertEquals(10, headsUpGame.getActivePlayers().get(0).getCurrentBet());
+        assertEquals(10, headsUpGame.getActivePlayers().getFirst().getCurrentBet());
     }
 
     @Test
@@ -1077,7 +1076,7 @@ class GameTest {
     @Test
     void testCleanupAfterHand() {
         // Make a player lose all chips
-        Player player = game.getActivePlayers().get(0);
+        Player player = game.getActivePlayers().getFirst();
         player.doAction(PlayerAction.ALL_IN, 0, 0);
 
         assertEquals(3, game.getActivePlayers().size());
@@ -1119,7 +1118,7 @@ class GameTest {
     @Test
     void testResetForNewHandWithEliminatedPlayers() {
         // Eliminate a player
-        Player eliminated = game.getActivePlayers().get(0);
+        Player eliminated = game.getActivePlayers().getFirst();
         eliminated.doAction(PlayerAction.ALL_IN, 0, 0);
         eliminated.setIsOut();
 
@@ -1146,7 +1145,7 @@ class GameTest {
         sidePotGame.processPlayerDecision(allInPlayer,
                 new PlayerDecision(PlayerAction.ALL_IN, 0, allInPlayer.getPlayerId()));
 
-        Player raiser = mixedStacks.get(0);
+        Player raiser = mixedStacks.getFirst();
         int previousBet = raiser.getCurrentBet();
         String message = sidePotGame.processPlayerDecision(raiser,
                 new PlayerDecision(PlayerAction.RAISE, 100, raiser.getPlayerId()));
