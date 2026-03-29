@@ -120,9 +120,8 @@ class WebSocketSecurityTest {
     }
 
     @Test
-    @DisplayName("WebSocket should connect without token (handshake is public)")
-    void websocket_shouldConnect_withoutToken() throws Exception {
-        // WebSocket handshake is public, but user won't be authenticated
+    @DisplayName("WebSocket should REJECT connection without token")
+    void websocket_shouldReject_withoutToken() {
         CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
 
         stompClient.connectAsync(wsUrl, handshakeHeaders, new StompHeaders(),
@@ -133,28 +132,19 @@ class WebSocketSecurityTest {
                     }
 
                     @Override
-                    public void handleException(@NonNull StompSession session, StompCommand command,
-                                                @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
-                        sessionFuture.completeExceptionally(exception);
-                    }
-
-                    @Override
                     public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
                         sessionFuture.completeExceptionally(exception);
                     }
                 });
 
-        // Connection should succeed (handshake is public), but principal will be null
-        StompSession session = sessionFuture.get(5, TimeUnit.SECONDS);
-        assertNotNull(session);
-        assertTrue(session.isConnected());
-
-        session.disconnect();
+        // Connection should fail or timeout because Interceptor returns null for missing token
+        // Use a 2-second timeout which is plenty for a local connection but short enough for a test failure
+        assertThrows(Exception.class, () -> sessionFuture.get(2, TimeUnit.SECONDS));
     }
 
     @Test
-    @DisplayName("WebSocket should handle invalid JWT token gracefully")
-    void websocket_shouldHandleInvalidToken_gracefully() throws Exception {
+    @DisplayName("WebSocket should REJECT connection with invalid JWT token")
+    void websocket_shouldReject_invalidToken() {
         StompHeaders connectHeaders = new StompHeaders();
         connectHeaders.add("Authorization", "Bearer invalid-token-here");
 
@@ -168,24 +158,13 @@ class WebSocketSecurityTest {
                     }
 
                     @Override
-                    public void handleException(@NonNull StompSession session, StompCommand command,
-                                                @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
-                        sessionFuture.completeExceptionally(exception);
-                    }
-
-                    @Override
                     public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
                         sessionFuture.completeExceptionally(exception);
                     }
                 });
 
-        // Connection should still succeed but user won't be authenticated
-        // The interceptor logs a warning but doesn't reject the connection
-        StompSession session = sessionFuture.get(5, TimeUnit.SECONDS);
-        assertNotNull(session);
-        assertTrue(session.isConnected());
-
-        session.disconnect();
+        // Connection should fail or timeout because Interceptor returns null for invalid token
+        assertThrows(Exception.class, () -> sessionFuture.get(2, TimeUnit.SECONDS));
     }
 
     @Test

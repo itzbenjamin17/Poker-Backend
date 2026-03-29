@@ -3,7 +3,6 @@ package com.pokergame.controller;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
-import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
@@ -98,20 +97,6 @@ public class ApiController {
 
     // ==================== Game Endpoints ====================
 
-    /**
-     * Processes a player action. Delegates to
-     * {@link GameController#performAction(String, PlayerActionRequest, Principal)}.
-     * SECURED ENDPOINT - Requires JWT token.
-     */
-    @PostMapping("/game/{gameId}/action")
-    public ResponseEntity<Void> performAction(
-            @PathVariable String gameId,
-            @Valid @RequestBody PlayerActionRequest actionRequest,
-            Principal principal) {
-        logger.debug("API: Delegating player action for game: {}", gameId);
-        gameController.performAction(gameId, actionRequest, principal);
-        return ResponseEntity.ok().build();
-    }
 
     /**
      * Retrieves current public game state for an authenticated player in the game.

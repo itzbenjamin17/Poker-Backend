@@ -323,6 +323,31 @@ public class GameStateService {
     }
 
     /**
+     * Sends a private notification message to a specific player's private channel.
+     * Used for action errors or private-only feedback.
+     *
+     * @param gameId     the unique identifier of the game
+     * @param playerName the name of the player to notify
+     * @param message    the notification message content
+     * @param type       the type of notification (e.g. "ACTION_ERROR")
+     */
+    public void sendPrivatePlayerNotification(String gameId, String playerName, String message, String type) {
+        String encodedPlayerName = java.net.URLEncoder.encode(
+                playerName,
+                java.nio.charset.StandardCharsets.UTF_8);
+
+        PlayerNotificationResponse notification = new PlayerNotificationResponse(
+                type,
+                message,
+                playerName,
+                gameId);
+
+        messagingTemplate.convertAndSend(
+                "/game/" + gameId + "/player-name/" + encodedPlayerName + "/private",
+                notification);
+    }
+
+    /**
      * Broadcasts a game end message when a winner is determined.
      * Sent when only one player remains with chips.
      *

@@ -13,10 +13,12 @@ import com.pokergame.model.Game;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.web.bind.annotation.*;
+import jakarta.annotation.Nonnull;
 
 import java.security.Principal;
 
@@ -105,7 +107,7 @@ public class GameController {
 
     /**
      * Processes a player action (fold, check, call, raise, all-in).
-     * Uses WebSocket messaging for real-time updates.
+     * Now primarily handled via direct WebSocket communication.
      *
      * @param gameId        game identifier
      * @param actionRequest action type and amount
@@ -120,6 +122,18 @@ public class GameController {
         logger.info("Processing player action for game {} by {}: {}", gameId, playerName, actionRequest);
         playerActionService.processPlayerAction(gameId, actionRequest, playerName);
         logger.debug("Player action processed successfully for game {}", gameId);
+    }
+
+    /**
+     * Handles exceptions occurring during WebSocket message processing.
+     * Propagates errors back to the specific initiating player via their private channel.
+     */
+    @Nonnull
+    @MessageExceptionHandler
+    public void handleMessageException(Exception exception, Principal principal, @DestinationVariable String gameId) {
+        String playerName = principal.getName();
+        logger.warn("WebSocket Action Error for player {} in game {}: {}", playerName, gameId, exception.getMessage());
+        gameStateService.sendPrivatePlayerNotification(gameId, playerName, exception.getMessage(), "ACTION_ERROR");
     }
 
     /**

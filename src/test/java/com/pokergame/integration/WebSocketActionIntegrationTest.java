@@ -1,0 +1,241 @@
+package com.pokergame.integration;
+
+import com.pokergame.dto.request.CreateRoomRequest;
+import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.dto.response.PlayerNotificationResponse;
+import com.pokergame.enums.PlayerAction;
+import com.pokergame.security.JwtService;
+import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.RoomService;
+import org.jspecify.annotations.NonNull;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.messaging.converter.CompositeMessageConverter;
+import org.springframework.messaging.converter.JacksonJsonMessageConverter;
+import org.springframework.messaging.converter.MessageConverter;
+import org.springframework.messaging.converter.StringMessageConverter;
+import org.springframework.messaging.simp.stomp.*;
+import org.springframework.web.socket.WebSocketHttpHeaders;
+import org.springframework.web.socket.client.standard.StandardWebSocketClient;
+import org.springframework.web.socket.messaging.WebSocketStompClient;
+import org.springframework.web.socket.sockjs.client.SockJsClient;
+import org.springframework.web.socket.sockjs.client.Transport;
+import org.springframework.web.socket.sockjs.client.WebSocketTransport;
+
+import java.lang.reflect.Type;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+class WebSocketActionIntegrationTest {
+
+    @LocalServerPort
+    private int port;
+
+    @Autowired
+    private JwtService jwtService;
+
+    @Autowired
+    private RoomService roomService;
+
+    @Autowired
+    private GameLifecycleService gameLifecycleService;
+
+    private WebSocketStompClient stompClient;
+    private String wsUrl;
+    private String roomId;
+    private String hostToken;
+    private String otherToken;
+    private final String hostName = "ActionHost";
+    private final String otherName = "OtherPlayer";
+
+    @BeforeEach
+    void setUp() {
+        wsUrl = "ws://localhost:" + port + "/ws";
+
+        List<Transport> transports = new ArrayList<>();
+        transports.add(new WebSocketTransport(new StandardWebSocketClient()));
+        SockJsClient sockJsClient = new SockJsClient(transports);
+
+        stompClient = new WebSocketStompClient(sockJsClient);
+        List<MessageConverter> converters = new ArrayList<>();
+        converters.add(new StringMessageConverter());
+        converters.add(new JacksonJsonMessageConverter());
+        stompClient.setMessageConverter(new CompositeMessageConverter(converters));
+
+        // Create a room
+        CreateRoomRequest createRequest = new CreateRoomRequest(
+                "ActionTestRoom" + UUID.randomUUID().toString().substring(0, 8),
+                hostName,
+                6, 10, 20, 1000, null);
+        roomId = roomService.createRoom(createRequest);
+        hostToken = jwtService.generateToken(hostName);
+        otherToken = jwtService.generateToken(otherName);
+    }
+
+    private StompSession connectSession(String token) throws Exception {
+        StompHeaders connectHeaders = new StompHeaders();
+        connectHeaders.add("Authorization", "Bearer " + token);
+        WebSocketHttpHeaders handshakeHeaders = new WebSocketHttpHeaders();
+        handshakeHeaders.add("Origin", "http://localhost:5173");
+
+        CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
+        stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
+                new StompSessionHandlerAdapter() {
+                    @Override
+                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
+                        sessionFuture.complete(session);
+                    }
+                    @Override
+                    public void handleException(@NonNull StompSession session, StompCommand command, @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
+                        sessionFuture.completeExceptionally(exception);
+                    }
+                });
+        return sessionFuture.get(5, TimeUnit.SECONDS);
+    }
+
+    @Test
+    @DisplayName("Should receive ACTION_ERROR on private topic for invalid bets")
+    void shouldReceiveError_whenInvalidActionSent() throws Exception {
+        roomService.joinRoom(new com.pokergame.dto.request.JoinRoomRequest(roomService.getRoom(roomId).getRoomName(), otherName, null));
+        
+        StompSession session = connectSession(hostToken);
+        CompletableFuture<PlayerNotificationResponse> errorFuture = new CompletableFuture<>();
+
+        String privateTopic = "/game/" + roomId + "/player-name/" + hostName + "/private";
+        session.subscribe(privateTopic, new StompFrameHandler() {
+            @Override
+            public Type getPayloadType(@NonNull StompHeaders headers) {
+                return PlayerNotificationResponse.class;
+            }
+            @Override
+            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                if (payload instanceof PlayerNotificationResponse notification && "ACTION_ERROR".equals(notification.type())) {
+                    errorFuture.complete(notification);
+                }
+            }
+        });
+
+        gameLifecycleService.createGameFromRoom(roomId);
+        Thread.sleep(500);
+
+        PlayerActionRequest invalidAction = new PlayerActionRequest(PlayerAction.BET, 2000);
+        session.send("/app/" + roomId + "/action", invalidAction);
+
+        PlayerNotificationResponse error = errorFuture.get(10, TimeUnit.SECONDS);
+        assertNotNull(error);
+        assertEquals("ACTION_ERROR", error.type());
+        session.disconnect();
+    }
+
+    @Test
+    @DisplayName("Should update game state when valid action is sent via WebSocket")
+    void shouldSucceed_whenValidActionSent() throws Exception {
+        roomService.joinRoom(new com.pokergame.dto.request.JoinRoomRequest(roomService.getRoom(roomId).getRoomName(), otherName, null));
+
+        StompSession hostSession = connectSession(hostToken);
+        CompletableFuture<com.pokergame.dto.response.PublicGameStateResponse> stateFuture = new CompletableFuture<>();
+
+        hostSession.subscribe("/game/" + roomId, new StompFrameHandler() {
+            @Override
+            public Type getPayloadType(@NonNull StompHeaders headers) {
+                return com.pokergame.dto.response.PublicGameStateResponse.class;
+            }
+            @Override
+            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                if (payload instanceof com.pokergame.dto.response.PublicGameStateResponse response) {
+                    stateFuture.complete(response);
+                }
+            }
+        });
+        
+        gameLifecycleService.createGameFromRoom(roomId);
+        com.pokergame.dto.response.PublicGameStateResponse initial = stateFuture.get(10, TimeUnit.SECONDS);
+        
+        String current = initial.currentPlayerName();
+        StompSession activeSession = hostName.equals(current) ? hostSession : connectSession(otherToken);
+        
+        CompletableFuture<com.pokergame.dto.response.PublicGameStateResponse> nextFuture = new CompletableFuture<>();
+        activeSession.subscribe("/game/" + roomId, new StompFrameHandler() {
+            @Override
+            public Type getPayloadType(@NonNull StompHeaders headers) {
+                return com.pokergame.dto.response.PublicGameStateResponse.class;
+            }
+            @Override
+            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                if (payload instanceof com.pokergame.dto.response.PublicGameStateResponse state) {
+                    nextFuture.complete(state);
+                }
+            }
+        });
+        
+        Thread.sleep(300);
+        activeSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
+        
+        // If fold happens in 2-player game, it might end the hand, so just verify any state arrived.
+        assertNotNull(nextFuture.get(10, TimeUnit.SECONDS));
+        hostSession.disconnect();
+        if (activeSession != hostSession) activeSession.disconnect();
+    }
+
+    @Test
+    @DisplayName("Should handle actions correctly after client disconnects and reconnects")
+    void shouldHandleActions_afterReconnect() throws Exception {
+        roomService.joinRoom(new com.pokergame.dto.request.JoinRoomRequest(roomService.getRoom(roomId).getRoomName(), otherName, null));
+
+        StompSession sessionTemp = connectSession(hostToken);
+        CompletableFuture<com.pokergame.dto.response.PublicGameStateResponse> initialFuture = new CompletableFuture<>();
+        sessionTemp.subscribe("/game/" + roomId, new StompFrameHandler() {
+            @Override
+            public Type getPayloadType(@NonNull StompHeaders headers) {
+                return com.pokergame.dto.response.PublicGameStateResponse.class;
+            }
+            @Override
+            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                if (payload instanceof com.pokergame.dto.response.PublicGameStateResponse s) initialFuture.complete(s);
+            }
+        });
+        gameLifecycleService.createGameFromRoom(roomId);
+        com.pokergame.dto.response.PublicGameStateResponse state = initialFuture.get(10, TimeUnit.SECONDS);
+        String current = state.currentPlayerName();
+        sessionTemp.disconnect();
+        
+        String token = hostName.equals(current) ? hostToken : otherToken;
+
+        StompSession session = connectSession(token);
+        Thread.sleep(500);
+        session.disconnect();
+        Thread.sleep(500);
+        
+        StompSession session2 = connectSession(token);
+        CompletableFuture<com.pokergame.dto.response.PublicGameStateResponse> finalFuture = new CompletableFuture<>();
+        session2.subscribe("/game/" + roomId, new StompFrameHandler() {
+            @Override
+            public Type getPayloadType(@NonNull StompHeaders headers) {
+                return com.pokergame.dto.response.PublicGameStateResponse.class;
+            }
+            @Override
+            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                if (payload instanceof com.pokergame.dto.response.PublicGameStateResponse res) finalFuture.complete(res);
+            }
+        });
+        
+        Thread.sleep(300);
+        session2.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
+        
+        // Verifying we actually got a response payload on the socket
+        com.pokergame.dto.response.PublicGameStateResponse result = finalFuture.get(10, TimeUnit.SECONDS);
+        assertNotNull(result);
+
+        session2.disconnect();
+    }
+}
