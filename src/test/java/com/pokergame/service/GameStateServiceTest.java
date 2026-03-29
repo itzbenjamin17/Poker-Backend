@@ -322,7 +322,7 @@ class GameStateServiceTest {
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
-        gameStateService.broadcastGameEnd(GAME_ID, winner);
+        gameStateService.broadcastGameEnd(GAME_ID, winner, false);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
 
@@ -342,7 +342,7 @@ class GameStateServiceTest {
         Player winner = testPlayers.getFirst();
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        gameStateService.broadcastGameEnd(GAME_ID, winner);
+        gameStateService.broadcastGameEnd(GAME_ID, winner, false);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
 
@@ -356,7 +356,7 @@ class GameStateServiceTest {
 
     @Test
     void broadcastGameEnd_WithNullWinner_ShouldNotThrow() {
-        assertDoesNotThrow(() -> gameStateService.broadcastGameEnd(GAME_ID, null));
+        assertDoesNotThrow(() -> gameStateService.broadcastGameEnd(GAME_ID, null, false));
     }
 
     // ==================== Edge Case Tests ====================

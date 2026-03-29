@@ -129,7 +129,7 @@ public class GameLifecycleService {
         boolean gameEnded = game.resetForNewHand();
         if (gameEnded) {
             logger.warn("Game {} became over after reset", gameId);
-            handleGameEnd(gameId);
+            handleGameEnd(gameId, false);
             return;
         }
 
@@ -208,7 +208,7 @@ public class GameLifecycleService {
                 // If only one player remains, end the game immediately
                 if (game.getPlayers().size() == 1) {
                     logger.info("Only one player remaining in game {}, ending game", gameId);
-                    handleGameEnd(gameId);
+                    handleGameEnd(gameId, true);
                     return;
                 }
 
@@ -234,8 +234,9 @@ public class GameLifecycleService {
      * resources.
      *
      * @param gameId the unique identifier of the game
+     * @param isForfeit true if the game ended due to a player leaving/disconnecting
      */
-    public void handleGameEnd(String gameId) {
+    public void handleGameEnd(String gameId, boolean isForfeit) {
         Game game = getGame(gameId);
         if (game == null)
             return;
@@ -261,7 +262,7 @@ public class GameLifecycleService {
             return;
         }
 
-        gameStateService.broadcastGameEnd(gameId, winner);
+        gameStateService.broadcastGameEnd(gameId, winner, isForfeit);
 
         // Wait a few seconds for players to see the result, then destroy the room and
         // game, on a different thread

@@ -97,7 +97,6 @@ public class ApiController {
 
     // ==================== Game Endpoints ====================
 
-
     /**
      * Retrieves current public game state for an authenticated player in the game.
      * Delegates to {@link GameController#getGameState(String, Principal)}.

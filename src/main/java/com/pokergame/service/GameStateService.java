@@ -355,8 +355,9 @@ public class GameStateService {
      *
      * @param gameId the unique identifier of the game
      * @param winner the Player object representing the game winner
+     * @param isForfeit true if the game ended due to a player leaving/disconnecting
      */
-    public void broadcastGameEnd(String gameId, Player winner) {
+    public void broadcastGameEnd(String gameId, Player winner, boolean isForfeit) {
         if (winner == null) {
             logger.warn("Cannot broadcast game end for {} - winner is null", gameId);
             return;
@@ -367,6 +368,7 @@ public class GameStateService {
         gameEndData.put("winner", winner.getName());
         gameEndData.put("winnerChips", winner.getChips());
         gameEndData.put("gameId", gameId);
+        gameEndData.put("isForfeit", isForfeit);
         gameEndData.put("message", "🏆 " + winner.getName() + " wins the game with " + winner.getChips() + " chips!");
 
         messagingTemplate.convertAndSend("/game/" + gameId, (Object) gameEndData);

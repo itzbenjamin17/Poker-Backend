@@ -188,7 +188,7 @@ class GameLifecycleServiceTest {
 
         // Should end the game and schedule cleanup because game became over after reset
         verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
-        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class));
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
         verify(applicationEventPublisher).publishEvent(any(GameCleanupEvent.class));
     }
 
@@ -252,7 +252,7 @@ class GameLifecycleServiceTest {
 
         gameLifecycleService.leaveGame(ROOM_ID, playerToLeave);
 
-        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class));
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
     }
 
     @Test
@@ -446,7 +446,7 @@ class GameLifecycleServiceTest {
         assertDoesNotThrow(() -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
 
         verify(gameStateService).broadcastGameEnd(eq(ROOM_ID),
-                argThat(player -> player != null && player.getName().equals("Host")));
+                argThat(player -> player != null && player.getName().equals("Host")), anyBoolean());
         verify(applicationEventPublisher).publishEvent(any(GameCleanupEvent.class));
     }
 
@@ -473,16 +473,16 @@ class GameLifecycleServiceTest {
         gameLifecycleService.createGameFromRoom(ROOM_ID);
         reset(gameStateService);
 
-        gameLifecycleService.handleGameEnd(ROOM_ID);
+        gameLifecycleService.handleGameEnd(ROOM_ID, false);
 
-        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class));
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
     }
 
     @Test
     void handleGameEnd_WithNullGame_ShouldNotBroadcast() {
-        gameLifecycleService.handleGameEnd("nonexistent-id");
+        gameLifecycleService.handleGameEnd("nonexistent-id", false);
 
-        verify(gameStateService, never()).broadcastGameEnd(anyString(), any(Player.class));
+        verify(gameStateService, never()).broadcastGameEnd(anyString(), any(Player.class), anyBoolean());
     }
 
     @Test
@@ -494,7 +494,7 @@ class GameLifecycleServiceTest {
         game.getPlayers().clear();
         game.getActivePlayers().clear();
 
-        assertDoesNotThrow(() -> gameLifecycleService.handleGameEnd(ROOM_ID));
+        assertDoesNotThrow(() -> gameLifecycleService.handleGameEnd(ROOM_ID, false));
     }
 
     // ==================== Integration-like Tests ====================

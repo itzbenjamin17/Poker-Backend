@@ -20,6 +20,20 @@ import org.springframework.web.client.RestClient;
 
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
+import java.util.List;
+import java.util.ArrayList;
+
+import org.springframework.messaging.simp.stomp.*;
+import org.springframework.messaging.converter.*;
+import org.springframework.web.socket.WebSocketHttpHeaders;
+import org.springframework.web.socket.client.standard.StandardWebSocketClient;
+import org.springframework.web.socket.messaging.WebSocketStompClient;
+import org.springframework.web.socket.sockjs.client.SockJsClient;
+import org.springframework.web.socket.sockjs.client.Transport;
+import org.springframework.web.socket.sockjs.client.WebSocketTransport;
+import com.pokergame.security.JwtService;
+import org.jspecify.annotations.NonNull;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -35,11 +49,48 @@ class GameLifecycleIntegrationTest {
     @Autowired
     private GameLifecycleService gameLifecycleService;
 
+    @Autowired
+    private JwtService jwtService;
+
+    private WebSocketStompClient stompClient;
+
     @BeforeEach
     void setUp() {
         restClient = RestClient.builder()
                 .baseUrl("http://localhost:" + port)
                 .build();
+
+        List<Transport> transports = new ArrayList<>();
+        transports.add(new WebSocketTransport(new StandardWebSocketClient()));
+        SockJsClient sockJsClient = new SockJsClient(transports);
+
+        stompClient = new WebSocketStompClient(sockJsClient);
+        List<MessageConverter> converters = new ArrayList<>();
+        converters.add(new StringMessageConverter());
+        converters.add(new JacksonJsonMessageConverter());
+        stompClient.setMessageConverter(new CompositeMessageConverter(converters));
+    }
+
+    private StompSession connectSession(String token) throws Exception {
+        String wsUrl = "ws://localhost:" + port + "/ws";
+        StompHeaders connectHeaders = new StompHeaders();
+        connectHeaders.add("Authorization", "Bearer " + token);
+        WebSocketHttpHeaders handshakeHeaders = new WebSocketHttpHeaders();
+        handshakeHeaders.add("Origin", "http://localhost:5173");
+
+        CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
+        stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
+                new StompSessionHandlerAdapter() {
+                    @Override
+                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
+                        sessionFuture.complete(session);
+                    }
+                    @Override
+                    public void handleException(@NonNull StompSession session, StompCommand command, @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
+                        sessionFuture.completeExceptionally(exception);
+                    }
+                });
+        return sessionFuture.get(5, TimeUnit.SECONDS);
     }
 
     @Test
@@ -471,35 +522,28 @@ class GameLifecycleIntegrationTest {
             String gameId,
             PlayerActionRequest request,
             String tokenA,
-            String tokenB) {
-        if (tryPerformAction(gameId, request, tokenA)) {
-            return tokenA;
-        }
-        if (tryPerformAction(gameId, request, tokenB)) {
-            return tokenB;
-        }
+            String tokenB) throws Exception {
+        
+        String stateBody = restClient.get()
+                .uri("/api/game/" + gameId + "/state")
+                .header("Authorization", "Bearer " + tokenA)
+                .retrieve()
+                .body(String.class);
+        
+        JsonNode state = objectMapper.readTree(stateBody);
+        String currentPlayerName = state.path("currentPlayerName").asText();
 
-        fail("Neither player could perform action " + request.action() + " for game " + gameId);
-        return "";
-    }
+        String nameA = jwtService.extractPlayerName(tokenA);
+        String actingToken = nameA.equals(currentPlayerName) ? tokenA : tokenB;
 
-    private boolean tryPerformAction(String gameId, PlayerActionRequest request, String token) {
-        try {
-            restClient.post()
-                    .uri("/api/game/" + gameId + "/action")
-                    .header("Authorization", "Bearer " + token)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(request)
-                    .retrieve()
-                    .toBodilessEntity();
-            return true;
-        } catch (HttpClientErrorException ex) {
-            if (ex.getStatusCode() == HttpStatus.FORBIDDEN &&
-                    ex.getResponseBodyAsString().contains("It's not your turn")) {
-                return false;
-            }
-            throw ex;
-        }
+        StompSession session = connectSession(actingToken);
+        session.send("/app/" + gameId + "/action", request);
+        
+        // Small delay to allow async STOMP message to process
+        TimeUnit.MILLISECONDS.sleep(200);
+        session.disconnect();
+
+        return actingToken;
     }
 
     private boolean awaitRoomDestruction(String roomId, String token, long timeoutMillis) throws InterruptedException {
