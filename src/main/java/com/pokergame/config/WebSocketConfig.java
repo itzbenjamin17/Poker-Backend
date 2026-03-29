@@ -23,9 +23,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // - /game/{gameId} - public game state for all players
         // - /game/{gameId}/player/{playerId}/private - private data per player
         // - /room/{roomId} - room lobby updates
+        // broker is what sends messages to all subscribed clients
         config.enableSimpleBroker("/room", "/game");
 
-        // Prefix for destinations clients send messages TO (handled by @MessageMapping)
+        // Prefix for destinations clients send messages to (handled by @MessageMapping)
         config.setApplicationDestinationPrefixes("/app");
     }
 
