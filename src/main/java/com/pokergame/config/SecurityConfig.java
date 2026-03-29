@@ -49,7 +49,6 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // Public endpoints - where tokens are ISSUED (no token required)
                         .requestMatchers("/api/room/create", "/api/room/join").permitAll()
-                        .requestMatchers("/room/create", "/room/join").permitAll()
 
                         // WebSocket handshake must be public
                         .requestMatchers("/ws/**").permitAll()
@@ -68,15 +67,21 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
+        // Allows cookies, authorization headers to be sent in CORS requests
         config.setAllowCredentials(true);
+
         config.setAllowedOriginPatterns(List.of(
                 "http://localhost:5173",
                 "https://*.ngrok-free.app"));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With"));
+
+        config.setAllowedMethods(List.of("GET", "POST", "OPTIONS"));
+
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+
         config.setExposedHeaders(List.of("Authorization"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        // Applies this CORS configuration to all endpoints
         source.registerCorsConfiguration("/**", config);
         return source;
     }

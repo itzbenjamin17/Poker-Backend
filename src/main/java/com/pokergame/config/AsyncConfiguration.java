@@ -33,10 +33,11 @@ public class AsyncConfiguration {
         // CALLER_RUNS_POLICY: Current request thread runs the task
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
 
+        // Wait for tasks to complete before shutting down the executor
         executor.setWaitForTasksToCompleteOnShutdown(true);
 
         // Maximum seconds to wait for tasks during shutdown
-        executor.setAwaitTerminationSeconds(60);
+        executor.setAwaitTerminationSeconds(120);
 
         executor.initialize();
 
@@ -46,6 +47,7 @@ public class AsyncConfiguration {
     @Bean(name = "taskScheduler")
     public ThreadPoolTaskScheduler taskScheduler() {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        // Number of threads for scheduled tasks (e.g., game timers)
         scheduler.setPoolSize(5);
         scheduler.setThreadNamePrefix("GameScheduler-");
         scheduler.initialize();
