@@ -136,6 +136,12 @@ public class WebSocketEventListener {
         pendingDisconnects.put(username, new PendingDisconnect(roomId, future));
     }
 
+    /**
+     * Cleans up a disconnected user from the game.
+     * 
+     * @param username The username of the disconnected user.
+     * @param roomId   The room ID of the disconnected user.
+     */
     private void cleanupDisconnectedUser(String username, String roomId) {
         pendingDisconnects.remove(username);
 
@@ -166,6 +172,13 @@ public class WebSocketEventListener {
         }
     }
 
+    /**
+     * Finds the room ID of the room that the given player is in.
+     * 
+     * @param username The username of the player.
+     * @return The room ID of the room that the given player is in, or null if the player is not in any room.
+     */
+    // TODO: Make this more efficient, maybe store the room ID in the user object
     private String findRoomIdByPlayer(String username) {
         for (Room room : roomService.getRooms()) {
             if (room.hasPlayer(username)) {
@@ -175,11 +188,33 @@ public class WebSocketEventListener {
         return null;
     }
 
+    /**
+     * Registers an active WebSocket session for the given user.
+     * 
+     * @param username The username of the user.
+     * @param sessionId The session ID of the user.
+     */
     private void registerActiveSession(String username, String sessionId) {
-        activeSessionsByUser.computeIfAbsent(username, ignored -> ConcurrentHashMap.newKeySet()).add(sessionId);
+        // Get the set of active sessions for the user, or create a new one if it
+        // doesn't exist
+        Set<String> sessions = activeSessionsByUser.get(username);
+        if (sessions == null) {
+            sessions = ConcurrentHashMap.newKeySet();
+            activeSessionsByUser.put(username, sessions);
+        }
+        // Add the new session ID to the user's set of sessions
+        sessions.add(sessionId);
+
+        // Map the session ID back to the username for reverse lookup
         sessionToUser.put(sessionId, username);
     }
 
+    /**
+     * Unregisters an active WebSocket session for the given user.
+     * 
+     * @param username The username of the user.
+     * @param sessionId The session ID of the user.
+     */
     private void unregisterActiveSession(String username, String sessionId) {
         if (sessionId != null) {
             sessionToUser.remove(sessionId);
@@ -195,14 +230,15 @@ public class WebSocketEventListener {
         }
     }
 
+    /**
+     * Checks if the given user has any active WebSocket sessions.
+     * 
+     * @param username The username of the user.
+     * @return True if the user has any active WebSocket sessions, false otherwise.
+     */
     private boolean hasActiveSession(String username) {
         Set<String> sessions = activeSessionsByUser.get(username);
         return sessions != null && !sessions.isEmpty();
-    }
-
-    @PreDestroy
-    public void shutdownExecutor() {
-        pendingDisconnects.values().forEach(pending -> pending.future().cancel(false));
     }
 
     private record PendingDisconnect(String roomId, ScheduledFuture<?> future) {
