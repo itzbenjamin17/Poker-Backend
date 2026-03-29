@@ -88,7 +88,8 @@ public class GameStateService {
         for (Player targetPlayer : game.getPlayers()) {
             String encodedPlayerName = java.net.URLEncoder.encode(
                     targetPlayer.getName(),
-                    java.nio.charset.StandardCharsets.UTF_8);
+                    java.nio.charset.StandardCharsets.UTF_8)
+                    .replace("+", "%20");
 
             messagingTemplate.convertAndSend(
                     "/game/" + gameId + "/player-name/" + encodedPlayerName + "/private",
@@ -334,7 +335,8 @@ public class GameStateService {
     public void sendPrivatePlayerNotification(String gameId, String playerName, String message, String type) {
         String encodedPlayerName = java.net.URLEncoder.encode(
                 playerName,
-                java.nio.charset.StandardCharsets.UTF_8);
+                java.nio.charset.StandardCharsets.UTF_8)
+                .replace("+", "%20");
 
         PlayerNotificationResponse notification = new PlayerNotificationResponse(
                 type,

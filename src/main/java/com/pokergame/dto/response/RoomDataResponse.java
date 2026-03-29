@@ -16,5 +16,6 @@ public record RoomDataResponse(
         String hostName,
         List<PlayerJoinInfo> players,
         int currentPlayers,
-        boolean canStartGame
-) {}
+        boolean canStartGame,
+        boolean gameStarted
+) {}

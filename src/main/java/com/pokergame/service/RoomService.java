@@ -276,8 +276,10 @@ public class RoomService {
                 currentHost,
                 playerObjects,
                 playerObjects.size(),
-                playerObjects.size() >= 2);
+                playerObjects.size() >= 2,
+                room.isGameStarted());
     }
+
 
     /**
      * Retrieves a room by its unique identifier.

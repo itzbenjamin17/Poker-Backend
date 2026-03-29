@@ -96,7 +96,9 @@ public class GameLifecycleService {
         messagingTemplate.convertAndSend("/rooms" + roomId,
                 new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), gameStartMessage));
 
+        room.setGameStarted(true);
         logger.info("Game created and started for room: {} with {} players", roomId, players.size());
+
 
         startNewHand(roomId);
 

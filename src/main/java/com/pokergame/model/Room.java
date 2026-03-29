@@ -32,6 +32,8 @@ public class Room {
     private final int buyIn;
     private final String password;
     private final LocalDateTime createdAt;
+    private boolean isGameStarted;
+
 
     /**
      * Creates a new poker room with the specified configuration.
@@ -241,4 +243,12 @@ public class Room {
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
-}
+
+    public boolean isGameStarted() {
+        return isGameStarted;
+    }
+
+    public void setGameStarted(boolean gameStarted) {
+        isGameStarted = gameStarted;
+    }
+}

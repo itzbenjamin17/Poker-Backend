@@ -126,14 +126,46 @@ public class GameController {
 
     /**
      * Handles exceptions occurring during WebSocket message processing.
-     * Propagates errors back to the specific initiating player via their private channel.
+     * Propagates errors back to the specific initiating player via their private
+     * channel.
      */
     @Nonnull
     @MessageExceptionHandler
-    public void handleMessageException(Exception exception, Principal principal, @DestinationVariable String gameId) {
+    public void handleMessageException(Exception exception, Principal principal,
+            org.springframework.messaging.Message<?> message) {
         String playerName = principal.getName();
-        logger.warn("WebSocket Action Error for player {} in game {}: {}", playerName, gameId, exception.getMessage());
-        gameStateService.sendPrivatePlayerNotification(gameId, playerName, exception.getMessage(), "ACTION_ERROR");
+
+        // Extract gameId from the destination header manually
+        org.springframework.messaging.simp.SimpMessageHeaderAccessor accessor = org.springframework.messaging.simp.SimpMessageHeaderAccessor
+                .wrap(message);
+        String destination = accessor.getDestination();
+        String gameId = "unknown";
+
+        if (destination != null) {
+            String[] parts = destination.split("/");
+            if (parts.length >= 3) {
+                gameId = parts[2];
+            }
+        }
+
+        String userFriendlyMessage = exception.getMessage();
+
+        // Sanitize technical messages like Jackson deserialization errors
+        if (exception instanceof org.springframework.messaging.converter.MessageConversionException ||
+                (userFriendlyMessage != null && userFriendlyMessage.contains("Cannot deserialize"))) {
+            userFriendlyMessage = "Invalid action request format. Please try again with a valid amount.";
+            logger.warn("Technical WebSocket Action Error (sanitized) for {} in game {}: {}", playerName, gameId,
+                    exception.getMessage());
+        } else {
+            logger.warn("WebSocket Action Error for player {} in game {}: {}", playerName, gameId, userFriendlyMessage);
+        }
+
+        // Ensure error messages are not too long
+        if (userFriendlyMessage != null && userFriendlyMessage.length() > 150) {
+            userFriendlyMessage = userFriendlyMessage.substring(0, 147) + "...";
+        }
+
+        gameStateService.sendPrivatePlayerNotification(gameId, playerName, userFriendlyMessage, "ACTION_ERROR");
     }
 
     /**
