@@ -1,5 +1,7 @@
 package com.pokergame.service;
 
+import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.event.GameCleanupEvent;
 import com.pokergame.model.Game;
@@ -274,6 +276,68 @@ class GameLifecycleServiceTest {
         verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
     }
 
+    @Test
+    void leaveGame_NonCurrentPlayerLeavesWithCurrentAtTail_ShouldNotThrowOrCorruptTurnIndex() {
+        testRoom.addPlayer("Player3");
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        reset(gameStateService);
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+
+        // Move turn to tail seat so removing an earlier seat used to leave a stale
+        // index.
+        game.nextPlayer();
+        game.nextPlayer();
+        Player currentPlayer = game.getCurrentPlayer();
+
+        Player playerToLeave = game.getPlayers().stream()
+                .filter(p -> !p.equals(currentPlayer))
+                .findFirst()
+                .orElseThrow();
+
+        assertDoesNotThrow(() -> gameLifecycleService.leaveGame(ROOM_ID, playerToLeave.getName()));
+        assertNotNull(game.getCurrentPlayer());
+        verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
+    }
+
+    @Test
+    void leaveGame_WhenRoomMissing_ShouldCleanupGameWithoutBroadcast() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        reset(gameStateService);
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        String playerToLeave = game.getPlayers().getFirst().getName();
+
+        when(roomService.getRoom(ROOM_ID)).thenReturn(null);
+
+        assertDoesNotThrow(() -> gameLifecycleService.leaveGame(ROOM_ID, playerToLeave));
+
+        assertNull(gameLifecycleService.getGame(ROOM_ID));
+        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
+    }
+
+    @Test
+    void leaveGame_WhenRoomDestroyedMidFlow_ShouldCleanupGameWithoutBroadcast() {
+        testRoom.addPlayer("Player3");
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom, testRoom, null);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        reset(gameStateService);
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        Player currentPlayer = game.getCurrentPlayer();
+        Player playerToLeave = game.getPlayers().stream()
+                .filter(p -> !p.equals(currentPlayer))
+                .findFirst()
+                .orElseThrow();
+
+        assertDoesNotThrow(() -> gameLifecycleService.leaveGame(ROOM_ID, playerToLeave.getName()));
+
+        assertNull(gameLifecycleService.getGame(ROOM_ID));
+        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
+    }
+
     // ==================== getGame Tests ====================
 
     @Test
@@ -305,6 +369,29 @@ class GameLifecycleServiceTest {
     @Test
     void gameExists_WhenGameDoesNotExist_ShouldReturnFalse() {
         assertFalse(gameLifecycleService.gameExists("nonexistent-id"));
+    }
+
+    @Test
+    void playerExistsInGame_WhenPlayerExists_ShouldReturnTrue() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        String existingPlayer = gameLifecycleService.getGame(ROOM_ID).getPlayers().getFirst().getName();
+
+        assertTrue(gameLifecycleService.playerExistsInGame(ROOM_ID, existingPlayer));
+    }
+
+    @Test
+    void playerExistsInGame_WhenPlayerDoesNotExist_ShouldReturnFalse() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        assertFalse(gameLifecycleService.playerExistsInGame(ROOM_ID, "NonexistentPlayer"));
+    }
+
+    @Test
+    void playerExistsInGame_WhenGameDoesNotExist_ShouldReturnFalse() {
+        assertFalse(gameLifecycleService.playerExistsInGame("nonexistent-id", "Player"));
     }
 
     // ==================== handleGameEnd Tests ====================
@@ -369,6 +456,86 @@ class GameLifecycleServiceTest {
     }
 
     // ==================== CONCURRENCY TESTS ====================
+
+    @Test
+    void leaveGame_ConcurrentWithPlayerAction_NonCurrentDisconnect_ShouldNotThrowOrCorruptTurnIndex()
+            throws InterruptedException {
+        final int iterations = 20;
+        PlayerActionService playerActionService = new PlayerActionService(
+                gameLifecycleService,
+                gameStateService,
+                applicationEventPublisher);
+
+        ConcurrentHashMap<String, Room> roomsById = new ConcurrentHashMap<>();
+        when(roomService.getRoom(anyString())).thenAnswer(invocation -> roomsById.get(invocation.getArgument(0)));
+
+        for (int i = 0; i < iterations; i++) {
+            String roomId = "race-room-" + i;
+            String host = "Host-" + i;
+            String p2 = "P2-" + i;
+            String p3 = "P3-" + i;
+
+            Room room = new Room(roomId, "Race Room " + i, host, 6, 5, 10, 100, null);
+            room.addPlayer(host);
+            room.addPlayer(p2);
+            room.addPlayer(p3);
+            roomsById.put(roomId, room);
+
+            gameLifecycleService.createGameFromRoom(roomId);
+            Game game = gameLifecycleService.getGame(roomId);
+
+            Player currentPlayer = game.getCurrentPlayer();
+            Player leavingPlayer = game.getPlayers().stream()
+                    .filter(player -> !player.equals(currentPlayer))
+                    .findFirst()
+                    .orElseThrow();
+
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            CountDownLatch done = new CountDownLatch(2);
+            ConcurrentLinkedQueue<Throwable> failures = new ConcurrentLinkedQueue<>();
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+
+            executor.submit(() -> {
+                ready.countDown();
+                try {
+                    start.await(2, TimeUnit.SECONDS);
+                    playerActionService.processPlayerAction(
+                            roomId,
+                            new PlayerActionRequest(PlayerAction.FOLD, null),
+                            currentPlayer.getName());
+                } catch (Throwable t) {
+                    failures.add(t);
+                } finally {
+                    done.countDown();
+                }
+            });
+
+            executor.submit(() -> {
+                ready.countDown();
+                try {
+                    start.await(2, TimeUnit.SECONDS);
+                    gameLifecycleService.leaveGame(roomId, leavingPlayer.getName());
+                } catch (Throwable t) {
+                    failures.add(t);
+                } finally {
+                    done.countDown();
+                }
+            });
+
+            assertTrue(ready.await(2, TimeUnit.SECONDS), "Workers did not become ready in time");
+            start.countDown();
+            assertTrue(done.await(5, TimeUnit.SECONDS), "Concurrent operations took too long");
+            executor.shutdownNow();
+
+            assertTrue(failures.isEmpty(), "Concurrent leave/action produced failures: " + failures);
+
+            Game finalGame = gameLifecycleService.getGame(roomId);
+            assertNotNull(finalGame, "Game should still exist after non-current leave");
+            assertEquals(2, finalGame.getPlayers().size(), "Exactly one player should be removed from the game");
+            assertDoesNotThrow(finalGame::getCurrentPlayer, "Current player lookup should remain index-safe");
+        }
+    }
 
     @Test
     void leaveGame_MultiplePlayersConcurrently_ShouldNotCorruptGameState() throws InterruptedException {

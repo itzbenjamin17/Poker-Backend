@@ -115,6 +115,39 @@ class GameStateServiceTest {
         verify(messagingTemplate, times(4)).convertAndSend(anyString(), any(Object.class));
     }
 
+    @Test
+    void broadcastGameState_AfterNonCurrentLeaveWithStaleBlindIndex_ShouldNotThrow() {
+        List<Player> threePlayers = new ArrayList<>();
+        threePlayers.add(new Player("Player1", UUID.randomUUID().toString(), 100));
+        threePlayers.add(new Player("Player2", UUID.randomUUID().toString(), 100));
+        threePlayers.add(new Player("Player3", UUID.randomUUID().toString(), 100));
+
+        Game game = new Game(GAME_ID, threePlayers, 5, 10, handEvaluator);
+        game.postBlinds();
+
+        Room room = new Room(
+                GAME_ID,
+                "Test Room",
+                "Player1",
+                6,
+                5,
+                10,
+                100,
+                null);
+        room.addPlayer("Player1");
+        room.addPlayer("Player2");
+        room.addPlayer("Player3");
+
+        when(roomService.getRoom(GAME_ID)).thenReturn(room);
+
+        Player playerToRemove = game.getActivePlayers().get(1);
+        assertNotEquals(playerToRemove, game.getCurrentPlayer());
+        game.removePlayerFromGame(playerToRemove);
+
+        assertDoesNotThrow(() -> gameStateService.broadcastGameState(GAME_ID, game));
+        verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
+    }
+
     // ==================== broadcastShowdownResults Tests ====================
 
     @Test

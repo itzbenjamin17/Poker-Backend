@@ -91,9 +91,10 @@ public class WebSocketEventListener {
                 logger.info("Automatically removing disconnected user '{}' from room '{}'", username,
                         room.getRoomName());
                 String roomId = room.getRoomId();
-                roomService.leaveRoom(roomId, username);
+                boolean gameActive = gameLifecycleService.gameExists(roomId);
+                roomService.leaveRoom(roomId, username, !gameActive);
 
-                if (gameLifecycleService.gameExists(roomId)) {
+                if (gameActive && gameLifecycleService.playerExistsInGame(roomId, username)) {
                     gameLifecycleService.leaveGame(roomId, username);
                 }
             } catch (Exception e) {

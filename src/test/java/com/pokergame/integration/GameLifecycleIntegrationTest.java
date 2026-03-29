@@ -158,6 +158,57 @@ class GameLifecycleIntegrationTest {
     }
 
     @Test
+    @DisplayName("Non-current player leave in 3-player active hand keeps game actionable")
+    void leaveGame_nonCurrentPlayerInThreePlayerActiveHand_shouldKeepGameResponsive() throws Exception {
+        String roomName = uniqueName("LeaveThreePlayerRoom");
+
+        JsonNode hostData = createRoom(roomName, "HostLeaveThree", 6);
+        String gameId = hostData.path("roomId").asText();
+        String hostToken = hostData.path("token").asText();
+
+        JsonNode secondData = joinRoom(roomName, "SecondLeaveThree");
+        String secondPlayerToken = secondData.path("token").asText();
+
+        JsonNode thirdData = joinRoom(roomName, "ThirdLeaveThree");
+        String thirdPlayerToken = thirdData.path("token").asText();
+
+        restClient.post()
+                .uri("/api/room/" + gameId + "/start-game")
+                .header("Authorization", "Bearer " + hostToken)
+                .retrieve()
+                .body(String.class);
+
+        // In a 3-player pre-flop start, host is current actor and joined players are
+        // non-current.
+        String leaveBody = restClient.post()
+                .uri("/api/game/" + gameId + "/leave")
+                .header("Authorization", "Bearer " + secondPlayerToken)
+                .retrieve()
+                .body(String.class);
+
+        assertNotNull(leaveBody);
+        JsonNode leaveResponse = objectMapper.readTree(leaveBody);
+        assertEquals("Successfully left game", leaveResponse.path("message").asText());
+
+        // Regression check: after leave and state broadcast, remaining players can
+        // still
+        // continue gameplay via action endpoint.
+        String actingToken = performActionByCurrentPlayer(
+                gameId,
+                new PlayerActionRequest(PlayerAction.CALL, null),
+                hostToken,
+                thirdPlayerToken);
+        assertTrue(actingToken.equals(hostToken) || actingToken.equals(thirdPlayerToken));
+
+        String nextActingToken = performActionByCurrentPlayer(
+                gameId,
+                new PlayerActionRequest(PlayerAction.FOLD, null),
+                hostToken,
+                thirdPlayerToken);
+        assertTrue(nextActingToken.equals(hostToken) || nextActingToken.equals(thirdPlayerToken));
+    }
+
+    @Test
     @DisplayName("Two players can complete a full hand round through public game action API")
     void fullRound_twoPlayers_viaPublicApiActions_shouldCompleteAndStartNextHand() throws Exception {
         String roomName = uniqueName("FullRoundRoom");

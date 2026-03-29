@@ -152,6 +152,7 @@ public class Game {
      */
     public void postBlinds() {
         if (activePlayers.size() >= 2) {
+            normalizeBlindPositions();
             Player smallBlindPlayer = activePlayers.get(smallBlindPosition);
             Player bigBlindPlayer = activePlayers.get(bigBlindPosition);
 
@@ -1016,11 +1017,62 @@ public class Game {
     }
 
     /**
+     * Removes a player from the game and reconciles turn index so it always points
+     * to a valid seat in {@code activePlayers}.
+     *
+     * @param playerToRemove the player to remove from game and active lists
+     */
+    public void removePlayerFromGame(Player playerToRemove) {
+        if (playerToRemove == null) {
+            return;
+        }
+
+        Player previousCurrent = null;
+        if (!activePlayers.isEmpty()) {
+            normalizeCurrentPlayerPosition();
+            previousCurrent = activePlayers.get(currentPlayerPosition);
+        }
+
+        players.remove(playerToRemove);
+        activePlayers.remove(playerToRemove);
+
+        if (activePlayers.isEmpty()) {
+            currentPlayerPosition = 0;
+            return;
+        }
+
+        normalizeBlindPositions();
+
+        // Preserve the same player turn when someone else leaves and that player is
+        // still present.
+        if (previousCurrent != null && !previousCurrent.equals(playerToRemove)) {
+            int preservedIndex = activePlayers.indexOf(previousCurrent);
+            if (preservedIndex >= 0) {
+                currentPlayerPosition = preservedIndex;
+                return;
+            }
+        }
+
+        // If current player left, point to the successor seat and skip non-actionable
+        // seats.
+        normalizeCurrentPlayerPosition();
+        Player current = activePlayers.get(currentPlayerPosition);
+        if (current.getHasFolded() || current.getIsAllIn()) {
+            nextPlayer();
+        }
+    }
+
+    /**
      * Returns the player whose turn it currently is.
      *
      * @return the current player
      */
     public Player getCurrentPlayer() {
+        if (activePlayers.isEmpty()) {
+            throw new IllegalStateException("No active players available");
+        }
+
+        normalizeCurrentPlayerPosition();
         return activePlayers.get(currentPlayerPosition);
     }
 
@@ -1028,12 +1080,40 @@ public class Game {
      * Advances to the next player in turn order.
      */
     public void nextPlayer() {
+        if (activePlayers.isEmpty()) {
+            currentPlayerPosition = 0;
+            return;
+        }
+
+        normalizeCurrentPlayerPosition();
+
         int originalPosition = currentPlayerPosition;
         do {
             currentPlayerPosition = (currentPlayerPosition + 1) % activePlayers.size();
         } while ((activePlayers.get(currentPlayerPosition).getHasFolded() ||
                 activePlayers.get(currentPlayerPosition).getIsAllIn()) &&
                 currentPlayerPosition != originalPosition);
+    }
+
+    private void normalizeCurrentPlayerPosition() {
+        if (activePlayers.isEmpty()) {
+            currentPlayerPosition = 0;
+            return;
+        }
+
+        currentPlayerPosition = Math.floorMod(currentPlayerPosition, activePlayers.size());
+    }
+
+    private void normalizeBlindPositions() {
+        if (activePlayers.isEmpty()) {
+            smallBlindPosition = 0;
+            bigBlindPosition = 0;
+            return;
+        }
+
+        int tableSize = activePlayers.size();
+        smallBlindPosition = Math.floorMod(smallBlindPosition, tableSize);
+        bigBlindPosition = Math.floorMod(bigBlindPosition, tableSize);
     }
 
     /**
@@ -1101,6 +1181,8 @@ public class Game {
             return null;
         }
 
+        normalizeBlindPositions();
+
         return activePlayers.get(smallBlindPosition).getPlayerId();
     }
 
@@ -1113,6 +1195,8 @@ public class Game {
         if (activePlayers.isEmpty()) {
             return null;
         }
+
+        normalizeBlindPositions();
 
         return activePlayers.get(bigBlindPosition).getPlayerId();
     }

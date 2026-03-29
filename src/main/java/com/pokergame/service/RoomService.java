@@ -50,22 +50,22 @@ public class RoomService {
         String roomId;
         synchronized (this) {
             if (isRoomNameTaken(request.getRoomName())) {
-            logger.warn("Attempted to create room with duplicate name: {}", request.getRoomName());
-            throw new BadRequestException(
-                "Room name '" + request.getRoomName() + "' is already taken. Please choose a different name.");
+                logger.warn("Attempted to create room with duplicate name: {}", request.getRoomName());
+                throw new BadRequestException(
+                        "Room name '" + request.getRoomName() + "' is already taken. Please choose a different name.");
             }
 
             roomId = UUID.randomUUID().toString();
 
             Room room = new Room(
-                roomId,
-                request.getRoomName(),
-                request.getPlayerName(), // Host name
-                request.getMaxPlayers(),
-                request.getSmallBlind(),
-                request.getBigBlind(),
-                request.getBuyIn(),
-                request.getPassword());
+                    roomId,
+                    request.getRoomName(),
+                    request.getPlayerName(), // Host name
+                    request.getMaxPlayers(),
+                    request.getSmallBlind(),
+                    request.getBigBlind(),
+                    request.getBuyIn(),
+                    request.getPassword());
 
             // Add the host as the first player
             room.addPlayer(request.getPlayerName());
@@ -151,6 +151,25 @@ public class RoomService {
      * @throws ResourceNotFoundException if room not found
      */
     public void leaveRoom(String roomId, String playerName) {
+        leaveRoom(roomId, playerName, true);
+    }
+
+    /**
+     * Removes a player from a room with contextual host-leave behaviour.
+     *
+     * <p>
+     * When the host leaves and {@code closeRoomWhenHostLeaves} is true,
+     * the room is closed (lobby behaviour). When false, the host is transferred
+     * to the next remaining player and the room stays open (active game behaviour).
+     * </p>
+     *
+     * @param roomId                  the unique identifier of the room
+     * @param playerName              the name of the player leaving
+     * @param closeRoomWhenHostLeaves true to close room on host leave, false to
+     *                                transfer host
+     * @throws ResourceNotFoundException if room not found
+     */
+    public void leaveRoom(String roomId, String playerName, boolean closeRoomWhenHostLeaves) {
         Room room = rooms.get(roomId);
         if (room == null) {
             logger.warn("Leave attempt failed: room not found for id {} (player: {})", roomId, playerName);
@@ -159,11 +178,35 @@ public class RoomService {
 
         // Check if the leaving player is the host
         if (isRoomHost(roomId, playerName)) {
-            // Host is leaving - destroy the entire Room
-            logger.info("Host {} leaving room {}, destroying room", playerName, room.getRoomName());
-            messagingTemplate.convertAndSend("/rooms" + roomId,
-                    new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
-            destroyRoom(roomId);
+            if (closeRoomWhenHostLeaves) {
+                // Host is leaving the lobby phase - destroy the room.
+                logger.info("Host {} leaving room {} during lobby phase, destroying room", playerName,
+                        room.getRoomName());
+                messagingTemplate.convertAndSend("/rooms" + roomId,
+                        new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                destroyRoom(roomId);
+            } else {
+                // Host is leaving during an active game - transfer host and keep room alive.
+                room.removePlayer(playerName);
+
+                if (room.getPlayers().isEmpty()) {
+                    logger.info("Host {} left room {} and no players remain, destroying room", playerName,
+                            room.getRoomName());
+                    messagingTemplate.convertAndSend("/rooms" + roomId,
+                            new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                    destroyRoom(roomId);
+                } else {
+                    String newHost = room.getPlayers().getFirst();
+                    roomHosts.put(roomId, newHost);
+
+                    logger.info("Host {} left room {} during active game. New host is {}",
+                            playerName,
+                            room.getRoomName(),
+                            newHost);
+                    messagingTemplate.convertAndSend("/rooms" + roomId,
+                            new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
+                }
+            }
         } else {
             // Regular player leaving - just remove them from the room
             room.removePlayer(playerName);
@@ -210,11 +253,13 @@ public class RoomService {
             throw new ResourceNotFoundException("Room not found");
         }
 
+        String currentHost = roomHosts.getOrDefault(roomId, room.getHostName());
+
         // Convert player names to PlayerInfoDTO objects
         List<PlayerJoinInfo> playerObjects = room.getPlayers().stream()
                 .map(playerName -> new PlayerJoinInfo(
                         playerName,
-                        isRoomHost(roomId, playerName),
+                        currentHost.equals(playerName),
                         "recently" // come back to this and change to actual time
                 ))
                 .collect(Collectors.toList());
@@ -228,7 +273,7 @@ public class RoomService {
                 room.getSmallBlind(),
                 room.getBigBlind(),
                 room.getCreatedAt(),
-                room.getHostName(),
+                currentHost,
                 playerObjects,
                 playerObjects.size(),
                 playerObjects.size() >= 2);

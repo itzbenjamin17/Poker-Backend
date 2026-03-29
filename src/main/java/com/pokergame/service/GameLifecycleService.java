@@ -122,7 +122,8 @@ public class GameLifecycleService {
             logger.warn("Cannot start new hand - game {} is over", gameId);
             return;
         }
-        // Weird structure here and in resetForNewHand because I wanted the game to hang at the end if the game was over and show the winner message for long
+        // Weird structure here and in resetForNewHand because I wanted the game to hang
+        // at the end if the game was over and show the winner message for long
         boolean gameEnded = game.resetForNewHand();
         if (gameEnded) {
             logger.warn("Game {} became over after reset", gameId);
@@ -155,50 +156,73 @@ public class GameLifecycleService {
             throw new ResourceNotFoundException("Game not found");
         }
 
-        // Find and remove the player from the game
-        Player playerToRemove = game.getPlayers().stream()
-                .filter(p -> p.getName().equals(playerName))
-                .findFirst()
-                .orElse(null);
-
-        if (playerToRemove == null) {
-            logger.warn("Remove player failed: player '{}' not found in game {}", playerName, gameId);
-            throw new BadRequestException("Player not found in game");
-        }
-
-        // Check if the leaving player was the current player
-        boolean wasCurrentPlayer = game.getCurrentPlayer() != null && game.getCurrentPlayer().equals(playerToRemove);
-
-        // Remove player from both lists
-        game.getPlayers().remove(playerToRemove);
-        game.getActivePlayers().remove(playerToRemove);
-
-        logger.info("Player {} left game {} | Remaining players: {}",
-                playerName, gameId, game.getPlayers().size());
-
-        // Check if no players left in the game
-        if (game.getPlayers().isEmpty()) {
-            logger.info("All players left game {}, destroying game and room", gameId);
-
-            // Clean up game and room data
-            activeGames.remove(gameId);
-            roomService.destroyRoom(gameId);
-        } else {
-            logger.info("Game {} continues with {} players", gameId, game.getPlayers().size());
-
-            // If only one player remains, end the game immediately
-            if (game.getPlayers().size() == 1) {
-                logger.info("Only one player remaining in game {}, ending game", gameId);
-                handleGameEnd(gameId);
+        // Keep leave flow serialized with player actions to avoid transient stale-seat
+        // reads while another thread mutates turn state.
+        synchronized (game) {
+            // Room may already be destroyed (e.g. host left via room flow).
+            // In that case, clean up the game without attempting room-backed broadcasts.
+            if (roomService.getRoom(gameId) == null) {
+                logger.info(
+                        "Room {} not found while removing player {} from game {}. Cleaning up game without broadcast.",
+                        gameId,
+                        playerName,
+                        gameId);
+                activeGames.remove(gameId);
                 return;
             }
 
-            // If the leaving player was the current player, advance to the next player
-            if (wasCurrentPlayer && !game.getActivePlayers().isEmpty()) {
-                game.nextPlayer();
+            // Find and remove the player from the game
+            Player playerToRemove = game.getPlayers().stream()
+                    .filter(p -> p.getName().equals(playerName))
+                    .findFirst()
+                    .orElse(null);
+
+            if (playerToRemove == null) {
+                logger.warn("Remove player failed: player '{}' not found in game {}", playerName, gameId);
+                throw new BadRequestException("Player not found in game");
             }
 
-            gameStateService.broadcastGameState(gameId, game);
+            // Check if the leaving player was the current player.
+            boolean wasCurrentPlayer = !game.getActivePlayers().isEmpty()
+                    && game.getCurrentPlayer().equals(playerToRemove);
+
+            // Remove player and reconcile turn index to prevent stale current-player
+            // pointer.
+            game.removePlayerFromGame(playerToRemove);
+
+            logger.info("Player {} left game {} | Remaining players: {}",
+                    playerName, gameId, game.getPlayers().size());
+
+            // Check if no players left in the game
+            if (game.getPlayers().isEmpty()) {
+                logger.info("All players left game {}, destroying game and room", gameId);
+
+                // Clean up game and room data
+                activeGames.remove(gameId);
+                roomService.destroyRoom(gameId);
+            } else {
+                logger.info("Game {} continues with {} players", gameId, game.getPlayers().size());
+
+                // If only one player remains, end the game immediately
+                if (game.getPlayers().size() == 1) {
+                    logger.info("Only one player remaining in game {}, ending game", gameId);
+                    handleGameEnd(gameId);
+                    return;
+                }
+
+                // If the leaving player was the current player, advance to the next player
+                if (wasCurrentPlayer && !game.getActivePlayers().isEmpty()) {
+                    game.nextPlayer();
+                }
+
+                if (roomService.getRoom(gameId) == null) {
+                    logger.info("Room {} was destroyed during leave flow. Cleaning up active game state.", gameId);
+                    activeGames.remove(gameId);
+                    return;
+                }
+
+                gameStateService.broadcastGameState(gameId, game);
+            }
         }
     }
 
@@ -271,5 +295,22 @@ public class GameLifecycleService {
      */
     public boolean gameExists(String gameId) {
         return activeGames.containsKey(gameId);
+    }
+
+    /**
+     * Checks whether a player currently exists in an active game.
+     *
+     * @param gameId     the unique identifier of the game
+     * @param playerName the player name to check
+     * @return true if the player exists in the game, false otherwise
+     */
+    public boolean playerExistsInGame(String gameId, String playerName) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            return false;
+        }
+
+        return game.getPlayers().stream()
+                .anyMatch(player -> player.getName().equals(playerName));
     }
 }

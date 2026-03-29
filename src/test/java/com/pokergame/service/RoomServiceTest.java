@@ -250,14 +250,52 @@ class RoomServiceTest {
     }
 
     @Test
-    void leaveRoom_Host_ShouldDestroyRoom() {
+    void leaveRoom_Host_WithCloseRoomWhenHostLeavesTrue_ShouldDestroyRoom() {
         String roomId = roomService.createRoom(validCreateRequest);
         reset(messagingTemplate);
 
-        roomService.leaveRoom(roomId, "HostPlayer");
+        roomService.leaveRoom(roomId, "HostPlayer", true);
 
         assertNull(roomService.getRoom(roomId));
         verify(messagingTemplate).convertAndSend(anyString(), any(Object.class));
+    }
+
+    @Test
+    void leaveRoom_Host_WithCloseRoomWhenHostLeavesFalse_ShouldTransferHostAndKeepRoomOpen() {
+        String roomId = roomService.createRoom(validCreateRequest);
+        roomService.joinRoom(new JoinRoomRequest("Test Room", "Player2", null));
+        roomService.joinRoom(new JoinRoomRequest("Test Room", "Player3", null));
+        reset(messagingTemplate);
+
+        roomService.leaveRoom(roomId, "HostPlayer", false);
+
+        Room room = roomService.getRoom(roomId);
+        assertNotNull(room);
+        assertFalse(room.getPlayers().contains("HostPlayer"));
+        assertTrue(room.getPlayers().contains("Player2"));
+        assertTrue(room.getPlayers().contains("Player3"));
+        assertTrue(roomService.isRoomHost(roomId, "Player2"));
+        assertFalse(roomService.isRoomHost(roomId, "Player3"));
+
+        verify(messagingTemplate).convertAndSend(anyString(), any(Object.class));
+    }
+
+    @Test
+    void getRoomData_AfterHostTransfer_ShouldReflectTransferredHost() {
+        String roomId = roomService.createRoom(validCreateRequest);
+        roomService.joinRoom(new JoinRoomRequest("Test Room", "Player2", null));
+
+        roomService.leaveRoom(roomId, "HostPlayer", false);
+
+        RoomDataResponse roomData = roomService.getRoomData(roomId);
+        assertEquals("Player2", roomData.hostName());
+
+        var transferredHost = roomData.players().stream()
+                .filter(p -> p.name().equals("Player2"))
+                .findFirst()
+                .orElseThrow();
+
+        assertTrue(transferredHost.isHost());
     }
 
     @Test

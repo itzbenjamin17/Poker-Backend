@@ -93,9 +93,13 @@ public class RoomController {
             Principal principal) {
         String playerName = principal.getName();
         logger.info("Player {} requesting to leave room {}", playerName, roomId);
-        roomService.leaveRoom(roomId, playerName);
+        boolean gameActive = gameLifecycleService.gameExists(roomId);
 
-        if (gameLifecycleService.gameExists(roomId)) {
+        // Host only closes room while in lobby phase. During active games, host is
+        // transferred.
+        roomService.leaveRoom(roomId, playerName, !gameActive);
+
+        if (gameActive && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
             gameLifecycleService.leaveGame(roomId, playerName);
         }
 
