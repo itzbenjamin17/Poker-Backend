@@ -33,6 +33,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
 
+        // Listens for the initial CONNECT message to authenticate the WebSocket session
         if (accessor != null && StompCommand.CONNECT.equals(accessor.getCommand())) {
             // Get Authorisation header from STOMP connect headers
             String authHeader = accessor.getFirstNativeHeader("Authorization");
@@ -54,13 +55,15 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
                     logger.debug("WebSocket authenticated for player: {}", playerName);
                 } else {
-                    // Log the invalid token but do not reject the handshake; leave the session unauthenticated
                     logger.warn("Invalid JWT token in WebSocket CONNECT");
+
+                    // Reject the connection
+                    return null;
                 }
             } else {
-                // No Authorisation header is fine for the public handshake; do not reject
-                // connection
-                logger.debug("No Authorization header in WebSocket CONNECT");
+                // No Authorisation header is fine for the public handshake, reject connection
+                logger.warn("No Authorization header in WebSocket CONNECT");
+                return null;
             }
         }
 
