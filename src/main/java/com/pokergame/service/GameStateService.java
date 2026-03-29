@@ -40,6 +40,33 @@ public class GameStateService {
     }
 
     /**
+     * Builds the current public game-state snapshot for REST consumers.
+     *
+     * @param gameId game identifier
+     * @param game   active game instance
+     * @return public game-state DTO for the requested game
+     */
+    public PublicGameStateResponse getPublicGameStateSnapshot(String gameId, Game game) {
+        return buildPublicGameStateResponse(gameId, game);
+    }
+
+    /**
+     * Builds the private game-state snapshot for a specific player.
+     *
+     * @param game       active game instance
+     * @param playerName authenticated player name
+     * @return private state containing the player's hole cards
+     */
+    public PrivatePlayerState getPrivatePlayerStateSnapshot(Game game, String playerName) {
+        Player player = game.getPlayers().stream()
+                .filter(p -> p.getName().equals(playerName))
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Player not found in game"));
+
+        return buildPrivatePlayerState(player);
+    }
+
+    /**
      * Broadcasts the current game state to all players in the game.
      * Each player receives a personalised view showing only their own hole cards.
      *
@@ -112,9 +139,7 @@ public class GameStateService {
         List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
             boolean isWinner = winners.contains(player);
             boolean isActive = !player.getHasFolded() && !player.getIsOut();
-            String status = player.getHasFolded() ? PlayerStatus.FOLDED.getStatus()
-                    : player.getIsOut() ? PlayerStatus.OUT.getStatus()
-                            : player.getIsAllIn() ? PlayerStatus.ALL_IN.getStatus() : PlayerStatus.ACTIVE.getStatus();
+            String status = resolvePlayerStatus(player);
             return new PublicPlayerState(
                     player.getPlayerId(),
                     player.getName(),
@@ -130,7 +155,8 @@ public class GameStateService {
                     isActive ? player.getBestHand() : List.of(),
                     isWinner,
                     isWinner ? winningsPerPlayer : 0,
-                    (isActive && isActualShowdown) ? player.getHoleCards() : null);
+                    (isActive && isActualShowdown) ? player.getHoleCards() : null,
+                    player.getDisconnectDeadlineEpochMs());
         }).toList();
 
         // Create PublicGameStateResponse DTO with showdown information
@@ -194,9 +220,7 @@ public class GameStateService {
 
         // Convert players to PlayerState DTOs
         List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
-            String status = player.getHasFolded() ? PlayerStatus.FOLDED.getStatus()
-                    : player.getIsOut() ? "OUT"
-                            : player.getIsAllIn() ? PlayerStatus.ALL_IN.getStatus() : PlayerStatus.ACTIVE.getStatus();
+            String status = resolvePlayerStatus(player);
             boolean isCurrentPlayer = player.equals(currentPlayer);
             return new PublicPlayerState(
                     player.getPlayerId(),
@@ -213,7 +237,8 @@ public class GameStateService {
                     List.of(),
                     null,
                     null,
-                    null);
+                    null,
+                    player.getDisconnectDeadlineEpochMs());
         }).toList();
 
         // Create PublicGameStateResponse DTO with auto-advance fields
@@ -231,7 +256,9 @@ public class GameStateService {
                 null, // winners
                 null, // winningsPerPlayer
                 isAutoAdvancing,
-                message);
+                message,
+                null,
+                null);
 
         logger.info("Broadcasting auto-advance state for game {}: {}", gameId, message);
         messagingTemplate.convertAndSend("/game/" + gameId, autoAdvanceResponse);
@@ -347,9 +374,7 @@ public class GameStateService {
             logger.debug("Building game state - no active players found");
         }
         for (Player player : game.getPlayers()) {
-            String status = player.getHasFolded() ? PlayerStatus.FOLDED.getStatus()
-                    : player.getIsOut() ? "OUT"
-                            : player.getIsAllIn() ? PlayerStatus.ALL_IN.getStatus() : PlayerStatus.ACTIVE.getStatus();
+            String status = resolvePlayerStatus(player);
             playerStateList.add(new PublicPlayerState(
                     player.getPlayerId(),
                     player.getName(),
@@ -360,8 +385,17 @@ public class GameStateService {
                     player.equals(currentPlayer),
                     player.getHasFolded(),
                     player.getPlayerId().equals(smallBlindPlayerId),
-                    player.getPlayerId().equals(bigBlindPlayerId)));
+                    player.getPlayerId().equals(bigBlindPlayerId),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    player.getDisconnectDeadlineEpochMs()));
         }
+
+        String claimWinPlayerName = computeClaimWinPlayerName(game);
+        boolean claimWinAvailable = claimWinPlayerName != null;
 
         return new PublicGameStateResponse(
                 room.getMaxPlayers(),
@@ -373,8 +407,48 @@ public class GameStateService {
                 game.getCommunityCards(),
                 playerStateList,
                 currentPlayer != null ? currentPlayer.getName() : null,
-                currentPlayer != null ? currentPlayer.getPlayerId() : null);
+                currentPlayer != null ? currentPlayer.getPlayerId() : null,
+                claimWinAvailable,
+                claimWinPlayerName);
 
+    }
+
+    private String resolvePlayerStatus(Player player) {
+        if (player.getIsOut()) {
+            return PlayerStatus.OUT.getStatus();
+        }
+        if (player.getIsDisconnected()) {
+            return PlayerStatus.DISCONNECTED.getStatus();
+        }
+        if (player.getHasFolded()) {
+            return PlayerStatus.FOLDED.getStatus();
+        }
+        if (player.getIsAllIn()) {
+            return PlayerStatus.ALL_IN.getStatus();
+        }
+        return PlayerStatus.ACTIVE.getStatus();
+    }
+
+    private String computeClaimWinPlayerName(Game game) {
+        List<Player> eligiblePlayers = game.getPlayers().stream()
+                .filter(player -> !player.getIsOut())
+                .toList();
+
+        if (eligiblePlayers.size() < 2) {
+            return null;
+        }
+
+        List<Player> connectedPlayers = eligiblePlayers.stream()
+                .filter(player -> !player.getIsDisconnected())
+                .toList();
+
+        boolean anyDisconnected = eligiblePlayers.stream().anyMatch(Player::getIsDisconnected);
+
+        if (!anyDisconnected || connectedPlayers.size() != 1) {
+            return null;
+        }
+
+        return connectedPlayers.get(0).getName();
     }
 
     /**

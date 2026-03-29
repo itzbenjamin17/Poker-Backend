@@ -32,6 +32,8 @@ public class Player {
     private boolean hasFolded;
     private boolean isAllIn;
     private boolean isOut;
+    private boolean isDisconnected;
+    private Long disconnectDeadlineEpochMs;
 
     /**
      * Creates a new player with the specified name and starting chip count.
@@ -58,6 +60,8 @@ public class Player {
         this.hasFolded = false;
         this.isAllIn = false;
         this.isOut = false;
+        this.isDisconnected = false;
+        this.disconnectDeadlineEpochMs = null;
     }
 
     /**
@@ -228,11 +232,49 @@ public class Player {
     }
 
     /**
+     * Returns whether the player is currently disconnected and waiting to
+     * reconnect.
+     *
+     * @return true if disconnected, false otherwise
+     */
+    public boolean getIsDisconnected() {
+        return isDisconnected;
+    }
+
+    /**
+     * Returns the UTC epoch milliseconds when disconnect grace expires.
+     *
+     * @return disconnect deadline in epoch milliseconds, or null if not
+     *         disconnected
+     */
+    public Long getDisconnectDeadlineEpochMs() {
+        return disconnectDeadlineEpochMs;
+    }
+
+    /**
      * Sets the player to be out, should only be used when the player has no chips
      *
      */
     public void setIsOut() {
         this.isOut = true;
+    }
+
+    /**
+     * Marks whether this player is disconnected from the current game session.
+     *
+     * @param disconnected true if disconnected, false if reconnected
+     */
+    public void setDisconnected(boolean disconnected) {
+        this.isDisconnected = disconnected;
+    }
+
+    /**
+     * Sets the UTC epoch milliseconds when this player's disconnect grace ends.
+     *
+     * @param disconnectDeadlineEpochMs deadline timestamp, or null when connected
+     */
+    public void setDisconnectDeadlineEpochMs(Long disconnectDeadlineEpochMs) {
+        this.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
     }
 
     /**

@@ -79,6 +79,11 @@ public class PlayerActionService {
                         "It's not your turn. Current player is: " + currentPlayer.getName());
             }
 
+            if (currentPlayer.getIsDisconnected()) {
+                logger.warn("Disconnected player {} attempted to act in game {}", playerName, gameId);
+                throw new UnauthorisedActionException("You are disconnected. Reconnect to continue your turn.");
+            }
+
             PlayerDecision decision = new PlayerDecision(
                     actionRequest.action(),
                     actionRequest.amount() != null ? actionRequest.amount() : 0,

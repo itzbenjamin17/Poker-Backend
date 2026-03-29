@@ -6,9 +6,11 @@ import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.service.GameLifecycleService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
@@ -29,6 +31,9 @@ class GameLifecycleIntegrationTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private RestClient restClient;
+
+    @Autowired
+    private GameLifecycleService gameLifecycleService;
 
     @BeforeEach
     void setUp() {
@@ -127,6 +132,126 @@ class GameLifecycleIntegrationTest {
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
         assertTrue(ex.getResponseBodyAsString().contains("Game not found"));
     }
+
+    @Test
+    @DisplayName("Game state endpoint returns current state for active player")
+    void getGameState_whenPlayerInGame_shouldSucceed() throws Exception {
+        String roomName = uniqueName("StateSnapshotRoom");
+
+        JsonNode hostData = createRoom(roomName, "StateHost", 6);
+        String gameId = hostData.path("roomId").asText();
+        String hostToken = hostData.path("token").asText();
+
+        joinRoom(roomName, "StateGuest");
+
+        restClient.post()
+                .uri("/api/room/" + gameId + "/start-game")
+                .header("Authorization", "Bearer " + hostToken)
+                .retrieve()
+                .body(String.class);
+
+        String stateBody = restClient.get()
+                .uri("/api/game/" + gameId + "/state")
+                .header("Authorization", "Bearer " + hostToken)
+                .retrieve()
+                .body(String.class);
+
+        assertNotNull(stateBody);
+        JsonNode state = objectMapper.readTree(stateBody);
+
+        assertEquals("PRE_FLOP", state.path("phase").asText());
+        assertTrue(state.path("players").isArray());
+        assertEquals(2, state.path("players").size());
+    }
+
+    @Test
+    @DisplayName("Game state endpoint rejects authenticated non-member")
+    void getGameState_whenRequesterNotInGame_shouldReturnForbidden() throws Exception {
+        String targetRoomName = uniqueName("StateForbiddenTarget");
+        JsonNode hostData = createRoom(targetRoomName, "StateTargetHost", 6);
+        String gameId = hostData.path("roomId").asText();
+        String hostToken = hostData.path("token").asText();
+
+        joinRoom(targetRoomName, "StateTargetGuest");
+
+        restClient.post()
+                .uri("/api/room/" + gameId + "/start-game")
+                .header("Authorization", "Bearer " + hostToken)
+                .retrieve()
+                .body(String.class);
+
+        JsonNode outsiderData = createRoom(uniqueName("StateForbiddenOutsider"), "StateOutsider", 6);
+        String outsiderToken = outsiderData.path("token").asText();
+
+        HttpClientErrorException ex = assertThrows(HttpClientErrorException.class, () -> restClient.get()
+                .uri("/api/game/" + gameId + "/state")
+                .header("Authorization", "Bearer " + outsiderToken)
+                .retrieve()
+                .body(String.class));
+
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        assertTrue(ex.getResponseBodyAsString().contains("no longer part of this game"));
+    }
+
+        @Test
+        @DisplayName("Private state endpoint returns hole cards for active player")
+        void getPrivateState_whenPlayerInGame_shouldSucceed() throws Exception {
+        String roomName = uniqueName("PrivateStateRoom");
+
+        JsonNode hostData = createRoom(roomName, "PrivateStateHost", 6);
+        String gameId = hostData.path("roomId").asText();
+        String hostToken = hostData.path("token").asText();
+
+        joinRoom(roomName, "PrivateStateGuest");
+
+        restClient.post()
+            .uri("/api/room/" + gameId + "/start-game")
+            .header("Authorization", "Bearer " + hostToken)
+            .retrieve()
+            .body(String.class);
+
+        String privateBody = restClient.get()
+            .uri("/api/game/" + gameId + "/private-state")
+            .header("Authorization", "Bearer " + hostToken)
+            .retrieve()
+            .body(String.class);
+
+        assertNotNull(privateBody);
+        JsonNode privateState = objectMapper.readTree(privateBody);
+
+        assertTrue(privateState.path("playerId").isTextual());
+        assertTrue(privateState.path("holeCards").isArray());
+        assertEquals(2, privateState.path("holeCards").size());
+        }
+
+        @Test
+        @DisplayName("Private state endpoint rejects authenticated non-member")
+        void getPrivateState_whenRequesterNotInGame_shouldReturnForbidden() throws Exception {
+        String targetRoomName = uniqueName("PrivateStateForbiddenTarget");
+        JsonNode hostData = createRoom(targetRoomName, "PrivateStateTargetHost", 6);
+        String gameId = hostData.path("roomId").asText();
+        String hostToken = hostData.path("token").asText();
+
+        joinRoom(targetRoomName, "PrivateStateTargetGuest");
+
+        restClient.post()
+            .uri("/api/room/" + gameId + "/start-game")
+            .header("Authorization", "Bearer " + hostToken)
+            .retrieve()
+            .body(String.class);
+
+        JsonNode outsiderData = createRoom(uniqueName("PrivateStateForbiddenOutsider"), "PrivateStateOutsider", 6);
+        String outsiderToken = outsiderData.path("token").asText();
+
+        HttpClientErrorException ex = assertThrows(HttpClientErrorException.class, () -> restClient.get()
+            .uri("/api/game/" + gameId + "/private-state")
+            .header("Authorization", "Bearer " + outsiderToken)
+            .retrieve()
+            .body(String.class));
+
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        assertTrue(ex.getResponseBodyAsString().contains("no longer part of this game"));
+        }
 
     @Test
     @DisplayName("Player can leave active game through lifecycle endpoint")
@@ -277,6 +402,69 @@ class GameLifecycleIntegrationTest {
 
         boolean roomDestroyed = awaitRoomDestruction(gameId, hostToken, 12000);
         assertTrue(roomDestroyed, "Room should be destroyed after game end cleanup when one player remains");
+    }
+
+    @Test
+    @DisplayName("Claim win succeeds when all other non-out players are disconnected")
+    void claimWin_whenAllOpponentsDisconnected_shouldSucceed() throws Exception {
+        String roomName = uniqueName("ClaimWinRoom");
+
+        JsonNode hostData = createRoom(roomName, "ClaimHost", 6);
+        String gameId = hostData.path("roomId").asText();
+        String hostToken = hostData.path("token").asText();
+
+        joinRoom(roomName, "ClaimGuest");
+
+        restClient.post()
+                .uri("/api/room/" + gameId + "/start-game")
+                .header("Authorization", "Bearer " + hostToken)
+                .retrieve()
+                .body(String.class);
+
+        gameLifecycleService.markPlayerDisconnected(gameId, "ClaimGuest", System.currentTimeMillis() + 120_000);
+
+        String claimBody = restClient.post()
+                .uri("/api/game/" + gameId + "/claim-win")
+                .header("Authorization", "Bearer " + hostToken)
+                .retrieve()
+                .body(String.class);
+
+        assertNotNull(claimBody);
+        JsonNode response = objectMapper.readTree(claimBody);
+        assertEquals("Win claimed successfully", response.path("message").asText());
+
+        boolean roomDestroyed = awaitRoomDestruction(gameId, hostToken, 12000);
+        assertTrue(roomDestroyed, "Room should be destroyed after successful claim-win flow");
+    }
+
+    @Test
+    @DisplayName("Claim win stale API call is rejected when opponent is connected")
+    void claimWin_whenOpponentReconnected_shouldBeRejected() throws Exception {
+        String roomName = uniqueName("ClaimRejectRoom");
+
+        JsonNode hostData = createRoom(roomName, "ClaimRejectHost", 6);
+        String gameId = hostData.path("roomId").asText();
+        String hostToken = hostData.path("token").asText();
+
+        joinRoom(roomName, "ClaimRejectGuest");
+
+        restClient.post()
+                .uri("/api/room/" + gameId + "/start-game")
+                .header("Authorization", "Bearer " + hostToken)
+                .retrieve()
+                .body(String.class);
+
+        gameLifecycleService.markPlayerDisconnected(gameId, "ClaimRejectGuest", System.currentTimeMillis() + 120_000);
+        gameLifecycleService.markPlayerReconnected(gameId, "ClaimRejectGuest");
+
+        HttpClientErrorException ex = assertThrows(HttpClientErrorException.class, () -> restClient.post()
+                .uri("/api/game/" + gameId + "/claim-win")
+                .header("Authorization", "Bearer " + hostToken)
+                .retrieve()
+                .body(String.class));
+
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        assertTrue(ex.getResponseBodyAsString().toLowerCase().contains("claim"));
     }
 
     private String performActionByCurrentPlayer(

@@ -145,9 +145,14 @@ class RoomTest {
 
     @Test
     void testRoomCreationWithBigBlindEqualToSmallBlind() {
-        Room equalBlindsRoom = new Room("room123", "Room", "Host", 6, 10, 10, 1000, null);
-        assertEquals(10, equalBlindsRoom.getSmallBlind());
-        assertEquals(10, equalBlindsRoom.getBigBlind());
+        assertThrows(BadRequestException.class, () -> new Room("room123", "Room", "Host", 6, 10, 10, 1000, null));
+    }
+
+    @Test
+    void testRoomCreationWithBigBlindGreaterThanSmallBlind() {
+        Room validRoom = new Room("room123", "Room", "Host", 6, 10, 20, 1000, null);
+        assertEquals(10, validRoom.getSmallBlind());
+        assertEquals(20, validRoom.getBigBlind());
     }
 
     @Test
@@ -173,8 +178,7 @@ class RoomTest {
     @Test
     void testAddDuplicatePlayer() {
         room.addPlayer("Player1");
-        room.addPlayer("Player1");
-
+        assertThrows(BadRequestException.class, () -> room.addPlayer("Player1"));
         assertEquals(1, room.getPlayers().size());
         assertTrue(room.hasPlayer("Player1"));
     }
@@ -197,7 +201,7 @@ class RoomTest {
     void testRemoveNonExistentPlayer() {
         room.addPlayer("Player1");
 
-        room.removePlayer("NonExistent");
+        assertThrows(BadRequestException.class, () -> room.removePlayer("NonExistent"));
 
         assertEquals(1, room.getPlayers().size());
         assertTrue(room.hasPlayer("Player1"));
@@ -363,7 +367,7 @@ class RoomTest {
         assertEquals(3, room.getPlayers().size());
 
         // Try to add duplicate
-        room.addPlayer("Bob");
+        assertThrows(BadRequestException.class, () -> room.addPlayer("Bob"));
         assertEquals(3, room.getPlayers().size());
 
         // Remove one

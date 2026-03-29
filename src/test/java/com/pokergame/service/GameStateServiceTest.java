@@ -148,6 +148,54 @@ class GameStateServiceTest {
         verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
+    @Test
+    void broadcastGameState_WhenPlayerDisconnected_ShouldExposeDisconnectedStatus() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testPlayers.get(1).setDisconnected(true);
+        long disconnectDeadlineEpochMs = System.currentTimeMillis() + 120_000;
+        testPlayers.get(1).setDisconnectDeadlineEpochMs(disconnectDeadlineEpochMs);
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+
+        gameStateService.broadcastGameState(GAME_ID, testGame);
+
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        Object payload = captor.getValue();
+        assertInstanceOf(PublicGameStateResponse.class, payload);
+
+        PublicGameStateResponse response = (PublicGameStateResponse) payload;
+        PublicPlayerState disconnectedPlayer = response.players().stream()
+                .filter(player -> player.name().equals("Player2"))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals("DISCONNECTED", disconnectedPlayer.status());
+        assertEquals(disconnectDeadlineEpochMs, disconnectedPlayer.disconnectDeadlineEpochMs());
+    }
+
+    @Test
+    void broadcastGameState_WhenOnlyOneConnectedPlayerRemains_ShouldExposeClaimWinEligibility() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+
+        // Current player stays connected, all others disconnected.
+        Player current = testGame.getCurrentPlayer();
+        testGame.getPlayers().stream()
+                .filter(player -> !player.equals(current))
+                .forEach(player -> player.setDisconnected(true));
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+
+        gameStateService.broadcastGameState(GAME_ID, testGame);
+
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        Object payload = captor.getValue();
+        assertInstanceOf(PublicGameStateResponse.class, payload);
+
+        PublicGameStateResponse response = (PublicGameStateResponse) payload;
+        assertEquals(Boolean.TRUE, response.claimWinAvailable());
+        assertEquals(current.getName(), response.claimWinPlayerName());
+    }
+
     // ==================== broadcastShowdownResults Tests ====================
 
     @Test

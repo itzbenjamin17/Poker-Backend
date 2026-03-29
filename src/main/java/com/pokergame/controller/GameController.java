@@ -2,8 +2,14 @@ package com.pokergame.controller;
 
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.ApiResponse;
+import com.pokergame.dto.response.PrivatePlayerState;
+import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
+import com.pokergame.model.Game;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -26,12 +32,75 @@ public class GameController {
 
     private final GameLifecycleService gameLifecycleService;
 
+    private final GameStateService gameStateService;
+
     private final PlayerActionService playerActionService;
 
     // Dependency Injection
-    public GameController(PlayerActionService playerActionService, GameLifecycleService gameLifecycleService) {
+    public GameController(PlayerActionService playerActionService,
+            GameLifecycleService gameLifecycleService,
+            GameStateService gameStateService) {
         this.playerActionService = playerActionService;
         this.gameLifecycleService = gameLifecycleService;
+        this.gameStateService = gameStateService;
+    }
+
+    /**
+     * Fetches current public game state for authenticated players who are still in
+     * the game.
+     * SECURED ENDPOINT - Requires JWT token.
+     *
+     * @param gameId    game identifier
+     * @param principal authenticated player (from JWT)
+     * @return latest game-state snapshot
+     */
+    @GetMapping("/{gameId}/state")
+    public ResponseEntity<PublicGameStateResponse> getGameState(
+            @PathVariable String gameId,
+            Principal principal) {
+        String playerName = principal.getName();
+        logger.debug("Player {} requested game state for {}", playerName, gameId);
+
+        Game game = getAuthorisedGame(gameId, playerName);
+
+        return ResponseEntity.ok(gameStateService.getPublicGameStateSnapshot(gameId, game));
+    }
+
+    /**
+     * Fetches the private state for the authenticated player (hole cards).
+     * SECURED ENDPOINT - Requires JWT token.
+     *
+     * @param gameId    game identifier
+     * @param principal authenticated player (from JWT)
+     * @return private player-state snapshot
+     */
+    @GetMapping("/{gameId}/private-state")
+    public ResponseEntity<PrivatePlayerState> getPrivateState(
+            @PathVariable String gameId,
+            Principal principal) {
+        String playerName = principal.getName();
+        logger.debug("Player {} requested private state for {}", playerName, gameId);
+
+        Game game = getAuthorisedGame(gameId, playerName);
+
+        return ResponseEntity.ok(gameStateService.getPrivatePlayerStateSnapshot(game, playerName));
+    }
+
+    private Game getAuthorisedGame(String gameId, String playerName) {
+        if (!gameLifecycleService.gameExists(gameId)) {
+            throw new ResourceNotFoundException("Game not found");
+        }
+
+        if (!gameLifecycleService.playerExistsInGame(gameId, playerName)) {
+            throw new UnauthorisedActionException("You are no longer part of this game.");
+        }
+
+        Game game = gameLifecycleService.getGame(gameId);
+        if (game == null) {
+            throw new ResourceNotFoundException("Game not found");
+        }
+
+        return game;
     }
 
     /**
@@ -71,5 +140,25 @@ public class GameController {
         gameLifecycleService.leaveGame(gameId, playerName);
         logger.info("Player {} successfully left game {}", playerName, gameId);
         return ResponseEntity.ok(ApiResponse.success("Successfully left game"));
+    }
+
+    /**
+     * Allows the remaining connected player to claim a win immediately when all
+     * other non-out players are disconnected.
+     * SECURED ENDPOINT - Requires JWT token.
+     *
+     * @param gameId    game identifier
+     * @param principal authenticated player (from JWT)
+     * @return success confirmation
+     */
+    @PostMapping("/{gameId}/claim-win")
+    public ResponseEntity<ApiResponse<Void>> claimWin(
+            @PathVariable String gameId,
+            Principal principal) {
+        String playerName = principal.getName();
+        logger.info("Player {} attempting to claim win in game {}", playerName, gameId);
+        gameLifecycleService.claimWin(gameId, playerName);
+        logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
+        return ResponseEntity.ok(ApiResponse.success("Win claimed successfully"));
     }
 }

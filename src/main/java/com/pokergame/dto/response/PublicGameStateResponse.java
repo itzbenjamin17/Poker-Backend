@@ -22,7 +22,10 @@ public record PublicGameStateResponse(
                 Integer winningsPerPlayer,
                 // For auto advancing
                 Boolean isAutoAdvancing,
-                String autoAdvanceMessage) {
+                String autoAdvanceMessage,
+                // Claim-win metadata
+                Boolean claimWinAvailable,
+                String claimWinPlayerName) {
 
         // For normal game state that isn't a showdown and isn't auto advance
         public PublicGameStateResponse(int maxPlayers,
@@ -49,7 +52,42 @@ public record PublicGameStateResponse(
                                 null,
                                 null,
                                 null,
+                                null,
+                                null,
                                 null);
+
+        }
+
+        // For normal game state with claim-win metadata
+        public PublicGameStateResponse(int maxPlayers,
+                        int pot,
+                        List<Integer> pots,
+                        Integer uncalledAmount,
+                        GamePhase phase,
+                        int currentBet,
+                        List<Card> communityCards,
+                        List<PublicPlayerState> players,
+                        String currentPlayerName,
+                        String currentPlayerId,
+                        Boolean claimWinAvailable,
+                        String claimWinPlayerName) {
+                this(
+                                maxPlayers,
+                                pot,
+                                pots,
+                                uncalledAmount,
+                                phase,
+                                currentBet,
+                                communityCards,
+                                players,
+                                currentPlayerName,
+                                currentPlayerId,
+                                null,
+                                null,
+                                null,
+                                null,
+                                claimWinAvailable,
+                                claimWinPlayerName);
 
         }
         // For a normal showdown
@@ -79,6 +117,8 @@ public record PublicGameStateResponse(
                                 currentPlayerId,
                                 winners,
                                 winningsPerPlayer,
+                                null,
+                                null,
                                 null,
                                 null);
 

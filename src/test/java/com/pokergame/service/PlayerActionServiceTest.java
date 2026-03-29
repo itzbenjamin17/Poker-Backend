@@ -100,6 +100,22 @@ class PlayerActionServiceTest {
     }
 
     @Test
+    void processPlayerAction_WhenCurrentPlayerDisconnected_ShouldThrowSecurityException() {
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
+
+        Player currentPlayer = testGame.getCurrentPlayer();
+        currentPlayer.setDisconnected(true);
+
+        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, null);
+
+        UnauthorisedActionException exception = assertThrows(
+                UnauthorisedActionException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
+
+        assertTrue(exception.getMessage().toLowerCase().contains("reconnect"));
+    }
+
+    @Test
     void processPlayerAction_WithValidFold_ShouldProcess() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
 

@@ -394,6 +394,77 @@ class GameLifecycleServiceTest {
         assertFalse(gameLifecycleService.playerExistsInGame("nonexistent-id", "Player"));
     }
 
+    @Test
+    void markPlayerDisconnected_WhenPlayerExists_ShouldSetDisconnectedAndBroadcast() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        long disconnectDeadlineEpochMs = System.currentTimeMillis() + 120_000;
+
+        reset(gameStateService);
+
+        assertDoesNotThrow(
+                () -> gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", disconnectDeadlineEpochMs));
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        Player player2 = game.getPlayers().stream().filter(p -> p.getName().equals("Player2")).findFirst()
+                .orElseThrow();
+        assertTrue(player2.getIsDisconnected());
+        assertEquals(disconnectDeadlineEpochMs, player2.getDisconnectDeadlineEpochMs());
+        verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
+    }
+
+    @Test
+    void markPlayerReconnected_WhenPlayerExists_ShouldClearDisconnectedAndBroadcast() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", System.currentTimeMillis() + 120_000);
+        reset(gameStateService);
+
+        assertDoesNotThrow(() -> gameLifecycleService.markPlayerReconnected(ROOM_ID, "Player2"));
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        Player player2 = game.getPlayers().stream().filter(p -> p.getName().equals("Player2")).findFirst()
+                .orElseThrow();
+        assertFalse(player2.getIsDisconnected());
+        assertNull(player2.getDisconnectDeadlineEpochMs());
+        verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
+    }
+
+    @Test
+    void claimWin_WhenAllOtherNonOutPlayersDisconnected_ShouldEndGameForClaimant() {
+        testRoom.addPlayer("Player3");
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", System.currentTimeMillis() + 120_000);
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", System.currentTimeMillis() + 120_000);
+
+        reset(gameStateService);
+        reset(applicationEventPublisher);
+
+        assertDoesNotThrow(() -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
+
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID),
+                argThat(player -> player != null && player.getName().equals("Host")));
+        verify(applicationEventPublisher).publishEvent(any(GameCleanupEvent.class));
+    }
+
+    @Test
+    void claimWin_WhenAnyOtherNonOutPlayerConnected_ShouldRejectClaim() {
+        testRoom.addPlayer("Player3");
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", System.currentTimeMillis() + 120_000);
+
+        UnauthorisedActionException exception = assertThrows(
+                UnauthorisedActionException.class,
+                () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
+
+        assertTrue(exception.getMessage().toLowerCase().contains("claim"));
+    }
+
     // ==================== handleGameEnd Tests ====================
 
     @Test

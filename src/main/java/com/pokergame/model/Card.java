@@ -29,7 +29,6 @@ public record Card(Rank rank, Suit suit) {
     public String toJsonString() {
         String r;
         switch (rank) {
-            case TEN -> r = "T";
             case JACK -> r = "J";
             case QUEEN -> r = "Q";
             case KING -> r = "K";

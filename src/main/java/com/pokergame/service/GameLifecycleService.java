@@ -242,12 +242,13 @@ public class GameLifecycleService {
         synchronized (game) {
             // Find the winner (last remaining player)
             winner = game.getActivePlayers().stream()
+                    .filter(player -> !player.getIsDisconnected())
                     .findFirst()
                     .orElse(null);
 
             if (winner == null) {
                 winner = game.getPlayers().stream()
-                        .filter(p -> !p.getIsOut())
+                        .filter(p -> !p.getIsOut() && !p.getIsDisconnected())
                         .findFirst()
                         .orElse(game.getPlayers().stream().findFirst().orElse(null));
             }
@@ -312,5 +313,151 @@ public class GameLifecycleService {
 
         return game.getPlayers().stream()
                 .anyMatch(player -> player.getName().equals(playerName));
+    }
+
+    /**
+     * Marks an active player as disconnected and broadcasts updated game state.
+     * Disconnected players stay in the game seat while reconnect grace is active.
+     *
+     * @param gameId                    the game identifier
+     * @param playerName                the disconnected player name
+     * @param disconnectDeadlineEpochMs disconnect grace expiry timestamp (UTC epoch
+     *                                  ms)
+     */
+    public void markPlayerDisconnected(String gameId, String playerName, long disconnectDeadlineEpochMs) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            return;
+        }
+
+        synchronized (game) {
+            Player player = game.getPlayers().stream()
+                    .filter(p -> p.getName().equals(playerName))
+                    .findFirst()
+                    .orElse(null);
+
+            if (player == null || player.getIsDisconnected()) {
+                return;
+            }
+
+            player.setDisconnected(true);
+            player.setDisconnectDeadlineEpochMs(disconnectDeadlineEpochMs);
+
+            if (roomService.getRoom(gameId) != null) {
+                gameStateService.broadcastGameState(gameId, game);
+            }
+        }
+    }
+
+    /**
+     * Clears disconnect flag for a player that reconnects within grace period.
+     *
+     * @param gameId     the game identifier
+     * @param playerName the reconnecting player name
+     */
+    public void markPlayerReconnected(String gameId, String playerName) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            return;
+        }
+
+        synchronized (game) {
+            Player player = game.getPlayers().stream()
+                    .filter(p -> p.getName().equals(playerName))
+                    .findFirst()
+                    .orElse(null);
+
+            if (player == null || !player.getIsDisconnected()) {
+                return;
+            }
+
+            player.setDisconnected(false);
+            player.setDisconnectDeadlineEpochMs(null);
+
+            if (roomService.getRoom(gameId) != null) {
+                gameStateService.broadcastGameState(gameId, game);
+            }
+        }
+    }
+
+    /**
+     * Determines whether the specified player may claim an immediate win because
+     * all other non-out players are disconnected.
+     *
+     * @param gameId     game identifier
+     * @param playerName claimant name
+     * @return true if the claim is currently valid
+     */
+    public boolean canPlayerClaimWin(String gameId, String playerName) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            return false;
+        }
+
+        synchronized (game) {
+            return canPlayerClaimWinInternal(game, playerName);
+        }
+    }
+
+    /**
+     * Claims an immediate game win for a connected player when all other
+     * non-out players are disconnected.
+     *
+     * @param gameId     game identifier
+     * @param playerName claimant name
+     */
+    public void claimWin(String gameId, String playerName) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            throw new ResourceNotFoundException("Game not found");
+        }
+
+        List<String> disconnectedOpponents;
+        synchronized (game) {
+            if (!canPlayerClaimWinInternal(game, playerName)) {
+                throw new UnauthorisedActionException("Cannot claim win right now.");
+            }
+
+            disconnectedOpponents = game.getPlayers().stream()
+                    .filter(player -> !player.getName().equals(playerName))
+                    .filter(player -> !player.getIsOut())
+                    .filter(Player::getIsDisconnected)
+                    .map(Player::getName)
+                    .toList();
+        }
+
+        for (String opponentName : disconnectedOpponents) {
+            if (roomService.getRoom(gameId) != null) {
+                roomService.leaveRoom(gameId, opponentName, false);
+            }
+            if (playerExistsInGame(gameId, opponentName)) {
+                leaveGame(gameId, opponentName);
+            }
+        }
+    }
+
+    private boolean canPlayerClaimWinInternal(Game game, String playerName) {
+        List<Player> eligiblePlayers = game.getPlayers().stream()
+                .filter(player -> !player.getIsOut())
+                .toList();
+
+        if (eligiblePlayers.size() < 2) {
+            return false;
+        }
+
+        Player claimant = eligiblePlayers.stream()
+                .filter(player -> player.getName().equals(playerName))
+                .findFirst()
+                .orElse(null);
+
+        if (claimant == null || claimant.getIsDisconnected()) {
+            return false;
+        }
+
+        List<Player> others = eligiblePlayers.stream()
+                .filter(player -> !player.getName().equals(playerName))
+                .toList();
+
+        return !others.isEmpty() && others.stream().allMatch(Player::getIsDisconnected);
     }
 }
