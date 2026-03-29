@@ -28,9 +28,9 @@ public class AsyncConfiguration {
         executor.setQueueCapacity(100);
 
         // Name in debug logs
-        executor.setThreadNamePrefix("AsyncGameThread-");
+        executor.setThreadNamePrefix("GameExecutor-");
 
-        // CALLER_RUNS_POLICY: Current request thread runs the task
+        // If the task queue is full, the thread that submitted the task will run it instead
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
 
         // Wait for tasks to complete before shutting down the executor
@@ -49,7 +49,7 @@ public class AsyncConfiguration {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
         // Number of threads for scheduled tasks (e.g., game timers)
         scheduler.setPoolSize(5);
-        scheduler.setThreadNamePrefix("GameScheduler-");
+        scheduler.setThreadNamePrefix("TaskScheduler-");
         scheduler.initialize();
         return scheduler;
     }

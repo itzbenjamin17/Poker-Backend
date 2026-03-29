@@ -17,9 +17,8 @@ import org.springframework.web.socket.messaging.SessionDisconnectEvent;
 
 import java.security.Principal;
 import java.util.List;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -37,19 +36,20 @@ class WebSocketEventListenerTest {
     @Mock
     private GameLifecycleService gameLifecycleService;
 
-    private ScheduledExecutorService scheduler;
+    private ThreadPoolTaskScheduler scheduler;
 
     @AfterEach
     void tearDown() {
         if (scheduler != null) {
-            scheduler.shutdownNow();
+            scheduler.shutdown();
         }
     }
 
     @Test
     void disconnectAndReconnectWithinGraceWindow_ShouldSkipPermanentRemoval() throws Exception {
-        scheduler = Executors.newSingleThreadScheduledExecutor();
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, gameLifecycleService, 120, scheduler);
+        scheduler = new ThreadPoolTaskScheduler();
+        scheduler.initialize();
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, gameLifecycleService, scheduler, 120);
 
         Room room = new Room("room-1", "Room 1", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
@@ -75,8 +75,9 @@ class WebSocketEventListenerTest {
 
     @Test
     void disconnectWithoutReconnect_AfterGraceWindow_ShouldPermanentlyRemovePlayer() throws Exception {
-        scheduler = Executors.newSingleThreadScheduledExecutor();
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, gameLifecycleService, 120, scheduler);
+        scheduler = new ThreadPoolTaskScheduler();
+        scheduler.initialize();
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, gameLifecycleService, scheduler, 120);
 
         Room room = new Room("room-2", "Room 2", "Bob", 6, 5, 10, 1000, null);
         room.addPlayer("Bob");

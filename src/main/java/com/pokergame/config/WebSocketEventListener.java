@@ -14,15 +14,16 @@ import org.springframework.web.socket.messaging.SessionConnectEvent;
 import org.springframework.web.socket.messaging.SessionDisconnectEvent;
 
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.TaskScheduler;
+
 import java.security.Principal;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 
 @Component
 public class WebSocketEventListener {
@@ -35,25 +36,24 @@ public class WebSocketEventListener {
     private final ConcurrentMap<String, Set<String>> activeSessionsByUser = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, String> sessionToUser = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PendingDisconnect> pendingDisconnects = new ConcurrentHashMap<>();
-    private final ScheduledExecutorService disconnectCleanupExecutor;
+    private final TaskScheduler taskScheduler;
 
     @Autowired
     public WebSocketEventListener(RoomService roomService,
             GameLifecycleService gameLifecycleService,
+            @Qualifier("taskScheduler") TaskScheduler taskScheduler,
             @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
-        this(roomService, gameLifecycleService, disconnectGracePeriodMs, Executors.newSingleThreadScheduledExecutor());
-    }
-
-    WebSocketEventListener(RoomService roomService,
-            GameLifecycleService gameLifecycleService,
-            long disconnectGracePeriodMs,
-            ScheduledExecutorService disconnectCleanupExecutor) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
+        this.taskScheduler = taskScheduler;
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
-        this.disconnectCleanupExecutor = disconnectCleanupExecutor;
     }
-
+    
+    /**
+     * Manages the logic for when a user establishes a new WebSocket connection.
+     * 
+     * @param event The connect event.
+     */
     @EventListener
     public void handleWebSocketConnectListener(SessionConnectEvent event) {
         StompHeaderAccessor headerAccessor = StompHeaderAccessor.wrap(event.getMessage());
@@ -65,9 +65,11 @@ public class WebSocketEventListener {
         }
 
         String username = user.getName();
+        // Tracks specific session to user because a user can have multiple sessions (e.g. multiple browser tabs)
         registerActiveSession(username, sessionId);
         logger.debug("Registered active WebSocket session {} for user {}", sessionId, username);
 
+        // If the user was previously disconnected, cancel the cleanup task and mark them as reconnected
         PendingDisconnect pendingDisconnect = pendingDisconnects.remove(username);
         if (pendingDisconnect != null) {
             pendingDisconnect.future().cancel(false);
@@ -79,6 +81,11 @@ public class WebSocketEventListener {
         }
     }
 
+    /**
+     * Manages the logic for when a user disconnects from the WebSocket.
+     * 
+     * @param event The disconnect event.
+     */
     @EventListener
     public void handleWebSocketDisconnectListener(SessionDisconnectEvent event) {
         StompHeaderAccessor headerAccessor = StompHeaderAccessor.wrap(event.getMessage());
@@ -91,7 +98,8 @@ public class WebSocketEventListener {
             logger.debug("WebSocket disconnected without resolvable username. sessionId={}", sessionId);
             return;
         }
-
+        // Users may have multiple sessions (e.g. multiple browser tabs)
+        // So we only schedule a cleanup if there are no active sessions left
         unregisterActiveSession(username, sessionId);
         if (hasActiveSession(username)) {
             logger.debug("User {} still has another active session; skipping disconnect timer", username);
@@ -104,12 +112,14 @@ public class WebSocketEventListener {
             return;
         }
 
+        // Marks the player as disconnected and marks when they should be removed from a game
         boolean gameActive = gameLifecycleService.gameExists(roomId);
         long disconnectDeadlineEpochMs = System.currentTimeMillis() + disconnectGracePeriodMs;
         if (gameActive && gameLifecycleService.playerExistsInGame(roomId, username)) {
             gameLifecycleService.markPlayerDisconnected(roomId, username, disconnectDeadlineEpochMs);
         }
 
+        // Cancel any existing disconnect timer for this user
         PendingDisconnect existing = pendingDisconnects.remove(username);
         if (existing != null) {
             existing.future().cancel(false);
@@ -118,9 +128,10 @@ public class WebSocketEventListener {
         logger.info("WebSocket disconnected for user {}. Scheduling delayed cleanup ({} ms)",
                 username, disconnectGracePeriodMs);
 
-        ScheduledFuture<?> future = disconnectCleanupExecutor.schedule(() -> cleanupDisconnectedUser(username, roomId),
-                disconnectGracePeriodMs,
-                TimeUnit.MILLISECONDS);
+        // Schedule the user to be removed from the game if they don't reconnect in 2 minutes
+        ScheduledFuture<?> future = taskScheduler.schedule(
+                () -> cleanupDisconnectedUser(username, roomId),
+                Instant.now().plusMillis(disconnectGracePeriodMs));
 
         pendingDisconnects.put(username, new PendingDisconnect(roomId, future));
     }
@@ -192,7 +203,6 @@ public class WebSocketEventListener {
     @PreDestroy
     public void shutdownExecutor() {
         pendingDisconnects.values().forEach(pending -> pending.future().cancel(false));
-        disconnectCleanupExecutor.shutdownNow();
     }
 
     private record PendingDisconnect(String roomId, ScheduledFuture<?> future) {
