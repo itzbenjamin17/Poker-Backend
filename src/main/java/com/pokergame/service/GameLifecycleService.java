@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.scheduling.annotation.Async;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -275,6 +276,7 @@ public class GameLifecycleService {
      * @param gameId id of the game that is now done
      */
 
+    @Async("gameExecutor")
     public void performGameCleanup(String gameId) {
         activeGames.remove(gameId);
         roomService.destroyRoom(gameId);

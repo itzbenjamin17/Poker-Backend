@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.scheduling.annotation.Async;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -74,6 +75,7 @@ public class GameStateService {
      * @param game   the Game object containing the current state
      * @throws BadRequestException if the game is null
      */
+    @Async("gameExecutor")
     public void broadcastGameState(String gameId, Game game) {
         if (game == null) {
             logger.warn("Cannot broadcast game state - game {} not found", gameId);
@@ -82,18 +84,29 @@ public class GameStateService {
 
         logger.debug("Broadcasting game state for game {}", gameId);
 
-        messagingTemplate.convertAndSend("/game/" + gameId, buildPublicGameStateResponse(gameId, game));
+        PublicGameStateResponse publicResponse;
+        List<PrivatePlayerState> privateStates = new ArrayList<>();
+        List<String> encodedNames = new ArrayList<>();
+
+        synchronized (game) {
+            publicResponse = buildPublicGameStateResponse(gameId, game);
+            for (Player targetPlayer : game.getPlayers()) {
+                String encodedPlayerName = java.net.URLEncoder.encode(
+                        targetPlayer.getName(),
+                        java.nio.charset.StandardCharsets.UTF_8)
+                        .replace("+", "%20");
+                encodedNames.add(encodedPlayerName);
+                privateStates.add(buildPrivatePlayerState(targetPlayer));
+            }
+        }
+
+        messagingTemplate.convertAndSend("/game/" + gameId, publicResponse);
 
         // Sending a personalised game state to each player
-        for (Player targetPlayer : game.getPlayers()) {
-            String encodedPlayerName = java.net.URLEncoder.encode(
-                    targetPlayer.getName(),
-                    java.nio.charset.StandardCharsets.UTF_8)
-                    .replace("+", "%20");
-
+        for (int i = 0; i < privateStates.size(); i++) {
             messagingTemplate.convertAndSend(
-                    "/game/" + gameId + "/player-name/" + encodedPlayerName + "/private",
-                    buildPrivatePlayerState(targetPlayer));
+                    "/game/" + gameId + "/player-name/" + encodedNames.get(i) + "/private",
+                    privateStates.get(i));
         }
     }
 
@@ -106,74 +119,80 @@ public class GameStateService {
      * @param winners           the list of Player objects who won the hand
      * @param winningsPerPlayer the number of chips each winner receives
      */
+    @Async("gameExecutor")
     public void broadcastShowdownResults(String gameId, Game game, List<Player> winners, int winningsPerPlayer) {
         if (game == null) {
             logger.warn("Cannot broadcast showdown - game {} not found", gameId);
             return;
         }
 
-        // Get room information
-        Room room = roomService.getRoom(gameId);
-        int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+        PublicGameStateResponse showdownResponse;
+        List<String> winnerNames;
 
-        // Get current player information
-        Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
-        if (currentPlayer != null) {
-            logger.debug("Showdown - current player: {} (ID: {})", currentPlayer.getName(),
-                    currentPlayer.getPlayerId());
-        } else {
-            logger.debug("Showdown - no active players found");
+        synchronized (game) {
+            // Get room information
+            Room room = roomService.getRoom(gameId);
+            int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+
+            // Get current player information
+            Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
+            if (currentPlayer != null) {
+                logger.debug("Showdown - current player: {} (ID: {})", currentPlayer.getName(),
+                        currentPlayer.getPlayerId());
+            } else {
+                logger.debug("Showdown - no active players found");
+            }
+            String currentPlayerName = currentPlayer != null ? currentPlayer.getName() : null;
+            String currentPlayerId = currentPlayer != null ? currentPlayer.getPlayerId() : null;
+
+            // Get winner names
+            winnerNames = winners.stream().map(Player::getName).toList();
+
+            // Check if this is an actual showdown (i.e. not a win by fold)
+            boolean isActualShowdown = winners.stream()
+                    .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != com.pokergame.enums.HandRank.NO_HAND);
+            String smallBlindPlayerId = game.getSmallBlindPlayerId();
+            String bigBlindPlayerId = game.getBigBlindPlayerId();
+
+            // Convert players to PublicPlayerState DTOs with showdown information
+            List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
+                boolean isWinner = winners.contains(player);
+                boolean isActive = !player.getHasFolded() && !player.getIsOut();
+                String status = resolvePlayerStatus(player);
+                return new PublicPlayerState(
+                        player.getPlayerId(),
+                        player.getName(),
+                        player.getChips(),
+                        player.getCurrentBet(),
+                        status,
+                        player.getIsAllIn(),
+                        false, // isCurrentPlayer not relevant during showdown
+                        player.getHasFolded(),
+                        player.getPlayerId().equals(smallBlindPlayerId),
+                        player.getPlayerId().equals(bigBlindPlayerId),
+                        isActive ? player.getHandRank() : null,
+                        isActive ? player.getBestHand() : List.of(),
+                        isWinner,
+                        isWinner ? winningsPerPlayer : 0,
+                        (isActive && isActualShowdown) ? player.getHoleCards() : null,
+                        player.getDisconnectDeadlineEpochMs());
+            }).toList();
+
+            // Create PublicGameStateResponse DTO with showdown information
+            showdownResponse = new PublicGameStateResponse(
+                    maxPlayers,
+                    game.getPot(),
+                    game.getPotBreakdown(),
+                    game.getUncalledAmount(),
+                    game.getCurrentPhase(),
+                    game.getCurrentHighestBet(),
+                    game.getCommunityCards(),
+                    playersList,
+                    currentPlayerName,
+                    currentPlayerId,
+                    winnerNames,
+                    winningsPerPlayer);
         }
-        String currentPlayerName = currentPlayer != null ? currentPlayer.getName() : null;
-        String currentPlayerId = currentPlayer != null ? currentPlayer.getPlayerId() : null;
-
-        // Get winner names
-        List<String> winnerNames = winners.stream().map(Player::getName).toList();
-
-        // Check if this is an actual showdown (i.e. not a win by fold)
-        boolean isActualShowdown = winners.stream()
-                .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != com.pokergame.enums.HandRank.NO_HAND);
-        String smallBlindPlayerId = game.getSmallBlindPlayerId();
-        String bigBlindPlayerId = game.getBigBlindPlayerId();
-
-        // Convert players to PublicPlayerState DTOs with showdown information
-        List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
-            boolean isWinner = winners.contains(player);
-            boolean isActive = !player.getHasFolded() && !player.getIsOut();
-            String status = resolvePlayerStatus(player);
-            return new PublicPlayerState(
-                    player.getPlayerId(),
-                    player.getName(),
-                    player.getChips(),
-                    player.getCurrentBet(),
-                    status,
-                    player.getIsAllIn(),
-                    false, // isCurrentPlayer not relevant during showdown
-                    player.getHasFolded(),
-                    player.getPlayerId().equals(smallBlindPlayerId),
-                    player.getPlayerId().equals(bigBlindPlayerId),
-                    isActive ? player.getHandRank() : null,
-                    isActive ? player.getBestHand() : List.of(),
-                    isWinner,
-                    isWinner ? winningsPerPlayer : 0,
-                    (isActive && isActualShowdown) ? player.getHoleCards() : null,
-                    player.getDisconnectDeadlineEpochMs());
-        }).toList();
-
-        // Create PublicGameStateResponse DTO with showdown information
-        PublicGameStateResponse showdownResponse = new PublicGameStateResponse(
-                maxPlayers,
-                game.getPot(),
-                game.getPotBreakdown(),
-                game.getUncalledAmount(),
-                game.getCurrentPhase(),
-                game.getCurrentHighestBet(),
-                game.getCommunityCards(),
-                playersList,
-                currentPlayerName,
-                currentPlayerId,
-                winnerNames,
-                winningsPerPlayer);
 
         // Broadcast showdown results to all players
         messagingTemplate.convertAndSend("/game/" + gameId, showdownResponse);
@@ -196,70 +215,75 @@ public class GameStateService {
      * @param message         the message to display to players about auto-advance
      *                        status
      */
+    @Async("gameExecutor")
     public void broadcastGameStateWithAutoAdvance(String gameId, Game game, boolean isAutoAdvancing, String message) {
         if (game == null) {
             logger.warn("Cannot broadcast auto-advance state - game {} not found", gameId);
             return;
         }
 
-        // Get room information
-        Room room = roomService.getRoom(gameId);
-        int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+        PublicGameStateResponse autoAdvanceResponse;
 
-        // Get current player information
-        Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
-        if (currentPlayer != null) {
-            logger.debug("Auto-advance - current player: {} (ID: {})", currentPlayer.getName(),
-                    currentPlayer.getPlayerId());
-        } else {
-            logger.debug("Auto-advance - no active players found");
+        synchronized (game) {
+            // Get room information
+            Room room = roomService.getRoom(gameId);
+            int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+
+            // Get current player information
+            Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
+            if (currentPlayer != null) {
+                logger.debug("Auto-advance - current player: {} (ID: {})", currentPlayer.getName(),
+                        currentPlayer.getPlayerId());
+            } else {
+                logger.debug("Auto-advance - no active players found");
+            }
+            String currentPlayerName = currentPlayer != null ? currentPlayer.getName() : null;
+            String currentPlayerId = currentPlayer != null ? currentPlayer.getPlayerId() : null;
+            String smallBlindPlayerId = game.getSmallBlindPlayerId();
+            String bigBlindPlayerId = game.getBigBlindPlayerId();
+
+            // Convert players to PlayerState DTOs
+            List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
+                String status = resolvePlayerStatus(player);
+                boolean isCurrentPlayer = player.equals(currentPlayer);
+                return new PublicPlayerState(
+                        player.getPlayerId(),
+                        player.getName(),
+                        player.getChips(),
+                        player.getCurrentBet(),
+                        status,
+                        player.getIsAllIn(),
+                        isCurrentPlayer,
+                        player.getHasFolded(),
+                        player.getPlayerId().equals(smallBlindPlayerId),
+                        player.getPlayerId().equals(bigBlindPlayerId),
+                        player.getHandRank(),
+                        List.of(),
+                        null,
+                        null,
+                        null,
+                        player.getDisconnectDeadlineEpochMs());
+            }).toList();
+
+            // Create PublicGameStateResponse DTO with auto-advance fields
+            autoAdvanceResponse = new PublicGameStateResponse(
+                    maxPlayers,
+                    game.getPot(),
+                    game.getPotBreakdown(),
+                    game.getUncalledAmount(),
+                    game.getCurrentPhase(),
+                    game.getCurrentHighestBet(),
+                    game.getCommunityCards(),
+                    playersList,
+                    currentPlayerName,
+                    currentPlayerId,
+                    null, // winners
+                    null, // winningsPerPlayer
+                    isAutoAdvancing,
+                    message,
+                    null,
+                    null);
         }
-        String currentPlayerName = currentPlayer != null ? currentPlayer.getName() : null;
-        String currentPlayerId = currentPlayer != null ? currentPlayer.getPlayerId() : null;
-        String smallBlindPlayerId = game.getSmallBlindPlayerId();
-        String bigBlindPlayerId = game.getBigBlindPlayerId();
-
-        // Convert players to PlayerState DTOs
-        List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
-            String status = resolvePlayerStatus(player);
-            boolean isCurrentPlayer = player.equals(currentPlayer);
-            return new PublicPlayerState(
-                    player.getPlayerId(),
-                    player.getName(),
-                    player.getChips(),
-                    player.getCurrentBet(),
-                    status,
-                    player.getIsAllIn(),
-                    isCurrentPlayer,
-                    player.getHasFolded(),
-                    player.getPlayerId().equals(smallBlindPlayerId),
-                    player.getPlayerId().equals(bigBlindPlayerId),
-                    player.getHandRank(),
-                    List.of(),
-                    null,
-                    null,
-                    null,
-                    player.getDisconnectDeadlineEpochMs());
-        }).toList();
-
-        // Create PublicGameStateResponse DTO with auto-advance fields
-        PublicGameStateResponse autoAdvanceResponse = new PublicGameStateResponse(
-                maxPlayers,
-                game.getPot(),
-                game.getPotBreakdown(),
-                game.getUncalledAmount(),
-                game.getCurrentPhase(),
-                game.getCurrentHighestBet(),
-                game.getCommunityCards(),
-                playersList,
-                currentPlayerName,
-                currentPlayerId,
-                null, // winners
-                null, // winningsPerPlayer
-                isAutoAdvancing,
-                message,
-                null,
-                null);
 
         logger.info("Broadcasting auto-advance state for game {}: {}", gameId, message);
         messagingTemplate.convertAndSend("/game/" + gameId, autoAdvanceResponse);
@@ -272,6 +296,7 @@ public class GameStateService {
      * @param gameId the unique identifier of the game
      * @param game   the Game object containing the current state
      */
+    @Async("gameExecutor")
     public void broadcastAutoAdvanceNotification(String gameId, Game game) {
         if (game == null) {
             logger.warn("Cannot broadcast auto-advance notification - game {} not found", gameId);
@@ -294,6 +319,7 @@ public class GameStateService {
      * @param gameId the unique identifier of the game
      * @param game   the Game object containing the current state
      */
+    @Async("gameExecutor")
     public void broadcastAutoAdvanceComplete(String gameId, Game game) {
         if (game == null) {
             logger.warn("Cannot broadcast auto-advance complete - game {} not found", gameId);
@@ -313,6 +339,7 @@ public class GameStateService {
      * @param playerName the name of the player to notify
      * @param message    the notification message content
      */
+    @Async("gameExecutor")
     public void sendPlayerNotification(String gameId, String playerName, String message) {
         PlayerNotificationResponse notification = new PlayerNotificationResponse(
                 "PLAYER_NOTIFICATION",
@@ -332,6 +359,7 @@ public class GameStateService {
      * @param message    the notification message content
      * @param type       the type of notification (e.g. "ACTION_ERROR")
      */
+    @Async("gameExecutor")
     public void sendPrivatePlayerNotification(String gameId, String playerName, String message, String type) {
         String encodedPlayerName = java.net.URLEncoder.encode(
                 playerName,
@@ -357,6 +385,7 @@ public class GameStateService {
      * @param winner the Player object representing the game winner
      * @param isForfeit true if the game ended due to a player leaving/disconnecting
      */
+    @Async("gameExecutor")
     public void broadcastGameEnd(String gameId, Player winner, boolean isForfeit) {
         if (winner == null) {
             logger.warn("Cannot broadcast game end for {} - winner is null", gameId);
