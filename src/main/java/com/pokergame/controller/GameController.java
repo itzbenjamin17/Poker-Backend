@@ -28,7 +28,7 @@ import java.security.Principal;
  * updates.
  */
 @RestController
-@RequestMapping("/game")
+@RequestMapping("/api/game")
 public class GameController {
     private static final Logger logger = LoggerFactory.getLogger(GameController.class);
 
@@ -161,8 +161,8 @@ public class GameController {
         }
 
         // Ensure error messages are not too long
-        if (userFriendlyMessage != null && userFriendlyMessage.length() > 150) {
-            userFriendlyMessage = userFriendlyMessage.substring(0, 147) + "...";
+        if (userFriendlyMessage != null && userFriendlyMessage.length() > 80) {
+            userFriendlyMessage = userFriendlyMessage.substring(0, 77) + "...";
         }
 
         gameStateService.sendPrivatePlayerNotification(gameId, playerName, userFriendlyMessage, "ACTION_ERROR");

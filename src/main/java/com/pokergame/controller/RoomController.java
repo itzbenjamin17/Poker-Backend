@@ -22,7 +22,7 @@ import java.security.Principal;
  * Handles room creation, joining, leaving, and game initialisation.
  */
 @RestController
-@RequestMapping("/room")
+@RequestMapping("/api/room")
 public class RoomController {
     private static final Logger logger = LoggerFactory.getLogger(RoomController.class);
 
