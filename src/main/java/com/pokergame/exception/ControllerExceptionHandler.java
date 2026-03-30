@@ -10,6 +10,10 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 
+/**
+ * Exception handler for all exceptions in the application.
+ */
+
 @ControllerAdvice
 public class ControllerExceptionHandler {
     private static final Logger logger = LoggerFactory.getLogger(ControllerExceptionHandler.class);
@@ -55,6 +59,7 @@ public class ControllerExceptionHandler {
 
         logger.warn("Validation error: {}", message);
         ErrorResponse error = new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", message);
+        // returns 400 Bad Request
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
     }
 

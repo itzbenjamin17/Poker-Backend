@@ -209,14 +209,13 @@ public class GameStateService {
      * Includes special flags and messages to notify clients of automatic
      * progression.
      *
-     * @param gameId          the unique identifier of the game
-     * @param game            the Game object containing the current state
-     * @param isAutoAdvancing true if auto-advancing to showdown, false otherwise
-     * @param message         the message to display to players about auto-advance
-     *                        status
+     * @param gameId  the unique identifier of the game
+     * @param game    the Game object containing the current state
+     * @param message the message to display to players about auto-advance
+     *                status
      */
     @Async("gameExecutor")
-    public void broadcastGameStateWithAutoAdvance(String gameId, Game game, boolean isAutoAdvancing, String message) {
+    public void broadcastGameStateWithAutoAdvance(String gameId, Game game, String message) {
         if (game == null) {
             logger.warn("Cannot broadcast auto-advance state - game {} not found", gameId);
             return;
@@ -279,7 +278,7 @@ public class GameStateService {
                     currentPlayerId,
                     null, // winners
                     null, // winningsPerPlayer
-                    isAutoAdvancing,
+                    true,
                     message,
                     null,
                     null);
@@ -381,8 +380,8 @@ public class GameStateService {
      * Broadcasts a game end message when a winner is determined.
      * Sent when only one player remains with chips.
      *
-     * @param gameId the unique identifier of the game
-     * @param winner the Player object representing the game winner
+     * @param gameId    the unique identifier of the game
+     * @param winner    the Player object representing the game winner
      * @param isForfeit true if the game ended due to a player leaving/disconnecting
      */
     @Async("gameExecutor")

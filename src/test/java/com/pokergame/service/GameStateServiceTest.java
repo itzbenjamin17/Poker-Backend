@@ -240,7 +240,7 @@ class GameStateServiceTest {
 
     @Test
     void broadcastGameStateWithAutoAdvance_WithNullGame_ShouldNotBroadcast() {
-        gameStateService.broadcastGameStateWithAutoAdvance(GAME_ID, null, true, "Auto-advancing...");
+        gameStateService.broadcastGameStateWithAutoAdvance(GAME_ID, null, "Auto-advancing...");
 
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
@@ -249,16 +249,7 @@ class GameStateServiceTest {
     void broadcastGameStateWithAutoAdvance_WithValidData_ShouldBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
-        gameStateService.broadcastGameStateWithAutoAdvance(GAME_ID, testGame, true, "Auto-advancing...");
-
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
-    }
-
-    @Test
-    void broadcastGameStateWithAutoAdvance_WhenNotAutoAdvancing_ShouldStillBroadcast() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-
-        gameStateService.broadcastGameStateWithAutoAdvance(GAME_ID, testGame, false, "Not auto-advancing");
+        gameStateService.broadcastGameStateWithAutoAdvance(GAME_ID, testGame, "Auto-advancing...");
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }

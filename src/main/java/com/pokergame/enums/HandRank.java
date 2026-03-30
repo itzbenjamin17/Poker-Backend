@@ -1,5 +1,9 @@
 package com.pokergame.enums;
 
+/**
+ * Represents the rank of a poker hand.
+ */
+
 public enum HandRank {
     NO_HAND(-1),
     HIGH_CARD(1),
@@ -19,9 +23,5 @@ public enum HandRank {
 
     public boolean beats(HandRank other) {
         return this.rank > other.rank;
-    }
-
-    public boolean equals(HandRank other) {
-        return this.rank == other.rank;
     }
 }

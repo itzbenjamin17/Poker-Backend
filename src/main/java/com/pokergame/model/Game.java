@@ -1095,22 +1095,32 @@ public class Game {
                 currentPlayerPosition != originalPosition);
     }
 
+    /**
+     * Normalizes the current player position to be within the bounds of the active
+     * players list.
+     */
     private void normalizeCurrentPlayerPosition() {
         if (activePlayers.isEmpty()) {
             currentPlayerPosition = 0;
             return;
         }
-
+        // floorMod handles negative indices correctly but this isn't necessary for my
+        // code as I never subtract from currentPlayerPosition
         currentPlayerPosition = Math.floorMod(currentPlayerPosition, activePlayers.size());
     }
 
+    /**
+     * Normalizes the blind positions to be within the bounds of the active players
+     * list.
+     */
     private void normalizeBlindPositions() {
         if (activePlayers.isEmpty()) {
             smallBlindPosition = 0;
             bigBlindPosition = 0;
             return;
         }
-
+        // floorMod handles negative indices correctly but this isn't necessary for my
+        // code as I never subtract from the blind positions
         int tableSize = activePlayers.size();
         smallBlindPosition = Math.floorMod(smallBlindPosition, tableSize);
         bigBlindPosition = Math.floorMod(bigBlindPosition, tableSize);

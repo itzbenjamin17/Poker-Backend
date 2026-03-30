@@ -1,5 +1,9 @@
 package com.pokergame.enums;
 
+/**
+ * Represents the rank of a card.
+ */
+
 public enum Rank {
     TWO(2, "2"),
     THREE(3, "3"),

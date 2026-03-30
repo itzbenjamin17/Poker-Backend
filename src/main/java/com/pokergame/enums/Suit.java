@@ -1,5 +1,9 @@
 package com.pokergame.enums;
 
+/**
+ * Represents the suit of a card.
+ */
+
 public enum Suit {
     HEARTS("Hearts", "♥"),
     DIAMONDS("Diamonds", "♦"),

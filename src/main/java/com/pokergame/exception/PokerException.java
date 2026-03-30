@@ -1,5 +1,9 @@
 package com.pokergame.exception;
 
+/**
+ * Base exception for all poker game exceptions.
+ */
+
 @SuppressWarnings("unused")
 public abstract class PokerException extends RuntimeException {
     public PokerException(String message) {

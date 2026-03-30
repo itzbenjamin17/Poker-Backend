@@ -15,8 +15,9 @@ import java.util.List;
  * Manages player state including folding, all-in status, and current bets.
  *
  * <p>
- * <b>WARNING:</b> Very little validation is done in this class, make sure
- * inputs to methods in this class are valid
+ * <b>WARNING:</b> This class performs basic state and accounting validation
+ * but does not enforce Poker game rules. Use PlayerActionService for
+ * rule-validated actions.
  * </p>
  *
  */

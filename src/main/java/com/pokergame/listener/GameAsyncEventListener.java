@@ -147,15 +147,15 @@ public class GameAsyncEventListener {
 
                 if (currentPhase == GamePhase.PRE_FLOP) {
                     currentGame.dealFlop();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, true, "Dealing flop...");
+                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing flop...");
                 } else if (currentPhase == GamePhase.FLOP) {
                     currentGame.dealTurn();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, true, "Dealing turn...");
+                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing turn...");
                 } else if (currentPhase == GamePhase.TURN) {
                     currentGame.dealRiver();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, true, "Dealing river...");
+                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing river...");
                 } else {
-                    // We are at the end (RIVER or SHOWDOWN)
+                    // We are at the end (SHOWDOWN)
                     int potBeforeDistribution = currentGame.getPot();
                     List<Player> winners = currentGame.conductShowdown();
                     int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();

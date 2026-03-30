@@ -1,5 +1,9 @@
 package com.pokergame.enums;
 
+/**
+ * Represents the status of a player.
+ */
+
 public enum PlayerStatus {
     FOLDED("FOLDED"),
     OUT("OUT"),
