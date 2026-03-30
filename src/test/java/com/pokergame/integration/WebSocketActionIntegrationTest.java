@@ -3,6 +3,8 @@ package com.pokergame.integration;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.PlayerNotificationResponse;
+import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.security.JwtService;
@@ -141,51 +143,41 @@ class WebSocketActionIntegrationTest {
     @Test
     @DisplayName("Should update game state when valid action is sent via WebSocket")
     void shouldSucceed_whenValidActionSent() throws Exception {
-        roomService.joinRoom(new com.pokergame.dto.request.JoinRoomRequest(roomService.getRoom(roomId).getRoomName(), otherName, null));
+        roomService.joinRoom(new JoinRoomRequest(
+                roomService.getRoom(roomId).getRoomName(), otherName, null));
 
-        StompSession hostSession = connectSession(hostToken);
-        CompletableFuture<com.pokergame.dto.response.PublicGameStateResponse> stateFuture = new CompletableFuture<>();
+        StompSession hostSession  = connectSession(hostToken);
+        StompSession otherSession = connectSession(otherToken);
 
-        hostSession.subscribe("/game/" + roomId, new StompFrameHandler() {
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) {
-                return com.pokergame.dto.response.PublicGameStateResponse.class;
+        CompletableFuture<PublicGameStateResponse> initialFuture = new CompletableFuture<>();
+        CompletableFuture<PublicGameStateResponse> nextFuture    = new CompletableFuture<>();
+
+        StompFrameHandler handler = new StompFrameHandler() {
+            @Override public Type getPayloadType(StompHeaders h) {
+                return PublicGameStateResponse.class;
             }
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                if (payload instanceof com.pokergame.dto.response.PublicGameStateResponse response) {
-                    stateFuture.complete(response);
-                }
+            @Override public void handleFrame(StompHeaders h, Object payload) {
+                if (!(payload instanceof PublicGameStateResponse state)) return;
+                if (!initialFuture.isDone()) initialFuture.complete(state);
+                else nextFuture.complete(state);
             }
-        });
-        
+        };
+
+        hostSession.subscribe("/game/" + roomId, handler);
+        otherSession.subscribe("/game/" + roomId, handler);
+
         gameLifecycleService.createGameFromRoom(roomId);
-        com.pokergame.dto.response.PublicGameStateResponse initial = stateFuture.get(10, TimeUnit.SECONDS);
-        
-        String current = initial.currentPlayerName();
-        StompSession activeSession = hostName.equals(current) ? hostSession : connectSession(otherToken);
-        
-        CompletableFuture<com.pokergame.dto.response.PublicGameStateResponse> nextFuture = new CompletableFuture<>();
-        activeSession.subscribe("/game/" + roomId, new StompFrameHandler() {
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) {
-                return com.pokergame.dto.response.PublicGameStateResponse.class;
-            }
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                if (payload instanceof com.pokergame.dto.response.PublicGameStateResponse state) {
-                    nextFuture.complete(state);
-                }
-            }
-        });
-        
-        Thread.sleep(300);
-        activeSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
-        
-        // If fold happens in 2-player game, it might end the hand, so just verify any state arrived.
+        PublicGameStateResponse initial = initialFuture.get(10, TimeUnit.SECONDS);
+
+        StompSession activeSession = hostName.equals(initial.currentPlayerName())
+                ? hostSession : otherSession;
+
+        activeSession.send("/app/" + roomId + "/action",
+                new PlayerActionRequest(PlayerAction.FOLD, null));
+
         assertNotNull(nextFuture.get(10, TimeUnit.SECONDS));
         hostSession.disconnect();
-        if (activeSession != hostSession) activeSession.disconnect();
+        otherSession.disconnect();
     }
 
     @Test

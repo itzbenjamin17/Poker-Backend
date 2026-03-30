@@ -94,7 +94,7 @@ public class GameLifecycleService {
         gameStartMessage.put("gameId", roomId);
         gameStartMessage.put("message", "Game started! Redirecting to game...");
 
-        messagingTemplate.convertAndSend("/rooms" + roomId,
+        messagingTemplate.convertAndSend("/rooms/" + roomId,
                 new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), gameStartMessage));
 
         room.setGameStarted(true);

@@ -1,6 +1,6 @@
 # ♠️ Poker Backend - Real-time Game Engine
 
-A **Java 21 + Spring Boot 4.0** backend for multiplayer poker, featuring real-time game state management, WebSocket communication, JWT authentication, and comprehensive hand evaluation logic.
+A **Java 21 + Spring Boot 4.0** backend for multiplayer poker, featuring real-time game state management, WebSocket communication, JWT authentication, reconnect handling, and comprehensive hand evaluation logic.
 
 **Purpose:** Showcase project demonstrating enterprise backend patterns, real-time systems, and clean architecture.
 
@@ -77,19 +77,18 @@ java -jar target/Poker-0.0.1-SNAPSHOT.jar
 
 ### Layered Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
-│  Controller Layer (REST + WebSocket endpoints)      │
-│  ├── RoomController (REST)                          │
-│  ├── GameController (WebSocket)                     │
-│  └── ApiController (Unified gateway)                │
+│  Controller Layer (REST + WebSocket endpoints)     │
+│  ├── RoomController (REST)                         │
+│  └── GameController (REST + WebSocket)             │
 └────────────────────┬────────────────────────────────┘
                      │
 ┌─────────────────────▼────────────────────────────────┐
 │  Service Layer (Business Logic)                     │
 │  ├── RoomService (Room lifecycle)                   │
 │  ├── GameLifecycleService (Hand management)         │
-│  ├── GameStateService (State queries)               │
+│  ├── GameStateService (State queries & broadcasts)  │
 │  ├── PlayerActionService (Action validation)        │
 │  └── HandEvaluatorService (Hand ranking)            │
 └────────────────────┬────────────────────────────────┘
@@ -104,30 +103,29 @@ java -jar target/Poker-0.0.1-SNAPSHOT.jar
 └─────────────────────────────────────────────────────┘
 ```
 
-> 💡 **Separation of Concerns**: Each layer has a single responsibility. Controllers handle routing, services handle logic, models handle state. Easy to test and maintain.
+> 💡 **Separation of Concerns**: Each layer has a single responsibility. Controllers handle routing, services handle logic, models handle state. Async listeners handle delayed events like reconnect cleanup, auto-advance, and next-hand scheduling.
 
 ## 📁 Project Structure
 
-```
+```text
 src/main/java/com/pokergame/
 ├── PokerApplication.java          # Spring Boot entry point
 │
 ├── controller/
-│   ├── RoomController.java         # REST: /room, /api/room
-│   ├── GameController.java         # REST: /game | WebSocket: /app/{gameId}/action
-│   └── ApiController.java          # REST: /api (unified)
+│   ├── RoomController.java         # REST: /api/room/*
+│   └── GameController.java         # REST: /api/game/* | WebSocket: /app/{gameId}/action
 │
 ├── service/
-│   ├── RoomService.java            # Room creation, join, leave
-│   ├── GameLifecycleService.java   # Game initialization, phases
-│   ├── GameStateService.java       # Game state queries
+│   ├── RoomService.java            # Room creation, join, leave, host transfer
+│   ├── GameLifecycleService.java   # Game initialization, hand starts, claim-win, cleanup
+│   ├── GameStateService.java       # Public/private state snapshots and broadcasts
 │   ├── PlayerActionService.java    # Action validation & execution
 │   └── HandEvaluatorService.java   # Poker hand ranking
 │
 ├── model/
-│   ├── Game.java                   # Game state, betting, phases
+│   ├── Game.java                   # Game state, betting, phases, side-pot logic
 │   ├── Room.java                   # Room/lobby management
-│   ├── Player.java                 # Player state, chips, cards
+│   ├── Player.java                 # Player state, chips, cards, disconnect status
 │   ├── Card.java                   # Immutable card (Rank + Suit)
 │   ├── Deck.java                   # 52-card deck, shuffle logic
 │   └── HandEvaluationResult.java   # Hand ranking result
@@ -136,10 +134,10 @@ src/main/java/com/pokergame/
 │   ├── GamePhase.java              # PRE_FLOP, FLOP, TURN, RIVER, SHOWDOWN
 │   ├── PlayerAction.java           # FOLD, CHECK, CALL, BET, RAISE, ALL_IN
 │   ├── HandRank.java               # NO_HAND to ROYAL_FLUSH (with rank values)
-│   ├── PlayerStatus.java           # FOLDED, OUT, ACTIVE, ALL_IN
+│   ├── PlayerStatus.java           # FOLDED, OUT, ACTIVE, ALL_IN, DISCONNECTED
 │   ├── Rank.java                   # A, 2-9, T (10), J, Q, K
 │   ├── Suit.java                   # HEARTS, DIAMONDS, CLUBS, SPADES
-│   └── ResponseMessage.java        # Standard response messages (GAME_STARTED, PLAYER_JOINED etc.)
+│   └── ResponseMessage.java        # ROOM_CREATED, GAME_STARTED, ACTION_ERROR, etc.
 │
 ├── dto/
 │   ├── request/
@@ -153,7 +151,7 @@ src/main/java/com/pokergame/
 │       ├── RoomDataResponse.java    # Room details response
 │       ├── ErrorResponse.java       # Error details response
 │       ├── PublicGameStateResponse.java # Public game state DTO
-│       ├── PublicPlayerState.java   # Public player info (no hole cards)
+│       ├── PublicPlayerState.java   # Public player info
 │       ├── PrivatePlayerState.java  # Private player info (with hole cards)
 │       └── PlayerNotificationResponse.java # Player action notifications
 │
@@ -161,12 +159,12 @@ src/main/java/com/pokergame/
 │   ├── SecurityConfig.java          # JWT auth, CORS, stateless
 │   ├── WebSocketConfig.java         # STOMP endpoints, message broker
 │   ├── WebSocketAuthInterceptor.java# JWT validation for WebSocket
-│   ├── AsyncConfiguration.java      # Async/parallel processing
-│   └── WebSocketEventListener.java  # Connection lifecycle events
+│   ├── AsyncConfiguration.java      # Async executors and scheduler
+│   └── WebSocketEventListener.java  # Connection lifecycle and reconnect grace
 │
 ├── security/
 │   ├── JwtService.java              # Token generation & validation
-│   └── JwtAuthenticationFilter.java  # JWT filter chain
+│   └── JwtAuthenticationFilter.java # JWT filter chain
 │
 ├── exception/
 │   ├── PokerException.java          # Base custom exception
@@ -180,16 +178,15 @@ src/main/java/com/pokergame/
 │   ├── AutoAdvanceEvent.java        # Triggered to auto-advance phase
 │   └── GameCleanupEvent.java        # Triggered on game end
 │
-├── listener/
-    └── GameAsyncEventListener.java  # Listens for game events
-
+└── listener/
+    └── GameAsyncEventListener.java  # Listens for delayed game events
 ```
 
 ## 🎰 Game Rules & Logic
 
 ### Game Phases
 
-Texas Hold'em poker phases (managed by `GameLifecycleService`):
+Texas Hold'em poker phases (managed by `GameLifecycleService` and `PlayerActionService`):
 
 #### Pre-Flop
 
@@ -198,18 +195,17 @@ Texas Hold'em poker phases (managed by `GameLifecycleService`):
 - Each player receives 2 private cards (hole cards)
 - Small blind posts small blind bet
 - Big blind posts big blind bet
-- UTG (Under The Gun) player starts betting
+- In heads-up play, dealer posts the small blind and acts first pre-flop
 - Players can: Fold, Check, Call, Bet, Raise, All-in
-- Phase ends when all players have matched the highest bet or folded
+- Phase ends when all players have matched the highest bet, folded, or can no longer act
 
 #### Flop
 
 **First community card betting round**
 
 - 3 community cards revealed on the table
-- First active player (after dealer) starts betting
+- First active player after the dealer starts betting
 - Same betting rules as pre-flop
-- Smallest bet size = Big Blind
 
 #### Turn
 
@@ -229,10 +225,11 @@ Texas Hold'em poker phases (managed by `GameLifecycleService`):
 
 **Winner determination**
 
-- Remaining players reveal hole cards
+- Remaining players reveal hole cards when needed
 - `HandEvaluatorService` evaluates each 5-card best hand
 - Pot distributed to winner(s)
-- Game ends or new hand begins
+- Side pots and uncalled chips are handled for all-in scenarios
+- Game ends or a new hand begins after a scheduled delay
 
 ### Hand Rankings (Best to Worst)
 
@@ -283,16 +280,16 @@ Actions handled by `PlayerActionService`:
 | ---------- | ---------------------------- | -------------------------- |
 | **FOLD**   | Discard hand, exit this hand | In-game, your turn         |
 | **CHECK**  | Pass without betting         | No bet raised this round   |
-| **CALL**   | Match current bet            | Sufficient chips           |
-| **BET**    | Initiate or raise bet        | Specified amount available |
-| **RAISE**  | Increase current bet         | Amount > current bet       |
-| **ALL_IN** | Bet all remaining chips      | Any amount ≤ chip stack    |
+| **CALL**   | Match current bet            | Auto-converts to all-in if call exceeds stack |
+| **BET**    | Initiate betting             | Positive amount required   |
+| **RAISE**  | Increase current bet         | Must result in a bet above current highest bet |
+| **ALL_IN** | Bet all remaining chips      | No amount required         |
 
 ## 🔌 API Reference
 
 ### REST Endpoints
 
-All endpoints return JSON. Authentication via Bearer token in `Authorization` header.
+All endpoints return JSON. Authentication via Bearer token in `Authorization` header, except where noted.
 
 #### Room Management
 
@@ -307,9 +304,10 @@ All endpoints return JSON. Authentication via Bearer token in `Authorization` he
   "roomName": "High Stakes Game",
   "playerName": "AlexPoker",
   "maxPlayers": 6,
-  "smallBlind": 5,
-  "bigBlind": 10,
-  "buyIn": 1000
+  "smallBlind": 10,
+  "bigBlind": 20,
+  "buyIn": 1000,
+  "password": null
 }
 ```
 
@@ -377,8 +375,9 @@ All endpoints return JSON. Authentication via Bearer token in `Authorization` he
   "roomName": "High Stakes Game",
   "maxPlayers": 6,
   "buyIn": 1000,
-  "smallBlind": 5,
-  "bigBlind": 10,
+  "smallBlind": 10,
+  "bigBlind": 20,
+  "createdAt": "2026-03-30T22:00:00",
   "hostName": "AlexPoker",
   "players": [
     {
@@ -393,13 +392,16 @@ All endpoints return JSON. Authentication via Bearer token in `Authorization` he
     }
   ],
   "currentPlayers": 2,
-  "canStartGame": true
+  "canStartGame": true,
+  "gameStarted": false
 }
 ```
 
 ##### POST /api/room/:roomId/start-game
 
 **Start the game (host only)**
+
+Requires at least 2 players in the room.
 
 **Response (200 OK):**
 
@@ -414,11 +416,95 @@ All endpoints return JSON. Authentication via Bearer token in `Authorization` he
 
 **Leave the room**
 
+Current behaviour:
+
+- Host leaving during lobby phase closes the room
+- Host leaving during an active game transfers host ownership to the next player
+- Non-host leaving removes only that player unless the room becomes empty
+
 **Response (200 OK):**
 
 ```json
 {
   "message": "Successfully left room",
+  "data": null
+}
+```
+
+#### Game Management
+
+##### GET /api/game/:gameId/state
+
+**Fetch current public game state**
+
+**Response (200 OK):**
+
+```json
+{
+  "maxPlayers": 6,
+  "pot": 150,
+  "pots": [150],
+  "uncalledAmount": 0,
+  "phase": "FLOP",
+  "currentBet": 50,
+  "communityCards": ["AH", "KD", "QS"],
+  "players": [
+    {
+      "id": "player-1",
+      "name": "AlexPoker",
+      "chips": 950,
+      "currentBet": 50,
+      "status": "ACTIVE",
+      "isAllIn": false,
+      "isCurrentPlayer": false,
+      "hasFolded": false,
+      "isSmallBlind": true,
+      "isBigBlind": false,
+      "disconnectDeadlineEpochMs": null
+    }
+  ],
+  "currentPlayerId": "player-2",
+  "currentPlayerName": "BobPoker",
+  "claimWinAvailable": false,
+  "claimWinPlayerName": null
+}
+```
+
+##### GET /api/game/:gameId/private-state
+
+**Fetch private state for the authenticated player**
+
+**Response (200 OK):**
+
+```json
+{
+  "playerId": "player-1",
+  "holeCards": ["AC", "AS"]
+}
+```
+
+##### POST /api/game/:gameId/leave
+
+**Leave an active game**
+
+**Response (200 OK):**
+
+```json
+{
+  "message": "Successfully left game",
+  "data": null
+}
+```
+
+##### POST /api/game/:gameId/claim-win
+
+**Claim a win if all other eligible players are disconnected**
+
+**Response (200 OK):**
+
+```json
+{
+  "message": "Win claimed successfully",
   "data": null
 }
 ```
@@ -437,9 +523,11 @@ All endpoints return JSON. Authentication via Bearer token in `Authorization` he
 
 ```json
 {
-  "gameId": "game-99999",
-  "phase": "FLOP",
+  "maxPlayers": 6,
   "pot": 150,
+  "pots": [150],
+  "uncalledAmount": 0,
+  "phase": "FLOP",
   "currentBet": 50,
   "communityCards": ["AH", "KD", "QS"],
   "players": [
@@ -449,19 +537,22 @@ All endpoints return JSON. Authentication via Bearer token in `Authorization` he
       "chips": 950,
       "status": "ACTIVE",
       "currentBet": 50,
-      "hasFolded": false
+      "hasFolded": false,
+      "disconnectDeadlineEpochMs": null
     }
   ],
   "currentPlayerId": "player-2",
-  "currentPlayerName": "BobPoker"
+  "currentPlayerName": "BobPoker",
+  "claimWinAvailable": false,
+  "claimWinPlayerName": null
 }
 ```
 
-**Frequency:** On every bet, phase change, or player action
+**Frequency:** On every bet, phase change, player action, reconnect/disconnect state change, showdown, or auto-advance event
 
 #### /game/{gameId}/player-name/{encodedPlayerName}/private
 
-**Subscribe to private player data (hole cards, final hand)**
+**Subscribe to private player data (hole cards, action errors)**
 
 **Message Format:**
 
@@ -472,9 +563,20 @@ All endpoints return JSON. Authentication via Bearer token in `Authorization` he
 }
 ```
 
+Private error/notification messages can also arrive on this channel:
+
+```json
+{
+  "type": "ACTION_ERROR",
+  "message": "It's not your turn. Current player is: AlexPoker",
+  "playerName": "BobPoker",
+  "gameId": "room-12345"
+}
+```
+
 > **Note:** Only your player receives messages on this channel
 
-#### /rooms{roomId}
+#### /rooms/{roomId}
 
 **Subscribe to room/lobby updates**
 
@@ -485,15 +587,16 @@ All endpoints return JSON. Authentication via Bearer token in `Authorization` he
   "message": "PLAYER_JOINED",
   "data": {
     "roomId": "room-12345",
-    "player": "CharliePoker",
-    "currentCount": 3
+    "roomName": "High Stakes Game",
+    "currentPlayers": 3,
+    "canStartGame": true
   }
 }
 ```
 
-**Messages:** PLAYER_JOINED, PLAYER_LEFT, ROOM_CLOSED
+**Messages:** `ROOM_CREATED`, `PLAYER_JOINED`, `PLAYER_LEFT`, `GAME_STARTED`, `ROOM_CLOSED`
 
-> Note: some clients may also subscribe to compatibility aliases such as `/rooms/{roomId}` and `/topic/rooms/{roomId}`.
+> Note: room broadcasts in the current backend are sent to `/rooms/{roomId}`.
 
 ### Send Actions (Player moves)
 
@@ -508,20 +611,20 @@ The client sends player actions via WebSocket to `/app/{gameId}/action`:
 
 **Valid actions with required fields:**
 
-| Action | Amount | Notes                   |
-| ------ | ------ | ----------------------- |
-| FOLD   | —      | No chips required       |
-| CHECK  | —      | Invalid if a bet exists |
-| CALL   | —      | Auto-calculates amount  |
-| BET    | ✓      | Initiates betting round |
-| RAISE  | ✓      | Must be > current bet   |
-| ALL_IN | ✓ or — | All remaining chips     |
+| Action | Amount | Notes                               |
+| ------ | ------ | ----------------------------------- |
+| FOLD   | —      | No chips required                   |
+| CHECK  | —      | Invalid if a bet exists             |
+| CALL   | —      | Auto-calculates amount              |
+| BET    | ✓      | Requires a positive amount          |
+| RAISE  | ✓      | Must result in a bet above current bet |
+| ALL_IN | —      | Uses all remaining chips            |
 
 ## 🔐 Authentication
 
 ### JWT Token Flow
 
-```
+```text
 User                                Backend
   │                                   │
   ├─ POST /api/room/create    ─→      │
@@ -540,9 +643,14 @@ User                                Backend
   │                                   ├─ Set Principal for session
   │← Connected ───────────────────────┤
   │                                   │
-  ├─ POST /api/game/{gameId}/action ─→│
+  ├─ GET /api/game/{gameId}/state ─→  │
   │  (Authorization: Bearer token)    ├─ JwtAuthenticationFilter
   │                                   ├─ Resolve Principal
+  │                                   ├─ Return secured snapshot
+  │← Public/private game state ───────┤
+  │                                   │
+  ├─ SEND /app/{gameId}/action  ─→    │
+  │  (authenticated STOMP session)    ├─ Validate current player
   │                                   ├─ Execute action
   │← Broadcast update ────────────────┤
 ```
@@ -556,13 +664,20 @@ jwt.secret=${JWT_SECRET:dev-only-not-for-production-change-me}
 jwt.expirationMillis=86400000  # 24 hours
 ```
 
-> ⚠️ **Important**: The default JWT secret is for **development only**. For production, set the `JWT_SECRET` environment variable to a secure, random value.
+
+Additional gameplay-related configuration:
+
+```properties
+poker.disconnect.grace-period-ms=120000
+```
+
+This controls the reconnect grace window before a fully disconnected player is automatically removed.
 
 **Token Claims:**
 
 ```json
 {
-  "sub": "player-1",
+  "sub": "AlexPoker",
   "iat": 1711353000,
   "exp": 1711439400
 }
@@ -676,11 +791,13 @@ logging.level.com.pokergame=DEBUG
 jwt.secret=${JWT_SECRET:dev-only-not-for-production-change-me}
 jwt.expirationMillis=86400000
 
+# Reconnect grace window
+poker.disconnect.grace-period-ms=120000
+
 # CORS (localhost + ngrok)
 # Configured in SecurityConfig.java
 ```
 
-> 💡 To customize port, add to `application.properties`: `server.port=9090`
 
 ## ✅ Validation Evidence
 
@@ -688,25 +805,33 @@ jwt.expirationMillis=86400000
 
 Comprehensive test coverage in `src/test/java/com/pokergame/`:
 
-**Unit Tests** (`model/`):
+**Unit Tests** (`model/`, `service/`, `security/`, `config/`):
 
 - `CardTest` - Card creation, equality
 - `DeckTest` - Deck initialization, shuffle, draw
 - `RankTest`, `SuitTest` - Enum validation
-- `GameTest` - Game state management
+- `GameTest` - Game state management and pot behaviour
 - `GamePhaseTest` - Phase transitions
 - `PlayerTest` - Player state updates
 - `PlayerActionTest` - Action validation
 - `HandEvaluationResultTest` - Hand ranking results
 - `HandRankTest` - Hand rank comparisons
 - `RoomTest` - Room management
+- `RoomServiceTest` - Room lifecycle service behaviour
+- `GameLifecycleServiceTest` - Game lifecycle rules
+- `GameStateServiceTest` - Public/private state generation
+- `PlayerActionServiceTest` - Action processing and progression
+- `HandEvaluatorServiceTest` - Hand comparison and evaluation
+- `JwtServiceTest` - Token generation and validation
+- `WebSocketEventListenerTest` - Disconnect grace and reconnect recovery
 
 **Integration Tests** (`integration/`):
 
 - `GameLifecycleIntegrationTest` - Full game flow (deal → showdown)
-- `RoomLifecycleIntegrationTest` - Room creation, join, leave
-- `SecurityIntegrationTest` - JWT auth validation
-- `WebSocketSecurityTest` - WebSocket JWT verification
+- `RoomLifecycleIntegrationTest` - Room creation, join, leave, concurrent duplicate-name guard
+- `SecurityIntegrationTest` - JWT auth validation and host-only actions
+- `WebSocketSecurityTest` - WebSocket JWT verification and subscription coverage
+- `WebSocketActionIntegrationTest` - Invalid action errors, valid action state updates, reconnect action flow
 
 ### Execute Tests
 
@@ -737,7 +862,7 @@ cat target/surefire-reports/*.txt  # View test summaries
 
 ### Current Status: Work in Progress ⚠️
 
-This project is a **portfolio/demo implementation** of a real-time poker game engine. While the core game logic is solid, some production-readiness features are pending.
+This project is a **portfolio/demo implementation** of a real-time poker game engine. While the core game logic is strong, some production-readiness features are still pending.
 
 ## 📌 Portfolio Context
 
@@ -745,10 +870,10 @@ This repository is primarily a showcase artifact rather than a general-purpose l
 
 Areas I am still working on
 
-- **Performance**: Optimising game state updates, reduce WebSocket message frequency
-- **Reliability**: Adding transaction management, consistency checks
-- **Testing**: Increasing unit & integration test coverage
-- **Security**: Input sanitization, rate limiting, account management
+- **Persistence**: Room and game state is currently held in memory only
+- **Scalability**: No shared state or clustering for multi-instance deployment yet
+- **Security**: Input hardening, rate limiting, and fuller account/session management
+- **Reliability**: More operational safeguards and observability around live game state
 
 ## 📜 License & Attribution
 
