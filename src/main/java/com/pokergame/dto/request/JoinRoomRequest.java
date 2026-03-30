@@ -5,7 +5,12 @@ import jakarta.validation.constraints.Size;
 
 /**
  * DTO for joining an existing poker room
+ * 
+ * @param roomName The name of the room.
+ * @param playerName The name of the player joining the room.
+ * @param password The password for the room (optional).
  */
+
 public record JoinRoomRequest(
         @NotBlank(message = "Room name is required")
         String roomName,

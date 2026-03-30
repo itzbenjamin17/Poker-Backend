@@ -5,6 +5,18 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
+/**
+ * Represents a request to create a new room.
+ * 
+ * @param roomName     The name of the room.
+ * @param playerName   The name of the player creating the room.
+ * @param maxPlayers   The maximum number of players allowed in the room.
+ * @param smallBlind   The small blind amount.
+ * @param bigBlind     The big blind amount.
+ * @param buyIn        The buy-in amount.
+ * @param password     The password for the room (optional).
+ */
+
 public class CreateRoomRequest {
 
     @NotBlank(message = "Room name is required")
