@@ -19,7 +19,6 @@ import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.web.bind.annotation.*;
-import jakarta.annotation.Nonnull;
 
 import java.security.Principal;
 
@@ -130,7 +129,6 @@ public class GameController {
      * Propagates errors back to the specific initiating player via their private
      * channel.
      */
-    @Nonnull
     @MessageExceptionHandler
     public void handleMessageException(Exception exception, Principal principal,
             org.springframework.messaging.Message<?> message) {

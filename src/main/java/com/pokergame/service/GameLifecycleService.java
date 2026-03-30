@@ -386,25 +386,6 @@ public class GameLifecycleService {
     }
 
     /**
-     * Determines whether the specified player may claim an immediate win because
-     * all other non-out players are disconnected.
-     *
-     * @param gameId     game identifier
-     * @param playerName claimant name
-     * @return true if the claim is currently valid
-     */
-    public boolean canPlayerClaimWin(String gameId, String playerName) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            return false;
-        }
-
-        synchronized (game) {
-            return canPlayerClaimWinInternal(game, playerName);
-        }
-    }
-
-    /**
      * Claims an immediate game win for a connected player when all other
      * non-out players are disconnected.
      *
@@ -419,7 +400,7 @@ public class GameLifecycleService {
 
         List<String> disconnectedOpponents;
         synchronized (game) {
-            if (!canPlayerClaimWinInternal(game, playerName)) {
+            if (!canPlayerClaimWin(game, playerName)) {
                 throw new UnauthorisedActionException("Cannot claim win right now.");
             }
 
@@ -441,7 +422,7 @@ public class GameLifecycleService {
         }
     }
 
-    private boolean canPlayerClaimWinInternal(Game game, String playerName) {
+    private boolean canPlayerClaimWin(Game game, String playerName) {
         List<Player> eligiblePlayers = game.getPlayers().stream()
                 .filter(player -> !player.getIsOut())
                 .toList();

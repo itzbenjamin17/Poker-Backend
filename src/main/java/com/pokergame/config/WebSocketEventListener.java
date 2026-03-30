@@ -196,11 +196,7 @@ public class WebSocketEventListener {
     private void registerActiveSession(String username, String sessionId) {
         // Get the set of active sessions for the user, or create a new one if it
         // doesn't exist
-        Set<String> sessions = activeSessionsByUser.get(username);
-        if (sessions == null) {
-            sessions = ConcurrentHashMap.newKeySet();
-            activeSessionsByUser.put(username, sessions);
-        }
+        Set<String> sessions = activeSessionsByUser.computeIfAbsent(username, k -> ConcurrentHashMap.newKeySet());
         // Add the new session ID to the user's set of sessions
         sessions.add(sessionId);
 

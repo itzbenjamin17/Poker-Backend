@@ -505,7 +505,7 @@ public class GameStateService {
             return null;
         }
 
-        return connectedPlayers.get(0).getName();
+        return connectedPlayers.getFirst().getName();
     }
 
     /**

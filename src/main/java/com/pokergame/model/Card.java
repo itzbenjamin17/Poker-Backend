@@ -35,7 +35,7 @@ public record Card(Rank rank, Suit suit) {
             case ACE -> r = "A";
             default -> r = String.valueOf(rank.getValue());
         }
-        return r + suit.name().substring(0, 1);
+        return r + suit.name().charAt(0);
     }
 
     /**
