@@ -576,7 +576,7 @@ Private error/notification messages can also arrive on this channel:
 
 > **Note:** Only your player receives messages on this channel
 
-#### /rooms/{roomId}
+#### /room/{roomId}
 
 **Subscribe to room/lobby updates**
 
@@ -596,7 +596,7 @@ Private error/notification messages can also arrive on this channel:
 
 **Messages:** `ROOM_CREATED`, `PLAYER_JOINED`, `PLAYER_LEFT`, `GAME_STARTED`, `ROOM_CLOSED`
 
-> Note: room broadcasts in the current backend are sent to `/rooms/{roomId}`.
+> Note: room broadcasts in the current backend are sent to `/room/{roomId}`.
 
 ### Send Actions (Player moves)
 
