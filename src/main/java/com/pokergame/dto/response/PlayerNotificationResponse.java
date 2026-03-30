@@ -1,5 +1,7 @@
 package com.pokergame.dto.response;
 
+import com.pokergame.enums.ResponseMessage;
+
 /**
  * Response DTO for player-specific notifications during gameplay
  * 
@@ -10,7 +12,7 @@ package com.pokergame.dto.response;
  */
 
 public record PlayerNotificationResponse(
-        String type,
+        ResponseMessage type,
         String message,
         String playerName,
         String gameId

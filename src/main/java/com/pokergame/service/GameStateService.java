@@ -308,7 +308,7 @@ public class GameStateService {
                 gameId);
 
         messagingTemplate.convertAndSend("/game/" + gameId,
-                new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_START.getMessage(),
+                new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_START,
                         "No further betting actions are possible. Auto-advancing to showdown...", null, gameId));
     }
 
@@ -328,7 +328,7 @@ public class GameStateService {
 
         logger.info("Broadcasting auto-advance complete for game {}: {}", gameId, game.getCommunityCards());
         messagingTemplate.convertAndSend("/game/" + gameId,
-                new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_COMPLETE.getMessage(), "", null, gameId));
+                new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_COMPLETE, "", null, gameId));
     }
 
     /**
@@ -342,7 +342,7 @@ public class GameStateService {
     @Async("gameExecutor")
     public void sendPlayerNotification(String gameId, String playerName, String message) {
         PlayerNotificationResponse notification = new PlayerNotificationResponse(
-                "PLAYER_NOTIFICATION",
+                ResponseMessage.PLAYER_NOTIFICATION,
                 message,
                 playerName,
                 gameId);
@@ -360,7 +360,7 @@ public class GameStateService {
      * @param type       the type of notification (e.g. "ACTION_ERROR")
      */
     @Async("gameExecutor")
-    public void sendPrivatePlayerNotification(String gameId, String playerName, String message, String type) {
+    public void sendPrivatePlayerNotification(String gameId, String playerName, String message, ResponseMessage type) {
         String encodedPlayerName = java.net.URLEncoder.encode(
                 playerName,
                 java.nio.charset.StandardCharsets.UTF_8)

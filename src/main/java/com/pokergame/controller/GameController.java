@@ -10,6 +10,7 @@ import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
 import com.pokergame.model.Game;
+import com.pokergame.enums.ResponseMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -165,7 +166,7 @@ public class GameController {
             userFriendlyMessage = userFriendlyMessage.substring(0, 77) + "...";
         }
 
-        gameStateService.sendPrivatePlayerNotification(gameId, playerName, userFriendlyMessage, "ACTION_ERROR");
+        gameStateService.sendPrivatePlayerNotification(gameId, playerName, userFriendlyMessage, ResponseMessage.ACTION_ERROR);
     }
 
     /**

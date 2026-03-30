@@ -1,5 +1,9 @@
 package com.pokergame.enums;
 
+/**
+ * Enum for response messages.
+ */
+
 public enum ResponseMessage {
     ROOM_CREATED("ROOM_CREATED"),
     PLAYER_JOINED("PLAYER_JOINED"),
@@ -8,7 +12,9 @@ public enum ResponseMessage {
     GAME_STARTED("GAME_STARTED"),
     GAME_END("GAME_END"),
     AUTO_ADVANCE_START("AUTO_ADVANCE_START"),
-    AUTO_ADVANCE_COMPLETE("AUTO_ADVANCE_COMPLETE");
+    AUTO_ADVANCE_COMPLETE("AUTO_ADVANCE_COMPLETE"),
+    ACTION_ERROR("ACTION_ERROR"),
+    PLAYER_NOTIFICATION("PLAYER_NOTIFICATION");
 
     private final String message;
 

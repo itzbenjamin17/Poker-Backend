@@ -4,6 +4,7 @@ import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.PlayerNotificationResponse;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.ResponseMessage;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
@@ -119,7 +120,7 @@ class WebSocketActionIntegrationTest {
             }
             @Override
             public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                if (payload instanceof PlayerNotificationResponse notification && "ACTION_ERROR".equals(notification.type())) {
+                if (payload instanceof PlayerNotificationResponse notification && ResponseMessage.ACTION_ERROR.equals(notification.type())) {
                     errorFuture.complete(notification);
                 }
             }
@@ -133,7 +134,7 @@ class WebSocketActionIntegrationTest {
 
         PlayerNotificationResponse error = errorFuture.get(10, TimeUnit.SECONDS);
         assertNotNull(error);
-        assertEquals("ACTION_ERROR", error.type());
+        assertEquals(ResponseMessage.ACTION_ERROR, error.type());
         session.disconnect();
     }
 
