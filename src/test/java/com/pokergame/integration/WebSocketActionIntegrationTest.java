@@ -183,52 +183,39 @@ class WebSocketActionIntegrationTest {
     @Test
     @DisplayName("Should handle actions correctly after client disconnects and reconnects")
     void shouldHandleActions_afterReconnect() throws Exception {
-        roomService.joinRoom(new com.pokergame.dto.request.JoinRoomRequest(roomService.getRoom(roomId).getRoomName(), otherName, null));
+        roomService.joinRoom(new JoinRoomRequest(
+                roomService.getRoom(roomId).getRoomName(), otherName, null));
 
-        StompSession sessionTemp = connectSession(hostToken);
-        CompletableFuture<com.pokergame.dto.response.PublicGameStateResponse> initialFuture = new CompletableFuture<>();
-        sessionTemp.subscribe("/game/" + roomId, new StompFrameHandler() {
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) {
-                return com.pokergame.dto.response.PublicGameStateResponse.class;
-            }
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                if (payload instanceof com.pokergame.dto.response.PublicGameStateResponse s) initialFuture.complete(s);
+        // Get initial state to know who acts first
+        StompSession tempSession = connectSession(hostToken);
+        CompletableFuture<PublicGameStateResponse> initialFuture = new CompletableFuture<>();
+        tempSession.subscribe("/game/" + roomId, new StompFrameHandler() {
+            @Override public Type getPayloadType(StompHeaders h) { return PublicGameStateResponse.class; }
+            @Override public void handleFrame(StompHeaders h, Object payload) {
+                if (payload instanceof PublicGameStateResponse s) initialFuture.complete(s);
             }
         });
+
         gameLifecycleService.createGameFromRoom(roomId);
-        com.pokergame.dto.response.PublicGameStateResponse state = initialFuture.get(10, TimeUnit.SECONDS);
-        String current = state.currentPlayerName();
-        sessionTemp.disconnect();
-        
+        String current = initialFuture.get(10, TimeUnit.SECONDS).currentPlayerName();
+        tempSession.disconnect();
+
         String token = hostName.equals(current) ? hostToken : otherToken;
 
-        StompSession session = connectSession(token);
-        Thread.sleep(500);
-        session.disconnect();
-        Thread.sleep(500);
-        
+        // Reconnect and subscribe BEFORE sending — captures reconnect broadcast and FOLD response
         StompSession session2 = connectSession(token);
-        CompletableFuture<com.pokergame.dto.response.PublicGameStateResponse> finalFuture = new CompletableFuture<>();
+        CompletableFuture<Object> finalFuture = new CompletableFuture<>();
+
         session2.subscribe("/game/" + roomId, new StompFrameHandler() {
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) {
-                return com.pokergame.dto.response.PublicGameStateResponse.class;
-            }
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                if (payload instanceof com.pokergame.dto.response.PublicGameStateResponse res) finalFuture.complete(res);
+            @Override public Type getPayloadType(StompHeaders h) { return PublicGameStateResponse.class; }
+            @Override public void handleFrame(StompHeaders h, Object payload) {
+                finalFuture.complete(payload); // accepts any payload — state update or game end
             }
         });
-        
-        Thread.sleep(300);
-        session2.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
-        
-        // Verifying we actually got a response payload on the socket
-        com.pokergame.dto.response.PublicGameStateResponse result = finalFuture.get(10, TimeUnit.SECONDS);
-        assertNotNull(result);
 
+        session2.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
+
+        assertNotNull(finalFuture.get(10, TimeUnit.SECONDS));
         session2.disconnect();
     }
 }

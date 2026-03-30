@@ -119,24 +119,21 @@ public class GameLifecycleService {
             return;
         }
         logger.info("Starting new hand for game: {}", gameId);
+        synchronized (game){
+            // Weird structure here and in resetForNewHand because I wanted the game to hang
+            // at the end if the game was over and show the winner message for longer
+            boolean gameEnded = game.resetForNewHand();
+            if (gameEnded) {
+                logger.warn("Game {} became over after reset", gameId);
+                handleGameEnd(gameId, false);
+                return;
+            }
 
-        // Was having issues with duplicate calls
-        if (game.isGameOver()) {
-            logger.warn("Cannot start new hand - game {} is over", gameId);
-            return;
-        }
-        // Weird structure here and in resetForNewHand because I wanted the game to hang
-        // at the end if the game was over and show the winner message for long
-        boolean gameEnded = game.resetForNewHand();
-        if (gameEnded) {
-            logger.warn("Game {} became over after reset", gameId);
-            handleGameEnd(gameId, false);
-            return;
+            game.dealHoleCards();
+            game.postBlinds();
+            gameStateService.broadcastGameState(gameId, game);
         }
 
-        game.dealHoleCards();
-        game.postBlinds();
-        gameStateService.broadcastGameState(gameId, game);
 
         logger.info("New hand started successfully for game: {} | Current player: {} | Phase: {} | Pot: {}",
                 gameId, game.getCurrentPlayer().getName(), game.getCurrentPhase(), game.getPot());

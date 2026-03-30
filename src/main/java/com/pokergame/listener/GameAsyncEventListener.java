@@ -142,31 +142,34 @@ public class GameAsyncEventListener {
                 if (currentGame == null)
                     return;
 
-                GamePhase currentPhase = currentGame.getCurrentPhase();
                 boolean sequenceComplete = false;
 
-                if (currentPhase == GamePhase.PRE_FLOP) {
-                    currentGame.dealFlop();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing flop...");
-                } else if (currentPhase == GamePhase.FLOP) {
-                    currentGame.dealTurn();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing turn...");
-                } else if (currentPhase == GamePhase.TURN) {
-                    currentGame.dealRiver();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing river...");
-                } else {
-                    // We are at the end (SHOWDOWN)
-                    int potBeforeDistribution = currentGame.getPot();
-                    List<Player> winners = currentGame.conductShowdown();
-                    int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
+                synchronized (currentGame) {
+                    GamePhase currentPhase = currentGame.getCurrentPhase();
 
-                    gameStateService.broadcastShowdownResults(gameId, currentGame, winners, winningsPerPlayer);
-                    gameStateService.broadcastAutoAdvanceComplete(gameId, currentGame);
+                    if (currentPhase == GamePhase.PRE_FLOP) {
+                        currentGame.dealFlop();
+                        gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing flop...");
+                    } else if (currentPhase == GamePhase.FLOP) {
+                        currentGame.dealTurn();
+                        gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing turn...");
+                    } else if (currentPhase == GamePhase.TURN) {
+                        currentGame.dealRiver();
+                        gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing river...");
+                    } else {
+                        // We are at the end (SHOWDOWN)
+                        int potBeforeDistribution = currentGame.getPot();
+                        List<Player> winners = currentGame.conductShowdown();
+                        int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
 
-                    // Schedule the final new hand start
-                    taskScheduler.schedule(() -> gameLifecycleService.startNewHand(gameId),
-                            Instant.now().plusMillis(ROUND_END_DELAY_MS));
-                    sequenceComplete = true;
+                        gameStateService.broadcastShowdownResults(gameId, currentGame, winners, winningsPerPlayer);
+                        gameStateService.broadcastAutoAdvanceComplete(gameId, currentGame);
+
+                        // Schedule the final new hand start
+                        taskScheduler.schedule(() -> gameLifecycleService.startNewHand(gameId),
+                                Instant.now().plusMillis(ROUND_END_DELAY_MS));
+                        sequenceComplete = true;
+                    }
                 }
 
                 // If the sequence isn't done, schedule the next step recursively
