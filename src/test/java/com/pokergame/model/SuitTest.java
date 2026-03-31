@@ -1,12 +1,16 @@
 package com.pokergame.model;
 
 import com.pokergame.enums.Suit;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Unit tests for the Suit enum.
  */
+@Tag("unit")
+@DisplayName("Suit enum")
 class SuitTest {
 
     @Test

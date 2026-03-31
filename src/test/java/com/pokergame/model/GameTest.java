@@ -6,6 +6,8 @@ import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.service.HandEvaluatorService;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -19,6 +21,8 @@ import static org.mockito.Mockito.*;
 /**
  * Unit tests for the Game class.
  */
+@Tag("unit")
+@DisplayName("Game model")
 class GameTest {
 
         @Mock

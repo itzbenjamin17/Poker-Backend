@@ -8,6 +8,8 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -29,6 +31,8 @@ import static org.mockito.Mockito.*;
 /**
  * Unit tests for the GameLifecycleService class.
  */
+@Tag("unit")
+@DisplayName("Game lifecycle service")
 @ExtendWith(MockitoExtension.class)
 class GameLifecycleServiceTest {
 
@@ -759,11 +763,15 @@ class GameLifecycleServiceTest {
         Player player2 = game.getPlayers().get(1);
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
         CountDownLatch latch = new CountDownLatch(2);
 
         // Thread 1: Player leaves (causes game end since only 1 will remain)
         executor.submit(() -> {
             try {
+                ready.countDown();
+                assertTrue(start.await(2, TimeUnit.SECONDS));
                 gameLifecycleService.leaveGame(ROOM_ID, player1.getName());
             } catch (Exception e) {
                 // Expected - game might end
@@ -775,7 +783,8 @@ class GameLifecycleServiceTest {
         // Thread 2: Another player tries to leave at the same time
         executor.submit(() -> {
             try {
-                Thread.sleep(10); // Slight delay to interleave operations
+                ready.countDown();
+                assertTrue(start.await(2, TimeUnit.SECONDS));
                 gameLifecycleService.leaveGame(ROOM_ID, player2.getName());
             } catch (Exception e) {
                 // Expected - game might already be ended or player might be gone
@@ -784,6 +793,8 @@ class GameLifecycleServiceTest {
             }
         });
 
+        assertTrue(ready.await(2, TimeUnit.SECONDS), "Workers did not become ready in time");
+        start.countDown();
         assertTrue(latch.await(5, TimeUnit.SECONDS), "Operations took too long");
         executor.shutdown();
 

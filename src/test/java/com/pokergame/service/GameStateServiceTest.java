@@ -6,6 +6,8 @@ import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.*;
 import com.pokergame.exception.BadRequestException;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -24,6 +26,8 @@ import static org.mockito.Mockito.*;
 /**
  * Unit tests for the GameStateService class.
  */
+@Tag("unit")
+@DisplayName("Game state service")
 @ExtendWith(MockitoExtension.class)
 class GameStateServiceTest {
     private GameStateService gameStateService;

@@ -5,6 +5,8 @@ import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import com.pokergame.exception.BadRequestException;
 import java.util.List;
@@ -13,6 +15,8 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Unit tests for the Player class.
  */
+@Tag("unit")
+@DisplayName("Player model")
 class PlayerTest {
 
     private Player player;

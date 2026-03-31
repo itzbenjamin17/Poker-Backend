@@ -3,6 +3,8 @@ package com.pokergame.model;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import com.pokergame.exception.BadRequestException;
 import java.util.ArrayList;
@@ -12,6 +14,8 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Unit tests for the HandEvaluationResult record.
  */
+@Tag("unit")
+@DisplayName("Hand evaluation result")
 class HandEvaluationResultTest {
 
         @Test

@@ -1,237 +1,170 @@
 package com.pokergame.integration;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
-import org.junit.jupiter.api.BeforeEach;
+import com.pokergame.integration.support.AbstractIntegrationTestSupport;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.RestClient;
 
-import java.util.UUID;
+import java.time.Duration;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
+@Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-class RoomLifecycleIntegrationTest {
+@DisplayName("Room lifecycle integration")
+class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
 
-    @LocalServerPort
-    private int port;
+    @Nested
+    @DisplayName("room lifecycle")
+    class RoomLifecycle {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
-    private RestClient restClient;
+        @Test
+        @DisplayName("should create a room, join it, and fetch updated room details")
+        void givenCreatedRoom_whenPlayerJoins_thenRoomInfoReflectsBothPlayers() throws Exception {
+            String roomName = uniqueName("LifecycleRoom");
+            JsonNode createData = createRoom(roomName, "HostAlpha", 6);
+            String roomId = createData.path("roomId").asText();
+            String hostToken = createData.path("token").asText();
 
-    @BeforeEach
-    void setUp() {
-        restClient = RestClient.builder()
-                .baseUrl("http://localhost:" + port)
-                .build();
+            JsonNode joinData = joinRoom(roomName, "PlayerBeta");
+            String roomInfoBody = restClient.get()
+                    .uri("/api/room/" + roomId)
+                    .header("Authorization", "Bearer " + hostToken)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode roomInfo = objectMapper.readTree(roomInfoBody);
+
+            assertThat(joinData.path("roomId").asText()).isEqualTo(roomId);
+            assertThat(roomInfo.path("roomName").asText()).isEqualTo(roomName);
+            assertThat(roomInfo.path("currentPlayers").asInt()).isEqualTo(2);
+            assertThat(roomInfo.path("canStartGame").asBoolean()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should keep a room open when a non-host player leaves")
+        void givenNonHostLeaves_whenLeaveRoom_thenRoomRemainsAvailable() throws Exception {
+            String roomName = uniqueName("LeaveNonHostRoom");
+            JsonNode createData = createRoom(roomName, "HostGamma", 6);
+            String roomId = createData.path("roomId").asText();
+            String hostToken = createData.path("token").asText();
+            String playerToken = joinRoom(roomName, "PlayerDelta").path("token").asText();
+
+            String leaveResponse = restClient.post()
+                    .uri("/api/room/" + roomId + "/leave")
+                    .header("Authorization", "Bearer " + playerToken)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode roomInfo = objectMapper.readTree(restClient.get()
+                    .uri("/api/room/" + roomId)
+                    .header("Authorization", "Bearer " + hostToken)
+                    .retrieve()
+                    .body(String.class));
+
+            assertThat(leaveResponse).contains("Successfully left room");
+            assertThat(roomInfo.path("currentPlayers").asInt()).isEqualTo(1);
+            assertThat(roomInfo.path("hostName").asText()).isEqualTo("HostGamma");
+        }
+
+        @Test
+        @DisplayName("should close the room when the host leaves")
+        void givenHostLeaves_whenLeaveRoom_thenRoomIsClosed() throws Exception {
+            JsonNode createData = createRoom(uniqueName("HostLeaveRoom"), "HostEpsilon", 6);
+            String roomId = createData.path("roomId").asText();
+            String hostToken = createData.path("token").asText();
+
+            String leaveResponse = restClient.post()
+                    .uri("/api/room/" + roomId + "/leave")
+                    .header("Authorization", "Bearer " + hostToken)
+                    .retrieve()
+                    .body(String.class);
+
+            HttpClientErrorException notFound = assertThrows(HttpClientErrorException.class, () -> restClient.get()
+                    .uri("/api/room/" + roomId)
+                    .header("Authorization", "Bearer " + hostToken)
+                    .retrieve()
+                    .body(String.class));
+
+            assertThat(leaveResponse).contains("Successfully left room");
+            assertThat(notFound.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        }
+
+        @Test
+        @DisplayName("should return 404 when joining an unknown room")
+        void givenUnknownRoom_whenJoinRoom_thenReturnNotFound() {
+            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
+                    .uri("/api/room/join")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(new JoinRoomRequest(uniqueName("UnknownRoom"), "PlayerZeta", null))
+                    .retrieve()
+                    .body(String.class));
+
+            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(exception.getResponseBodyAsString()).contains("Room not found");
+        }
     }
 
     @Test
-    @DisplayName("Room lifecycle: create -> join -> fetch room info")
-    void roomLifecycle_createJoinFetchInfo_shouldSucceed() throws Exception {
-        String roomName = uniqueName("LifecycleRoom");
-
-        JsonNode createData = createRoom(roomName, "HostAlpha", 6);
-        String roomId = createData.path("roomId").asText();
-        String hostToken = createData.path("token").asText();
-
-        JsonNode joinData = joinRoom(roomName, "PlayerBeta");
-        assertEquals(roomId, joinData.path("roomId").asText());
-        assertEquals("PlayerBeta", joinData.path("playerName").asText());
-
-        String roomInfoBody = restClient.get()
-                .uri("/api/room/" + roomId)
-                .header("Authorization", "Bearer " + hostToken)
-                .retrieve()
-                .body(String.class);
-
-        assertNotNull(roomInfoBody);
-        JsonNode roomInfo = objectMapper.readTree(roomInfoBody);
-
-        assertEquals(roomId, roomInfo.path("roomId").asText());
-        assertEquals(roomName, roomInfo.path("roomName").asText());
-        assertEquals(2, roomInfo.path("currentPlayers").asInt());
-        assertTrue(roomInfo.path("canStartGame").asBoolean());
-    }
-
-    @Test
-    @DisplayName("Non-host leave keeps room available")
-    void leaveRoom_nonHost_shouldKeepRoomOpen() throws Exception {
-        String roomName = uniqueName("LeaveNonHostRoom");
-
-        JsonNode createData = createRoom(roomName, "HostGamma", 6);
-        String roomId = createData.path("roomId").asText();
-        String hostToken = createData.path("token").asText();
-
-        JsonNode joinData = joinRoom(roomName, "PlayerDelta");
-        String playerToken = joinData.path("token").asText();
-
-        String leaveResponse = restClient.post()
-                .uri("/api/room/" + roomId + "/leave")
-                .header("Authorization", "Bearer " + playerToken)
-                .retrieve()
-                .body(String.class);
-
-        assertNotNull(leaveResponse);
-        assertTrue(leaveResponse.contains("Successfully left room"));
-
-        String roomInfoBody = restClient.get()
-                .uri("/api/room/" + roomId)
-                .header("Authorization", "Bearer " + hostToken)
-                .retrieve()
-                .body(String.class);
-
-        JsonNode roomInfo = objectMapper.readTree(roomInfoBody);
-        assertEquals(1, roomInfo.path("currentPlayers").asInt());
-        assertEquals("HostGamma", roomInfo.path("hostName").asText());
-    }
-
-    @Test
-    @DisplayName("Host leave closes room")
-    void leaveRoom_host_shouldCloseRoom() throws Exception {
-        String roomName = uniqueName("HostLeaveRoom");
-
-        JsonNode createData = createRoom(roomName, "HostEpsilon", 6);
-        String roomId = createData.path("roomId").asText();
-        String hostToken = createData.path("token").asText();
-
-        String leaveResponse = restClient.post()
-                .uri("/api/room/" + roomId + "/leave")
-                .header("Authorization", "Bearer " + hostToken)
-                .retrieve()
-                .body(String.class);
-
-        assertNotNull(leaveResponse);
-        assertTrue(leaveResponse.contains("Successfully left room"));
-
-        HttpClientErrorException notFound = assertThrows(HttpClientErrorException.class, () -> restClient.get()
-                .uri("/api/room/" + roomId)
-                .header("Authorization", "Bearer " + hostToken)
-                .retrieve()
-                .body(String.class));
-
-        assertEquals(HttpStatus.NOT_FOUND, notFound.getStatusCode());
-    }
-
-    @Test
-    @DisplayName("Join unknown room returns 404")
-    void joinRoom_unknownRoom_shouldReturn404() {
-        JoinRoomRequest joinRequest = new JoinRoomRequest(uniqueName("UnknownRoom"), "PlayerZeta", null);
-
-        HttpClientErrorException ex = assertThrows(HttpClientErrorException.class, () -> restClient.post()
-                .uri("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(joinRequest)
-                .retrieve()
-                .body(String.class));
-
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
-        assertTrue(ex.getResponseBodyAsString().contains("Room not found"));
-    }
-
-    @Test
-    @DisplayName("Concurrent create with same room name allows only one success")
-    void createRoom_concurrentDuplicateName_shouldAllowSingleSuccess() throws InterruptedException {
+    @Tag("slow")
+    @DisplayName("should allow only one successful create when the same room name is submitted concurrently")
+    void givenConcurrentDuplicateCreates_whenCreateRoom_thenOnlyOneRequestSucceeds() throws InterruptedException {
         int attempts = 8;
         String roomName = uniqueName("ConcurrentCreate");
         ExecutorService executor = Executors.newFixedThreadPool(attempts);
         CountDownLatch ready = new CountDownLatch(attempts);
         CountDownLatch start = new CountDownLatch(1);
         CountDownLatch done = new CountDownLatch(attempts);
-        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger successCount = new AtomicInteger();
+        Queue<Throwable> unexpectedFailures = new ConcurrentLinkedQueue<>();
 
-        for (int i = 0; i < attempts; i++) {
-            int idx = i;
+        for (int index = 0; index < attempts; index++) {
+            int currentIndex = index;
             executor.submit(() -> {
                 try {
-                    CreateRoomRequest request = new CreateRoomRequest(roomName, "Host" + idx, 6, 10, 20, 1000, null);
                     ready.countDown();
-                    if (!start.await(3, TimeUnit.SECONDS)) {
-                        return;
-                    }
+                    assertThat(start.await(3, TimeUnit.SECONDS)).isTrue();
 
                     restClient.post()
                             .uri("/api/room/create")
                             .contentType(MediaType.APPLICATION_JSON)
-                            .body(request)
+                            .body(new CreateRoomRequest(roomName, "Host" + currentIndex, 6, 10, 20, 1000, null))
                             .retrieve()
                             .body(String.class);
                     successCount.incrementAndGet();
-                } catch (HttpClientErrorException ex) {
-                    assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
-                    assertTrue(ex.getResponseBodyAsString().contains("already taken"));
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
+                } catch (HttpClientErrorException exception) {
+                    assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(exception.getResponseBodyAsString()).contains("already taken");
+                } catch (Throwable throwable) {
+                    unexpectedFailures.add(throwable);
                 } finally {
                     done.countDown();
                 }
             });
         }
 
-        assertTrue(ready.await(3, TimeUnit.SECONDS));
+        assertThat(ready.await(3, TimeUnit.SECONDS)).isTrue();
         start.countDown();
-        assertTrue(done.await(10, TimeUnit.SECONDS));
-        executor.shutdown();
+        assertThat(done.await(Duration.ofSeconds(10).toMillis(), TimeUnit.MILLISECONDS)).isTrue();
+        executor.shutdownNow();
 
-        assertEquals(1, successCount.get(), "Only one room creation should succeed for identical names");
-    }
-
-    private JsonNode createRoom(String roomName, String hostName, int maxPlayers) throws Exception {
-        CreateRoomRequest request = new CreateRoomRequest(roomName, hostName, maxPlayers, 10, 20, 1000, null);
-
-        String body = restClient.post()
-                .uri("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(request)
-                .retrieve()
-                .body(String.class);
-
-        assertNotNull(body);
-        JsonNode json = objectMapper.readTree(body);
-        assertEquals("Room created successfully", json.path("message").asText());
-
-        JsonNode data = json.path("data");
-        assertFalse(data.path("roomId").asText().isBlank());
-        assertFalse(data.path("token").asText().isBlank());
-        assertEquals(hostName, data.path("playerName").asText());
-        return data;
-    }
-
-    private JsonNode joinRoom(String roomName, String playerName) throws Exception {
-        JoinRoomRequest request = new JoinRoomRequest(roomName, playerName, null);
-
-        String body = restClient.post()
-                .uri("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(request)
-                .retrieve()
-                .body(String.class);
-
-        assertNotNull(body);
-        JsonNode json = objectMapper.readTree(body);
-        assertEquals("Successfully joined room", json.path("message").asText());
-
-        JsonNode data = json.path("data");
-        assertFalse(data.path("roomId").asText().isBlank());
-        assertFalse(data.path("token").asText().isBlank());
-        assertEquals(playerName, data.path("playerName").asText());
-        return data;
-    }
-
-    private String uniqueName(String prefix) {
-        return prefix + "-" + UUID.randomUUID().toString().substring(0, 8);
+        assertThat(unexpectedFailures).isEmpty();
+        assertThat(successCount).hasValue(1);
     }
 }

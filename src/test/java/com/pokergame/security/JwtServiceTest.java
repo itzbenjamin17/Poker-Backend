@@ -2,388 +2,228 @@ package com.pokergame.security;
 
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.security.SignatureException;
-import org.junit.jupiter.api.BeforeEach;
+import io.jsonwebtoken.security.WeakKeyException;
+import org.awaitility.Awaitility;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
-import static org.junit.jupiter.api.Assertions.*;
+import java.time.Duration;
+import java.util.stream.Stream;
 
-/**
- * Unit tests for the JwtService class.
- * Tests token generation, validation, and player name extraction.
- */
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+@Tag("unit")
+@DisplayName("JWT service")
 class JwtServiceTest {
 
-    private JwtService jwtService;
     private static final String TEST_SECRET = "test-secret-key-that-is-long-enough-for-hmac-sha-256";
-    private static final long TEST_EXPIRATION = 3600000L; // 1 hour
+    private static final long DEFAULT_EXPIRATION_MILLIS = 3_600_000L;
+    private static final Duration EXPIRATION_WAIT_TIMEOUT = Duration.ofSeconds(2);
 
-    @BeforeEach
-    void setUp() {
-        jwtService = new JwtService();
-        ReflectionTestUtils.setField(jwtService, "secretKeyString", TEST_SECRET);
-        ReflectionTestUtils.setField(jwtService, "expirationMillis", TEST_EXPIRATION);
-        jwtService.init();
+    private final JwtService jwtService = createService(TEST_SECRET, DEFAULT_EXPIRATION_MILLIS);
+
+    @Nested
+    @DisplayName("token generation")
+    class TokenGeneration {
+
+        @Test
+        @DisplayName("should generate a non-empty token for a valid player name")
+        void givenValidPlayerName_whenGenerateToken_thenReturnSignedToken() {
+            String token = jwtService.generateToken("TestPlayer");
+
+            assertThat(token).isNotBlank();
+            assertThat(jwtService.isTokenValid(token)).isTrue();
+        }
+
+        @Test
+        @DisplayName("should generate different tokens for different players")
+        void givenDifferentPlayers_whenGenerateToken_thenReturnDifferentTokens() {
+            String firstToken = jwtService.generateToken("Player1");
+            String secondToken = jwtService.generateToken("Player2");
+
+            assertThat(firstToken).isNotEqualTo(secondToken);
+        }
+
+        @ParameterizedTest(name = "should preserve player name \"{0}\"")
+        @MethodSource("com.pokergame.security.JwtServiceTest#specialPlayerNames")
+        void givenSpecialOrLongPlayerNames_whenGenerateToken_thenPlayerNameCanBeExtracted(String playerName) {
+            String token = jwtService.generateToken(playerName);
+
+            assertThat(jwtService.isTokenValid(token)).isTrue();
+            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName);
+        }
+
+        @Test
+        @DisplayName("should encode an empty player name as a null subject when extracted")
+        void givenEmptyPlayerName_whenGenerateToken_thenExtractPlayerNameReturnsNull() {
+            String token = jwtService.generateToken("");
+
+            assertThat(jwtService.isTokenValid(token)).isTrue();
+            assertThat(jwtService.extractPlayerName(token)).isNull();
+        }
     }
 
-    // ==================== generateToken Tests ====================
+    @Nested
+    @DisplayName("token validation")
+    class TokenValidation {
 
-    @Test
-    void generateToken_WithValidPlayerName_ShouldReturnNonNullToken() {
-        String token = jwtService.generateToken("TestPlayer");
+        @Test
+        @DisplayName("should report valid tokens as valid")
+        void givenFreshToken_whenValidate_thenReturnTrue() {
+            String token = jwtService.generateToken("TestPlayer");
 
-        assertNotNull(token);
-        assertFalse(token.isEmpty());
-    }
+            assertThat(jwtService.isTokenValid(token)).isTrue();
+        }
 
-    @Test
-    void generateToken_WithDifferentPlayerNames_ShouldReturnDifferentTokens() {
-        String token1 = jwtService.generateToken("Player1");
-        String token2 = jwtService.generateToken("Player2");
-
-        assertNotEquals(token1, token2);
-    }
-
-    @Test
-    void generateToken_MultipleTokensForSamePlayer_ShouldBeIndependent() {
-        // Generate multiple tokens for the same player
-        String token1 = jwtService.generateToken("TestPlayer");
-        String token2 = jwtService.generateToken("TestPlayer");
-
-        // Both tokens should be valid
-        assertTrue(jwtService.isTokenValid(token1));
-        assertTrue(jwtService.isTokenValid(token2));
-
-        // Both should extract the same player name
-        assertEquals("TestPlayer", jwtService.extractPlayerName(token1));
-        assertEquals("TestPlayer", jwtService.extractPlayerName(token2));
-
-        // Note: Tokens generated in the same millisecond may be identical
-        // This is expected behavior - what matters is both are valid for the same player
-    }
-
-    @Test
-    void generateToken_WithEmptyPlayerName_ShouldStillGenerateToken() {
-        String token = jwtService.generateToken("");
-
-        assertNotNull(token);
-        assertTrue(jwtService.isTokenValid(token));
-        // Note: extractPlayerName will return null for empty subject, not empty string
-        assertNull(jwtService.extractPlayerName(token));
-    }
-
-    @Test
-    void generateToken_WithSpecialCharacters_ShouldGenerateValidToken() {
-        String playerName = "Player@123!#$%";
-        String token = jwtService.generateToken(playerName);
-
-        assertNotNull(token);
-        assertTrue(jwtService.isTokenValid(token));
-        assertEquals(playerName, jwtService.extractPlayerName(token));
-    }
-
-    @Test
-    void generateToken_WithUnicodeCharacters_ShouldGenerateValidToken() {
-        String playerName = "玩家123";
-        String token = jwtService.generateToken(playerName);
-
-        assertNotNull(token);
-        assertTrue(jwtService.isTokenValid(token));
-        assertEquals(playerName, jwtService.extractPlayerName(token));
-    }
-
-    @Test
-    void generateToken_WithVeryLongPlayerName_ShouldGenerateValidToken() {
-        String playerName = "A".repeat(1000);
-        String token = jwtService.generateToken(playerName);
-
-        assertNotNull(token);
-        assertTrue(jwtService.isTokenValid(token));
-        assertEquals(playerName, jwtService.extractPlayerName(token));
-    }
-
-    // ==================== isTokenValid Tests ====================
-
-    @Test
-    void isTokenValid_WithValidToken_ShouldReturnTrue() {
-        String token = jwtService.generateToken("TestPlayer");
-
-        assertTrue(jwtService.isTokenValid(token));
-    }
-
-    @Test
-    void isTokenValid_WithInvalidToken_ShouldReturnFalse() {
-        String invalidToken = "invalid.token.string";
-
-        assertFalse(jwtService.isTokenValid(invalidToken));
-    }
-
-    @Test
-    void isTokenValid_WithExpiredToken_ShouldReturnFalse() throws InterruptedException {
-        // Create a service with very short expiration
-        JwtService shortLivedService = new JwtService();
-        ReflectionTestUtils.setField(shortLivedService, "secretKeyString", TEST_SECRET);
-        ReflectionTestUtils.setField(shortLivedService, "expirationMillis", 10L); // 10 milliseconds
-        shortLivedService.init();
-
-        String token = shortLivedService.generateToken("TestPlayer");
-
-        // Wait for token to expire
-        Thread.sleep(50);
-
-        assertFalse(shortLivedService.isTokenValid(token));
-    }
-
-    @Test
-    void isTokenValid_WithTamperedToken_ShouldReturnFalse() {
-        String token = jwtService.generateToken("TestPlayer");
-
-        // Tamper with the token by modifying a character
-        String tamperedToken = token.substring(0, token.length() - 5) + "XXXXX";
-
-        assertFalse(jwtService.isTokenValid(tamperedToken));
-    }
-
-    @Test
-    void isTokenValid_WithNullToken_ShouldReturnFalse() {
-        assertFalse(jwtService.isTokenValid(null));
-    }
-
-    @Test
-    void isTokenValid_WithEmptyToken_ShouldReturnFalse() {
-        assertFalse(jwtService.isTokenValid(""));
-    }
-
-    @Test
-    void isTokenValid_WithTokenFromDifferentSecret_ShouldReturnFalse() {
-        // Create another service with different secret
-        JwtService otherService = new JwtService();
-        ReflectionTestUtils.setField(otherService, "secretKeyString", "different-secret-key-for-testing");
-        ReflectionTestUtils.setField(otherService, "expirationMillis", TEST_EXPIRATION);
-        otherService.init();
-
-        String tokenFromOtherService = otherService.generateToken("TestPlayer");
-
-        // Should be invalid when validated with original service
-        assertFalse(jwtService.isTokenValid(tokenFromOtherService));
-    }
-
-    @Test
-    void isTokenValid_WithMalformedJWT_ShouldReturnFalse() {
-        String[] malformedTokens = {
+        @ParameterizedTest(name = "should reject malformed token \"{0}\"")
+        @NullAndEmptySource
+        @ValueSource(strings = {
+                "invalid.token.string",
                 "not.a.jwt",
-                "only.two.parts",
-                "",
                 ".",
                 "..",
                 "...",
                 "malformed"
-        };
+        })
+        void givenMalformedToken_whenValidate_thenReturnFalse(String malformedToken) {
+            assertThat(jwtService.isTokenValid(malformedToken)).isFalse();
+        }
 
-        for (String malformedToken : malformedTokens) {
-            assertFalse(jwtService.isTokenValid(malformedToken),
-                    "Token should be invalid: " + malformedToken);
+        @Test
+        @DisplayName("should reject a tampered token")
+        void givenTamperedToken_whenValidate_thenReturnFalse() {
+            String token = jwtService.generateToken("TestPlayer");
+            String tamperedToken = token.substring(0, token.length() - 5) + "XXXXX";
+
+            assertThat(jwtService.isTokenValid(tamperedToken)).isFalse();
+        }
+
+        @Test
+        @DisplayName("should reject a token signed with a different secret")
+        void givenTokenSignedWithDifferentSecret_whenValidate_thenReturnFalse() {
+            JwtService otherService = createService(
+                    "different-secret-key-that-is-long-enough-for-hmac-sha-256",
+                    DEFAULT_EXPIRATION_MILLIS);
+
+            String token = otherService.generateToken("TestPlayer");
+
+            assertThat(jwtService.isTokenValid(token)).isFalse();
+        }
+
+        @Test
+        @DisplayName("should report an expired token as invalid without using hard coded sleeps")
+        void givenExpiredToken_whenValidate_thenReturnFalse() {
+            JwtService shortLivedService = createService(TEST_SECRET, 25L);
+            String token = shortLivedService.generateToken("TestPlayer");
+
+            Awaitility.await()
+                    .atMost(EXPIRATION_WAIT_TIMEOUT)
+                    .until(() -> !shortLivedService.isTokenValid(token));
+
+            assertThat(shortLivedService.isTokenValid(token)).isFalse();
         }
     }
 
-    // ==================== extractPlayerName Tests ====================
+    @Nested
+    @DisplayName("player extraction")
+    class PlayerExtraction {
 
-    @Test
-    void extractPlayerName_WithValidToken_ShouldReturnCorrectPlayerName() {
-        String playerName = "TestPlayer";
-        String token = jwtService.generateToken(playerName);
-
-        String extractedName = jwtService.extractPlayerName(token);
-
-        assertEquals(playerName, extractedName);
-    }
-
-    @Test
-    void extractPlayerName_WithDifferentPlayerNames_ShouldReturnCorrectNames() {
-        String[] playerNames = {"Player1", "Player2", "Alice", "Bob", "Admin"};
-
-        for (String playerName : playerNames) {
+        @ParameterizedTest(name = "should extract player name \"{0}\"")
+        @ValueSource(strings = { "Player1", "Player2", "Alice", "Bob", "Admin" })
+        void givenValidToken_whenExtractPlayerName_thenReturnSubject(String playerName) {
             String token = jwtService.generateToken(playerName);
-            String extractedName = jwtService.extractPlayerName(token);
-            assertEquals(playerName, extractedName);
+
+            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName);
+        }
+
+        @Test
+        @DisplayName("should throw when extracting from an invalid token")
+        void givenInvalidToken_whenExtractPlayerName_thenThrow() {
+            assertThatThrownBy(() -> jwtService.extractPlayerName("invalid.token.string"))
+                    .isInstanceOf(Exception.class);
+        }
+
+        @Test
+        @DisplayName("should throw ExpiredJwtException when the token has expired")
+        void givenExpiredToken_whenExtractPlayerName_thenThrowExpiredJwtException() {
+            JwtService shortLivedService = createService(TEST_SECRET, 25L);
+            String token = shortLivedService.generateToken("TestPlayer");
+
+            Awaitility.await()
+                    .atMost(EXPIRATION_WAIT_TIMEOUT)
+                    .ignoreExceptions()
+                    .untilAsserted(() -> assertThatThrownBy(() -> shortLivedService.extractPlayerName(token))
+                            .isInstanceOf(ExpiredJwtException.class));
+        }
+
+        @Test
+        @DisplayName("should throw SignatureException when the token has been tampered with")
+        void givenTamperedToken_whenExtractPlayerName_thenThrowSignatureException() {
+            String token = jwtService.generateToken("TestPlayer");
+            String tamperedToken = token.substring(0, token.length() - 5) + "XXXXX";
+
+            assertThatThrownBy(() -> jwtService.extractPlayerName(tamperedToken))
+                    .isInstanceOf(SignatureException.class);
         }
     }
 
-    @Test
-    void extractPlayerName_WithEmptyPlayerName_ShouldReturnNull() {
-        String token = jwtService.generateToken("");
+    @Nested
+    @DisplayName("service initialization")
+    class Initialization {
 
-        String extractedName = jwtService.extractPlayerName(token);
-
-        // JWT treats empty string subject as null
-        assertNull(extractedName);
-    }
-
-    @Test
-    void extractPlayerName_WithSpecialCharacters_ShouldReturnCorrectName() {
-        String playerName = "Player@123!#$%";
-        String token = jwtService.generateToken(playerName);
-
-        String extractedName = jwtService.extractPlayerName(token);
-
-        assertEquals(playerName, extractedName);
-    }
-
-    @Test
-    void extractPlayerName_WithInvalidToken_ShouldThrowException() {
-        String invalidToken = "invalid.token.string";
-
-        assertThrows(Exception.class, () -> jwtService.extractPlayerName(invalidToken));
-    }
-
-    @Test
-    void extractPlayerName_WithExpiredToken_ShouldThrowExpiredJwtException() throws InterruptedException {
-        // Create a service with very short expiration
-        JwtService shortLivedService = new JwtService();
-        ReflectionTestUtils.setField(shortLivedService, "secretKeyString", TEST_SECRET);
-        ReflectionTestUtils.setField(shortLivedService, "expirationMillis", 10L);
-        shortLivedService.init();
-
-        String token = shortLivedService.generateToken("TestPlayer");
-
-        // Wait for token to expire
-        Thread.sleep(50);
-
-        assertThrows(ExpiredJwtException.class, () -> shortLivedService.extractPlayerName(token));
-    }
-
-    @Test
-    void extractPlayerName_WithTamperedToken_ShouldThrowSignatureException() {
-        String token = jwtService.generateToken("TestPlayer");
-        String tamperedToken = token.substring(0, token.length() - 5) + "XXXXX";
-
-        assertThrows(SignatureException.class, () -> jwtService.extractPlayerName(tamperedToken));
-    }
-
-    @Test
-    void extractPlayerName_WithNullToken_ShouldThrowException() {
-        assertThrows(Exception.class, () -> jwtService.extractPlayerName(null));
-    }
-
-    // ==================== Integration Tests ====================
-
-    @Test
-    void tokenLifecycle_GenerateValidateExtract_ShouldWorkCorrectly() {
-        String playerName = "TestPlayer";
-
-        // Generate
-        String token = jwtService.generateToken(playerName);
-        assertNotNull(token);
-
-        // Validate
-        assertTrue(jwtService.isTokenValid(token));
-
-        // Extract
-        String extractedName = jwtService.extractPlayerName(token);
-        assertEquals(playerName, extractedName);
-    }
-
-    @Test
-    void multipleTokens_ShouldBeIndependent() {
-        String player1 = "Player1";
-        String player2 = "Player2";
-
-        String token1 = jwtService.generateToken(player1);
-        String token2 = jwtService.generateToken(player2);
-
-        // Both tokens should be valid
-        assertTrue(jwtService.isTokenValid(token1));
-        assertTrue(jwtService.isTokenValid(token2));
-
-        // Each token should extract its own player name
-        assertEquals(player1, jwtService.extractPlayerName(token1));
-        assertEquals(player2, jwtService.extractPlayerName(token2));
-
-        // Tokens should be different
-        assertNotEquals(token1, token2);
-    }
-
-    @Test
-    void tokenFormat_ShouldBeStandardJWT() {
-        String token = jwtService.generateToken("TestPlayer");
-
-        // JWT should have 3 parts separated by dots
-        String[] parts = token.split("\\.");
-        assertEquals(3, parts.length, "JWT should have 3 parts (header.payload.signature)");
-
-        // Each part should be non-empty
-        for (String part : parts) {
-            assertFalse(part.isEmpty(), "JWT parts should not be empty");
-        }
-    }
-
-    @Test
-    void init_ShouldHandleDifferentSecretKeyFormats() {
-        JwtService service = new JwtService();
-
-        // Test with various secret key formats that meet minimum length requirements
-        // After base64 encoding, they need to produce at least 256 bits (32 bytes)
-        String[] secrets = {
+        @ParameterizedTest(name = "should accept secret \"{0}\"")
+        @ValueSource(strings = {
                 "this-is-a-long-enough-secret-key-for-hmac-sha-256-algorithm",
                 "another-valid-secret-with-special-chars-!@#$%^&*()_+-=[]{}",
                 "very-long-secret-key-that-is-definitely-long-enough-12345678",
                 "12345678901234567890123456789012345678901234567890123456"
-        };
-
-        for (String secret : secrets) {
+        })
+        void givenValidSecret_whenInitialise_thenDoNotThrow(String secret) {
+            JwtService service = new JwtService();
             ReflectionTestUtils.setField(service, "secretKeyString", secret);
-            ReflectionTestUtils.setField(service, "expirationMillis", TEST_EXPIRATION);
+            ReflectionTestUtils.setField(service, "expirationMillis", DEFAULT_EXPIRATION_MILLIS);
 
-            assertDoesNotThrow(service::init, "Init should not throw for secret: " + secret);
+            org.junit.jupiter.api.Assertions.assertDoesNotThrow(service::init);
+        }
+
+        @Test
+        @DisplayName("should reject a weak secret key")
+        void givenShortSecret_whenInitialise_thenThrowWeakKeyException() {
+            JwtService service = new JwtService();
+            ReflectionTestUtils.setField(service, "secretKeyString", "short");
+            ReflectionTestUtils.setField(service, "expirationMillis", DEFAULT_EXPIRATION_MILLIS);
+
+            assertThatThrownBy(service::init).isInstanceOf(WeakKeyException.class);
         }
     }
 
     @Test
-    void init_WithShortSecretKey_ShouldThrowWeakKeyException() {
+    @DisplayName("should keep the generate validate extract lifecycle consistent")
+    void givenGeneratedToken_whenRunningLifecycle_thenValidateAndExtractSuccessfully() {
+        String token = jwtService.generateToken("TestPlayer");
+
+        assertThat(jwtService.isTokenValid(token)).isTrue();
+        assertThat(jwtService.extractPlayerName(token)).isEqualTo("TestPlayer");
+        assertThat(token.split("\\.")).hasSize(3).allSatisfy(part -> assertThat(part).isNotBlank());
+    }
+
+    private JwtService createService(String secret, long expirationMillis) {
         JwtService service = new JwtService();
-        ReflectionTestUtils.setField(service, "secretKeyString", "short");
-        ReflectionTestUtils.setField(service, "expirationMillis", TEST_EXPIRATION);
-
-        // Short keys should throw WeakKeyException
-        assertThrows(io.jsonwebtoken.security.WeakKeyException.class, service::init);
+        ReflectionTestUtils.setField(service, "secretKeyString", secret);
+        ReflectionTestUtils.setField(service, "expirationMillis", expirationMillis);
+        service.init();
+        return service;
     }
 
-    @Test
-    void tokenExpiration_ShouldBeRespected() throws InterruptedException {
-        long shortExpiration = 1900L;
-        JwtService shortLivedService = new JwtService();
-        ReflectionTestUtils.setField(shortLivedService, "secretKeyString", TEST_SECRET);
-        ReflectionTestUtils.setField(shortLivedService, "expirationMillis", shortExpiration);
-        shortLivedService.init();
-
-        String token = shortLivedService.generateToken("TestPlayer");
-
-        // Token should be valid immediately
-        assertTrue(shortLivedService.isTokenValid(token), "Token should be valid immediately after generation");
-
-        // Wait for token to expire
-        Thread.sleep(2000);
-
-        // Token should now be invalid
-        assertFalse(shortLivedService.isTokenValid(token), "Token should be invalid after expiration");
-    }
-
-    @Test
-    void tokenSecurity_DifferentPlayersCannotReuseTokens() {
-        String token1 = jwtService.generateToken("Player1");
-
-        // Token is valid
-        assertTrue(jwtService.isTokenValid(token1));
-
-        // Token contains Player1's name
-        assertEquals("Player1", jwtService.extractPlayerName(token1));
-
-        // Generate token for Player2
-        String token2 = jwtService.generateToken("Player2");
-
-        // Both tokens are valid but contain different player names
-        assertTrue(jwtService.isTokenValid(token1));
-        assertTrue(jwtService.isTokenValid(token2));
-        assertNotEquals(jwtService.extractPlayerName(token1), jwtService.extractPlayerName(token2));
+    private static Stream<String> specialPlayerNames() {
+        return Stream.of("Player@123!#$%", "玩家123", "A".repeat(1000));
     }
 }

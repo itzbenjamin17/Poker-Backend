@@ -7,6 +7,8 @@ import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.*;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -15,6 +17,7 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -28,6 +31,8 @@ import static org.mockito.Mockito.*;
 /**
  * Unit tests for the PlayerActionService class.
  */
+@Tag("unit")
+@DisplayName("Player action service")
 @ExtendWith(MockitoExtension.class)
 class PlayerActionServiceTest {
 
@@ -573,6 +578,7 @@ class PlayerActionServiceTest {
         CountDownLatch latch = new CountDownLatch(2);
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
+        ConcurrentLinkedQueue<Throwable> unexpectedFailures = new ConcurrentLinkedQueue<>();
 
         // Current player tries to fold
         executor.submit(() -> {
@@ -585,7 +591,7 @@ class PlayerActionServiceTest {
             } catch (UnauthorisedActionException e) {
                 failureCount.incrementAndGet();
             } catch (Exception e) {
-                e.printStackTrace();
+                unexpectedFailures.add(e);
             } finally {
                 latch.countDown();
             }
@@ -602,7 +608,7 @@ class PlayerActionServiceTest {
             } catch (UnauthorisedActionException e) {
                 failureCount.incrementAndGet();
             } catch (Exception e) {
-                e.printStackTrace();
+                unexpectedFailures.add(e);
             } finally {
                 latch.countDown();
             }
@@ -610,6 +616,7 @@ class PlayerActionServiceTest {
 
         assertTrue(latch.await(5, TimeUnit.SECONDS));
         executor.shutdown();
+        assertTrue(unexpectedFailures.isEmpty(), "Unexpected failures: " + unexpectedFailures);
 
         // LOGIC FIX: In a real concurrent run, it's possible for:
         // 1. P1 acts -> Turn passes -> P2 acts (Success = 2)
@@ -715,16 +722,17 @@ class PlayerActionServiceTest {
 
         int numberOfActions = 3; // All 3 players will act
         ExecutorService executor = Executors.newFixedThreadPool(numberOfActions);
+        CountDownLatch ready = new CountDownLatch(numberOfActions);
+        CountDownLatch start = new CountDownLatch(1);
         CountDownLatch latch = new CountDownLatch(numberOfActions);
         AtomicInteger successCount = new AtomicInteger(0);
 
         // Each player takes their turn in rapid succession
         for (int i = 0; i < numberOfActions; i++) {
-            final int actionIndex = i;
             executor.submit(() -> {
                 try {
-                    // Small stagger to ensure sequential processing
-                    Thread.sleep(actionIndex * 50);
+                    ready.countDown();
+                    assertTrue(start.await(2, TimeUnit.SECONDS));
 
                     Player currentPlayer = testGame.getCurrentPlayer();
                     playerActionService.processPlayerAction(
@@ -740,6 +748,8 @@ class PlayerActionServiceTest {
             });
         }
 
+        assertTrue(ready.await(2, TimeUnit.SECONDS), "Workers did not become ready in time");
+        start.countDown();
         assertTrue(latch.await(10, TimeUnit.SECONDS), "Actions took too long");
         executor.shutdown();
 

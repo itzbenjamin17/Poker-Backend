@@ -2,8 +2,10 @@ package com.pokergame.model;
 
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import com.pokergame.exception.BadRequestException;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -14,6 +16,8 @@ import java.util.Set;
 /**
  * Unit tests for the Deck class.
  */
+@Tag("unit")
+@DisplayName("Deck model")
 class DeckTest {
 
     private Deck deck;

@@ -2,6 +2,8 @@ package com.pokergame.model;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import com.pokergame.exception.BadRequestException;
 
 import java.time.LocalDateTime;
@@ -11,6 +13,8 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Unit tests for the Room class.
  */
+@Tag("unit")
+@DisplayName("Room model")
 class RoomTest {
 
     private Room room;

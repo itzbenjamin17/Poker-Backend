@@ -1,12 +1,16 @@
 package com.pokergame.model;
 
 import com.pokergame.enums.Rank;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Unit tests for the Rank enum.
  */
+@Tag("unit")
+@DisplayName("Rank enum")
 class RankTest {
 
     @Test

@@ -6,6 +6,8 @@ import com.pokergame.enums.Suit;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.model.*;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -15,6 +17,8 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Unit tests for the HandEvaluatorService class.
  */
+@Tag("unit")
+@DisplayName("Hand evaluator service")
 class HandEvaluatorServiceTest {
 
         private HandEvaluatorService service;

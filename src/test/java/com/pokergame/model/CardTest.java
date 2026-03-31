@@ -2,12 +2,16 @@ package com.pokergame.model;
 
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Unit tests for the Card class.
  */
+@Tag("unit")
+@DisplayName("Card model")
 class CardTest {
 
     @Test

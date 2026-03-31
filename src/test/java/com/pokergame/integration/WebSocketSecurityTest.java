@@ -1,45 +1,33 @@
 package com.pokergame.integration;
 
 import com.pokergame.dto.request.CreateRoomRequest;
+import com.pokergame.integration.support.AbstractIntegrationTestSupport;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.RoomService;
 import org.jspecify.annotations.NonNull;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.messaging.converter.CompositeMessageConverter;
-import org.springframework.messaging.converter.MessageConverter;
-import org.springframework.messaging.converter.JacksonJsonMessageConverter;
-import org.springframework.messaging.converter.StringMessageConverter;
-import org.springframework.messaging.simp.stomp.*;
-import org.springframework.web.socket.WebSocketHttpHeaders;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
+import org.springframework.messaging.simp.stomp.StompHeaders;
+import org.springframework.messaging.simp.stomp.StompSession;
+import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
-import org.springframework.web.socket.sockjs.client.SockJsClient;
-import org.springframework.web.socket.sockjs.client.Transport;
-import org.springframework.web.socket.sockjs.client.WebSocketTransport;
 
 import java.lang.reflect.Type;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/**
- * Integration tests for WebSocket authentication via JWT.
- * Tests STOMP connection with and without valid JWT tokens.
- */
+@Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-class WebSocketSecurityTest {
-
-    @LocalServerPort
-    private int port;
+@DisplayName("WebSocket security integration")
+class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
 
     @Autowired
     private JwtService jwtService;
@@ -47,288 +35,162 @@ class WebSocketSecurityTest {
     @Autowired
     private RoomService roomService;
 
-    private WebSocketStompClient stompClient;
-    private String wsUrl;
-    private String roomId;
-    private WebSocketHttpHeaders handshakeHeaders;
+    @Nested
+    @DisplayName("connection handling")
+    class ConnectionHandling {
 
-    @BeforeEach
-    void setUp() {
-        wsUrl = "ws://localhost:" + port + "/ws";
+        @Test
+        @DisplayName("should connect with a valid JWT")
+        void givenValidToken_whenConnect_thenSessionIsConnected() throws Exception {
+            String roomId = roomService.createRoom(new CreateRoomRequest(
+                    uniqueName("WsConnectRoom"),
+                    "WsTestHost",
+                    6,
+                    10,
+                    20,
+                    1000,
+                    null));
+            WebSocketStompClient stompClient = createStompClient();
 
-        // Define handshake headers with the allowed Origin to pass CORS check
-        handshakeHeaders = new WebSocketHttpHeaders();
-        handshakeHeaders.add("Origin", "http://localhost:5173");
+            StompSession session = connectSession(stompClient, jwtService.generateToken("WsTestHost"));
 
-        // Create STOMP client with SockJS
-        List<Transport> transports = new ArrayList<>();
-        transports.add(new WebSocketTransport(new StandardWebSocketClient()));
-        SockJsClient sockJsClient = new SockJsClient(transports);
+            assertThat(roomId).isNotBlank();
+            assertThat(session.isConnected()).isTrue();
+            session.disconnect();
+            stompClient.stop();
+        }
 
-        stompClient = new WebSocketStompClient(sockJsClient);
+        @Test
+        @DisplayName("should reject connections without a token")
+        void givenMissingToken_whenConnect_thenFail() {
+            WebSocketStompClient stompClient = createStompClient();
+            CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
 
-        // Register converters for String and JSON (Jackson)
-        List<MessageConverter> converters = new ArrayList<>();
-        converters.add(new StringMessageConverter());
-        // Use JacksonJsonMessageConverter as MappingJackson2MessageConverter is
-        // deprecated
-        converters.add(new JacksonJsonMessageConverter());
-        stompClient.setMessageConverter(new CompositeMessageConverter(converters));
+            stompClient.connectAsync(
+                    "ws://localhost:" + port + "/ws",
+                    createHandshakeHeaders(),
+                    new StompHeaders(),
+                    new StompSessionHandlerAdapter() {
+                        @Override
+                        public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
+                            sessionFuture.complete(session);
+                        }
 
-        // Create a test room with UUID to avoid name collisions
-        CreateRoomRequest createRequest = new CreateRoomRequest(
-                "WsTestRoom" + UUID.randomUUID().toString().substring(0, 8),
-                "WsTestHost",
-                6, 10, 20, 1000, null);
-        roomId = roomService.createRoom(createRequest);
+                        @Override
+                        public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
+                            sessionFuture.completeExceptionally(exception);
+                        }
+                    });
+
+            assertThrows(Exception.class, () -> sessionFuture.get(2, TimeUnit.SECONDS));
+            stompClient.stop();
+        }
+
+        @Test
+        @DisplayName("should reject connections with an invalid token")
+        void givenInvalidToken_whenConnect_thenFail() {
+            WebSocketStompClient stompClient = createStompClient();
+            CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
+            StompHeaders connectHeaders = new StompHeaders();
+            connectHeaders.add("Authorization", "Bearer invalid-token-here");
+
+            stompClient.connectAsync(
+                    "ws://localhost:" + port + "/ws",
+                    createHandshakeHeaders(),
+                    connectHeaders,
+                    new StompSessionHandlerAdapter() {
+                        @Override
+                        public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
+                            sessionFuture.complete(session);
+                        }
+
+                        @Override
+                        public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
+                            sessionFuture.completeExceptionally(exception);
+                        }
+                    });
+
+            assertThrows(Exception.class, () -> sessionFuture.get(2, TimeUnit.SECONDS));
+            stompClient.stop();
+        }
     }
 
-    @Test
-    @DisplayName("WebSocket should connect with valid JWT token")
-    void websocket_shouldConnect_withValidToken() throws Exception {
-        String token = jwtService.generateToken("WsTestHost");
+    @Nested
+    @DisplayName("connected clients")
+    class ConnectedClients {
 
-        StompHeaders connectHeaders = new StompHeaders();
-        connectHeaders.add("Authorization", "Bearer " + token);
+        @Test
+        @DisplayName("should allow subscriptions to room and game destinations after authentication")
+        void givenConnectedClient_whenSubscribe_thenSessionRemainsConnected() throws Exception {
+            String roomId = roomService.createRoom(new CreateRoomRequest(
+                    uniqueName("WsSubscribeRoom"),
+                    "WsTestHost",
+                    6,
+                    10,
+                    20,
+                    1000,
+                    null));
+            WebSocketStompClient stompClient = createStompClient();
+            StompSession session = connectSession(stompClient, jwtService.generateToken("WsTestHost"));
 
-        CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
+            StompSession.Subscription roomSubscription = session.subscribe("/room/" + roomId, new NoOpFrameHandler());
+            StompSession.Subscription gameSubscription = session.subscribe("/game/" + roomId, new NoOpFrameHandler());
 
-        stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
-                new StompSessionHandlerAdapter() {
-                    @Override
-                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
-                        sessionFuture.complete(session);
-                    }
+            assertThat(roomSubscription).isNotNull();
+            assertThat(gameSubscription).isNotNull();
+            assertThat(session.isConnected()).isTrue();
 
-                    @Override
-                    public void handleException(@NonNull StompSession session, StompCommand command,
-                                                @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
-                        sessionFuture.completeExceptionally(exception);
-                    }
+            session.disconnect();
+            stompClient.stop();
+        }
 
-                    @Override
-                    public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
-                        sessionFuture.completeExceptionally(exception);
-                    }
-                });
+        @Test
+        @DisplayName("should allow sending messages to application destinations")
+        void givenConnectedClient_whenSendActionMessage_thenNoRoutingExceptionOccurs() throws Exception {
+            String roomId = roomService.createRoom(new CreateRoomRequest(
+                    uniqueName("WsSendRoom"),
+                    "WsTestHost",
+                    6,
+                    10,
+                    20,
+                    1000,
+                    null));
+            WebSocketStompClient stompClient = createStompClient();
+            StompSession session = connectSession(stompClient, jwtService.generateToken("WsTestHost"));
 
-        StompSession session = sessionFuture.get(5, TimeUnit.SECONDS);
-        assertNotNull(session);
-        assertTrue(session.isConnected());
+            org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                    () -> session.send("/app/" + roomId + "/action", Map.of("action", "FOLD")));
 
-        session.disconnect();
+            session.disconnect();
+            stompClient.stop();
+        }
+
+        @Test
+        @DisplayName("should allow multiple authenticated clients to connect at the same time")
+        void givenMultipleValidTokens_whenConnect_thenEachClientGetsItsOwnSession() throws Exception {
+            WebSocketStompClient stompClient = createStompClient();
+
+            StompSession sessionOne = connectSession(stompClient, jwtService.generateToken("Player1"));
+            StompSession sessionTwo = connectSession(stompClient, jwtService.generateToken("Player2"));
+
+            assertThat(sessionOne.isConnected()).isTrue();
+            assertThat(sessionTwo.isConnected()).isTrue();
+
+            sessionOne.disconnect();
+            sessionTwo.disconnect();
+            stompClient.stop();
+        }
     }
 
-    @Test
-    @DisplayName("WebSocket should REJECT connection without token")
-    void websocket_shouldReject_withoutToken() {
-        CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
+    private static class NoOpFrameHandler implements org.springframework.messaging.simp.stomp.StompFrameHandler {
+        @Override
+        public Type getPayloadType(@NonNull StompHeaders headers) {
+            return Object.class;
+        }
 
-        stompClient.connectAsync(wsUrl, handshakeHeaders, new StompHeaders(),
-                new StompSessionHandlerAdapter() {
-                    @Override
-                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
-                        sessionFuture.complete(session);
-                    }
-
-                    @Override
-                    public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
-                        sessionFuture.completeExceptionally(exception);
-                    }
-                });
-
-        // Connection should fail or timeout because Interceptor returns null for missing token
-        // Use a 2-second timeout which is plenty for a local connection but short enough for a test failure
-        assertThrows(Exception.class, () -> sessionFuture.get(2, TimeUnit.SECONDS));
+        @Override
+        public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+            // No-op: these tests only care that subscription succeeds.
+        }
     }
-
-    @Test
-    @DisplayName("WebSocket should REJECT connection with invalid JWT token")
-    void websocket_shouldReject_invalidToken() {
-        StompHeaders connectHeaders = new StompHeaders();
-        connectHeaders.add("Authorization", "Bearer invalid-token-here");
-
-        CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
-
-        stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
-                new StompSessionHandlerAdapter() {
-                    @Override
-                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
-                        sessionFuture.complete(session);
-                    }
-
-                    @Override
-                    public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
-                        sessionFuture.completeExceptionally(exception);
-                    }
-                });
-
-        // Connection should fail or timeout because Interceptor returns null for invalid token
-        assertThrows(Exception.class, () -> sessionFuture.get(2, TimeUnit.SECONDS));
-    }
-
-    @Test
-    @DisplayName("WebSocket should allow subscription to game topics with valid token")
-    void websocket_shouldAllowSubscription_withValidToken() throws Exception {
-        String token = jwtService.generateToken("WsTestHost");
-
-        StompHeaders connectHeaders = new StompHeaders();
-        connectHeaders.add("Authorization", "Bearer " + token);
-
-        CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
-        CompletableFuture<Boolean> subscriptionFuture = new CompletableFuture<>();
-
-        stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
-                new StompSessionHandlerAdapter() {
-                    @Override
-                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
-                        sessionFuture.complete(session);
-                    }
-
-                    @Override
-                    public void handleException(@NonNull StompSession session, StompCommand command,
-                                                @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
-                        sessionFuture.completeExceptionally(exception);
-                    }
-                });
-
-        StompSession session = sessionFuture.get(5, TimeUnit.SECONDS);
-
-        // Subscribe to a game topic
-        session.subscribe("/game/" + roomId, new StompFrameHandler() {
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) {
-                return Object.class;
-            }
-
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                subscriptionFuture.complete(true);
-            }
-        });
-
-        // Subscription should succeed (no exception thrown)
-        assertTrue(session.isConnected());
-
-        session.disconnect();
-    }
-
-    @Test
-    @DisplayName("WebSocket should allow subscription to room topics")
-    void websocket_shouldAllowSubscription_toRoomTopics() throws Exception {
-        String token = jwtService.generateToken("WsTestHost");
-
-        StompHeaders connectHeaders = new StompHeaders();
-        connectHeaders.add("Authorization", "Bearer " + token);
-
-        CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
-
-        stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
-                new StompSessionHandlerAdapter() {
-                    @Override
-                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
-                        sessionFuture.complete(session);
-                    }
-                });
-
-        StompSession session = sessionFuture.get(5, TimeUnit.SECONDS);
-
-        // Subscribe to room topic
-        StompSession.Subscription subscription = session.subscribe("/room/" + roomId, new StompFrameHandler() {
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) {
-                return Object.class;
-            }
-
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                // Handle frame
-            }
-        });
-
-        assertNotNull(subscription);
-        assertTrue(session.isConnected());
-
-        session.disconnect();
-    }
-
-    @Test
-    @DisplayName("WebSocket client can send messages to application destinations")
-    void websocket_shouldSendMessages_toAppDestinations() throws Exception {
-        String token = jwtService.generateToken("WsTestHost");
-
-        StompHeaders connectHeaders = new StompHeaders();
-        connectHeaders.add("Authorization", "Bearer " + token);
-
-        CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
-
-        stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders,
-                new StompSessionHandlerAdapter() {
-                    @Override
-                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
-                        sessionFuture.complete(session);
-                    }
-                });
-
-        StompSession session = sessionFuture.get(5, TimeUnit.SECONDS);
-
-        // Send a message to app destination (this tests the /app prefix routing)
-        // Server may log an error since there's no active game, but message routing
-        // works
-        // Using a Map to send proper JSON object
-        java.util.Map<String, Object> actionPayload = new java.util.HashMap<>();
-        actionPayload.put("action", "FOLD");
-
-        assertDoesNotThrow(() -> {
-            session.send("/app/" + roomId + "/action", actionPayload);
-        });
-
-        session.disconnect();
-    }
-
-    @Test
-    @DisplayName("Multiple clients can connect with different tokens")
-    void websocket_multipleClients_canConnect() throws Exception {
-        String token1 = jwtService.generateToken("Player1");
-        String token2 = jwtService.generateToken("Player2");
-
-        CompletableFuture<StompSession> session1Future = new CompletableFuture<>();
-        CompletableFuture<StompSession> session2Future = new CompletableFuture<>();
-
-        // Connect first client
-        StompHeaders headers1 = new StompHeaders();
-        headers1.add("Authorization", "Bearer " + token1);
-
-        stompClient.connectAsync(wsUrl, handshakeHeaders, headers1,
-                new StompSessionHandlerAdapter() {
-                    @Override
-                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
-                        session1Future.complete(session);
-                    }
-                });
-
-        // Connect second client
-        StompHeaders headers2 = new StompHeaders();
-        headers2.add("Authorization", "Bearer " + token2);
-
-        stompClient.connectAsync(wsUrl, handshakeHeaders, headers2,
-                new StompSessionHandlerAdapter() {
-                    @Override
-                    public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
-                        session2Future.complete(session);
-                    }
-                });
-
-        StompSession session1 = session1Future.get(5, TimeUnit.SECONDS);
-        StompSession session2 = session2Future.get(5, TimeUnit.SECONDS);
-
-        assertNotNull(session1);
-        assertNotNull(session2);
-        assertTrue(session1.isConnected());
-        assertTrue(session2.isConnected());
-
-        session1.disconnect();
-        session2.disconnect();
-    }
-
 }
