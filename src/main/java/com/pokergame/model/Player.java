@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Represents a poker player with hole cards, chips, and betting capabilities.
@@ -51,6 +52,11 @@ public class Player {
             logger.error("Invalid chips: {}", chips);
             throw new BadRequestException("Chips cannot be negative");
         }
+        if (playerId == null || playerId.trim().isEmpty()) {
+            logger.error("Invalid player ID: {}", playerId);
+            throw new BadRequestException("Player ID cannot be empty");
+        }
+
         this.name = name;
         this.playerId = playerId;
         this.chips = chips;
@@ -314,5 +320,21 @@ public class Player {
 
     public void setHandRank(HandRank handRank) {
         this.handRank = handRank;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof Player player)) {
+            return false;
+        }
+        return Objects.equals(playerId, player.playerId);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(playerId);
     }
 }

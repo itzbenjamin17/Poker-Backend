@@ -112,7 +112,7 @@ public class PlayerActionService {
             // the action itself was successful
             try {
                 // Track who has acted in the initial turn
-                Set<String> actedPlayers = playersWhoActedInInitialTurn.computeIfAbsent(gameId, k -> new HashSet<>());
+                Set<String> actedPlayers = playersWhoActedInInitialTurn.computeIfAbsent(gameId, k -> ConcurrentHashMap.newKeySet());
                 actedPlayers.add(currentPlayer.getPlayerId());
 
                 // Check if everyone has had their initial turn

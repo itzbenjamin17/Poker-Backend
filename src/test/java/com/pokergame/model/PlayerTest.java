@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import com.pokergame.exception.BadRequestException;
+import java.util.HashSet;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -277,5 +278,37 @@ class PlayerTest {
     @Test
     void testGetName() {
         assertEquals("TestPlayer", player.getName());
+    }
+
+    @Test
+    void testEqualsUsesStablePlayerIdAcrossReconstructedInstances() {
+        Player reconstructed = new Player("DifferentName", "player123", 50);
+
+        assertEquals(player, reconstructed);
+        assertEquals(reconstructed, player);
+    }
+
+    @Test
+    void testHashCodeMatchesForSamePlayerId() {
+        Player reconstructed = new Player("DifferentName", "player123", 50);
+
+        assertEquals(player.hashCode(), reconstructed.hashCode());
+    }
+
+    @Test
+    void testEqualsReturnsFalseForDifferentPlayerIds() {
+        Player differentPlayer = new Player("TestPlayer", "other-player", 1000);
+
+        assertNotEquals(player, differentPlayer);
+    }
+
+    @Test
+    void testEqualsSupportsCollectionLookupsForReconstructedInstances() {
+        HashSet<Player> players = new HashSet<>();
+        players.add(player);
+
+        Player reconstructed = new Player("TestPlayer", "player123", 1000);
+
+        assertTrue(players.contains(reconstructed));
     }
 }

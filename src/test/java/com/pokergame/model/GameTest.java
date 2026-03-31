@@ -1097,21 +1097,44 @@ class GameTest {
         }
 
         @Test
-        void testResetForNewHand() {
-                // Set up some game state
+        void testResetForNewHandClearsHandStateAndAdvancesDealer() {
                 game.dealHoleCards();
                 game.postBlinds();
                 game.dealFlop();
 
-                game.resetForNewHand();
+                Player playerOne = game.getPlayers().get(0);
+                Player playerTwo = game.getPlayers().get(1);
+                Player playerThree = game.getPlayers().get(2);
 
+                playerOne.doAction(PlayerAction.FOLD, 0, game.getPot());
+                playerTwo.setBestHand(List.of(new Card(Rank.ACE, Suit.SPADES)));
+                playerTwo.setHandRank(HandRank.ONE_PAIR);
+                playerThree.doAction(PlayerAction.BET, 100, 0);
+
+                int dealerPositionBeforeReset = game.getDealerPosition();
+                int potBeforeReset = game.getPot();
+                List<Integer> chipCountsBeforeReset = game.getPlayers().stream()
+                                .map(Player::getChips)
+                                .toList();
+
+                boolean gameEnded = game.resetForNewHand();
+
+                assertFalse(gameEnded);
                 assertEquals(0, game.getCommunityCards().size());
-                assertEquals(0, game.getPot());
+                assertEquals(potBeforeReset, game.getPot(),
+                                "Hand reset should preserve any configured carry-over pot");
                 assertEquals(0, game.getCurrentHighestBet());
                 assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
+                assertEquals(players.size(), game.getActivePlayers().size());
+                assertEquals((dealerPositionBeforeReset + 1) % players.size(), game.getDealerPosition());
+                assertEquals(chipCountsBeforeReset,
+                                game.getPlayers().stream().map(Player::getChips).toList(),
+                                "Hand reset should not change chip stacks");
 
-                for (Player player : game.getActivePlayers()) {
+                for (Player player : game.getPlayers()) {
                         assertEquals(0, player.getHoleCards().size());
+                        assertEquals(0, player.getBestHand().size());
+                        assertEquals(HandRank.NO_HAND, player.getHandRank());
                         assertEquals(0, player.getCurrentBet());
                         assertFalse(player.getHasFolded());
                         assertFalse(player.getIsAllIn());

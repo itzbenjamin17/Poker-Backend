@@ -92,8 +92,8 @@ public class Game {
      * @return true if the game is over after hand cleanup, false otherwise
      */
     public boolean resetForNewHand() {
-        // TODO: Need to add carry over to rounds other than showdown
-        int carryOverPot = currentPhase == GamePhase.SHOWDOWN ? pot : 0;
+        // Doing this for readability
+        int carryOverPot = pot;
 
         if (logger.isDebugEnabled()) {
             logger.debug("Resetting hand for game {} | carryOverPot={} | previousContributions={}",
