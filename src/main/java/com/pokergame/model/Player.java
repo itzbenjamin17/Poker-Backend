@@ -36,6 +36,7 @@ public class Player {
     private boolean isOut;
     private boolean isDisconnected;
     private Long disconnectDeadlineEpochMs;
+    private boolean isReadyForNextHand;
 
     /**
      * Creates a new player with the specified name and starting chip count.
@@ -69,6 +70,7 @@ public class Player {
         this.isOut = false;
         this.isDisconnected = false;
         this.disconnectDeadlineEpochMs = null;
+        this.isReadyForNextHand = false;
     }
 
     /**
@@ -82,6 +84,7 @@ public class Player {
         this.hasFolded = false;
         this.isAllIn = false;
         this.currentBet = 0;
+        this.isReadyForNextHand = false;
     }
 
     /**
@@ -259,6 +262,15 @@ public class Player {
     }
 
     /**
+     * Returns whether the player has confirmed readiness for the next hand.
+     *
+     * @return true if ready, false otherwise
+     */
+    public boolean getIsReadyForNextHand() {
+        return isReadyForNextHand;
+    }
+
+    /**
      * Sets the player to be out, should only be used when the player has no chips
      *
      */
@@ -282,6 +294,15 @@ public class Player {
      */
     public void setDisconnectDeadlineEpochMs(Long disconnectDeadlineEpochMs) {
         this.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
+    }
+
+    /**
+     * Sets whether this player is ready to continue to the next hand.
+     *
+     * @param readyForNextHand true if ready, false otherwise
+     */
+    public void setReadyForNextHand(boolean readyForNextHand) {
+        this.isReadyForNextHand = readyForNextHand;
     }
 
     /**

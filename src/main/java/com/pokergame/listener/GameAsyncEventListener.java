@@ -1,14 +1,18 @@
 package com.pokergame.listener;
 
 import com.pokergame.enums.GamePhase;
+import com.pokergame.event.AutoAdvanceEvent;
+import com.pokergame.event.GameCleanupEvent;
+import com.pokergame.event.StartNewHandEvent;
+import com.pokergame.event.StartReadyCountdownEvent;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
-import com.pokergame.event.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
@@ -31,7 +35,12 @@ import java.util.List;
 public class GameAsyncEventListener {
 
     private static final Logger logger = LoggerFactory.getLogger(GameAsyncEventListener.class);
-    private static final long ROUND_END_DELAY_MS = 5000;
+
+    @Value("${poker.round-end.display-delay-ms:0}")
+    private long roundEndDelayMs = 0;
+
+    @Value("${poker.ready-countdown-ms:30000}")
+    private long readyCountdownMs = 30000;
 
     private final GameLifecycleService gameLifecycleService;
     private final GameStateService gameStateService;
@@ -71,6 +80,34 @@ public class GameAsyncEventListener {
                 logger.error("Error starting new hand for game {}: {}", event.gameId(), e.getMessage());
             }
         }, Instant.now().plusMillis(event.delay()));
+    }
+
+    /**
+     * Opens the post-round ready countdown gate using configured delay.
+     * Default behavior is immediate open on showdown reveal.
+     *
+     * @param event event containing game id, display delay, and countdown duration
+     */
+    @EventListener
+    public void handleStartReadyCountdown(StartReadyCountdownEvent event) {
+        logger.info("Scheduling ready countdown for game {} in {}ms", event.gameId(), event.delayMs());
+
+        if (event.delayMs() <= 0) {
+            try {
+                gameLifecycleService.startReadyCountdown(event.gameId(), event.countdownMs());
+            } catch (Exception e) {
+                logger.error("Error starting ready countdown for game {}: {}", event.gameId(), e.getMessage());
+            }
+            return;
+        }
+
+        taskScheduler.schedule(() -> {
+            try {
+                gameLifecycleService.startReadyCountdown(event.gameId(), event.countdownMs());
+            } catch (Exception e) {
+                logger.error("Error starting ready countdown for game {}: {}", event.gameId(), e.getMessage());
+            }
+        }, Instant.now().plusMillis(event.delayMs()));
     }
 
     /**
@@ -165,9 +202,14 @@ public class GameAsyncEventListener {
                         gameStateService.broadcastShowdownResults(gameId, currentGame, winners, winningsPerPlayer);
                         gameStateService.broadcastAutoAdvanceComplete(gameId, currentGame);
 
-                        // Schedule the final new hand start
-                        taskScheduler.schedule(() -> gameLifecycleService.startNewHand(gameId),
-                                Instant.now().plusMillis(ROUND_END_DELAY_MS));
+                        // Open ready gate for showdown review (default delay is immediate)
+                        if (roundEndDelayMs <= 0) {
+                            gameLifecycleService.startReadyCountdown(gameId, readyCountdownMs);
+                        } else {
+                            taskScheduler.schedule(
+                                    () -> gameLifecycleService.startReadyCountdown(gameId, readyCountdownMs),
+                                    Instant.now().plusMillis(roundEndDelayMs));
+                        }
                         sequenceComplete = true;
                     }
                 }

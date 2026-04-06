@@ -175,7 +175,8 @@ public class GameStateService {
                         isWinner,
                         isWinner ? winningsPerPlayer : 0,
                         (isActive && isActualShowdown) ? player.getHoleCards() : null,
-                        player.getDisconnectDeadlineEpochMs());
+                        player.getDisconnectDeadlineEpochMs(),
+                        player.getIsReadyForNextHand());
             }).toList();
 
             // Create PublicGameStateResponse DTO with showdown information
@@ -191,7 +192,13 @@ public class GameStateService {
                     currentPlayerName,
                     currentPlayerId,
                     winnerNames,
-                    winningsPerPlayer);
+                    winningsPerPlayer,
+                    null,
+                    null,
+                    game.isReadyCountdownActive(),
+                    game.getReadyCountdownDeadlineEpochMs(),
+                    null,
+                    null);
         }
 
         // Broadcast showdown results to all players
@@ -261,7 +268,8 @@ public class GameStateService {
                         null,
                         null,
                         null,
-                        player.getDisconnectDeadlineEpochMs());
+                        player.getDisconnectDeadlineEpochMs(),
+                        player.getIsReadyForNextHand());
             }).toList();
 
             // Create PublicGameStateResponse DTO with auto-advance fields
@@ -280,6 +288,8 @@ public class GameStateService {
                     null, // winningsPerPlayer
                     true,
                     message,
+                    game.isReadyCountdownActive(),
+                    game.getReadyCountdownDeadlineEpochMs(),
                     null,
                     null);
         }
@@ -448,7 +458,8 @@ public class GameStateService {
                     null,
                     null,
                     null,
-                    player.getDisconnectDeadlineEpochMs()));
+                    player.getDisconnectDeadlineEpochMs(),
+                    player.getIsReadyForNextHand()));
         }
 
         String claimWinPlayerName = computeClaimWinPlayerName(game);
@@ -465,6 +476,12 @@ public class GameStateService {
                 playerStateList,
                 currentPlayer != null ? currentPlayer.getName() : null,
                 currentPlayer != null ? currentPlayer.getPlayerId() : null,
+                null,
+                null,
+                null,
+                null,
+                game.isReadyCountdownActive(),
+                game.getReadyCountdownDeadlineEpochMs(),
                 claimWinAvailable,
                 claimWinPlayerName);
 

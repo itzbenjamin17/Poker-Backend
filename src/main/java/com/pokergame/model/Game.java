@@ -37,6 +37,8 @@ public class Game {
     private final int smallBlind;
     private final int bigBlind;
     private final Map<String, Integer> handContributions;
+    private boolean readyCountdownActive;
+    private Long readyCountdownDeadlineEpochMs;
 
     // Track if everyone has had their initial turn in the current betting round
     private boolean everyoneHasHadInitialTurn;
@@ -83,6 +85,8 @@ public class Game {
         this.handEvaluator = handEvaluator;
         this.everyoneHasHadInitialTurn = false;
         this.handContributions = new HashMap<>();
+        this.readyCountdownActive = false;
+        this.readyCountdownDeadlineEpochMs = null;
     }
 
     /**
@@ -115,11 +119,14 @@ public class Game {
         currentPhase = GamePhase.PRE_FLOP;
         everyoneHasHadInitialTurn = false;
         handContributions.clear();
+        readyCountdownActive = false;
+        readyCountdownDeadlineEpochMs = null;
 
         logger.debug("Hand reset complete for game {} | contributions cleared", gameId);
 
         activePlayers.clear();
         for (Player player : players) {
+            player.setReadyForNextHand(false);
             if (!player.getIsOut()) {
                 player.resetAttributes();
                 activePlayers.add(player);
@@ -972,6 +979,78 @@ public class Game {
     public boolean isHandOver() {
         long activePlayerCount = activePlayers.stream().filter(p -> !p.getHasFolded()).count();
         return activePlayerCount <= 1;
+    }
+
+    /**
+     * Opens the ready-confirmation gate and clears prior ready states.
+     *
+     * @param deadlineEpochMs UTC epoch milliseconds when countdown expires
+     */
+    public void openReadyCountdown(long deadlineEpochMs) {
+        readyCountdownActive = true;
+        readyCountdownDeadlineEpochMs = deadlineEpochMs;
+        for (Player player : players) {
+            player.setReadyForNextHand(false);
+        }
+    }
+
+    /**
+     * Closes the ready-confirmation gate.
+     */
+    public void closeReadyCountdown() {
+        readyCountdownActive = false;
+        readyCountdownDeadlineEpochMs = null;
+    }
+
+    /**
+     * Returns whether the ready countdown gate is currently active.
+     *
+     * @return true when ready gate is active, false otherwise
+     */
+    public boolean isReadyCountdownActive() {
+        return readyCountdownActive;
+    }
+
+    /**
+     * Returns the UTC epoch milliseconds when the ready countdown expires.
+     *
+     * @return deadline timestamp, or null if no ready gate is active
+     */
+    public Long getReadyCountdownDeadlineEpochMs() {
+        return readyCountdownDeadlineEpochMs;
+    }
+
+    /**
+     * Returns true when all currently eligible players are marked ready.
+     *
+     * <p>
+     * Eligible players are connected players that are not out of the game.
+     * </p>
+     *
+     * @return true if all eligible players are ready, false otherwise
+     */
+    public boolean areAllReadyEligiblePlayersReady() {
+        List<Player> eligiblePlayers = getReadyEligiblePlayers();
+        if (eligiblePlayers.isEmpty()) {
+            return false;
+        }
+        return eligiblePlayers.stream().allMatch(Player::getIsReadyForNextHand);
+    }
+
+    /**
+     * Marks all currently eligible players as ready.
+     */
+    public void forceReadyForEligiblePlayers() {
+        for (Player player : getReadyEligiblePlayers()) {
+            player.setReadyForNextHand(true);
+        }
+    }
+
+    private List<Player> getReadyEligiblePlayers() {
+        return players.stream()
+                .filter(player -> !player.getIsOut())
+                .filter(player -> !player.getIsDisconnected())
+                .toList();
     }
 
     /**

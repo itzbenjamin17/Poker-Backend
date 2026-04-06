@@ -125,6 +125,21 @@ public class GameController {
     }
 
     /**
+     * Marks the authenticated player as READY during the post-round countdown.
+     *
+     * @param gameId    game identifier
+     * @param principal authenticated player (from JWT)
+     */
+    @MessageMapping("/{gameId}/ready")
+    public void markReady(
+            @DestinationVariable String gameId,
+            Principal principal) {
+        String playerName = principal.getName();
+        logger.info("Processing READY confirmation for game {} by {}", gameId, playerName);
+        gameLifecycleService.markPlayerReadyForNextHand(gameId, playerName);
+    }
+
+    /**
      * Handles exceptions occurring during WebSocket message processing.
      * Propagates errors back to the specific initiating player via their private
      * channel.
@@ -164,7 +179,8 @@ public class GameController {
             userFriendlyMessage = userFriendlyMessage.substring(0, 77) + "...";
         }
 
-        gameStateService.sendPrivatePlayerNotification(gameId, playerName, userFriendlyMessage, ResponseMessage.ACTION_ERROR);
+        gameStateService.sendPrivatePlayerNotification(gameId, playerName, userFriendlyMessage,
+                ResponseMessage.ACTION_ERROR);
     }
 
     /**

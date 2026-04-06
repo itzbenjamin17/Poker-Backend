@@ -8,22 +8,31 @@ import java.util.List;
 /**
  * Represents the public state of a game.
  * 
- * @param maxPlayers       The maximum number of players in the game.
- * @param pot              The total pot size.
- * @param pots             The pot sizes for each pot. (For side pots)
- * @param uncalledAmount   The uncalled amount. (Total amount of chips only one player has ability to win, usually in split pot scenarios)
- * @param phase            The current game phase.
- * @param currentBet       The current bet amount.
- * @param communityCards   The community cards.
- * @param players          The list of public player states.
- * @param currentPlayerName The name of the current player.
- * @param currentPlayerId  The ID of the current player.
- * @param winners          The list of winners.
- * @param winningsPerPlayer The winnings per player.
- * @param isAutoAdvancing  Whether the game is auto advancing.
- * @param autoAdvanceMessage The auto advance message.
- * @param claimWinAvailable  Whether claim win is available.
- * @param claimWinPlayerName The name of the player who can claim win.
+ * @param maxPlayers                    The maximum number of players in the
+ *                                      game.
+ * @param pot                           The total pot size.
+ * @param pots                          The pot sizes for each pot. (For side
+ *                                      pots)
+ * @param uncalledAmount                The uncalled amount. (Total amount of
+ *                                      chips only one player has ability to
+ *                                      win, usually in split pot scenarios)
+ * @param phase                         The current game phase.
+ * @param currentBet                    The current bet amount.
+ * @param communityCards                The community cards.
+ * @param players                       The list of public player states.
+ * @param currentPlayerName             The name of the current player.
+ * @param currentPlayerId               The ID of the current player.
+ * @param winners                       The list of winners.
+ * @param winningsPerPlayer             The winnings per player.
+ * @param isAutoAdvancing               Whether the game is auto advancing.
+ * @param autoAdvanceMessage            The auto advance message.
+ * @param isReadyCountdownActive        Whether the post-round ready countdown
+ *                                      is active.
+ * @param readyCountdownDeadlineEpochMs The UTC epoch ms when ready countdown
+ *                                      expires.
+ * @param claimWinAvailable             Whether claim win is available.
+ * @param claimWinPlayerName            The name of the player who can claim
+ *                                      win.
  */
 public record PublicGameStateResponse(
                 int maxPlayers,
@@ -43,6 +52,9 @@ public record PublicGameStateResponse(
                 // For auto advancing
                 Boolean isAutoAdvancing,
                 String autoAdvanceMessage,
+                // Ready-countdown metadata
+                Boolean isReadyCountdownActive,
+                Long readyCountdownDeadlineEpochMs,
                 // Claim-win metadata
                 Boolean claimWinAvailable,
                 String claimWinPlayerName) {
@@ -69,6 +81,8 @@ public record PublicGameStateResponse(
                                 players,
                                 currentPlayerName,
                                 currentPlayerId,
+                                null,
+                                null,
                                 null,
                                 null,
                                 null,
@@ -106,6 +120,8 @@ public record PublicGameStateResponse(
                                 null,
                                 null,
                                 null,
+                                null,
+                                null,
                                 claimWinAvailable,
                                 claimWinPlayerName);
 
@@ -137,6 +153,8 @@ public record PublicGameStateResponse(
                                 currentPlayerId,
                                 winners,
                                 winningsPerPlayer,
+                                null,
+                                null,
                                 null,
                                 null,
                                 null,

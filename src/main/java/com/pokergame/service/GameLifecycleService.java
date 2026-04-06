@@ -11,13 +11,17 @@ import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 import org.springframework.scheduling.annotation.Async;
 
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
 import java.util.stream.Collectors;
 
 /**
@@ -40,20 +44,25 @@ public class GameLifecycleService {
 
     private final ApplicationEventPublisher eventPublisher;
 
+    private final TaskScheduler taskScheduler;
+
     // Dependency Injection
     GameLifecycleService(RoomService roomService,
             HandEvaluatorService handEvaluatorService,
             GameStateService gameStateService,
             SimpMessagingTemplate messagingTemplate,
-            ApplicationEventPublisher eventPublisher) {
+            ApplicationEventPublisher eventPublisher,
+            @Qualifier("taskScheduler") TaskScheduler taskScheduler) {
         this.roomService = roomService;
         this.handEvaluator = handEvaluatorService;
         this.gameStateService = gameStateService;
         this.messagingTemplate = messagingTemplate;
         this.eventPublisher = eventPublisher;
+        this.taskScheduler = taskScheduler;
     }
 
     private final Map<String, Game> activeGames = new ConcurrentHashMap<>();
+    private final Map<String, ScheduledFuture<?>> readyCountdownTimeouts = new ConcurrentHashMap<>();
 
     /**
      * Creates and initialises an actual poker game from an existing room.
@@ -100,7 +109,6 @@ public class GameLifecycleService {
         room.setGameStarted(true);
         logger.info("Game created and started for room: {} with {} players", roomId, players.size());
 
-
         startNewHand(roomId);
 
         return roomId;
@@ -119,7 +127,13 @@ public class GameLifecycleService {
             return;
         }
         logger.info("Starting new hand for game: {}", gameId);
-        synchronized (game){
+        synchronized (game) {
+            ScheduledFuture<?> existingTimeout = readyCountdownTimeouts.remove(gameId);
+            if (existingTimeout != null) {
+                existingTimeout.cancel(false);
+            }
+            game.closeReadyCountdown();
+
             // Weird structure here and in resetForNewHand because I wanted the game to hang
             // at the end if the game was over and show the winner message for longer
             boolean gameEnded = game.resetForNewHand();
@@ -133,7 +147,6 @@ public class GameLifecycleService {
             game.postBlinds();
             gameStateService.broadcastGameState(gameId, game);
         }
-
 
         logger.info("New hand started successfully for game: {} | Current player: {} | Phase: {} | Pot: {}",
                 gameId, game.getCurrentPlayer().getName(), game.getCurrentPhase(), game.getPot());
@@ -223,6 +236,10 @@ public class GameLifecycleService {
 
                 gameStateService.broadcastGameState(gameId, game);
             }
+
+            if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
+                completeReadyCountdownAndStartNextHand(gameId, game);
+            }
         }
     }
 
@@ -231,7 +248,7 @@ public class GameLifecycleService {
      * Broadcasts the game end event to all participants and cleans up game
      * resources.
      *
-     * @param gameId the unique identifier of the game
+     * @param gameId    the unique identifier of the game
      * @param isForfeit true if the game ended due to a player leaving/disconnecting
      */
     public void handleGameEnd(String gameId, boolean isForfeit) {
@@ -348,6 +365,10 @@ public class GameLifecycleService {
             if (roomService.getRoom(gameId) != null) {
                 gameStateService.broadcastGameState(gameId, game);
             }
+
+            if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
+                completeReadyCountdownAndStartNextHand(gameId, game);
+            }
         }
     }
 
@@ -380,6 +401,117 @@ public class GameLifecycleService {
                 gameStateService.broadcastGameState(gameId, game);
             }
         }
+    }
+
+    /**
+     * Opens a shared ready countdown after round end and schedules timeout
+     * auto-advance.
+     *
+     * @param gameId      game identifier
+     * @param countdownMs countdown duration in milliseconds
+     */
+    public void startReadyCountdown(String gameId, long countdownMs) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            return;
+        }
+
+        synchronized (game) {
+            if (game.getCurrentPhase() != com.pokergame.enums.GamePhase.SHOWDOWN) {
+                return;
+            }
+
+            long deadlineEpochMs = System.currentTimeMillis() + countdownMs;
+            game.openReadyCountdown(deadlineEpochMs);
+            gameStateService.broadcastGameState(gameId, game);
+
+            if (game.areAllReadyEligiblePlayersReady()) {
+                completeReadyCountdownAndStartNextHand(gameId, game);
+                return;
+            }
+        }
+
+        ScheduledFuture<?> existingTimeout = readyCountdownTimeouts.remove(gameId);
+        if (existingTimeout != null) {
+            existingTimeout.cancel(false);
+        }
+
+        ScheduledFuture<?> timeoutFuture = taskScheduler.schedule(
+                () -> handleReadyCountdownTimeout(gameId),
+                Instant.now().plusMillis(countdownMs));
+        if (timeoutFuture != null) {
+            readyCountdownTimeouts.put(gameId, timeoutFuture);
+        } else {
+            logger.warn("Ready countdown timeout was not scheduled for game {}", gameId);
+        }
+    }
+
+    /**
+     * Marks a player as ready during an active ready countdown gate.
+     *
+     * @param gameId     game identifier
+     * @param playerName player name from principal
+     */
+    public void markPlayerReadyForNextHand(String gameId, String playerName) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            throw new ResourceNotFoundException("Game not found");
+        }
+
+        synchronized (game) {
+            if (!game.isReadyCountdownActive()) {
+                throw new UnauthorisedActionException("Ready countdown is not active.");
+            }
+
+            Player player = game.getPlayers().stream()
+                    .filter(p -> p.getName().equals(playerName))
+                    .findFirst()
+                    .orElseThrow(() -> new UnauthorisedActionException("You are no longer part of this game."));
+
+            if (player.getIsOut()) {
+                throw new UnauthorisedActionException("You are out of this game.");
+            }
+
+            if (player.getIsDisconnected()) {
+                throw new UnauthorisedActionException("Reconnect before marking ready.");
+            }
+
+            player.setReadyForNextHand(true);
+            gameStateService.broadcastGameState(gameId, game);
+
+            if (game.areAllReadyEligiblePlayersReady()) {
+                completeReadyCountdownAndStartNextHand(gameId, game);
+            }
+        }
+    }
+
+    private void handleReadyCountdownTimeout(String gameId) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            readyCountdownTimeouts.remove(gameId);
+            return;
+        }
+
+        synchronized (game) {
+            if (!game.isReadyCountdownActive()) {
+                readyCountdownTimeouts.remove(gameId);
+                return;
+            }
+
+            game.forceReadyForEligiblePlayers();
+            gameStateService.broadcastGameState(gameId, game);
+            completeReadyCountdownAndStartNextHand(gameId, game);
+        }
+    }
+
+    private void completeReadyCountdownAndStartNextHand(String gameId, Game game) {
+        ScheduledFuture<?> existingTimeout = readyCountdownTimeouts.remove(gameId);
+        if (existingTimeout != null) {
+            existingTimeout.cancel(false);
+        }
+
+        game.closeReadyCountdown();
+        startNewHand(gameId);
     }
 
     /**

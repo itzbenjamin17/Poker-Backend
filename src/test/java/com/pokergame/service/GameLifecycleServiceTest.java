@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.scheduling.TaskScheduler;
 import static org.junit.jupiter.api.Assertions.*;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -51,6 +52,9 @@ class GameLifecycleServiceTest {
     @Mock
     private ApplicationEventPublisher applicationEventPublisher;
 
+    @Mock
+    private TaskScheduler taskScheduler;
+
     private GameLifecycleService gameLifecycleService;
 
     private Room testRoom;
@@ -59,7 +63,7 @@ class GameLifecycleServiceTest {
     @BeforeEach
     void setUp() {
         gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
-                applicationEventPublisher);
+                applicationEventPublisher, taskScheduler);
 
         testRoom = new Room(
                 ROOM_ID,

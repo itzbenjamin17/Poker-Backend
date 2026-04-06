@@ -3,7 +3,7 @@ package com.pokergame.service;
 import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.event.AutoAdvanceEvent;
-import com.pokergame.event.StartNewHandEvent;
+import com.pokergame.event.StartReadyCountdownEvent;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -12,6 +12,7 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
@@ -26,7 +27,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PlayerActionService {
 
     private static final Logger logger = LoggerFactory.getLogger(PlayerActionService.class);
-    private static final long ROUND_END_DELAY_MS = 5000;
+
+    @Value("${poker.round-end.display-delay-ms:0}")
+    private long roundEndDelayMs = 0;
+
+    @Value("${poker.ready-countdown-ms:30000}")
+    private long readyCountdownMs = 30000;
 
     private final GameLifecycleService gameLifecycleService;
 
@@ -112,7 +118,8 @@ public class PlayerActionService {
             // the action itself was successful
             try {
                 // Track who has acted in the initial turn
-                Set<String> actedPlayers = playersWhoActedInInitialTurn.computeIfAbsent(gameId, k -> ConcurrentHashMap.newKeySet());
+                Set<String> actedPlayers = playersWhoActedInInitialTurn.computeIfAbsent(gameId,
+                        k -> ConcurrentHashMap.newKeySet());
                 actedPlayers.add(currentPlayer.getPlayerId());
 
                 // Check if everyone has had their initial turn
@@ -206,10 +213,8 @@ public class PlayerActionService {
                     gameId, winners.stream().map(Player::getName).toList());
 
             int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
+            openReadyCountdownGate(gameId);
             gameStateService.broadcastShowdownResults(gameId, game, winners, winningsPerPlayer);
-
-            // Delay before starting the new hand to allow winner display
-            eventPublisher.publishEvent(new StartNewHandEvent(gameId, ROUND_END_DELAY_MS));
             return;
         }
 
@@ -254,15 +259,22 @@ public class PlayerActionService {
                         gameId, winners.stream().map(Player::getName).toList());
 
                 int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
+                openReadyCountdownGate(gameId);
                 gameStateService.broadcastShowdownResults(gameId, game, winners, winningsPerPlayer);
-
-                // Delay before starting the new hand, on a different thread
-                eventPublisher.publishEvent(new StartNewHandEvent(gameId, ROUND_END_DELAY_MS));
                 break;
             case SHOWDOWN:
                 logger.warn("Game {} is already in SHOWDOWN phase", gameId);
                 break;
         }
+    }
+
+    private void openReadyCountdownGate(String gameId) {
+        if (roundEndDelayMs <= 0) {
+            gameLifecycleService.startReadyCountdown(gameId, readyCountdownMs);
+            return;
+        }
+
+        eventPublisher.publishEvent(new StartReadyCountdownEvent(gameId, roundEndDelayMs, readyCountdownMs));
     }
 
 }
