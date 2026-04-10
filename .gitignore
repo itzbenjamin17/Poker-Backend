@@ -6,6 +6,7 @@ target/
 todo.txt
 apis.txt
 SECURITY_TODO.md
+GEMINI.md
 
 ### STS ###
 .apt_generated
