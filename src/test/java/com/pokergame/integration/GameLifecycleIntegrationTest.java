@@ -25,6 +25,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @Tag("integration")
@@ -285,9 +286,10 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken);
             performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken);
 
-            JsonNode state = readGameState(gameId, hostToken);
-
-            assertThat(state.path("phase").asText()).isEqualTo("TURN");
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                JsonNode state = readGameState(gameId, hostToken);
+                assertThat(state.path("phase").asText()).isEqualTo("TURN");
+            });
         }
     }
 

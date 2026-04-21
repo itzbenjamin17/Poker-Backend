@@ -48,7 +48,9 @@ public class GameStateService {
      * @return public game-state DTO for the requested game
      */
     public PublicGameStateResponse getPublicGameStateSnapshot(String gameId, Game game) {
-        return buildPublicGameStateResponse(gameId, game);
+        synchronized (game) {
+            return buildPublicGameStateResponse(gameId, game);
+        }
     }
 
     /**
@@ -59,12 +61,14 @@ public class GameStateService {
      * @return private state containing the player's hole cards
      */
     public PrivatePlayerState getPrivatePlayerStateSnapshot(Game game, String playerName) {
-        Player player = game.getPlayers().stream()
-                .filter(p -> p.getName().equals(playerName))
-                .findFirst()
-                .orElseThrow(() -> new ResourceNotFoundException("Player not found in game"));
+        synchronized (game) {
+            Player player = game.getPlayers().stream()
+                    .filter(p -> p.getName().equals(playerName))
+                    .findFirst()
+                    .orElseThrow(() -> new ResourceNotFoundException("Player not found in game"));
 
-        return buildPrivatePlayerState(player);
+            return buildPrivatePlayerState(player);
+        }
     }
 
     /**
