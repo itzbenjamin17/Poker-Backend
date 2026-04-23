@@ -9,6 +9,7 @@ SECURITY_TODO.md
 GEMINI.md
 AGENTS.md
 gemini_files/
+.env
 
 ### STS ###
 .apt_generated
