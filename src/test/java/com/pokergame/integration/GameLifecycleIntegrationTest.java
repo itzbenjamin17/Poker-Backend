@@ -6,7 +6,6 @@ import com.pokergame.enums.PlayerAction;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
-import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
@@ -14,15 +13,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpStatus;
-import org.springframework.messaging.simp.stomp.StompFrameHandler;
-import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.client.HttpClientErrorException;
 
-import java.lang.reflect.Type;
 import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("test")
 @DisplayName("Game lifecycle integration")
 class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
 
@@ -251,16 +247,42 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                     .retrieve()
                     .body(String.class);
 
-            String firstActingToken = performActionByCurrentPlayer(
-                    gameId,
-                    new PlayerActionRequest(PlayerAction.CALL, null),
-                    hostToken,
-                    thirdPlayerToken);
-            String secondActingToken = performActionByCurrentPlayer(
-                    gameId,
-                    new PlayerActionRequest(PlayerAction.FOLD, null),
-                    hostToken,
-                    thirdPlayerToken);
+            var stompClient = createStompClient();
+            StompSession hostSession = connectSession(stompClient, hostToken);
+            StompSession thirdSession = connectSession(stompClient, thirdPlayerToken);
+
+            String firstActingToken;
+            String secondActingToken;
+            try {
+                JsonNode beforeFirstAction = readGameState(gameId, hostToken);
+                String firstCurrentPlayer = beforeFirstAction.path("currentPlayerName").asText();
+                String firstPhase = beforeFirstAction.path("phase").asText();
+                firstActingToken = performActionByCurrentPlayer(
+                        gameId,
+                        new PlayerActionRequest(PlayerAction.CALL, null),
+                        hostToken,
+                        thirdPlayerToken,
+                        hostSession,
+                        thirdSession,
+                        state -> !firstCurrentPlayer.equals(state.path("currentPlayerName").asText())
+                                || !firstPhase.equals(state.path("phase").asText()));
+
+                JsonNode beforeSecondAction = readGameState(gameId, hostToken);
+                String secondCurrentPlayer = beforeSecondAction.path("currentPlayerName").asText();
+                secondActingToken = performActionByCurrentPlayer(
+                        gameId,
+                        new PlayerActionRequest(PlayerAction.FOLD, null),
+                        hostToken,
+                        thirdPlayerToken,
+                        hostSession,
+                        thirdSession,
+                        state -> "SHOWDOWN".equals(state.path("phase").asText())
+                                || playerHasFolded(state, secondCurrentPlayer));
+            } finally {
+                hostSession.disconnect();
+                thirdSession.disconnect();
+                stompClient.stop();
+            }
 
             assertThat(leaveBody).contains("Successfully left game");
             assertThat(firstActingToken).isIn(hostToken, thirdPlayerToken);
@@ -411,47 +433,15 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             String gameId,
             PlayerActionRequest request,
             String tokenA,
-            String tokenB) throws Exception {
-        JsonNode state = readGameState(gameId, tokenA);
-        String currentPlayerName = state.path("currentPlayerName").asText();
-        String actingToken = jwtService.extractPlayerName(tokenA).equals(currentPlayerName) ? tokenA : tokenB;
-
-        var stompClient = createStompClient();
-        StompSession session = connectSession(stompClient, actingToken);
-        CompletableFuture<Object> nextStateFuture = new CompletableFuture<>();
-
-        session.subscribe("/game/" + gameId, new StompFrameHandler() {
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) {
-                return Object.class;
-            }
-
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                if (!nextStateFuture.isDone()) {
-                    nextStateFuture.complete(payload);
-                }
-            }
-        });
-
-        session.send("/app/" + gameId + "/action", request);
-        nextStateFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-        session.disconnect();
-        stompClient.stop();
-        return actingToken;
-    }
-
-    private void performActionByCurrentPlayer(
-            String gameId,
-            PlayerActionRequest request,
-            String tokenA,
             String tokenB,
             StompSession sessionA,
             StompSession sessionB,
             Predicate<JsonNode> expectedState) throws Exception {
         JsonNode state = readGameState(gameId, tokenA);
         String currentPlayerName = state.path("currentPlayerName").asText();
-        StompSession actingSession = jwtService.extractPlayerName(tokenA).equals(currentPlayerName) ? sessionA : sessionB;
+        boolean tokenAIsCurrentPlayer = jwtService.extractPlayerName(tokenA).equals(currentPlayerName);
+        String actingToken = tokenAIsCurrentPlayer ? tokenA : tokenB;
+        StompSession actingSession = tokenAIsCurrentPlayer ? sessionA : sessionB;
 
         actingSession.send("/app/" + gameId + "/action", request);
 
@@ -465,6 +455,17 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                             nextState.path("communityCards").size())
                     .isTrue();
         });
+
+        return actingToken;
+    }
+
+    private boolean playerHasFolded(JsonNode state, String playerName) {
+        for (JsonNode player : state.path("players")) {
+            if (playerName.equals(player.path("name").asText())) {
+                return player.path("hasFolded").asBoolean();
+            }
+        }
+        return false;
     }
 
 }

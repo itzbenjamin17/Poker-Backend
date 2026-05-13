@@ -3,6 +3,7 @@ package com.pokergame.config;
 import com.pokergame.security.JwtService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.messaging.MessagingException;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.stomp.StompCommand;
@@ -56,14 +57,11 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
                     logger.debug("WebSocket authenticated for player: {}", playerName);
                 } else {
                     logger.warn("Invalid JWT token in WebSocket CONNECT");
-
-                    // Reject the connection
-                    return null;
+                    throw new MessagingException("Invalid WebSocket authorization token");
                 }
             } else {
-                // No Authorisation header is fine for the public handshake, reject connection
                 logger.warn("No Authorization header in WebSocket CONNECT");
-                return null;
+                throw new MessagingException("Missing WebSocket authorization token");
             }
         }
 

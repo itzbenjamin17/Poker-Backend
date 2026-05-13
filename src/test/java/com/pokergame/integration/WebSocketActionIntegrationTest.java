@@ -31,6 +31,7 @@ import java.lang.reflect.Type;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -66,15 +67,21 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
     class PlayerActions {
 
         @Test
-        @DisplayName("should publish ACTION_ERROR to the player's private topic for invalid bets")
+        @DisplayName("should publish ACTION_ERROR to the player's private topic for invalid actions")
         void givenInvalidAction_whenSendOverWebSocket_thenReceivePrivateErrorNotification() throws Exception {
             TestGameSession gameSession = createStartedGame();
+            gameLifecycleService.createGameFromRoom(gameSession.roomId());
+            String currentPlayerName = gameLifecycleService.getGame(gameSession.roomId()).getCurrentPlayer().getName();
+            String actingToken = HOST_NAME.equals(currentPlayerName)
+                    ? gameSession.hostToken()
+                    : gameSession.otherToken();
+
             WebSocketStompClient stompClient = createStompClient();
-            StompSession session = connectSession(stompClient, gameSession.hostToken());
+            StompSession session = connectSession(stompClient, actingToken);
             CompletableFuture<PlayerNotificationResponse> errorFuture = new CompletableFuture<>();
 
             session.subscribe(
-                    "/game/" + gameSession.roomId() + "/player-name/" + HOST_NAME + "/private",
+                    "/game/" + gameSession.roomId() + "/player-name/" + currentPlayerName + "/private",
                     new StompFrameHandler() {
                         @Override
                         public Type getPayloadType(@NonNull StompHeaders headers) {
@@ -91,11 +98,14 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
                         }
                     });
 
-            session.send("/app/" + gameSession.roomId() + "/action", new PlayerActionRequest(PlayerAction.BET, 2000));
+            session.send("/app/" + gameSession.roomId() + "/action",
+                    new PlayerActionRequest(PlayerAction.RAISE, 2000));
 
             PlayerNotificationResponse error = errorFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
             assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
+            assertThat(error.playerName()).isEqualTo(currentPlayerName);
+            assertThat(error.message()).contains("available chips");
             session.disconnect();
             stompClient.stop();
         }
@@ -110,33 +120,20 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             CompletableFuture<PublicGameStateResponse> initialStateFuture = new CompletableFuture<>();
             CompletableFuture<PublicGameStateResponse> nextStateFuture = new CompletableFuture<>();
 
-            StompFrameHandler handler = new StompFrameHandler() {
-                @Override
-                public Type getPayloadType(@NonNull StompHeaders headers) {
-                    return PublicGameStateResponse.class;
-                }
-
-                @Override
-                public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                    if (!(payload instanceof PublicGameStateResponse response)) {
-                        return;
-                    }
-
-                    if (!initialStateFuture.isDone()) {
-                        initialStateFuture.complete(response);
-                    } else if (!nextStateFuture.isDone()) {
-                        nextStateFuture.complete(response);
-                    }
-                }
-            };
-
-            hostSession.subscribe("/game/" + gameSession.roomId(), handler);
-            otherSession.subscribe("/game/" + gameSession.roomId(), handler);
+            hostSession.subscribe("/game/" + gameSession.roomId(), new MatchingPublicStateFrameHandler(
+                    initialStateFuture,
+                    response -> response.phase() == GamePhase.PRE_FLOP
+                            && !Boolean.TRUE.equals(response.isReadyCountdownActive())));
 
             gameLifecycleService.createGameFromRoom(gameSession.roomId());
 
             PublicGameStateResponse initialState = initialStateFuture.get(DEFAULT_TIMEOUT.toSeconds(),
                     TimeUnit.SECONDS);
+            hostSession.subscribe("/game/" + gameSession.roomId(), new MatchingPublicStateFrameHandler(
+                    nextStateFuture,
+                    response -> response.players().stream().anyMatch(player ->
+                            player.name().equals(initialState.currentPlayerName()) && player.hasFolded())));
+
             StompSession actingSession = HOST_NAME.equals(initialState.currentPlayerName()) ? hostSession
                     : otherSession;
             actingSession.send("/app/" + gameSession.roomId() + "/action",
@@ -144,7 +141,11 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
 
             PublicGameStateResponse nextState = nextStateFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
-            assertThat(nextState.currentPlayerName()).isNotBlank();
+            assertThat(nextState.players())
+                    .anySatisfy(player -> {
+                        assertThat(player.name()).isEqualTo(initialState.currentPlayerName());
+                        assertThat(player.hasFolded()).isTrue();
+                    });
             hostSession.disconnect();
             otherSession.disconnect();
             stompClient.stop();
@@ -403,6 +404,33 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
         @Override
         public void handleFrame(@NonNull StompHeaders headers, Object payload) {
             if (payload instanceof PublicGameStateResponse response && !future.isDone()) {
+                future.complete(response);
+            }
+        }
+    }
+
+    private static final class MatchingPublicStateFrameHandler implements StompFrameHandler {
+
+        private final CompletableFuture<PublicGameStateResponse> future;
+        private final Predicate<PublicGameStateResponse> predicate;
+
+        private MatchingPublicStateFrameHandler(
+                CompletableFuture<PublicGameStateResponse> future,
+                Predicate<PublicGameStateResponse> predicate) {
+            this.future = future;
+            this.predicate = predicate;
+        }
+
+        @Override
+        public Type getPayloadType(@NonNull StompHeaders headers) {
+            return PublicGameStateResponse.class;
+        }
+
+        @Override
+        public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+            if (payload instanceof PublicGameStateResponse response
+                    && !future.isDone()
+                    && predicate.test(response)) {
                 future.complete(response);
             }
         }
