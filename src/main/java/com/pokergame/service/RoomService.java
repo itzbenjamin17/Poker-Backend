@@ -47,20 +47,23 @@ public class RoomService {
      * @throws BadRequestException if the room name is already taken
      */
     public String createRoom(CreateRoomRequest request) {
+        String sanitizedRoomName = com.pokergame.util.InputSanitizer.sanitize(request.getRoomName());
+        String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(request.getPlayerName());
+
         String roomId;
         synchronized (this) {
-            if (isRoomNameTaken(request.getRoomName())) {
-                logger.warn("Attempted to create room with duplicate name: {}", request.getRoomName());
+            if (isRoomNameTaken(sanitizedRoomName)) {
+                logger.warn("Attempted to create room with duplicate name: {}", sanitizedRoomName);
                 throw new BadRequestException(
-                        "Room name '" + request.getRoomName() + "' is already taken. Please choose a different name.");
+                        "Room name '" + sanitizedRoomName + "' is already taken. Please choose a different name.");
             }
 
             roomId = UUID.randomUUID().toString();
 
             Room room = new Room(
                     roomId,
-                    request.getRoomName(),
-                    request.getPlayerName(), // Host name
+                    sanitizedRoomName,
+                    sanitizedPlayerName, // Host name
                     request.getMaxPlayers(),
                     request.getSmallBlind(),
                     request.getBigBlind(),
@@ -68,17 +71,17 @@ public class RoomService {
                     request.getPassword());
 
             // Add the host as the first player
-            room.addPlayer(request.getPlayerName());
+            room.addPlayer(sanitizedPlayerName);
 
             rooms.put(roomId, room);
-            roomHosts.put(roomId, request.getPlayerName());
+            roomHosts.put(roomId, sanitizedPlayerName);
         }
 
         messagingTemplate.convertAndSend("/room/" + roomId,
                 new ApiResponse<>(ResponseMessage.ROOM_CREATED.getMessage(), getRoomData(roomId)));
 
         logger.info("Room created: {} (ID: {}) by host: {}",
-                request.getRoomName(), roomId, request.getPlayerName());
+                sanitizedRoomName, roomId, sanitizedPlayerName);
 
         return roomId;
     }
@@ -97,9 +100,12 @@ public class RoomService {
      * @throws UnauthorisedActionException if the room is full
      */
     public String joinRoom(JoinRoomRequest joinRequest) {
-        Room foundRoom = findRoomByName(joinRequest.roomName());
+        String sanitizedRoomName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.roomName());
+        String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.playerName());
+
+        Room foundRoom = findRoomByName(sanitizedRoomName);
         if (foundRoom == null) {
-            logger.warn("Join attempt failed: room not found for name {}", joinRequest.roomName());
+            logger.warn("Join attempt failed: room not found for name {}", sanitizedRoomName);
             throw new ResourceNotFoundException("Room not found");
         }
 
@@ -113,27 +119,27 @@ public class RoomService {
         // Check password if the room is private
         if (room.hasPassword() && !room.checkPassword(joinRequest.password())) {
             logger.warn("Invalid password attempt for room {} by player {}", room.getRoomName(),
-                    joinRequest.playerName());
+                    sanitizedPlayerName);
             throw new BadRequestException("Invalid password");
         }
 
         // Check if the room is full
         if (room.getPlayers().size() >= room.getMaxPlayers()) {
             logger.warn("Join attempt failed: room {} is full (player: {})", room.getRoomName(),
-                    joinRequest.playerName());
+                    sanitizedPlayerName);
             throw new UnauthorisedActionException("Room is full");
         }
 
         // Check if the player name already exists
-        if (room.hasPlayer(joinRequest.playerName())) {
-            logger.warn("Join attempt failed: player name '{}' already taken in room {}", joinRequest.playerName(),
+        if (room.hasPlayer(sanitizedPlayerName)) {
+            logger.warn("Join attempt failed: player name '{}' already taken in room {}", sanitizedPlayerName,
                     room.getRoomName());
             throw new BadRequestException("Player name already taken");
         }
 
-        room.addPlayer(joinRequest.playerName());
+        room.addPlayer(sanitizedPlayerName);
 
-        logger.info("Player {} joined room: {}", joinRequest.playerName(), room.getRoomName());
+        logger.info("Player {} joined room: {}", sanitizedPlayerName, room.getRoomName());
 
         messagingTemplate.convertAndSend("/room/" + roomId,
                 new ApiResponse<>(ResponseMessage.PLAYER_JOINED.getMessage(), getRoomData(roomId)));

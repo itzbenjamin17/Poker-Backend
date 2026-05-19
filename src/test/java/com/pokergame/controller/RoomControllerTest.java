@@ -7,8 +7,10 @@ import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.security.JwtAuthenticationFilter;
 import com.pokergame.security.JwtService;
+import com.pokergame.security.PayloadSizeFilter;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +19,8 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -33,6 +37,12 @@ class RoomControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private WebApplicationContext webApplicationContext;
+
+    @Autowired
+    private PayloadSizeFilter payloadSizeFilter;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @MockitoBean
@@ -46,6 +56,15 @@ class RoomControllerTest {
 
     @MockitoBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @BeforeEach
+    void setup() {
+        // We need to manually add the PayloadSizeFilter because @WebMvcTest 
+        // doesn't include custom filters by default even if they are @Components.
+        mockMvc = MockMvcBuilders.webAppContextSetup(webApplicationContext)
+                .addFilter(payloadSizeFilter)
+                .build();
+    }
 
     @Test
     @DisplayName("POST /api/room/create - Success")
@@ -160,6 +179,81 @@ class RoomControllerTest {
 
         mockMvc.perform(get("/api/room/{roomId}", roomId))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("POST /api/room/create - Validation Error (Oversized Name)")
+    void createRoom_ValidationError_OversizedName() throws Exception {
+        CreateRoomRequest request = new CreateRoomRequest("A".repeat(51), "Player1", 6, 10, 20, 1000, null);
+
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Room name must be 50 characters or less"));
+    }
+
+    @Test
+    @DisplayName("POST /api/room/create - Validation Error (Control Characters)")
+    void createRoom_ValidationError_ControlChars() throws Exception {
+        CreateRoomRequest request = new CreateRoomRequest("Room" + (char) 7, "Player1", 6, 10, 20, 1000, null);
+
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Room name cannot contain control characters"));
+    }
+
+    @Test
+    @DisplayName("POST /api/room/create - Validation Error (Invalid Numeric Range)")
+    void createRoom_ValidationError_InvalidRange() throws Exception {
+        CreateRoomRequest request = new CreateRoomRequest("Room1", "Player1", 1, 10, 20, 1000, null);
+
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Minimum 2 players required"));
+    }
+
+    @Test
+    @DisplayName("POST /api/room/join - Validation Error (Oversized Player Name)")
+    void joinRoom_ValidationError_OversizedPlayerName() throws Exception {
+        JoinRoomRequest request = new JoinRoomRequest("Room1", "A".repeat(31), null);
+
+        mockMvc.perform(post("/api/room/join")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Player name must be 30 characters or less"));
+    }
+
+    @Test
+    @DisplayName("POST /api/room/create - Malformed JSON")
+    void createRoom_MalformedJson() throws Exception {
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"roomName\": \"Room1\", \"maxPlayers\": \"not-a-number\" }"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Malformed JSON request payload"));
+    }
+
+    @Test
+    @DisplayName("POST /api/room/create - Payload Too Large")
+    void createRoom_PayloadTooLarge() throws Exception {
+        // Since we enabled the filter in SecurityConfig, we need to ensure the test MockMvc uses it.
+        // However, standard @WebMvcTest doesn't include custom filters from the context unless explicitly configured.
+        // But the PayloadSizeFilter is a @Component and OncePerRequestFilter.
+        
+        // Create a large body (> 10KB)
+        String largeBody = "{ \"roomName\": \"" + "A".repeat(11000) + "\", \"playerName\": \"P\" }";
+
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(largeBody))
+                .andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.message").value("Request payload too large. Maximum allowed is 10KB."));
     }
 
     @Test

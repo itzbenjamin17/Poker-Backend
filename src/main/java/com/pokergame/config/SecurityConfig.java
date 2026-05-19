@@ -25,9 +25,12 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final com.pokergame.security.PayloadSizeFilter payloadSizeFilter;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
+    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
+                          com.pokergame.security.PayloadSizeFilter payloadSizeFilter) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.payloadSizeFilter = payloadSizeFilter;
     }
 
     // All requests go through this filter chain
@@ -59,6 +62,9 @@ public class SecurityConfig {
                 // Explicitly disable unused login mechanisms to avoid default password generation
                 .formLogin(form -> form.disable())
                 .httpBasic(basic -> basic.disable())
+
+                // Reject oversized payloads early (before any processing)
+                .addFilterBefore(payloadSizeFilter, org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter.class)
 
                 // Add our JWT filter before Spring's pre-auth filter (since we use
                 // PreAuthenticatedAuthenticationToken)

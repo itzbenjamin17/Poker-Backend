@@ -4,6 +4,8 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 
 /**
  * Represents a request to create a new room.
@@ -20,9 +22,13 @@ import jakarta.validation.constraints.NotNull;
 public class CreateRoomRequest {
 
     @NotBlank(message = "Room name is required")
+    @Size(max = 50, message = "Room name must be 50 characters or less")
+    @Pattern(regexp = "^[^\\p{Cntrl}]*$", message = "Room name cannot contain control characters")
     private final String roomName;
 
     @NotBlank(message = "Player name is required")
+    @Size(max = 30, message = "Player name must be 30 characters or less")
+    @Pattern(regexp = "^[^\\p{Cntrl}]*$", message = "Player name cannot contain control characters")
     private String playerName;
 
     @NotNull
@@ -32,16 +38,21 @@ public class CreateRoomRequest {
 
     @NotNull
     @Min(value = 1, message = "Small blind must be at least 1")
+    @Max(value = 10000, message = "Small blind cannot exceed 10,000")
     private final Integer smallBlind;
 
     @NotNull
     @Min(value = 2, message = "Big blind must be at least 2")
+    @Max(value = 20000, message = "Big blind cannot exceed 20,000")
     private final Integer bigBlind;
 
     @NotNull
     @Min(value = 20, message = "Buy-in must be at least 20")
+    @Max(value = 1000000, message = "Buy-in cannot exceed 1,000,000")
     private final Integer buyIn;
 
+    @Size(max = 50, message = "Password must be 50 characters or less")
+    @Pattern(regexp = "^[^\\p{Cntrl}]*$", message = "Password cannot contain control characters")
     private final String password; // Optional - can be null/empty for public rooms
 
 

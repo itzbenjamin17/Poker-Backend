@@ -2,6 +2,7 @@ package com.pokergame.dto.request;
 
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.exception.BadRequestException;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotNull;
 
 /**
@@ -18,6 +19,7 @@ public record PlayerActionRequest(
         PlayerAction action,
 
         // Amount is optional - only needed for BET and RAISE actions
+        @Max(value = 10000000, message = "Amount cannot exceed 10,000,000")
         Integer amount
 
 ) {
