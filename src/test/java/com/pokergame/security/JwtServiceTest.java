@@ -196,12 +196,27 @@ class JwtServiceTest {
 
         @Test
         @DisplayName("should reject a weak secret key")
-        void givenShortSecret_whenInitialise_thenThrowWeakKeyException() {
+        void givenShortSecret_whenInitialise_thenThrowIllegalStateException() {
             JwtService service = new JwtService();
             ReflectionTestUtils.setField(service, "secretKeyString", "short");
             ReflectionTestUtils.setField(service, "expirationMillis", DEFAULT_EXPIRATION_MILLIS);
 
-            assertThatThrownBy(service::init).isInstanceOf(WeakKeyException.class);
+            assertThatThrownBy(service::init)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("too weak");
+        }
+
+        @ParameterizedTest(name = "should reject missing secret \"{0}\"")
+        @NullAndEmptySource
+        @ValueSource(strings = {"  ", "\t", "\n"})
+        void givenMissingSecret_whenInitialise_thenThrowIllegalStateException(String secret) {
+            JwtService service = new JwtService();
+            ReflectionTestUtils.setField(service, "secretKeyString", secret);
+            ReflectionTestUtils.setField(service, "expirationMillis", DEFAULT_EXPIRATION_MILLIS);
+
+            assertThatThrownBy(service::init)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("missing");
         }
     }
 

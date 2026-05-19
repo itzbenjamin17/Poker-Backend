@@ -17,7 +17,7 @@ import java.util.Date;
 @Service
 public class JwtService {
 
-    @Value("${jwt.secret:dev-only-not-for-production-change-me}")
+    @Value("${jwt.secret}")
     private String secretKeyString;
 
     @Value("${jwt.expirationMillis:86400000}") // default 24h
@@ -27,11 +27,17 @@ public class JwtService {
 
     @PostConstruct
     public void init() {
-        // Convert secret string to bytes for HMAC key
-        // If the secret is already long enough (>= 32 bytes), use it directly
-        // Otherwise, Keys.hmacShaKeyFor will throw WeakKeyException
-        byte[] keyBytes = secretKeyString.getBytes();
-        this.secretKey = Keys.hmacShaKeyFor(keyBytes);
+        if (secretKeyString == null || secretKeyString.isBlank()) {
+            throw new IllegalStateException("JWT secret key is missing. Please provide a valid secret via 'jwt.secret' or JWT_SECRET environment variable.");
+        }
+
+        try {
+            // Convert secret string to bytes for HMAC key
+            byte[] keyBytes = secretKeyString.getBytes();
+            this.secretKey = Keys.hmacShaKeyFor(keyBytes);
+        } catch (Exception e) {
+            throw new IllegalStateException("JWT secret key is too weak or invalid. It must be at least 256 bits (32 characters for plain text).", e);
+        }
     }
 
     /**

@@ -56,6 +56,10 @@ public class SecurityConfig {
                         // Everything else requires authentication
                         .anyRequest().authenticated())
 
+                // Explicitly disable unused login mechanisms to avoid default password generation
+                .formLogin(form -> form.disable())
+                .httpBasic(basic -> basic.disable())
+
                 // Add our JWT filter before Spring's pre-auth filter (since we use
                 // PreAuthenticatedAuthenticationToken)
                 .addFilterBefore(jwtAuthenticationFilter, AbstractPreAuthenticatedProcessingFilter.class);
