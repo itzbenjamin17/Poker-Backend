@@ -1,6 +1,7 @@
 package com.pokergame.security;
 
 import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,10 +18,10 @@ import java.util.Date;
 @Service
 public class JwtService {
 
-    @Value("${jwt.secret}")
+    @Value("${app.jwt.base64-secret}")
     private String secretKeyString;
 
-    @Value("${jwt.expirationMillis:86400000}") // default 24h
+    @Value("${jwt.expirationMillis:14400000}") // default 4h
     private long expirationMillis;
 
     private SecretKey secretKey;
@@ -28,16 +29,15 @@ public class JwtService {
     @PostConstruct
     public void init() {
         if (secretKeyString == null || secretKeyString.isBlank()) {
-            throw new IllegalStateException("JWT secret key is missing. Please provide a valid secret via 'jwt.secret' or JWT_SECRET environment variable.");
+            throw new IllegalStateException("JWT base64 secret key is missing. Please provide it via 'app.jwt.base64-secret' or the JWT_SECRET environment variable.");
         }
 
         try {
-            // Convert secret string to bytes for HMAC key
-            byte[] keyBytes = secretKeyString.getBytes();
+            // Decode the Base64 string directly into a byte array
+            byte[] keyBytes = Decoders.BASE64.decode(secretKeyString);
             this.secretKey = Keys.hmacShaKeyFor(keyBytes);
         } catch (Exception e) {
-            throw new IllegalStateException("JWT secret key is too weak or invalid. It must be at least 256 bits (32 characters for plain text).", e);
-        }
+            throw new IllegalStateException("JWT secret key parsing failed. Ensure it is a valid Base64 string and provides at least 512 bits of key material.", e);        }
     }
 
     /**

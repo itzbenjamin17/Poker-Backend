@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayName("JWT service")
 class JwtServiceTest {
 
-    private static final String TEST_SECRET = "test-secret-key-that-is-long-enough-for-hmac-sha-256";
+    private static final String TEST_SECRET = "Y2VudHVyeS1vbGQtc2VjcmV0LWtleS10aGF0LWlzLWRlZmluaXRlbHktbG9uZy1lbm91Z2gtZm9yLWhtYWMtc2hhLTUxMg==";
     private static final long DEFAULT_EXPIRATION_MILLIS = 3_600_000L;
     private static final Duration EXPIRATION_WAIT_TIMEOUT = Duration.ofSeconds(2);
 
@@ -110,7 +110,7 @@ class JwtServiceTest {
         @DisplayName("should reject a token signed with a different secret")
         void givenTokenSignedWithDifferentSecret_whenValidate_thenReturnFalse() {
             JwtService otherService = createService(
-                    "different-secret-key-that-is-long-enough-for-hmac-sha-256",
+                    "YW5vdGhlci1kaWZmZXJlbnQtc2VjcmV0LWtleS10aGF0LWlzLWRlZmluaXRlbHktbG9uZy1lbm91Z2gtZm9yLWhtYWMtc2hhLTUxMg==",
                     DEFAULT_EXPIRATION_MILLIS);
 
             String token = otherService.generateToken("TestPlayer");
@@ -181,10 +181,10 @@ class JwtServiceTest {
 
         @ParameterizedTest(name = "should accept secret \"{0}\"")
         @ValueSource(strings = {
-                "this-is-a-long-enough-secret-key-for-hmac-sha-256-algorithm",
-                "another-valid-secret-with-special-chars-!@#$%^&*()_+-=[]{}",
-                "very-long-secret-key-that-is-definitely-long-enough-12345678",
-                "12345678901234567890123456789012345678901234567890123456"
+                "Y2VudHVyeS1vbGQtc2VjcmV0LWtleS10aGF0LWlzLWRlZmluaXRlbHktbG9uZy1lbm91Z2gtZm9yLWhtYWMtc2hhLTUxMg==",
+                "YW5vdGhlci12YWxpZC1zZWNyZXQtd2l0aC1zcGVjaWFsLWNoYXJzLWV2ZW4tdGhvdWdoLWl0LWlzLWJhc2U2NC1lbmNvZGVkISEh",
+                "dmVyeS1sb25nLXNlY3JldC1rZXktdGhhdC1pcy1kZWZpbml0ZWx5LWxvbmctZW5vdWdoLTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNA==",
+                "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Ng=="
         })
         void givenValidSecret_whenInitialise_thenDoNotThrow(String secret) {
             JwtService service = new JwtService();
@@ -198,12 +198,12 @@ class JwtServiceTest {
         @DisplayName("should reject a weak secret key")
         void givenShortSecret_whenInitialise_thenThrowIllegalStateException() {
             JwtService service = new JwtService();
-            ReflectionTestUtils.setField(service, "secretKeyString", "short");
+            ReflectionTestUtils.setField(service, "secretKeyString", "c2hvcnQ=");
             ReflectionTestUtils.setField(service, "expirationMillis", DEFAULT_EXPIRATION_MILLIS);
 
             assertThatThrownBy(service::init)
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("too weak");
+                    .hasMessageContaining("parsing failed");
         }
 
         @ParameterizedTest(name = "should reject missing secret \"{0}\"")

@@ -52,6 +52,12 @@ class GameControllerTest {
     @MockitoBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
+    @MockitoBean
+    private com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter;
+
+    @MockitoBean
+    private com.pokergame.security.PayloadSizeFilter payloadSizeFilter;
+
     private final String gameId = "game-123";
     private final String playerName = "Player1";
     private Principal principal;

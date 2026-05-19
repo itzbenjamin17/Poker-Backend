@@ -661,7 +661,7 @@ Token settings in `application.properties`:
 
 ```properties
 jwt.secret=${JWT_SECRET:dev-only-not-for-production-change-me}
-jwt.expirationMillis=86400000  # 24 hours
+jwt.expirationMillis=14400000  # 4 hours
 ```
 
 
