@@ -33,13 +33,9 @@ public class RateLimitService {
             .refillGreedy(5, Duration.ofSeconds(1))
             .build();
 
-    public boolean isEnabled() {
-        return enabled;
-    }
-
     /**
      * Try to consume a token for a REST request.
-     * @param key unique key (e.g., clientIp + path)
+     * @param key unique key (e.g. clientIp + path)
      * @return true if token consumed, false if rate limited
      */
     public boolean tryConsumeRest(String key) {
@@ -50,17 +46,37 @@ public class RateLimitService {
 
     /**
      * Try to consume a token for a WebSocket message.
-     * @param sessionId the WS session ID
+     * @param username the player's username
      * @return true if token consumed, false if rate limited
      */
-    public boolean tryConsumeWs(String sessionId) {
+    public boolean tryConsumeWs(String username) {
         if (!enabled) return true;
-        Bucket bucket = wsBuckets.computeIfAbsent(sessionId, k -> Bucket.builder().addLimit(WS_LIMIT).build());
+        Bucket bucket = wsBuckets.computeIfAbsent(username, k -> Bucket.builder().addLimit(WS_LIMIT).build());
         return bucket.tryConsume(1);
     }
 
-    public void cleanUpWs(String sessionId) {
-        wsBuckets.remove(sessionId);
+    public void cleanUpWs(String username) {
+        wsBuckets.remove(username);
+    }
+
+    /**
+     * Removes a REST rate limit bucket.
+     * Useful for memory management or resetting limits for a specific IP/path.
+     * @param key the key used (e.g. clientIp + ":" + path)
+     */
+    public void cleanUpRest(String key) {
+        restBuckets.remove(key);
+    }
+
+    /**
+     * Periodically clear the REST buckets to prevent memory leaks from old IPs.
+     * Runs every hour.
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 3600000)
+    public void periodicRestCleanup() {
+        if (!restBuckets.isEmpty()) {
+            restBuckets.clear();
+        }
     }
 
     /**

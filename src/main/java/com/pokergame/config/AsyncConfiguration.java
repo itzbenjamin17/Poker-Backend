@@ -3,6 +3,7 @@ package com.pokergame.config;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
@@ -11,6 +12,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 
 @Configuration
 @EnableAsync
+@EnableScheduling
 public class AsyncConfiguration {
 
     @Bean(name = "gameExecutor")
@@ -47,7 +49,7 @@ public class AsyncConfiguration {
     @Bean(name = "taskScheduler")
     public ThreadPoolTaskScheduler taskScheduler() {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
-        // Number of threads for scheduled tasks (e.g., game timers)
+        // Number of threads for scheduled tasks (e.g. game timers)
         scheduler.setPoolSize(5);
         scheduler.setThreadNamePrefix("TaskScheduler-");
         scheduler.initialize();

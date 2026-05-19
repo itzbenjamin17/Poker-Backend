@@ -62,7 +62,7 @@ class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
                     null));
             WebSocketStompClient stompClient = createStompClient();
 
-            StompSession session = connectSession(stompClient, jwtService.generateToken("WsTestHost"));
+            StompSession session = connectSession(stompClient, jwtService.generateToken("WsTestHost", roomId));
 
             assertThat(roomId).isNotBlank();
             assertThat(session.isConnected()).isTrue();
@@ -161,7 +161,7 @@ class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
                     1000,
                     null));
             WebSocketStompClient stompClient = createStompClient();
-            StompSession session = connectSession(stompClient, jwtService.generateToken("WsTestHost"));
+            StompSession session = connectSession(stompClient, jwtService.generateToken("WsTestHost", roomId));
 
             StompSession.Subscription roomSubscription = session.subscribe("/room/" + roomId, new NoOpFrameHandler());
             StompSession.Subscription gameSubscription = session.subscribe("/game/" + roomId, new NoOpFrameHandler());
@@ -190,7 +190,7 @@ class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
             String currentPlayerName = gameLifecycleService.getGame(roomId).getCurrentPlayer().getName();
 
             WebSocketStompClient stompClient = createStompClient();
-            StompSession session = connectSession(stompClient, jwtService.generateToken(currentPlayerName));
+            StompSession session = connectSession(stompClient, jwtService.generateToken(currentPlayerName, roomId));
             CompletableFuture<PublicGameStateResponse> updateFuture = new CompletableFuture<>();
 
             session.subscribe("/game/" + roomId, new FoldedPlayerFrameHandler(updateFuture, currentPlayerName));
@@ -208,8 +208,8 @@ class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
         void givenMultipleValidTokens_whenConnect_thenEachClientGetsItsOwnSession() throws Exception {
             WebSocketStompClient stompClient = createStompClient();
 
-            StompSession sessionOne = connectSession(stompClient, jwtService.generateToken("Player1"));
-            StompSession sessionTwo = connectSession(stompClient, jwtService.generateToken("Player2"));
+            StompSession sessionOne = connectSession(stompClient, jwtService.generateToken("Player1", "room-1"));
+            StompSession sessionTwo = connectSession(stompClient, jwtService.generateToken("Player2", "room-2"));
 
             assertThat(sessionOne.isConnected()).isTrue();
             assertThat(sessionTwo.isConnected()).isTrue();

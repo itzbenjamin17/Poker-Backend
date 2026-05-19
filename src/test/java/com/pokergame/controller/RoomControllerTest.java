@@ -85,8 +85,9 @@ class RoomControllerTest {
     @DisplayName("POST /api/room/create - Success")
     void createRoom_ShouldReturnTokenResponse() throws Exception {
         CreateRoomRequest request = new CreateRoomRequest("Room1", "Player1", 6, 10, 20, 1000, null);
-        when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn("room-123");
-        when(jwtService.generateToken("Player1")).thenReturn("mock-token");
+        String roomId = "room-123";
+        when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn(roomId);
+        when(jwtService.generateToken("Player1", roomId)).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/create")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -94,19 +95,20 @@ class RoomControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Room created successfully"))
                 .andExpect(jsonPath("$.data.token").value("mock-token"))
-                .andExpect(jsonPath("$.data.roomId").value("room-123"))
+                .andExpect(jsonPath("$.data.roomId").value(roomId))
                 .andExpect(jsonPath("$.data.playerName").value("Player1"));
 
         verify(roomService).createRoom(any(CreateRoomRequest.class));
-        verify(jwtService).generateToken("Player1");
+        verify(jwtService).generateToken("Player1", roomId);
     }
 
     @Test
     @DisplayName("POST /api/room/join - Success")
     void joinRoom_ShouldReturnTokenResponse() throws Exception {
         JoinRoomRequest request = new JoinRoomRequest("Room1", "Player2", null);
-        when(roomService.joinRoom(any(JoinRoomRequest.class))).thenReturn("room-123");
-        when(jwtService.generateToken("Player2")).thenReturn("mock-token");
+        String roomId = "room-123";
+        when(roomService.joinRoom(any(JoinRoomRequest.class))).thenReturn(roomId);
+        when(jwtService.generateToken("Player2", roomId)).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/join")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -114,11 +116,11 @@ class RoomControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully joined room"))
                 .andExpect(jsonPath("$.data.token").value("mock-token"))
-                .andExpect(jsonPath("$.data.roomId").value("room-123"))
+                .andExpect(jsonPath("$.data.roomId").value(roomId))
                 .andExpect(jsonPath("$.data.playerName").value("Player2"));
 
         verify(roomService).joinRoom(any(JoinRoomRequest.class));
-        verify(jwtService).generateToken("Player2");
+        verify(jwtService).generateToken("Player2", roomId);
     }
 
     @Test
@@ -129,7 +131,7 @@ class RoomControllerTest {
         when(gameLifecycleService.gameExists(roomId)).thenReturn(false);
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + roomId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully left room"));
 
@@ -146,7 +148,7 @@ class RoomControllerTest {
         when(gameLifecycleService.playerExistsInGame(roomId, playerName)).thenReturn(true);
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + roomId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully left room"));
 
@@ -163,7 +165,7 @@ class RoomControllerTest {
         when(gameLifecycleService.playerExistsInGame(roomId, playerName)).thenReturn(false);
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + roomId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully left room"));
 
@@ -274,17 +276,20 @@ class RoomControllerTest {
     @Test
     @DisplayName("POST /api/room/create - Rate Limit Exceeded")
     void createRoom_RateLimitExceeded() throws Exception {
-        // Explicitly enable rate limiting for this test
         org.springframework.test.util.ReflectionTestUtils.setField(rateLimitService, "enabled", true);
-        
+
         CreateRoomRequest request = new CreateRoomRequest("Room", "Player1", 6, 10, 20, 1000, null);
+
+        // To test rate limiting, we need requests that FAIL or at least don't trigger the cleanup.
+        // Since createRoom() success now calls cleanUpRest(), we simulate failures (e.g., duplicate name).
+        when(roomService.createRoom(any())).thenThrow(new com.pokergame.exception.BadRequestException("Room name taken"));
 
         // Consume the limit (5 per 15 minutes)
         for (int i = 0; i < 5; i++) {
             mockMvc.perform(post("/api/room/create")
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(request)))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isBadRequest());
         }
 
         // The 6th attempt should fail with 429
@@ -304,7 +309,7 @@ class RoomControllerTest {
         when(gameLifecycleService.createGameFromRoom(roomId)).thenReturn("game-123");
 
         mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + roomId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Game started successfully"))
                 .andExpect(jsonPath("$.data").value("game-123"));
@@ -320,7 +325,7 @@ class RoomControllerTest {
         when(roomService.isRoomHost(roomId, playerName)).thenReturn(false);
 
         mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + roomId))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error").value("Forbidden"))
                 .andExpect(jsonPath("$.message").value("Only the room host can start the game. Please ask the host to start."));

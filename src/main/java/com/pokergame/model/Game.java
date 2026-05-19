@@ -93,7 +93,7 @@ public class Game {
      * Resets the game state for a new hand.
      * Cleans up the finished hand and reports whether the game has ended.
      *
-     * @return true if the game is over after hand cleanup, false otherwise
+     * @return true if the game is over after hand  clean-up, false otherwise
      */
     public boolean resetForNewHand() {
         // Doing this for readability

@@ -100,7 +100,7 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         void givenValidToken_whenLeaveRoom_thenReturnSuccessResponse() {
             String roomName = uniqueName("SecureLeaveRoomValid");
             String roomId = roomService.createRoom(new CreateRoomRequest(roomName, "TestHost", 6, 10, 20, 1000, null));
-            String validToken = jwtService.generateToken("TestHost");
+            String validToken = jwtService.generateToken("TestHost", roomId);
 
             String response = restClient.post()
                     .uri("/api/room/" + roomId + "/leave")
@@ -173,7 +173,7 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             String roomId = createData.path("roomId").asText();
             joinRoom(roomName, "NonHostPlayer");
 
-            String nonHostToken = jwtService.generateToken("NonHostPlayer");
+            String nonHostToken = jwtService.generateToken("NonHostPlayer", roomId);
 
             HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
                     .uri("/api/room/" + roomId + "/start-game")
@@ -206,15 +206,15 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         @Test
         @DisplayName("should round-trip the player name through the JWT subject")
         void givenPlayerName_whenGenerateToken_thenExtractSamePlayerName() {
-            String token = jwtService.generateToken("TokenTestPlayer");
+            String token = jwtService.generateToken("TokenTestPlayer", "test-room");
 
-            assertThat(jwtService.extractPlayerName(token)).isEqualTo("TokenTestPlayer");
+            assertThat(jwtService.extractPlayerName(token)).isEqualTo("TokenTestPlayer:test-room");
         }
 
         @Test
         @DisplayName("should validate fresh tokens and reject invalid or tampered ones")
         void givenDifferentTokenStates_whenValidate_thenReturnExpectedResult() {
-            String token = jwtService.generateToken("ValidPlayer");
+            String token = jwtService.generateToken("ValidPlayer", "test-room");
             String tamperedToken = token.substring(0, token.length() - 5) + "XXXXX";
 
             assertThat(jwtService.isTokenValid(token)).isTrue();

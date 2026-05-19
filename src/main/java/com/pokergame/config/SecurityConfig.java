@@ -1,6 +1,8 @@
 package com.pokergame.config;
 
 import com.pokergame.security.JwtAuthenticationFilter;
+import com.pokergame.security.PayloadSizeFilter;
+import com.pokergame.security.EndpointRateLimitFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -25,8 +27,8 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
-    private final com.pokergame.security.PayloadSizeFilter payloadSizeFilter;
-    private final com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter;
+    private final PayloadSizeFilter payloadSizeFilter;
+    private final EndpointRateLimitFilter endpointRateLimitFilter;
 
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
                           com.pokergame.security.PayloadSizeFilter payloadSizeFilter,
@@ -94,7 +96,7 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        // Allows cookies, authorization headers to be sent in CORS requests
+        // Allows cookies, authorisation headers to be sent in CORS requests
         config.setAllowCredentials(true);
 
         config.setAllowedOriginPatterns(List.of(

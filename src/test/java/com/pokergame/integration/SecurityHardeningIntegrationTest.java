@@ -35,16 +35,20 @@ class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSupport {
     @Test
     @DisplayName("should return 429 Too Many Requests when exceeding REST rate limit")
     void givenHighRequestRate_whenCreateRoomRepeatedly_thenReturn429() {
-        String roomNamePrefix = "RateLimitRoom";
+        String invalidRoomName = "A".repeat(51); // Triggers validation error, which prevents cleanup
         
-        // Limit is 5 per 15 mins. Send 6 requests.
+        // Limit is 5 per 15 mins. Send 5 failing requests.
         for (int i = 0; i < 5; i++) {
-            restClient.post()
-                    .uri("/api/room/create")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(new CreateRoomRequest(roomNamePrefix + i, "Player" + i, 6, 10, 20, 1000, null))
-                    .retrieve()
-                    .toBodilessEntity();
+            try {
+                restClient.post()
+                        .uri("/api/room/create")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(new CreateRoomRequest(invalidRoomName, "Player" + i, 6, 10, 20, 1000, null))
+                        .retrieve()
+                        .toBodilessEntity();
+            } catch (HttpClientErrorException e) {
+                assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            }
         }
 
         // 6th request should fail with 429
@@ -52,7 +56,7 @@ class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSupport {
             restClient.post()
                     .uri("/api/room/create")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(new CreateRoomRequest(roomNamePrefix + "6", "Player6", 6, 10, 20, 1000, null))
+                    .body(new CreateRoomRequest(invalidRoomName, "Player6", 6, 10, 20, 1000, null))
                     .retrieve()
                     .toBodilessEntity());
 

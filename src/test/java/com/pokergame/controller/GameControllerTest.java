@@ -65,7 +65,7 @@ class GameControllerTest {
     @BeforeEach
     void setUp() {
         principal = mock(Principal.class);
-        when(principal.getName()).thenReturn(playerName);
+        when(principal.getName()).thenReturn(playerName + ":" + gameId);
     }
 
     @Test
@@ -83,7 +83,7 @@ class GameControllerTest {
         when(gameStateService.getPublicGameStateSnapshot(gameId, game)).thenReturn(response);
 
         mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + gameId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.pot").value(100))
                 .andExpect(jsonPath("$.phase").value("PRE_FLOP"));
@@ -95,7 +95,7 @@ class GameControllerTest {
         when(gameLifecycleService.gameExists(gameId)).thenReturn(false);
 
         mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + gameId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("Game not found"));
     }
@@ -108,7 +108,7 @@ class GameControllerTest {
         when(gameLifecycleService.getGame(gameId)).thenReturn(null);
 
         mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + gameId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("Game not found"));
     }
@@ -120,7 +120,7 @@ class GameControllerTest {
         when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(false);
 
         mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + gameId))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message").value("You are no longer part of this game."));
     }
@@ -137,7 +137,7 @@ class GameControllerTest {
         when(gameStateService.getPrivatePlayerStateSnapshot(game, playerName)).thenReturn(response);
 
         mockMvc.perform(get("/api/game/{gameId}/private-state", gameId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + gameId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.playerId").value("p1-id"));
     }
@@ -149,7 +149,7 @@ class GameControllerTest {
         when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(false);
 
         mockMvc.perform(get("/api/game/{gameId}/private-state", gameId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + gameId))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message").value("You are no longer part of this game."));
     }
@@ -158,7 +158,7 @@ class GameControllerTest {
     @DisplayName("POST /api/game/{gameId}/leave - Success")
     void leaveGame_Success() throws Exception {
         mockMvc.perform(post("/api/game/{gameId}/leave", gameId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + gameId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully left game"));
 
@@ -169,7 +169,7 @@ class GameControllerTest {
     @DisplayName("POST /api/game/{gameId}/claim-win - Success")
     void claimWin_Success() throws Exception {
         mockMvc.perform(post("/api/game/{gameId}/claim-win", gameId)
-                .principal(() -> playerName))
+                .principal(() -> playerName + ":" + gameId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Win claimed successfully"));
 

@@ -41,12 +41,15 @@ public class JwtService {
     }
 
     /**
-     * Generates a signed JWT for the given player.
+     * Generates a signed JWT for the given player and room.
+     * The subject is a composite of playerName and roomId to ensure global uniqueness
+     * and prevent identity impersonation across different rooms.
      */
-    public String generateToken(String playerName) {
+    public String generateToken(String playerName, String roomId) {
         long now = System.currentTimeMillis();
+        String subject = playerName + ":" + roomId;
         return Jwts.builder()
-                .subject(playerName)
+                .subject(subject)
                 .issuedAt(new Date(now))
                 .expiration(new Date(now + expirationMillis))
                 .signWith(secretKey)

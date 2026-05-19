@@ -133,7 +133,7 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                     .body(String.class));
 
             assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-            assertThat(exception.getResponseBodyAsString()).contains("no longer part of this game");
+            assertThat(exception.getResponseBodyAsString()).contains("Token is not valid for this game.");
         }
 
         @Test
@@ -177,7 +177,7 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                     .body(String.class));
 
             assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-            assertThat(exception.getResponseBodyAsString()).contains("no longer part of this game");
+            assertThat(exception.getResponseBodyAsString()).contains("Token is not valid for this game.");
         }
     }
 
@@ -197,8 +197,8 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         }
 
         @Test
-        @DisplayName("should return not found for an unknown game id")
-        void givenUnknownGame_whenLeaveGame_thenReturnNotFound() throws Exception {
+        @DisplayName("should return forbidden for an unknown game id due to token mismatch")
+        void givenUnknownGame_whenLeaveGame_thenReturnForbidden() throws Exception {
             String hostToken = createRoom(uniqueName("UnknownGameRoom"), "HostUnknownGame", 6).path("token").asText();
 
             HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
@@ -207,8 +207,8 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                     .retrieve()
                     .body(String.class));
 
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
-            assertThat(exception.getResponseBodyAsString()).contains("Game not found");
+            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(exception.getResponseBodyAsString()).contains("Token is not valid for this game.");
         }
 
         @Test
@@ -497,7 +497,8 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             Predicate<JsonNode> expectedState) throws Exception {
         JsonNode state = readGameState(gameId, tokenA);
         String currentPlayerName = state.path("currentPlayerName").asText();
-        boolean tokenAIsCurrentPlayer = jwtService.extractPlayerName(tokenA).equals(currentPlayerName);
+        // Correctly handle composite identity playerName:gameId
+        boolean tokenAIsCurrentPlayer = jwtService.extractPlayerName(tokenA).equals(currentPlayerName + ":" + gameId);
         String actingToken = tokenAIsCurrentPlayer ? tokenA : tokenB;
         StompSession actingSession = tokenAIsCurrentPlayer ? sessionA : sessionB;
 

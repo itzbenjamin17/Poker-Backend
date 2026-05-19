@@ -83,8 +83,8 @@ public class GameAsyncEventListener {
     }
 
     /**
-     * Opens the post-round ready countdown gate using configured delay.
-     * Default behavior is immediate open on showdown reveal.
+     * Opens the post-round ready countdown gate using a configured delay.
+     * Default behaviour is immediate open on showdown reveal.
      *
      * @param event event containing game id, display delay, and countdown duration
      */

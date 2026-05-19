@@ -27,7 +27,7 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
 
         String path = request.getRequestURI();
         
-        // We only rate limit room creation and joining
+        // We only rate limit room creation and joining currently, may need to change this
         if (path.equals("/api/room/create") || path.equals("/api/room/join")) {
             String clientIp = getClientIp(request);
             // Key by IP + Path to prevent IP-based flooding across different actions

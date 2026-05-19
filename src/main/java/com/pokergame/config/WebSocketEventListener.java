@@ -31,6 +31,7 @@ public class WebSocketEventListener {
 
     private final RoomService roomService;
     private final GameLifecycleService gameLifecycleService;
+    private final com.pokergame.security.RateLimitService rateLimitService;
     private final long disconnectGracePeriodMs;
     private final ConcurrentMap<String, Set<String>> activeSessionsByUser = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, String> sessionToUser = new ConcurrentHashMap<>();
@@ -40,10 +41,12 @@ public class WebSocketEventListener {
     @Autowired
     public WebSocketEventListener(RoomService roomService,
             GameLifecycleService gameLifecycleService,
+            com.pokergame.security.RateLimitService rateLimitService,
             @Qualifier("taskScheduler") TaskScheduler taskScheduler,
             @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
+        this.rateLimitService = rateLimitService;
         this.taskScheduler = taskScheduler;
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
     }
@@ -68,7 +71,7 @@ public class WebSocketEventListener {
         registerActiveSession(username, sessionId);
         logger.debug("Registered active WebSocket session {} for user {}", sessionId, username);
 
-        // If the user was previously disconnected, cancel the cleanup task and mark them as reconnected
+        // If the user was previously disconnected, cancel the clean-up task and mark them as reconnected
         PendingDisconnect pendingDisconnect = pendingDisconnects.remove(username);
         if (pendingDisconnect != null) {
             pendingDisconnect.future().cancel(false);
@@ -97,8 +100,8 @@ public class WebSocketEventListener {
             logger.debug("WebSocket disconnected without resolvable username. sessionId={}", sessionId);
             return;
         }
-        // Users may have multiple sessions (e.g. multiple browser tabs)
-        // So we only schedule a cleanup if there are no active sessions left
+        // Users may have multiple sessions (e.g. multiple browser tabs),
+        // So we only schedule a clean-up if there are no active sessions left
         unregisterActiveSession(username, sessionId);
         if (hasActiveSession(username)) {
             logger.debug("User {} still has another active session; skipping disconnect timer", username);
@@ -151,6 +154,9 @@ public class WebSocketEventListener {
 
         logger.info("WebSocket grace period expired. Removing disconnected user: {}", username);
 
+        // Also clean up their WebSocket rate limit bucket
+        rateLimitService.cleanUpWs(username);
+
         Room room = roomService.getRoom(roomId);
         if (room == null || !room.hasPlayer(username)) {
             return;
@@ -194,7 +200,7 @@ public class WebSocketEventListener {
      * @param sessionId The session ID of the user.
      */
     private void registerActiveSession(String username, String sessionId) {
-        // Get the set of active sessions for the user, or create a new one if it
+        // Get the set of active sessions for the user or create a new one if it
         // doesn't exist
         Set<String> sessions = activeSessionsByUser.computeIfAbsent(username, k -> ConcurrentHashMap.newKeySet());
         // Add the new session ID to the user's set of sessions

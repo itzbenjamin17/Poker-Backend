@@ -29,6 +29,7 @@ class JwtServiceTest {
     private static final Duration EXPIRATION_WAIT_TIMEOUT = Duration.ofSeconds(2);
 
     private final JwtService jwtService = createService(TEST_SECRET, DEFAULT_EXPIRATION_MILLIS);
+    private static final String TEST_ROOM = "test-room";
 
     @Nested
     @DisplayName("token generation")
@@ -37,7 +38,7 @@ class JwtServiceTest {
         @Test
         @DisplayName("should generate a non-empty token for a valid player name")
         void givenValidPlayerName_whenGenerateToken_thenReturnSignedToken() {
-            String token = jwtService.generateToken("TestPlayer");
+            String token = jwtService.generateToken("TestPlayer", TEST_ROOM);
 
             assertThat(token).isNotBlank();
             assertThat(jwtService.isTokenValid(token)).isTrue();
@@ -46,8 +47,8 @@ class JwtServiceTest {
         @Test
         @DisplayName("should generate different tokens for different players")
         void givenDifferentPlayers_whenGenerateToken_thenReturnDifferentTokens() {
-            String firstToken = jwtService.generateToken("Player1");
-            String secondToken = jwtService.generateToken("Player2");
+            String firstToken = jwtService.generateToken("Player1", TEST_ROOM);
+            String secondToken = jwtService.generateToken("Player2", TEST_ROOM);
 
             assertThat(firstToken).isNotEqualTo(secondToken);
         }
@@ -55,19 +56,19 @@ class JwtServiceTest {
         @ParameterizedTest(name = "should preserve player name \"{0}\"")
         @MethodSource("com.pokergame.security.JwtServiceTest#specialPlayerNames")
         void givenSpecialOrLongPlayerNames_whenGenerateToken_thenPlayerNameCanBeExtracted(String playerName) {
-            String token = jwtService.generateToken(playerName);
+            String token = jwtService.generateToken(playerName, TEST_ROOM);
 
             assertThat(jwtService.isTokenValid(token)).isTrue();
-            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName);
+            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName + ":" + TEST_ROOM);
         }
 
         @Test
         @DisplayName("should encode an empty player name as a null subject when extracted")
-        void givenEmptyPlayerName_whenGenerateToken_thenExtractPlayerNameReturnsNull() {
-            String token = jwtService.generateToken("");
+        void givenEmptyPlayerName_whenGenerateToken_thenExtractPlayerNameReturnsRoomIdOnly() {
+            String token = jwtService.generateToken("", TEST_ROOM);
 
             assertThat(jwtService.isTokenValid(token)).isTrue();
-            assertThat(jwtService.extractPlayerName(token)).isNull();
+            assertThat(jwtService.extractPlayerName(token)).isEqualTo(":" + TEST_ROOM);
         }
     }
 
@@ -78,7 +79,7 @@ class JwtServiceTest {
         @Test
         @DisplayName("should report valid tokens as valid")
         void givenFreshToken_whenValidate_thenReturnTrue() {
-            String token = jwtService.generateToken("TestPlayer");
+            String token = jwtService.generateToken("TestPlayer", TEST_ROOM);
 
             assertThat(jwtService.isTokenValid(token)).isTrue();
         }
@@ -100,7 +101,7 @@ class JwtServiceTest {
         @Test
         @DisplayName("should reject a tampered token")
         void givenTamperedToken_whenValidate_thenReturnFalse() {
-            String token = jwtService.generateToken("TestPlayer");
+            String token = jwtService.generateToken("TestPlayer", TEST_ROOM);
             String tamperedToken = token.substring(0, token.length() - 5) + "XXXXX";
 
             assertThat(jwtService.isTokenValid(tamperedToken)).isFalse();
@@ -113,7 +114,7 @@ class JwtServiceTest {
                     "YW5vdGhlci1kaWZmZXJlbnQtc2VjcmV0LWtleS10aGF0LWlzLWRlZmluaXRlbHktbG9uZy1lbm91Z2gtZm9yLWhtYWMtc2hhLTUxMg==",
                     DEFAULT_EXPIRATION_MILLIS);
 
-            String token = otherService.generateToken("TestPlayer");
+            String token = otherService.generateToken("TestPlayer", TEST_ROOM);
 
             assertThat(jwtService.isTokenValid(token)).isFalse();
         }
@@ -122,7 +123,7 @@ class JwtServiceTest {
         @DisplayName("should report an expired token as invalid without using hard coded sleeps")
         void givenExpiredToken_whenValidate_thenReturnFalse() {
             JwtService shortLivedService = createService(TEST_SECRET, 25L);
-            String token = shortLivedService.generateToken("TestPlayer");
+            String token = shortLivedService.generateToken("TestPlayer", TEST_ROOM);
 
             Awaitility.await()
                     .atMost(EXPIRATION_WAIT_TIMEOUT)
@@ -139,9 +140,9 @@ class JwtServiceTest {
         @ParameterizedTest(name = "should extract player name \"{0}\"")
         @ValueSource(strings = { "Player1", "Player2", "Alice", "Bob", "Admin" })
         void givenValidToken_whenExtractPlayerName_thenReturnSubject(String playerName) {
-            String token = jwtService.generateToken(playerName);
+            String token = jwtService.generateToken(playerName, TEST_ROOM);
 
-            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName);
+            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName + ":" + TEST_ROOM);
         }
 
         @Test
@@ -155,7 +156,7 @@ class JwtServiceTest {
         @DisplayName("should throw ExpiredJwtException when the token has expired")
         void givenExpiredToken_whenExtractPlayerName_thenThrowExpiredJwtException() {
             JwtService shortLivedService = createService(TEST_SECRET, 25L);
-            String token = shortLivedService.generateToken("TestPlayer");
+            String token = shortLivedService.generateToken("TestPlayer", TEST_ROOM);
 
             Awaitility.await()
                     .atMost(EXPIRATION_WAIT_TIMEOUT)
@@ -167,7 +168,7 @@ class JwtServiceTest {
         @Test
         @DisplayName("should throw SignatureException when the token has been tampered with")
         void givenTamperedToken_whenExtractPlayerName_thenThrowSignatureException() {
-            String token = jwtService.generateToken("TestPlayer");
+            String token = jwtService.generateToken("TestPlayer", TEST_ROOM);
             String tamperedToken = token.substring(0, token.length() - 5) + "XXXXX";
 
             assertThatThrownBy(() -> jwtService.extractPlayerName(tamperedToken))
@@ -223,10 +224,10 @@ class JwtServiceTest {
     @Test
     @DisplayName("should keep the generate validate extract lifecycle consistent")
     void givenGeneratedToken_whenRunningLifecycle_thenValidateAndExtractSuccessfully() {
-        String token = jwtService.generateToken("TestPlayer");
+        String token = jwtService.generateToken("TestPlayer", TEST_ROOM);
 
         assertThat(jwtService.isTokenValid(token)).isTrue();
-        assertThat(jwtService.extractPlayerName(token)).isEqualTo("TestPlayer");
+        assertThat(jwtService.extractPlayerName(token)).isEqualTo("TestPlayer:" + TEST_ROOM);
         assertThat(token.split("\\.")).hasSize(3).allSatisfy(part -> assertThat(part).isNotBlank());
     }
 

@@ -26,6 +26,7 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -43,6 +44,9 @@ class WebSocketEventListenerTest {
 
     @Mock
     private GameLifecycleService gameLifecycleService;
+
+    @Mock
+    private com.pokergame.security.RateLimitService rateLimitService;
 
     private ThreadPoolTaskScheduler scheduler;
 
@@ -79,6 +83,7 @@ class WebSocketEventListenerTest {
                         verify(gameLifecycleService).markPlayerReconnected("room-1", "Alice");
                         verify(roomService, never()).leaveRoom(eq("room-1"), eq("Alice"), anyBoolean());
                         verify(gameLifecycleService, never()).leaveGame("room-1", "Alice");
+                        verify(rateLimitService, never()).cleanUpWs(anyString());
                     });
         }
 
@@ -100,6 +105,7 @@ class WebSocketEventListenerTest {
                     .atMost(Duration.ofSeconds(1))
                     .untilAsserted(() -> {
                         verify(gameLifecycleService).markPlayerDisconnected(eq("room-2"), eq("Bob"), anyLong());
+                        verify(rateLimitService).cleanUpWs("Bob");
                         verify(roomService).leaveRoom("room-2", "Bob", false);
                         verify(gameLifecycleService).leaveGame("room-2", "Bob");
                     });
@@ -109,7 +115,7 @@ class WebSocketEventListenerTest {
     private WebSocketEventListener createListener() {
         scheduler = new ThreadPoolTaskScheduler();
         scheduler.initialize();
-        return new WebSocketEventListener(roomService, gameLifecycleService, scheduler, DISCONNECT_GRACE_PERIOD_MS);
+        return new WebSocketEventListener(roomService, gameLifecycleService, rateLimitService, scheduler, DISCONNECT_GRACE_PERIOD_MS);
     }
 
     private Room createRoom(String roomId, String roomName, String playerName) {

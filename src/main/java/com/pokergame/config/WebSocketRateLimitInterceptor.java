@@ -9,6 +9,8 @@ import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.stereotype.Component;
 
+import java.security.Principal;
+
 /**
  * Interceptor to throttle WebSocket messages per session to prevent spamming.
  */
@@ -27,17 +29,12 @@ public class WebSocketRateLimitInterceptor implements ChannelInterceptor {
 
         // Only throttle SEND commands (player actions, chat, etc.)
         if (StompCommand.SEND.equals(accessor.getCommand())) {
-            String sessionId = accessor.getSessionId();
-            if (sessionId != null) {
-                if (!rateLimitService.tryConsumeWs(sessionId)) {
+            Principal user = accessor.getUser();
+            if (user != null) {
+                String username = user.getName();
+                if (!rateLimitService.tryConsumeWs(username)) {
                     throw new MessageDeliveryException("Message rate limit exceeded. Maximum 5 messages per second allowed.");
                 }
-            }
-        } else if (StompCommand.DISCONNECT.equals(accessor.getCommand())) {
-            // Clean up bucket on disconnect
-            String sessionId = accessor.getSessionId();
-            if (sessionId != null) {
-                rateLimitService.cleanUpWs(sessionId);
             }
         }
 

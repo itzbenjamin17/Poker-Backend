@@ -60,8 +60,14 @@ public class GameController {
     public ResponseEntity<PublicGameStateResponse> getGameState(
             @PathVariable String gameId,
             Principal principal) {
-        String playerName = principal.getName();
+        String compositeName = principal.getName();
+        String playerName = compositeName.split(":")[0];
         logger.debug("Player {} requested game state for {}", playerName, gameId);
+
+        // Security check: ensure the token is actually for THIS game/room
+        if (!compositeName.endsWith(":" + gameId)) {
+            throw new UnauthorisedActionException("Token is not valid for this game.");
+        }
 
         Game game = getAuthorisedGame(gameId, playerName);
 
@@ -80,8 +86,14 @@ public class GameController {
     public ResponseEntity<PrivatePlayerState> getPrivateState(
             @PathVariable String gameId,
             Principal principal) {
-        String playerName = principal.getName();
+        String compositeName = principal.getName();
+        String playerName = compositeName.split(":")[0];
         logger.debug("Player {} requested private state for {}", playerName, gameId);
+
+        // Security check: ensure the token is actually for THIS game/room
+        if (!compositeName.endsWith(":" + gameId)) {
+            throw new UnauthorisedActionException("Token is not valid for this game.");
+        }
 
         Game game = getAuthorisedGame(gameId, playerName);
 
@@ -118,8 +130,15 @@ public class GameController {
             @DestinationVariable String gameId,
             @Payload PlayerActionRequest actionRequest,
             Principal principal) {
-        String playerName = principal.getName();
+        String compositeName = principal.getName();
+        String playerName = compositeName.split(":")[0];
         logger.info("Processing player action for game {} by {}: {}", gameId, playerName, actionRequest);
+
+        // Security check: ensure the token is actually for THIS game/room
+        if (!compositeName.endsWith(":" + gameId)) {
+            throw new UnauthorisedActionException("Token is not valid for this game.");
+        }
+
         playerActionService.processPlayerAction(gameId, actionRequest, playerName);
         logger.debug("Player action processed successfully for game {}", gameId);
     }
@@ -134,8 +153,15 @@ public class GameController {
     public void markReady(
             @DestinationVariable String gameId,
             Principal principal) {
-        String playerName = principal.getName();
+        String compositeName = principal.getName();
+        String playerName = compositeName.split(":")[0];
         logger.info("Processing READY confirmation for game {} by {}", gameId, playerName);
+
+        // Security check: ensure the token is actually for THIS game/room
+        if (!compositeName.endsWith(":" + gameId)) {
+            throw new UnauthorisedActionException("Token is not valid for this game.");
+        }
+
         gameLifecycleService.markPlayerReadyForNextHand(gameId, playerName);
     }
 
@@ -147,7 +173,8 @@ public class GameController {
     @MessageExceptionHandler
     public void handleMessageException(Exception exception, Principal principal,
             org.springframework.messaging.Message<?> message) {
-        String playerName = principal.getName();
+        String compositeName = principal.getName();
+        String playerName = compositeName.split(":")[0];
 
         // Extract gameId from the destination header manually
         org.springframework.messaging.simp.SimpMessageHeaderAccessor accessor = org.springframework.messaging.simp.SimpMessageHeaderAccessor
@@ -164,7 +191,7 @@ public class GameController {
 
         String userFriendlyMessage = exception.getMessage();
 
-        // Sanitize technical messages like Jackson deserialization errors
+        // Sanitise technical messages like Jackson deserialization errors
         if (exception instanceof org.springframework.messaging.converter.MessageConversionException ||
                 (userFriendlyMessage != null && userFriendlyMessage.contains("Cannot deserialize"))) {
             userFriendlyMessage = "Invalid action request format. Please try again with a valid amount.";
@@ -196,8 +223,15 @@ public class GameController {
     public ResponseEntity<ApiResponse<Void>> leaveGame(
             @PathVariable String gameId,
             Principal principal) {
-        String playerName = principal.getName();
+        String compositeName = principal.getName();
+        String playerName = compositeName.split(":")[0];
         logger.info("Player {} requesting to leave game {}", playerName, gameId);
+
+        // Security check: ensure the token is actually for THIS game/room
+        if (!compositeName.endsWith(":" + gameId)) {
+            throw new UnauthorisedActionException("Token is not valid for this game.");
+        }
+
         gameLifecycleService.leaveGame(gameId, playerName);
         logger.info("Player {} successfully left game {}", playerName, gameId);
         return ResponseEntity.ok(ApiResponse.success("Successfully left game"));
@@ -216,8 +250,15 @@ public class GameController {
     public ResponseEntity<ApiResponse<Void>> claimWin(
             @PathVariable String gameId,
             Principal principal) {
-        String playerName = principal.getName();
+        String compositeName = principal.getName();
+        String playerName = compositeName.split(":")[0];
         logger.info("Player {} attempting to claim win in game {}", playerName, gameId);
+
+        // Security check: ensure the token is actually for THIS game/room
+        if (!compositeName.endsWith(":" + gameId)) {
+            throw new UnauthorisedActionException("Token is not valid for this game.");
+        }
+
         gameLifecycleService.claimWin(gameId, playerName);
         logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
         return ResponseEntity.ok(ApiResponse.success("Win claimed successfully"));

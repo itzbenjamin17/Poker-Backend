@@ -385,8 +385,8 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
 
         return new TestGameSession(
                 roomId,
-                jwtService.generateToken(HOST_NAME),
-                jwtService.generateToken(OTHER_NAME));
+                jwtService.generateToken(HOST_NAME, roomId),
+                jwtService.generateToken(OTHER_NAME, roomId));
     }
 
     private record TestGameSession(String roomId, String hostToken, String otherToken) {
