@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -263,11 +264,15 @@ public class RoomService {
 
         // Convert player names to PlayerInfoDTO objects
         List<PlayerJoinInfo> playerObjects = room.getPlayers().stream()
-                .map(playerName -> new PlayerJoinInfo(
-                        playerName,
-                        currentHost.equals(playerName),
-                        "recently" // come back to this and change to actual time
-                ))
+                .map(playerName -> {
+                    LocalDateTime joinedAt = room.getJoinedAt(playerName);
+                    String joinedAtStr = (joinedAt != null) ? joinedAt.toString() : "recently";
+                    return new PlayerJoinInfo(
+                            playerName,
+                            currentHost.equals(playerName),
+                            joinedAtStr
+                    );
+                })
                 .collect(Collectors.toList());
 
         // Create and return the RoomDataDTO

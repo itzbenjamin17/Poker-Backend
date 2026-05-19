@@ -429,6 +429,64 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    @Nested
+    @DisplayName("ready countdown flow")
+    class ReadyCountdownFlow {
+
+        @Test
+        @DisplayName("should start new hand when all players are ready")
+        void givenShowdown_whenAllPlayersReady_thenStartNewHand() throws Exception {
+            String roomName = uniqueName("ReadyFlowRoom");
+            JsonNode hostData = createRoom(roomName, "ReadyHost", 2);
+            String gameId = hostData.path("roomId").asText();
+            String hostToken = hostData.path("token").asText();
+            String guestToken = joinRoom(roomName, "ReadyGuest").path("token").asText();
+            startGame(gameId, hostToken);
+
+            var stompClient = createStompClient();
+            StompSession hostSession = connectSession(stompClient, hostToken);
+            StompSession guestSession = connectSession(stompClient, guestToken);
+
+            try {
+                // Reach showdown by checking down all streets
+                // Pre-flop
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CALL, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                // Flop
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                // Turn
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                // River
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, 
+                    state -> "SHOWDOWN".equals(state.path("phase").asText()));
+
+                // Verify countdown active
+                JsonNode showdownState = readGameState(gameId, hostToken);
+                assertThat(showdownState.path("isReadyCountdownActive").asBoolean()).isTrue();
+
+                // Mark both ready
+                hostSession.send("/app/" + gameId + "/ready", "{}");
+                guestSession.send("/app/" + gameId + "/ready", "{}");
+
+                // Wait for new hand (PRE_FLOP)
+                await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    JsonNode nextHandState = readGameState(gameId, hostToken);
+                    assertThat(nextHandState.path("phase").asText()).isEqualTo("PRE_FLOP");
+                    // Pot should be reset to blinds (10 + 20 = 30)
+                    assertThat(nextHandState.path("pot").asInt()).isEqualTo(30);
+                });
+
+            } finally {
+                hostSession.disconnect();
+                guestSession.disconnect();
+                stompClient.stop();
+            }
+        }
+    }
+
     private String performActionByCurrentPlayer(
             String gameId,
             PlayerActionRequest request,

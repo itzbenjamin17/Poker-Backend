@@ -12,17 +12,20 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     private final WebSocketAuthInterceptor webSocketAuthInterceptor;
+    private final WebSocketRateLimitInterceptor webSocketRateLimitInterceptor;
 
-    public WebSocketConfig(WebSocketAuthInterceptor webSocketAuthInterceptor) {
+    public WebSocketConfig(WebSocketAuthInterceptor webSocketAuthInterceptor,
+                           WebSocketRateLimitInterceptor webSocketRateLimitInterceptor) {
         this.webSocketAuthInterceptor = webSocketAuthInterceptor;
+        this.webSocketRateLimitInterceptor = webSocketRateLimitInterceptor;
     }
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
         // Enable simple broker for destinations the server broadcasts to:
+        // - /room/{roomId} - room lobby updates
         // - /game/{gameId} - public game state for all players
         // - /game/{gameId}/player/{playerId}/private - private data per player
-        // - /room/{roomId} - room lobby updates
         // broker is what sends messages to all subscribed clients
         config.enableSimpleBroker("/room", "/game");
 
@@ -40,7 +43,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
-        // Register interceptor to authenticate STOMP CONNECT with JWT
-        registration.interceptors(webSocketAuthInterceptor);
+        // Register interceptors to authenticate STOMP CONNECT and throttle messages
+        registration.interceptors(webSocketAuthInterceptor, webSocketRateLimitInterceptor);
     }
 }

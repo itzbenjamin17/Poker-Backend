@@ -26,11 +26,25 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final com.pokergame.security.PayloadSizeFilter payloadSizeFilter;
+    private final com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter;
 
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
-                          com.pokergame.security.PayloadSizeFilter payloadSizeFilter) {
+                          com.pokergame.security.PayloadSizeFilter payloadSizeFilter,
+                          com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.payloadSizeFilter = payloadSizeFilter;
+        this.endpointRateLimitFilter = endpointRateLimitFilter;
+    }
+
+    /**
+     * Provide a dummy UserDetailsService to suppress default password generation.
+     * Authenticated state is managed entirely via JWT principal.
+     */
+    @Bean
+    public org.springframework.security.core.userdetails.UserDetailsService userDetailsService() {
+        return username -> {
+            throw new org.springframework.security.core.userdetails.UsernameNotFoundException("Not used");
+        };
     }
 
     // All requests go through this filter chain
@@ -62,6 +76,9 @@ public class SecurityConfig {
                 // Explicitly disable unused login mechanisms to avoid default password generation
                 .formLogin(form -> form.disable())
                 .httpBasic(basic -> basic.disable())
+
+                // Enforce rate limits early
+                .addFilterBefore(endpointRateLimitFilter, org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter.class)
 
                 // Reject oversized payloads early (before any processing)
                 .addFilterBefore(payloadSizeFilter, org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter.class)

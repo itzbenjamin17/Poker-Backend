@@ -25,7 +25,7 @@ public class Room {
     private final String roomId;
     private final String roomName;
     private final String hostName;
-    private final List<String> players;
+    private final java.util.Map<String, LocalDateTime> playersWithJoinTime;
     private final int maxPlayers;
     private final int smallBlind;
     private final int bigBlind;
@@ -86,7 +86,7 @@ public class Room {
         this.bigBlind = bigBlind;
         this.buyIn = buyIn;
         this.password = password;
-        this.players = new ArrayList<>();
+        this.playersWithJoinTime = new java.util.LinkedHashMap<>();
         this.createdAt = LocalDateTime.now();
     }
 
@@ -96,8 +96,8 @@ public class Room {
      * @param playerName the name of the player to add
      */
     public void addPlayer(String playerName) {
-        if (!players.contains(playerName)) {
-            players.add(playerName);
+        if (!playersWithJoinTime.containsKey(playerName)) {
+            playersWithJoinTime.put(playerName, LocalDateTime.now());
         }
         else{
             throw new BadRequestException(String.format("Cannot add %s to room as they are already in the room", playerName));
@@ -110,8 +110,8 @@ public class Room {
      * @param playerName the name of the player to remove
      */
     public void removePlayer(String playerName) {
-        if (players.contains(playerName)){
-            players.remove(playerName);
+        if (playersWithJoinTime.containsKey(playerName)){
+            playersWithJoinTime.remove(playerName);
         }
         else{
             throw new BadRequestException(
@@ -127,7 +127,17 @@ public class Room {
      * @return true if the player is in the room, false otherwise
      */
     public boolean hasPlayer(String playerName) {
-        return players.contains(playerName);
+        return playersWithJoinTime.containsKey(playerName);
+    }
+
+    /**
+     * Returns the timestamp when a player joined the room.
+     *
+     * @param playerName the name of the player
+     * @return the join timestamp, or null if player not found
+     */
+    public LocalDateTime getJoinedAt(String playerName) {
+        return playersWithJoinTime.get(playerName);
     }
 
     /**
@@ -160,7 +170,7 @@ public class Room {
      */
     @Override
     public String toString() {
-        return roomName + " (" + roomId + ")" + " by " + hostName + " with " + players.size() + " players";
+        return roomName + " (" + roomId + ")" + " by " + hostName + " with " + playersWithJoinTime.size() + " players";
     }
 
     /**
@@ -196,7 +206,7 @@ public class Room {
      * @return the player list
      */
     public List<String> getPlayers() {
-        return players;
+        return new ArrayList<>(playersWithJoinTime.keySet());
     }
 
     /**

@@ -32,6 +32,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(RoomController.class)
 @AutoConfigureMockMvc(addFilters = false)
+@org.springframework.context.annotation.Import({
+        com.pokergame.security.RateLimitService.class,
+        com.pokergame.security.EndpointRateLimitFilter.class,
+        com.pokergame.security.PayloadSizeFilter.class
+})
 class RoomControllerTest {
 
     @Autowired
@@ -42,6 +47,12 @@ class RoomControllerTest {
 
     @Autowired
     private PayloadSizeFilter payloadSizeFilter;
+
+    @Autowired
+    private com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter;
+
+    @Autowired
+    private com.pokergame.security.RateLimitService rateLimitService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -59,10 +70,14 @@ class RoomControllerTest {
 
     @BeforeEach
     void setup() {
-        // We need to manually add the PayloadSizeFilter because @WebMvcTest 
+        // Reset rate limit buckets to ensure a fresh start for each test
+        rateLimitService.reset();
+
+        // We need to manually add the filters because @WebMvcTest 
         // doesn't include custom filters by default even if they are @Components.
         mockMvc = MockMvcBuilders.webAppContextSetup(webApplicationContext)
                 .addFilter(payloadSizeFilter)
+                .addFilter(endpointRateLimitFilter)
                 .build();
     }
 
@@ -254,6 +269,30 @@ class RoomControllerTest {
                 .content(largeBody))
                 .andExpect(status().isPayloadTooLarge())
                 .andExpect(jsonPath("$.message").value("Request payload too large. Maximum allowed is 10KB."));
+    }
+
+    @Test
+    @DisplayName("POST /api/room/create - Rate Limit Exceeded")
+    void createRoom_RateLimitExceeded() throws Exception {
+        // Explicitly enable rate limiting for this test
+        org.springframework.test.util.ReflectionTestUtils.setField(rateLimitService, "enabled", true);
+        
+        CreateRoomRequest request = new CreateRoomRequest("Room", "Player1", 6, 10, 20, 1000, null);
+
+        // Consume the limit (5 per 15 minutes)
+        for (int i = 0; i < 5; i++) {
+            mockMvc.perform(post("/api/room/create")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isOk());
+        }
+
+        // The 6th attempt should fail with 429
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.message").value("Too many requests. Please try again in 15 minutes."));
     }
 
     @Test

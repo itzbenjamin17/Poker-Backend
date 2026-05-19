@@ -108,11 +108,45 @@ class RoomServiceTest {
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("already taken");
         }
+
+        @Test
+        @DisplayName("should trim room and player names during creation")
+        void createRoom_TrimsNames() {
+            String roomId = roomService.createRoom(new CreateRoomRequest(
+                    "  Untrimmed Room  ",
+                    "  Untrimmed Player  ",
+                    6, 10, 20, 1000, null));
+
+            Room room = roomService.getRoom(roomId);
+            assertThat(room.getRoomName()).isEqualTo("Untrimmed Room");
+            assertThat(room.getPlayers()).containsExactly("Untrimmed Player");
+        }
     }
 
     @Nested
     @DisplayName("joining rooms")
     class JoinRoom {
+
+        @Test
+        @DisplayName("should allow joining a room with leading/trailing whitespace in the search name")
+        void joinRoom_TrimsSearchName() {
+            String roomId = roomService.createRoom(validCreateRequest);
+
+            String joinedRoomId = roomService.joinRoom(new JoinRoomRequest("  Test Room  ", "Player2", null));
+
+            assertThat(joinedRoomId).isEqualTo(roomId);
+            assertThat(roomService.getRoom(roomId).getPlayers()).contains("Player2");
+        }
+
+        @Test
+        @DisplayName("should trim player name when joining")
+        void joinRoom_TrimsPlayerName() {
+            roomService.createRoom(validCreateRequest);
+
+            roomService.joinRoom(new JoinRoomRequest("Test Room", "  P2  ", null));
+
+            assertThat(roomService.findRoomByName("Test Room").getPlayers()).contains("P2");
+        }
 
         @Test
         @DisplayName("should add a second player to an existing public room")
