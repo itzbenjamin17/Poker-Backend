@@ -2,7 +2,6 @@ package com.pokergame.security;
 
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
-import io.github.bucket4j.Refill;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -23,10 +22,16 @@ public class RateLimitService {
     private final Map<String, Bucket> wsBuckets = new ConcurrentHashMap<>();
 
     // REST Limit: 5 attempts per 15 minutes (per IP + PlayerName/Path)
-    private static final Bandwidth REST_LIMIT = Bandwidth.classic(5, Refill.greedy(5, Duration.ofMinutes(15)));
+    private static final Bandwidth REST_LIMIT = Bandwidth.builder()
+            .capacity(5)
+            .refillGreedy(5, Duration.ofMinutes(15))
+            .build();
 
     // WS Limit: 5 messages per second (per Session)
-    private static final Bandwidth WS_LIMIT = Bandwidth.classic(5, Refill.greedy(5, Duration.ofSeconds(1)));
+    private static final Bandwidth WS_LIMIT = Bandwidth.builder()
+            .capacity(5)
+            .refillGreedy(5, Duration.ofSeconds(1))
+            .build();
 
     public boolean isEnabled() {
         return enabled;

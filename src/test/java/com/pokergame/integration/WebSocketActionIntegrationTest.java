@@ -196,41 +196,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             CompletableFuture<PublicGameStateResponse> initialStateFuture = new CompletableFuture<>();
             CompletableFuture<PublicGameStateResponse> readyGateOpenFuture = new CompletableFuture<>();
             CompletableFuture<PublicGameStateResponse> nextHandFuture = new CompletableFuture<>();
-            AtomicBoolean readyGateSeen = new AtomicBoolean(false);
-
-            StompFrameHandler stateHandler = new StompFrameHandler() {
-                @Override
-                public Type getPayloadType(@NonNull StompHeaders headers) {
-                    return PublicGameStateResponse.class;
-                }
-
-                @Override
-                public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                    if (!(payload instanceof PublicGameStateResponse response)) {
-                        return;
-                    }
-
-                    if (!initialStateFuture.isDone()
-                            && response.phase() == GamePhase.PRE_FLOP
-                            && !Boolean.TRUE.equals(response.isReadyCountdownActive())) {
-                        initialStateFuture.complete(response);
-                    }
-
-                    if (!readyGateOpenFuture.isDone()
-                            && response.phase() == GamePhase.SHOWDOWN
-                            && Boolean.TRUE.equals(response.isReadyCountdownActive())) {
-                        readyGateSeen.set(true);
-                        readyGateOpenFuture.complete(response);
-                    }
-
-                    if (!nextHandFuture.isDone()
-                            && readyGateSeen.get()
-                            && response.phase() == GamePhase.PRE_FLOP
-                            && !Boolean.TRUE.equals(response.isReadyCountdownActive())) {
-                        nextHandFuture.complete(response);
-                    }
-                }
-            };
+            StompFrameHandler stateHandler = getStompFrameHandler(initialStateFuture, readyGateOpenFuture, nextHandFuture);
 
             hostSession.subscribe("/game/" + gameSession.roomId(), stateHandler);
             otherSession.subscribe("/game/" + gameSession.roomId(), stateHandler);
@@ -358,6 +324,44 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             hostSession.disconnect();
             otherSession.disconnect();
         }
+    }
+
+    private static @NonNull StompFrameHandler getStompFrameHandler(CompletableFuture<PublicGameStateResponse> initialStateFuture, CompletableFuture<PublicGameStateResponse> readyGateOpenFuture, CompletableFuture<PublicGameStateResponse> nextHandFuture) {
+        AtomicBoolean readyGateSeen = new AtomicBoolean(false);
+
+        return new StompFrameHandler() {
+            @Override
+            public Type getPayloadType(@NonNull StompHeaders headers) {
+                return PublicGameStateResponse.class;
+            }
+
+            @Override
+            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                if (!(payload instanceof PublicGameStateResponse response)) {
+                    return;
+                }
+
+                if (!initialStateFuture.isDone()
+                        && response.phase() == GamePhase.PRE_FLOP
+                        && !Boolean.TRUE.equals(response.isReadyCountdownActive())) {
+                    initialStateFuture.complete(response);
+                }
+
+                if (!readyGateOpenFuture.isDone()
+                        && response.phase() == GamePhase.SHOWDOWN
+                        && Boolean.TRUE.equals(response.isReadyCountdownActive())) {
+                    readyGateSeen.set(true);
+                    readyGateOpenFuture.complete(response);
+                }
+
+                if (!nextHandFuture.isDone()
+                        && readyGateSeen.get()
+                        && response.phase() == GamePhase.PRE_FLOP
+                        && !Boolean.TRUE.equals(response.isReadyCountdownActive())) {
+                    nextHandFuture.complete(response);
+                }
+            }
+        };
     }
 
     private static boolean isReadyEligible(PublicPlayerState player) {

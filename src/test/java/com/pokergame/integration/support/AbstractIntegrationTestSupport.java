@@ -4,9 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
+import com.pokergame.security.RateLimitService;
 import org.awaitility.Awaitility;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -18,6 +20,7 @@ import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.socket.WebSocketHttpHeaders;
@@ -44,11 +47,18 @@ public abstract class AbstractIntegrationTestSupport {
     @LocalServerPort
     protected int port;
 
+    @Autowired
+    protected RateLimitService rateLimitService;
+
     protected final ObjectMapper objectMapper = new ObjectMapper();
     protected RestClient restClient;
 
     @BeforeEach
-    void initialiseRestClient() {
+    void setupIntegrationTest() {
+        // Reset rate limiting to disabled by default for each test
+        ReflectionTestUtils.setField(rateLimitService, "enabled", false);
+        rateLimitService.reset();
+
         restClient = RestClient.builder()
                 .baseUrl("http://localhost:" + port)
                 .build();

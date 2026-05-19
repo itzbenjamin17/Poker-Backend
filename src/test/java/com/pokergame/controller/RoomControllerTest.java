@@ -267,7 +267,7 @@ class RoomControllerTest {
         mockMvc.perform(post("/api/room/create")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(largeBody))
-                .andExpect(status().isPayloadTooLarge())
+                .andExpect(status().isContentTooLarge())
                 .andExpect(jsonPath("$.message").value("Request payload too large. Maximum allowed is 10KB."));
     }
 
