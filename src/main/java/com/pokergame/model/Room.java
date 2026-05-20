@@ -86,7 +86,7 @@ public class Room {
         this.bigBlind = bigBlind;
         this.buyIn = buyIn;
         this.password = password;
-        this.playersWithJoinTime = new java.util.LinkedHashMap<>();
+        this.playersWithJoinTime = java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>());
         this.createdAt = LocalDateTime.now();
     }
 
@@ -95,7 +95,7 @@ public class Room {
      *
      * @param playerName the name of the player to add
      */
-    public void addPlayer(String playerName) {
+    public synchronized void addPlayer(String playerName) {
         if (!playersWithJoinTime.containsKey(playerName)) {
             playersWithJoinTime.put(playerName, LocalDateTime.now());
         }
@@ -109,7 +109,7 @@ public class Room {
      *
      * @param playerName the name of the player to remove
      */
-    public void removePlayer(String playerName) {
+    public synchronized void removePlayer(String playerName) {
         if (playersWithJoinTime.containsKey(playerName)){
             playersWithJoinTime.remove(playerName);
         }
@@ -126,7 +126,7 @@ public class Room {
      * @param playerName the name of the player to check
      * @return true if the player is in the room, false otherwise
      */
-    public boolean hasPlayer(String playerName) {
+    public synchronized boolean hasPlayer(String playerName) {
         return playersWithJoinTime.containsKey(playerName);
     }
 
@@ -136,7 +136,7 @@ public class Room {
      * @param playerName the name of the player
      * @return the join timestamp, or null if player not found
      */
-    public LocalDateTime getJoinedAt(String playerName) {
+    public synchronized LocalDateTime getJoinedAt(String playerName) {
         return playersWithJoinTime.get(playerName);
     }
 
@@ -205,7 +205,7 @@ public class Room {
      *
      * @return the player list
      */
-    public List<String> getPlayers() {
+    public synchronized List<String> getPlayers() {
         return new ArrayList<>(playersWithJoinTime.keySet());
     }
 

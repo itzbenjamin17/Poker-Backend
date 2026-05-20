@@ -42,17 +42,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String token = authHeader.substring(7);
 
             if (jwtService.isTokenValid(token)) {
-                String playerName = jwtService.extractPlayerName(token);
+                PlayerPrincipal principal = jwtService.extractPrincipal(token);
 
-                // Create the pre-authenticated token (authentication already occurred via JWT
-                // validation)
+                // Create the pre-authenticated token
                 PreAuthenticatedAuthenticationToken authentication = new PreAuthenticatedAuthenticationToken(
-                        playerName, token, Collections.emptyList());
+                        principal, token, Collections.emptyList());
                 authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 
-                // Set in the security context - now Principal.getName() returns playerName
+                // Set in the security context
                 SecurityContextHolder.getContext().setAuthentication(authentication);
-                logger.debug("Authenticated player: {}", playerName);
+                logger.debug("Authenticated player: {} for room: {}", principal.playerName(), principal.roomId());
             }
         }
 

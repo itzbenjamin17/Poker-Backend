@@ -8,6 +8,7 @@ import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.model.Game;
 import com.pokergame.security.JwtAuthenticationFilter;
+import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
@@ -19,10 +20,11 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.support.MessageBuilder;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.security.Principal;
 import java.util.Collections;
 
 import static org.mockito.Mockito.*;
@@ -60,12 +62,13 @@ class GameControllerTest {
 
     private final String gameId = "game-123";
     private final String playerName = "Player1";
-    private Principal principal;
+    private PlayerPrincipal principal;
+    private Authentication auth;
 
     @BeforeEach
     void setUp() {
-        principal = mock(Principal.class);
-        when(principal.getName()).thenReturn(playerName + ":" + gameId);
+        principal = new PlayerPrincipal(playerName, gameId);
+        auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
     }
 
     @Test
@@ -83,7 +86,7 @@ class GameControllerTest {
         when(gameStateService.getPublicGameStateSnapshot(gameId, game)).thenReturn(response);
 
         mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(() -> playerName + ":" + gameId))
+                .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.pot").value(100))
                 .andExpect(jsonPath("$.phase").value("PRE_FLOP"));
@@ -95,7 +98,7 @@ class GameControllerTest {
         when(gameLifecycleService.gameExists(gameId)).thenReturn(false);
 
         mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(() -> playerName + ":" + gameId))
+                .principal(auth))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("Game not found"));
     }
@@ -108,7 +111,7 @@ class GameControllerTest {
         when(gameLifecycleService.getGame(gameId)).thenReturn(null);
 
         mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(() -> playerName + ":" + gameId))
+                .principal(auth))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("Game not found"));
     }
@@ -120,7 +123,7 @@ class GameControllerTest {
         when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(false);
 
         mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(() -> playerName + ":" + gameId))
+                .principal(auth))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message").value("You are no longer part of this game."));
     }
@@ -137,7 +140,7 @@ class GameControllerTest {
         when(gameStateService.getPrivatePlayerStateSnapshot(game, playerName)).thenReturn(response);
 
         mockMvc.perform(get("/api/game/{gameId}/private-state", gameId)
-                .principal(() -> playerName + ":" + gameId))
+                .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.playerId").value("p1-id"));
     }
@@ -149,7 +152,7 @@ class GameControllerTest {
         when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(false);
 
         mockMvc.perform(get("/api/game/{gameId}/private-state", gameId)
-                .principal(() -> playerName + ":" + gameId))
+                .principal(auth))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message").value("You are no longer part of this game."));
     }
@@ -158,7 +161,7 @@ class GameControllerTest {
     @DisplayName("POST /api/game/{gameId}/leave - Success")
     void leaveGame_Success() throws Exception {
         mockMvc.perform(post("/api/game/{gameId}/leave", gameId)
-                .principal(() -> playerName + ":" + gameId))
+                .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully left game"));
 
@@ -169,7 +172,7 @@ class GameControllerTest {
     @DisplayName("POST /api/game/{gameId}/claim-win - Success")
     void claimWin_Success() throws Exception {
         mockMvc.perform(post("/api/game/{gameId}/claim-win", gameId)
-                .principal(() -> playerName + ":" + gameId))
+                .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Win claimed successfully"));
 

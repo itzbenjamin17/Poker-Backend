@@ -59,16 +59,16 @@ class JwtServiceTest {
             String token = jwtService.generateToken(playerName, TEST_ROOM);
 
             assertThat(jwtService.isTokenValid(token)).isTrue();
-            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName + ":" + TEST_ROOM);
+            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName);
         }
 
         @Test
-        @DisplayName("should encode an empty player name as a null subject when extracted")
-        void givenEmptyPlayerName_whenGenerateToken_thenExtractPlayerNameReturnsRoomIdOnly() {
+        @DisplayName("should encode an empty player name as an empty subject when extracted")
+        void givenEmptyPlayerName_whenGenerateToken_thenExtractPlayerNameReturnsEmpty() {
             String token = jwtService.generateToken("", TEST_ROOM);
 
             assertThat(jwtService.isTokenValid(token)).isTrue();
-            assertThat(jwtService.extractPlayerName(token)).isEqualTo(":" + TEST_ROOM);
+            assertThat(jwtService.extractPlayerName(token)).isEqualTo("");
         }
     }
 
@@ -142,7 +142,20 @@ class JwtServiceTest {
         void givenValidToken_whenExtractPlayerName_thenReturnSubject(String playerName) {
             String token = jwtService.generateToken(playerName, TEST_ROOM);
 
-            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName + ":" + TEST_ROOM);
+            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName);
+        }
+
+        @Test
+        @DisplayName("should extract full principal including room ID")
+        void givenValidToken_whenExtractPrincipal_thenReturnPlayerPrincipal() {
+            String playerName = "Alice";
+            String token = jwtService.generateToken(playerName, TEST_ROOM);
+
+            PlayerPrincipal principal = jwtService.extractPrincipal(token);
+
+            assertThat(principal.playerName()).isEqualTo(playerName);
+            assertThat(principal.roomId()).isEqualTo(TEST_ROOM);
+            assertThat(principal.getName()).isEqualTo(playerName + ":" + TEST_ROOM);
         }
 
         @Test
@@ -227,7 +240,12 @@ class JwtServiceTest {
         String token = jwtService.generateToken("TestPlayer", TEST_ROOM);
 
         assertThat(jwtService.isTokenValid(token)).isTrue();
-        assertThat(jwtService.extractPlayerName(token)).isEqualTo("TestPlayer:" + TEST_ROOM);
+        assertThat(jwtService.extractPlayerName(token)).isEqualTo("TestPlayer");
+        
+        PlayerPrincipal principal = jwtService.extractPrincipal(token);
+        assertThat(principal.playerName()).isEqualTo("TestPlayer");
+        assertThat(principal.roomId()).isEqualTo(TEST_ROOM);
+
         assertThat(token.split("\\.")).hasSize(3).allSatisfy(part -> assertThat(part).isNotBlank());
     }
 

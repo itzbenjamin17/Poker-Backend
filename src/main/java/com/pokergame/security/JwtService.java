@@ -42,14 +42,12 @@ public class JwtService {
 
     /**
      * Generates a signed JWT for the given player and room.
-     * The subject is a composite of playerName and roomId to ensure global uniqueness
-     * and prevent identity impersonation across different rooms.
      */
     public String generateToken(String playerName, String roomId) {
         long now = System.currentTimeMillis();
-        String subject = playerName + ":" + roomId;
         return Jwts.builder()
-                .subject(subject)
+                .subject(playerName)
+                .claim("roomId", roomId)
                 .issuedAt(new Date(now))
                 .expiration(new Date(now + expirationMillis))
                 .signWith(secretKey)
@@ -69,14 +67,29 @@ public class JwtService {
     }
 
     /**
+     * Extracts the player principal from a valid token.
+     */
+    public PlayerPrincipal extractPrincipal(String token) {
+        var claims = Jwts.parser()
+                .verifyWith(secretKey)
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+        
+        String subject = claims.getSubject();
+        return new PlayerPrincipal(subject == null ? "" : subject, claims.get("roomId", String.class));
+    }
+
+    /**
      * Extracts the player name (subject) from a valid token.
      */
     public String extractPlayerName(String token) {
-        return Jwts.parser()
+        String subject = Jwts.parser()
                 .verifyWith(secretKey)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload()
                 .getSubject();
+        return subject == null ? "" : subject;
     }
 }

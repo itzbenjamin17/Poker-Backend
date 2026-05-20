@@ -5,6 +5,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -42,12 +43,17 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
+    @Value("${poker.security.trust-proxy:false}")
+    private boolean trustProxy;
+
     private String getClientIp(HttpServletRequest request) {
-        String xfHeader = request.getHeader("X-Forwarded-For");
-        if (xfHeader == null) {
-            return request.getRemoteAddr();
+        if (trustProxy) {
+            String xfHeader = request.getHeader("X-Forwarded-For");
+            if (xfHeader != null) {
+                return xfHeader.split(",")[0].trim();
+            }
         }
-        return xfHeader.split(",")[0];
+        return request.getRemoteAddr();
     }
 
     private void sendRateLimitError(HttpServletResponse response) throws IOException {

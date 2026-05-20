@@ -89,29 +89,26 @@ public class GameStateService {
         logger.debug("Broadcasting game state for game {}", gameId);
 
         PublicGameStateResponse publicResponse;
-        List<PrivatePlayerState> privateStates = new ArrayList<>();
-        List<String> encodedNames = new ArrayList<>();
+        Map<String, PrivatePlayerState> playerPrivateStates = new HashMap<>();
 
         synchronized (game) {
             publicResponse = buildPublicGameStateResponse(gameId, game);
-            for (Player targetPlayer : game.getPlayers()) {
-                String encodedPlayerName = java.net.URLEncoder.encode(
-                        targetPlayer.getName(),
-                        java.nio.charset.StandardCharsets.UTF_8)
-                        .replace("+", "%20");
-                encodedNames.add(encodedPlayerName);
-                privateStates.add(buildPrivatePlayerState(targetPlayer));
+            for (Player player : game.getPlayers()) {
+                playerPrivateStates.put(player.getName(), buildPrivatePlayerState(player));
             }
         }
 
         messagingTemplate.convertAndSend("/game/" + gameId, publicResponse);
 
-        // Sending a personalised game state to each player
-        for (int i = 0; i < privateStates.size(); i++) {
-            messagingTemplate.convertAndSend(
-                    "/game/" + gameId + "/player-name/" + encodedNames.get(i) + "/private",
-                    privateStates.get(i));
-        }
+        // Sending a personalised game state to each player using secure user destinations
+        playerPrivateStates.forEach((playerName, privateState) -> {
+            // Principal name is playerName:roomId
+            String compositeName = playerName + ":" + gameId;
+            messagingTemplate.convertAndSendToUser(
+                    compositeName,
+                    "/queue/private",
+                    privateState);
+        });
     }
 
     /**
@@ -374,19 +371,18 @@ public class GameStateService {
      */
     @Async("gameExecutor")
     public void sendPrivatePlayerNotification(String gameId, String playerName, String message, ResponseMessage type) {
-        String encodedPlayerName = java.net.URLEncoder.encode(
-                playerName,
-                java.nio.charset.StandardCharsets.UTF_8)
-                .replace("+", "%20");
-
         PlayerNotificationResponse notification = new PlayerNotificationResponse(
                 type,
                 message,
                 playerName,
                 gameId);
 
-        messagingTemplate.convertAndSend(
-                "/game/" + gameId + "/player-name/" + encodedPlayerName + "/private",
+        // Principal name is playerName:roomId
+        String compositeName = playerName + ":" + gameId;
+        
+        messagingTemplate.convertAndSendToUser(
+                compositeName,
+                "/queue/private",
                 notification);
     }
 

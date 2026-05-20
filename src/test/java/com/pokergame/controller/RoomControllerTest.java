@@ -8,6 +8,7 @@ import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.security.JwtAuthenticationFilter;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PayloadSizeFilter;
+import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,12 +18,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 
 import static org.mockito.Mockito.*;
@@ -128,10 +132,12 @@ class RoomControllerTest {
     void leaveRoom_NoGameActive_ShouldReturnSuccess() throws Exception {
         String roomId = "room-123";
         String playerName = "Player1";
+        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
         when(gameLifecycleService.gameExists(roomId)).thenReturn(false);
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
-                .principal(() -> playerName + ":" + roomId))
+                .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully left room"));
 
@@ -144,11 +150,13 @@ class RoomControllerTest {
     void leaveRoom_GameActive_ShouldLeaveBoth() throws Exception {
         String roomId = "room-123";
         String playerName = "Player1";
+        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
         when(gameLifecycleService.gameExists(roomId)).thenReturn(true);
         when(gameLifecycleService.playerExistsInGame(roomId, playerName)).thenReturn(true);
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
-                .principal(() -> playerName + ":" + roomId))
+                .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully left room"));
 
@@ -161,11 +169,13 @@ class RoomControllerTest {
     void leaveRoom_GameActive_PlayerNotInGame() throws Exception {
         String roomId = "room-123";
         String playerName = "Player1";
+        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
         when(gameLifecycleService.gameExists(roomId)).thenReturn(true);
         when(gameLifecycleService.playerExistsInGame(roomId, playerName)).thenReturn(false);
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
-                .principal(() -> playerName + ":" + roomId))
+                .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully left room"));
 
@@ -305,11 +315,13 @@ class RoomControllerTest {
     void startGame_Host_ShouldReturnGameId() throws Exception {
         String roomId = "room-123";
         String playerName = "HostPlayer";
+        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
         when(roomService.isRoomHost(roomId, playerName)).thenReturn(true);
         when(gameLifecycleService.createGameFromRoom(roomId)).thenReturn("game-123");
 
         mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
-                .principal(() -> playerName + ":" + roomId))
+                .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Game started successfully"))
                 .andExpect(jsonPath("$.data").value("game-123"));
@@ -322,10 +334,12 @@ class RoomControllerTest {
     void startGame_NonHost_ShouldReturn403() throws Exception {
         String roomId = "room-123";
         String playerName = "GuestPlayer";
+        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
         when(roomService.isRoomHost(roomId, playerName)).thenReturn(false);
 
         mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
-                .principal(() -> playerName + ":" + roomId))
+                .principal(auth))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error").value("Forbidden"))
                 .andExpect(jsonPath("$.message").value("Only the room host can start the game. Please ask the host to start."));

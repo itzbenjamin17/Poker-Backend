@@ -11,6 +11,7 @@ import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
 import com.pokergame.model.Game;
 import com.pokergame.enums.ResponseMessage;
+import com.pokergame.security.PlayerPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +19,7 @@ import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.security.Principal;
@@ -53,19 +55,19 @@ public class GameController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param gameId    game identifier
-     * @param principal authenticated player (from JWT)
+     * @param authentication authenticated player (from JWT)
      * @return latest game-state snapshot
      */
     @GetMapping("/{gameId}/state")
     public ResponseEntity<PublicGameStateResponse> getGameState(
             @PathVariable String gameId,
-            Principal principal) {
-        String compositeName = principal.getName();
-        String playerName = compositeName.split(":")[0];
+            Authentication authentication) {
+        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+        String playerName = playerPrincipal.playerName();
         logger.debug("Player {} requested game state for {}", playerName, gameId);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!compositeName.endsWith(":" + gameId)) {
+        if (!playerPrincipal.roomId().equals(gameId)) {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
@@ -79,19 +81,19 @@ public class GameController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param gameId    game identifier
-     * @param principal authenticated player (from JWT)
+     * @param authentication authenticated player (from JWT)
      * @return private player-state snapshot
      */
     @GetMapping("/{gameId}/private-state")
     public ResponseEntity<PrivatePlayerState> getPrivateState(
             @PathVariable String gameId,
-            Principal principal) {
-        String compositeName = principal.getName();
-        String playerName = compositeName.split(":")[0];
+            Authentication authentication) {
+        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+        String playerName = playerPrincipal.playerName();
         logger.debug("Player {} requested private state for {}", playerName, gameId);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!compositeName.endsWith(":" + gameId)) {
+        if (!playerPrincipal.roomId().equals(gameId)) {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
@@ -130,12 +132,12 @@ public class GameController {
             @DestinationVariable String gameId,
             @Payload PlayerActionRequest actionRequest,
             Principal principal) {
-        String compositeName = principal.getName();
-        String playerName = compositeName.split(":")[0];
+        PlayerPrincipal playerPrincipal = extractPrincipalFromPrincipal(principal);
+        String playerName = playerPrincipal.playerName();
         logger.info("Processing player action for game {} by {}: {}", gameId, playerName, actionRequest);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!compositeName.endsWith(":" + gameId)) {
+        if (!playerPrincipal.roomId().equals(gameId)) {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
@@ -153,12 +155,12 @@ public class GameController {
     public void markReady(
             @DestinationVariable String gameId,
             Principal principal) {
-        String compositeName = principal.getName();
-        String playerName = compositeName.split(":")[0];
+        PlayerPrincipal playerPrincipal = extractPrincipalFromPrincipal(principal);
+        String playerName = playerPrincipal.playerName();
         logger.info("Processing READY confirmation for game {} by {}", gameId, playerName);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!compositeName.endsWith(":" + gameId)) {
+        if (!playerPrincipal.roomId().equals(gameId)) {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
@@ -173,8 +175,8 @@ public class GameController {
     @MessageExceptionHandler
     public void handleMessageException(Exception exception, Principal principal,
             org.springframework.messaging.Message<?> message) {
-        String compositeName = principal.getName();
-        String playerName = compositeName.split(":")[0];
+        PlayerPrincipal playerPrincipal = extractPrincipalFromPrincipal(principal);
+        String playerName = playerPrincipal.playerName();
 
         // Extract gameId from the destination header manually
         org.springframework.messaging.simp.SimpMessageHeaderAccessor accessor = org.springframework.messaging.simp.SimpMessageHeaderAccessor
@@ -216,19 +218,19 @@ public class GameController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param gameId    game identifier
-     * @param principal authenticated player (from JWT)
+     * @param authentication authenticated player (from JWT)
      * @return success confirmation
      */
     @PostMapping("/{gameId}/leave")
     public ResponseEntity<ApiResponse<Void>> leaveGame(
             @PathVariable String gameId,
-            Principal principal) {
-        String compositeName = principal.getName();
-        String playerName = compositeName.split(":")[0];
+            Authentication authentication) {
+        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+        String playerName = playerPrincipal.playerName();
         logger.info("Player {} requesting to leave game {}", playerName, gameId);
 
-        // Security check: ensure the token is actually for THIS game/room
-        if (!compositeName.endsWith(":" + gameId)) {
+        // Security check: ensure the token is actually for THIS game
+        if (!playerPrincipal.roomId().equals(gameId)) {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
@@ -243,24 +245,42 @@ public class GameController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param gameId    game identifier
-     * @param principal authenticated player (from JWT)
+     * @param authentication authenticated player (from JWT)
      * @return success confirmation
      */
     @PostMapping("/{gameId}/claim-win")
     public ResponseEntity<ApiResponse<Void>> claimWin(
             @PathVariable String gameId,
-            Principal principal) {
-        String compositeName = principal.getName();
-        String playerName = compositeName.split(":")[0];
+            Authentication authentication) {
+        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+        String playerName = playerPrincipal.playerName();
         logger.info("Player {} attempting to claim win in game {}", playerName, gameId);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!compositeName.endsWith(":" + gameId)) {
+        if (!playerPrincipal.roomId().equals(gameId)) {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
         gameLifecycleService.claimWin(gameId, playerName);
         logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
         return ResponseEntity.ok(ApiResponse.success("Win claimed successfully"));
+    }
+
+    private PlayerPrincipal extractPrincipal(Authentication authentication) {
+        if (authentication.getPrincipal() instanceof PlayerPrincipal principal) {
+            return principal;
+        }
+        throw new UnauthorisedActionException("Invalid authentication principal");
+    }
+
+    private PlayerPrincipal extractPrincipalFromPrincipal(Principal principal) {
+        if (principal instanceof PlayerPrincipal playerPrincipal) {
+            return playerPrincipal;
+        }
+        // In WebSocket context, principal might be wrapped or be the authentication object itself
+        if (principal instanceof Authentication authentication && authentication.getPrincipal() instanceof PlayerPrincipal playerPrincipal) {
+            return playerPrincipal;
+        }
+        throw new UnauthorisedActionException("Invalid authentication principal in WebSocket");
     }
 }

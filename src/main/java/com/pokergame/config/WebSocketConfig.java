@@ -25,12 +25,14 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // Enable simple broker for destinations the server broadcasts to:
         // - /room/{roomId} - room lobby updates
         // - /game/{gameId} - public game state for all players
-        // - /game/{gameId}/player/{playerId}/private - private data per player
-        // broker is what sends messages to all subscribed clients
-        config.enableSimpleBroker("/room", "/game");
+        // - /queue - standard destination for private user messages
+        config.enableSimpleBroker("/room", "/game", "/queue");
 
         // Prefix for destinations clients send messages to (handled by @MessageMapping)
         config.setApplicationDestinationPrefixes("/app");
+        
+        // Prefix for user-specific destinations
+        config.setUserDestinationPrefix("/user");
     }
 
     @Override

@@ -9,10 +9,12 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
+import com.pokergame.security.PlayerPrincipal;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.security.Principal;
@@ -57,17 +59,17 @@ public class RoomController {
             @Valid @RequestBody CreateRoomRequest createRequest,
             jakarta.servlet.http.HttpServletRequest request) {
         logger.info("Creating new room with request: {}", createRequest);
+        
+        // Sanitize names first to ensure consistency between token and storage
+        String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(createRequest.getPlayerName());
+        
         String roomId = roomService.createRoom(createRequest);
 
         // Generate JWT token for this player, bound to this room
-        String token = jwtService.generateToken(createRequest.getPlayerName(), roomId);
-
-        // Reset REST rate limit for this player on successful room creation
-        String clientIp = getClientIp(request);
-        rateLimitService.cleanUpRest(clientIp + ":" + request.getRequestURI());
+        String token = jwtService.generateToken(sanitizedPlayerName, roomId);
 
         logger.info("Room created successfully with ID: {}", roomId);
-        TokenResponse tokenResponse = new TokenResponse(token, roomId, createRequest.getPlayerName());
+        TokenResponse tokenResponse = new TokenResponse(token, roomId, sanitizedPlayerName);
         return ResponseEntity.ok(ApiResponse.success("Room created successfully", tokenResponse));
     }
 
@@ -83,26 +85,18 @@ public class RoomController {
             @Valid @RequestBody JoinRoomRequest joinRequest,
             jakarta.servlet.http.HttpServletRequest request) {
         logger.info("Player {} attempting to join room: {}", joinRequest.playerName(), joinRequest.roomName());
+        
+        // Sanitize names first to ensure consistency between token and storage
+        String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.playerName());
+        
         String roomId = roomService.joinRoom(joinRequest);
 
         // Generate JWT token for this player, bound to this room
-        String token = jwtService.generateToken(joinRequest.playerName(), roomId);
+        String token = jwtService.generateToken(sanitizedPlayerName, roomId);
 
-        // Reset REST rate limit for this player on successful room join
-        String clientIp = getClientIp(request);
-        rateLimitService.cleanUpRest(clientIp + ":" + request.getRequestURI());
-
-        logger.info("Player {} successfully joined room: {}", joinRequest.playerName(), joinRequest.roomName());
-        TokenResponse tokenResponse = new TokenResponse(token, roomId, joinRequest.playerName());
+        logger.info("Player {} successfully joined room: {}", sanitizedPlayerName, joinRequest.roomName());
+        TokenResponse tokenResponse = new TokenResponse(token, roomId, sanitizedPlayerName);
         return ResponseEntity.ok(ApiResponse.success("Successfully joined room", tokenResponse));
-    }
-
-    private String getClientIp(jakarta.servlet.http.HttpServletRequest request) {
-        String xfHeader = request.getHeader("X-Forwarded-For");
-        if (xfHeader == null) {
-            return request.getRemoteAddr();
-        }
-        return xfHeader.split(",")[0];
     }
 
     /**
@@ -110,20 +104,20 @@ public class RoomController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param roomId    room identifier
-     * @param principal authenticated player (from JWT)
+     * @param authentication authenticated player (from JWT)
      * @return success confirmation
      */
     @PostMapping("/{roomId}/leave")
     public ResponseEntity<ApiResponse<Void>> leaveRoom(
             @PathVariable String roomId,
-            Principal principal) {
-        String compositeName = principal.getName();
-        String playerName = compositeName.split(":")[0];
+            Authentication authentication) {
+        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+        String playerName = playerPrincipal.playerName();
         logger.info("Player {} requesting to leave room {}", playerName, roomId);
         boolean gameActive = gameLifecycleService.gameExists(roomId);
 
         // Security check: ensure the token is actually for THIS room
-        if (!compositeName.endsWith(":" + roomId)) {
+        if (!playerPrincipal.roomId().equals(roomId)) {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
 
@@ -162,20 +156,20 @@ public class RoomController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param roomId    room identifier
-     * @param principal authenticated player (must be host)
+     * @param authentication authenticated player (must be host)
      * @return created game ID
      * @throws UnauthorisedActionException if the player is not the room host
      */
     @PostMapping("/{roomId}/start-game")
     public ResponseEntity<ApiResponse<String>> startGame(
             @PathVariable String roomId,
-            Principal principal) {
-        String compositeName = principal.getName();
-        String playerName = compositeName.split(":")[0];
+            Authentication authentication) {
+        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+        String playerName = playerPrincipal.playerName();
         logger.info("Player {} attempting to start game for room {}", playerName, roomId);
 
         // Security check: ensure the token is actually for THIS room
-        if (!compositeName.endsWith(":" + roomId)) {
+        if (!playerPrincipal.roomId().equals(roomId)) {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
 
@@ -190,5 +184,12 @@ public class RoomController {
         logger.info("Game {} created successfully from room {}", gameId, roomId);
 
         return ResponseEntity.ok(ApiResponse.success("Game started successfully", gameId));
+    }
+
+    private PlayerPrincipal extractPrincipal(Authentication authentication) {
+        if (authentication.getPrincipal() instanceof PlayerPrincipal principal) {
+            return principal;
+        }
+        throw new UnauthorisedActionException("Invalid authentication principal");
     }
 }

@@ -82,32 +82,40 @@ public class GameLifecycleService {
             throw new ResourceNotFoundException("Room not found");
         }
 
-        if (room.getPlayers().size() < 2) {
-            logger.warn("Game creation failed: not enough players in room {} (count: {})", roomId,
-                    room.getPlayers().size());
-            throw new UnauthorisedActionException(
-                    "Need at least 2 players to start game. Please wait for more players to join.");
+        synchronized (room) {
+            if (activeGames.containsKey(roomId) || room.isGameStarted()) {
+                logger.warn("Game creation failed: game already exists for room {}", roomId);
+                throw new BadRequestException("Game has already started for this room.");
+            }
+
+            if (room.getPlayers().size() < 2) {
+                logger.warn("Game creation failed: not enough players in room {} (count: {})", roomId,
+                        room.getPlayers().size());
+                throw new UnauthorisedActionException(
+                        "Need at least 2 players to start game. Please wait for more players to join.");
+            }
+
+            // Create the actual poker game
+            List<String> playerNames = new ArrayList<>(room.getPlayers());
+            List<Player> players = playerNames.stream()
+                    .map(name -> new Player(name, UUID.randomUUID().toString(), room.getBuyIn()))
+                    .collect(Collectors.toList());
+
+            Game game = new Game(roomId, players, room.getSmallBlind(), room.getBigBlind(), handEvaluator);
+            activeGames.put(roomId, game);
+
+            // Broadcast to all players in the room that the game has started
+            Map<String, Object> gameStartMessage = new ConcurrentHashMap<>();
+            gameStartMessage.put("gameId", roomId);
+            gameStartMessage.put("message", "Game started! Redirecting to game...");
+
+            messagingTemplate.convertAndSend("/room/" + roomId,
+                    new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), gameStartMessage));
+
+            room.setGameStarted(true);
         }
 
-        // Create the actual poker game
-        List<String> playerNames = new ArrayList<>(room.getPlayers());
-        List<Player> players = playerNames.stream()
-                .map(name -> new Player(name, UUID.randomUUID().toString(), room.getBuyIn()))
-                .collect(Collectors.toList());
-
-        Game game = new Game(roomId, players, room.getSmallBlind(), room.getBigBlind(), handEvaluator);
-        activeGames.put(roomId, game);
-
-        // Broadcast to all players in the room that the game has started
-        Map<String, Object> gameStartMessage = new ConcurrentHashMap<>();
-        gameStartMessage.put("gameId", roomId);
-        gameStartMessage.put("message", "Game started! Redirecting to game...");
-
-        messagingTemplate.convertAndSend("/room/" + roomId,
-                new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), gameStartMessage));
-
-        room.setGameStarted(true);
-        logger.info("Game created and started for room: {} with {} players", roomId, players.size());
+        logger.info("Game created and started for room: {} with {} players", roomId, room.getPlayers().size());
 
         startNewHand(roomId);
 

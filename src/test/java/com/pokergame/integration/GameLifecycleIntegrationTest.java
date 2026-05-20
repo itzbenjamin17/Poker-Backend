@@ -497,8 +497,8 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             Predicate<JsonNode> expectedState) throws Exception {
         JsonNode state = readGameState(gameId, tokenA);
         String currentPlayerName = state.path("currentPlayerName").asText();
-        // Correctly handle composite identity playerName:gameId
-        boolean tokenAIsCurrentPlayer = jwtService.extractPlayerName(tokenA).equals(currentPlayerName + ":" + gameId);
+        // jwtService.extractPlayerName now returns just the playerName (subject)
+        boolean tokenAIsCurrentPlayer = jwtService.extractPlayerName(tokenA).equals(currentPlayerName);
         String actingToken = tokenAIsCurrentPlayer ? tokenA : tokenB;
         StompSession actingSession = tokenAIsCurrentPlayer ? sessionA : sessionB;
 

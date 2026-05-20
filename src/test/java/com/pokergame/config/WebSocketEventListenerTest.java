@@ -20,6 +20,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.web.socket.messaging.SessionConnectEvent;
 import org.springframework.web.socket.messaging.SessionDisconnectEvent;
 
+import com.pokergame.security.PlayerPrincipal;
 import java.security.Principal;
 import java.time.Duration;
 import java.util.List;
@@ -31,6 +32,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 @Tag("unit")
 @ExtendWith(MockitoExtension.class)
@@ -67,13 +69,13 @@ class WebSocketEventListenerTest {
             WebSocketEventListener listener = createListener();
             Room room = createRoom("room-1", "Room 1", "Alice");
 
-            when(roomService.getRooms()).thenReturn(List.of(room));
-            when(gameLifecycleService.gameExists("room-1")).thenReturn(true);
-            when(gameLifecycleService.playerExistsInGame("room-1", "Alice")).thenReturn(true);
+            lenient().when(roomService.getRooms()).thenReturn(List.of(room));
+            lenient().when(gameLifecycleService.gameExists("room-1")).thenReturn(true);
+            lenient().when(gameLifecycleService.playerExistsInGame("room-1", "Alice")).thenReturn(true);
 
-            listener.handleWebSocketConnectListener(connectEvent("Alice", "session-a"));
-            listener.handleWebSocketDisconnectListener(disconnectEvent("Alice", "session-a"));
-            listener.handleWebSocketConnectListener(connectEvent("Alice", "session-b"));
+            listener.handleWebSocketConnectListener(connectEvent("Alice", "room-1", "session-a"));
+            listener.handleWebSocketDisconnectListener(disconnectEvent("Alice", "room-1", "session-a"));
+            listener.handleWebSocketConnectListener(connectEvent("Alice", "room-1", "session-b"));
 
             Awaitility.await()
                     .atMost(Duration.ofSeconds(1))
@@ -93,19 +95,19 @@ class WebSocketEventListenerTest {
             WebSocketEventListener listener = createListener();
             Room room = createRoom("room-2", "Room 2", "Bob");
 
-            when(roomService.getRooms()).thenReturn(List.of(room));
-            when(roomService.getRoom("room-2")).thenReturn(room);
-            when(gameLifecycleService.gameExists("room-2")).thenReturn(true);
-            when(gameLifecycleService.playerExistsInGame("room-2", "Bob")).thenReturn(true);
+            lenient().when(roomService.getRooms()).thenReturn(List.of(room));
+            lenient().when(roomService.getRoom("room-2")).thenReturn(room);
+            lenient().when(gameLifecycleService.gameExists("room-2")).thenReturn(true);
+            lenient().when(gameLifecycleService.playerExistsInGame("room-2", "Bob")).thenReturn(true);
 
-            listener.handleWebSocketConnectListener(connectEvent("Bob", "session-1"));
-            listener.handleWebSocketDisconnectListener(disconnectEvent("Bob", "session-1"));
+            listener.handleWebSocketConnectListener(connectEvent("Bob", "room-2", "session-1"));
+            listener.handleWebSocketDisconnectListener(disconnectEvent("Bob", "room-2", "session-1"));
 
             Awaitility.await()
                     .atMost(Duration.ofSeconds(1))
                     .untilAsserted(() -> {
                         verify(gameLifecycleService).markPlayerDisconnected(eq("room-2"), eq("Bob"), anyLong());
-                        verify(rateLimitService).cleanUpWs("Bob");
+                        verify(rateLimitService).cleanUpWs("Bob:room-2");
                         verify(roomService).leaveRoom("room-2", "Bob", false);
                         verify(gameLifecycleService).leaveGame("room-2", "Bob");
                     });
@@ -124,23 +126,23 @@ class WebSocketEventListenerTest {
         return room;
     }
 
-    private SessionConnectEvent connectEvent(String username, String sessionId) {
+    private SessionConnectEvent connectEvent(String username, String roomId, String sessionId) {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
         accessor.setSessionId(sessionId);
-        accessor.setUser(namedPrincipal(username));
+        accessor.setUser(namedPrincipal(username, roomId));
         Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
         return new SessionConnectEvent(this, message);
     }
 
-    private SessionDisconnectEvent disconnectEvent(String username, String sessionId) {
+    private SessionDisconnectEvent disconnectEvent(String username, String roomId, String sessionId) {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.DISCONNECT);
         accessor.setSessionId(sessionId);
-        accessor.setUser(namedPrincipal(username));
+        accessor.setUser(namedPrincipal(username, roomId));
         Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
-        return new SessionDisconnectEvent(this, message, sessionId, null, namedPrincipal(username));
+        return new SessionDisconnectEvent(this, message, sessionId, null, namedPrincipal(username, roomId));
     }
 
-    private Principal namedPrincipal(String username) {
-        return () -> username;
+    private PlayerPrincipal namedPrincipal(String username, String roomId) {
+        return new PlayerPrincipal(username, roomId);
     }
 }

@@ -5,6 +5,7 @@ import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
 import com.pokergame.security.JwtService;
+import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.RoomService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -206,9 +207,15 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         @Test
         @DisplayName("should round-trip the player name through the JWT subject")
         void givenPlayerName_whenGenerateToken_thenExtractSamePlayerName() {
-            String token = jwtService.generateToken("TokenTestPlayer", "test-room");
+            String playerName = "TokenTestPlayer";
+            String roomId = "test-room";
+            String token = jwtService.generateToken(playerName, roomId);
 
-            assertThat(jwtService.extractPlayerName(token)).isEqualTo("TokenTestPlayer:test-room");
+            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName);
+
+            PlayerPrincipal principal = jwtService.extractPrincipal(token);
+            assertThat(principal.playerName()).isEqualTo(playerName);
+            assertThat(principal.roomId()).isEqualTo(roomId);
         }
 
         @Test

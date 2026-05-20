@@ -104,41 +104,50 @@ public class RoomService {
         String sanitizedRoomName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.roomName());
         String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.playerName());
 
-        Room foundRoom = findRoomByName(sanitizedRoomName);
-        if (foundRoom == null) {
-            logger.warn("Join attempt failed: room not found for name {}", sanitizedRoomName);
-            throw new ResourceNotFoundException("Room not found");
-        }
+        String roomId;
+        Room room;
+        synchronized (this) {
+            Room foundRoom = findRoomByName(sanitizedRoomName);
+            if (foundRoom == null) {
+                logger.warn("Join attempt failed: room not found for name {}", sanitizedRoomName);
+                throw new ResourceNotFoundException("Room not found");
+            }
 
-        String roomId = foundRoom.getRoomId();
-        Room room = rooms.get(roomId);
-        if (room == null) {
-            logger.warn("Join attempt failed: room not found for id {}", roomId);
-            throw new ResourceNotFoundException("Room not found");
-        }
+            roomId = foundRoom.getRoomId();
+            room = rooms.get(roomId);
+            if (room == null) {
+                logger.warn("Join attempt failed: room not found for id {}", roomId);
+                throw new ResourceNotFoundException("Room not found");
+            }
 
-        // Check password if the room is private
-        if (room.hasPassword() && !room.checkPassword(joinRequest.password())) {
-            logger.warn("Invalid password attempt for room {} by player {}", room.getRoomName(),
-                    sanitizedPlayerName);
-            throw new BadRequestException("Invalid password");
-        }
+            if (room.isGameStarted()) {
+                logger.warn("Attempted to join room {} after game started", room.getRoomName());
+                throw new BadRequestException("Cannot join room. The game has already started.");
+            }
 
-        // Check if the room is full
-        if (room.getPlayers().size() >= room.getMaxPlayers()) {
-            logger.warn("Join attempt failed: room {} is full (player: {})", room.getRoomName(),
-                    sanitizedPlayerName);
-            throw new UnauthorisedActionException("Room is full");
-        }
+            // Check password if the room is private
+            if (room.hasPassword() && !room.checkPassword(joinRequest.password())) {
+                logger.warn("Invalid password attempt for room {} by player {}", room.getRoomName(),
+                        sanitizedPlayerName);
+                throw new BadRequestException("Invalid password");
+            }
 
-        // Check if the player name already exists
-        if (room.hasPlayer(sanitizedPlayerName)) {
-            logger.warn("Join attempt failed: player name '{}' already taken in room {}", sanitizedPlayerName,
-                    room.getRoomName());
-            throw new BadRequestException("Player name already taken");
-        }
+            // Check if the room is full
+            if (room.getPlayers().size() >= room.getMaxPlayers()) {
+                logger.warn("Join attempt failed: room {} is full (player: {})", room.getRoomName(),
+                        sanitizedPlayerName);
+                throw new com.pokergame.exception.UnauthorisedActionException("Room is full");
+            }
 
-        room.addPlayer(sanitizedPlayerName);
+            // Check if the player name already exists
+            if (room.hasPlayer(sanitizedPlayerName)) {
+                logger.warn("Join attempt failed: player name '{}' already taken in room {}", sanitizedPlayerName,
+                        room.getRoomName());
+                throw new BadRequestException("Player name already taken");
+            }
+
+            room.addPlayer(sanitizedPlayerName);
+        }
 
         logger.info("Player {} joined room: {}", sanitizedPlayerName, room.getRoomName());
 

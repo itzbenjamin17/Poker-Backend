@@ -81,7 +81,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             CompletableFuture<PlayerNotificationResponse> errorFuture = new CompletableFuture<>();
 
             session.subscribe(
-                    "/game/" + gameSession.roomId() + "/player-name/" + currentPlayerName + "/private",
+                    "/user/queue/private",
                     new StompFrameHandler() {
                         @Override
                         public Type getPayloadType(@NonNull StompHeaders headers) {

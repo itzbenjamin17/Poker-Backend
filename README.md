@@ -66,16 +66,19 @@ The engine follows a strict **Layered Architecture** with unidirectional depende
 
 The engine has undergone a dedicated hardening pass:
 
-- **Rate Limiting:** Protects REST endpoints (5 attempts/15min) and WebSocket actions (5 msgs/sec).
-- **JWT Protection:** Signed tokens required for all actions; strict secret length verification at startup.
-- **Input Sanitization:** All text inputs are trimmed and validated; malformed JSON and oversized payloads (10KB limit) are rejected early.
-- **CORS & CSP:** Tailored policies for secure communication with the modern frontend.
+- **Structured Identity:** JWTs use structured claims (playerName, roomId) to prevent identity spoofing and cross-room impersonation.
+- **Secure WebSocket Messaging:** Private data is delivered via Spring user-specific destinations (`/user/queue/private`), preventing predictability and eavesdropping.
+- **Rate Limiting:** Protects REST endpoints (5 attempts/15min) and WebSocket actions (5 msgs/sec) with per-identity tracking.
+- **Lifecycle Enforcement:** Strict state checks prevent late joins to active games and duplicate game starts.
+- **JWT Protection:** Signed tokens required for all actions; mandatory environment secret length verification at startup.
+- **Input Sanitization:** All text inputs are trimmed and validated early; malformed JSON and oversized payloads (10KB limit) are rejected.
+- **Thread Safety:** Synchronized room mutations and atomic game initialisation ensure consistency under high concurrent load.
 
 ## ✅ Build & Verification
 
 ### Automated Testing
 
-The project maintains a high-quality baseline with **440+ automated tests**:
+The project maintains a high-quality baseline with **490+ automated tests**:
 
 ```bash
 # Run full suite (Unit + Integration)
@@ -84,7 +87,8 @@ The project maintains a high-quality baseline with **440+ automated tests**:
 
 ### Key Verification Areas
 
-- `SecurityHardeningIntegrationTest`: Verifies 429, 400, and 413 error handling.
+- `SecurityHardeningIntegrationTest`: Verifies identity isolation, sanitization consistency, and lifecycle enforcement.
+- `WebSocketSecurityTest`: Validates that private topics cannot be intercepted by other players.
 - `ResiliencyIntegrationTest`: Validates disconnect/reconnect state restoration.
 - `GameLifecycleIntegrationTest`: Full deal-to-showdown automation.
 - `HandEvaluatorServiceTest`: Mathematical correctness of poker hand ranking.

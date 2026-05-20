@@ -1,5 +1,6 @@
 package com.pokergame.config;
 
+import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.model.Room;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
@@ -59,26 +60,29 @@ public class WebSocketEventListener {
     @EventListener
     public void handleWebSocketConnectListener(SessionConnectEvent event) {
         StompHeaderAccessor headerAccessor = StompHeaderAccessor.wrap(event.getMessage());
-        Principal user = headerAccessor.getUser();
+        Principal principal = headerAccessor.getUser();
         String sessionId = headerAccessor.getSessionId();
 
-        if (user == null || sessionId == null) {
+        if (!(principal instanceof PlayerPrincipal playerPrincipal) || sessionId == null) {
             return;
         }
 
-        String username = user.getName();
+        String compositeName = playerPrincipal.getName();
+        String playerName = playerPrincipal.playerName();
+        String roomId = playerPrincipal.roomId();
+
         // Tracks specific session to user because a user can have multiple sessions (e.g. multiple browser tabs)
-        registerActiveSession(username, sessionId);
-        logger.debug("Registered active WebSocket session {} for user {}", sessionId, username);
+        registerActiveSession(compositeName, sessionId);
+        logger.debug("Registered active WebSocket session {} for user {}", sessionId, compositeName);
 
         // If the user was previously disconnected, cancel the clean-up task and mark them as reconnected
-        PendingDisconnect pendingDisconnect = pendingDisconnects.remove(username);
+        PendingDisconnect pendingDisconnect = pendingDisconnects.remove(compositeName);
         if (pendingDisconnect != null) {
             pendingDisconnect.future().cancel(false);
 
-            if (gameLifecycleService.gameExists(pendingDisconnect.roomId())
-                    && gameLifecycleService.playerExistsInGame(pendingDisconnect.roomId(), username)) {
-                gameLifecycleService.markPlayerReconnected(pendingDisconnect.roomId(), username);
+            if (gameLifecycleService.gameExists(roomId)
+                    && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
+                gameLifecycleService.markPlayerReconnected(roomId, playerName);
             }
         }
     }
@@ -91,88 +95,95 @@ public class WebSocketEventListener {
     @EventListener
     public void handleWebSocketDisconnectListener(SessionDisconnectEvent event) {
         StompHeaderAccessor headerAccessor = StompHeaderAccessor.wrap(event.getMessage());
-        Principal user = headerAccessor.getUser();
+        Principal principal = headerAccessor.getUser();
         String sessionId = headerAccessor.getSessionId();
 
-        String username = user != null ? user.getName() : sessionId != null ? sessionToUser.get(sessionId) : null;
+        String compositeName = principal != null ? principal.getName() : sessionId != null ? sessionToUser.get(sessionId) : null;
 
-        if (username == null) {
+        if (compositeName == null) {
             logger.debug("WebSocket disconnected without resolvable username. sessionId={}", sessionId);
             return;
         }
+        
         // Users may have multiple sessions (e.g. multiple browser tabs),
         // So we only schedule a clean-up if there are no active sessions left
-        unregisterActiveSession(username, sessionId);
-        if (hasActiveSession(username)) {
-            logger.debug("User {} still has another active session; skipping disconnect timer", username);
+        unregisterActiveSession(compositeName, sessionId);
+        if (hasActiveSession(compositeName)) {
+            logger.debug("User {} still has another active session; skipping disconnect timer", compositeName);
             return;
         }
 
-        String roomId = findRoomIdByPlayer(username);
-        if (roomId == null) {
-            logger.debug("No room found for disconnected user {}. Nothing to schedule.", username);
+        PlayerPrincipal playerPrincipal = (PlayerPrincipal) principal;
+        if (playerPrincipal == null) {
+            // Should not happen if compositeName is found from sessionToUser which was registered via PlayerPrincipal
             return;
         }
+        
+        String playerName = playerPrincipal.playerName();
+        String roomId = playerPrincipal.roomId();
 
         // Marks the player as disconnected and marks when they should be removed from a game
         boolean gameActive = gameLifecycleService.gameExists(roomId);
         long disconnectDeadlineEpochMs = System.currentTimeMillis() + disconnectGracePeriodMs;
-        if (gameActive && gameLifecycleService.playerExistsInGame(roomId, username)) {
-            gameLifecycleService.markPlayerDisconnected(roomId, username, disconnectDeadlineEpochMs);
+        if (gameActive && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
+            gameLifecycleService.markPlayerDisconnected(roomId, playerName, disconnectDeadlineEpochMs);
         }
 
         // Cancel any existing disconnect timer for this user
-        PendingDisconnect existing = pendingDisconnects.remove(username);
+        PendingDisconnect existing = pendingDisconnects.remove(compositeName);
         if (existing != null) {
             existing.future().cancel(false);
         }
 
         logger.info("WebSocket disconnected for user {}. Scheduling delayed cleanup ({} ms)",
-                username, disconnectGracePeriodMs);
+                compositeName, disconnectGracePeriodMs);
 
         // Schedule the user to be removed from the game if they don't reconnect in 2 minutes
         ScheduledFuture<?> future = taskScheduler.schedule(
-                () -> cleanupDisconnectedUser(username, roomId),
+                () -> cleanupDisconnectedUser(playerPrincipal),
                 Instant.now().plusMillis(disconnectGracePeriodMs));
 
-        pendingDisconnects.put(username, new PendingDisconnect(roomId, future));
+        pendingDisconnects.put(compositeName, new PendingDisconnect(roomId, future));
     }
 
     /**
      * Cleans up a disconnected user from the game.
      * 
-     * @param username The username of the disconnected user.
-     * @param roomId   The room ID of the disconnected user.
+     * @param principal The PlayerPrincipal of the disconnected user.
      */
-    private void cleanupDisconnectedUser(String username, String roomId) {
-        pendingDisconnects.remove(username);
+    private void cleanupDisconnectedUser(PlayerPrincipal principal) {
+        String compositeName = principal.getName();
+        String playerName = principal.playerName();
+        String roomId = principal.roomId();
+        
+        pendingDisconnects.remove(compositeName);
 
-        if (hasActiveSession(username)) {
-            logger.debug("Skipping disconnect cleanup for user {} because an active session exists", username);
+        if (hasActiveSession(compositeName)) {
+            logger.debug("Skipping disconnect cleanup for user {} because an active session exists", compositeName);
             return;
         }
 
-        logger.info("WebSocket grace period expired. Removing disconnected user: {}", username);
+        logger.info("WebSocket grace period expired. Removing disconnected user: {}", compositeName);
 
         // Also clean up their WebSocket rate limit bucket
-        rateLimitService.cleanUpWs(username);
+        rateLimitService.cleanUpWs(compositeName);
 
         Room room = roomService.getRoom(roomId);
-        if (room == null || !room.hasPlayer(username)) {
+        if (room == null || !room.hasPlayer(playerName)) {
             return;
         }
 
         try {
-            logger.info("Automatically removing disconnected user '{}' from room '{}'", username,
+            logger.info("Automatically removing disconnected user '{}' from room '{}'", playerName,
                     room.getRoomName());
             boolean gameActive = gameLifecycleService.gameExists(roomId);
-            roomService.leaveRoom(roomId, username, !gameActive);
+            roomService.leaveRoom(roomId, playerName, !gameActive);
 
-            if (gameActive && gameLifecycleService.playerExistsInGame(roomId, username)) {
-                gameLifecycleService.leaveGame(roomId, username);
+            if (gameActive && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
+                gameLifecycleService.leaveGame(roomId, playerName);
             }
         } catch (Exception e) {
-            logger.error("Failed to remove disconnected user '{}' from room '{}'", username,
+            logger.error("Failed to remove disconnected user '{}' from room '{}'", playerName,
                     room.getRoomName(), e);
         }
     }
