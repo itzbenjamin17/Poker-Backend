@@ -5,6 +5,7 @@ import com.pokergame.security.PayloadSizeFilter;
 import com.pokergame.security.EndpointRateLimitFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -92,6 +93,9 @@ public class SecurityConfig {
         return http.build();
     }
 
+    @Value("${app.security.cors.allowed-origins}")
+    private List<String> allowedOrigins;
+
     // CORS configuration to allow requests from frontend from certain origins
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
@@ -99,9 +103,7 @@ public class SecurityConfig {
         // Allows cookies, authorisation headers to be sent in CORS requests
         config.setAllowCredentials(true);
 
-        config.setAllowedOriginPatterns(List.of(
-                "http://localhost:5173",
-                "https://*.ngrok-free.app"));
+        config.setAllowedOriginPatterns(allowedOrigins);
 
         config.setAllowedMethods(List.of("GET", "POST", "OPTIONS"));
 
