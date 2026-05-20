@@ -120,6 +120,21 @@ public abstract class AbstractIntegrationTestSupport {
         return objectMapper.readTree(body);
     }
 
+    protected JsonNode getRoomData(String roomId, String token) throws Exception {
+        RestClient.RequestHeadersSpec<?> request = restClient.get()
+                .uri("/api/room/" + roomId);
+        
+        if (token != null) {
+            request.header("Authorization", "Bearer " + token);
+        }
+
+        String body = request.retrieve()
+                .body(String.class);
+
+        assertThat(body).isNotBlank();
+        return objectMapper.readTree(body);
+    }
+
     protected JsonNode readGameState(String gameId, String token) throws Exception {
         String body = restClient.get()
                 .uri("/api/game/" + gameId + "/state")

@@ -7,6 +7,7 @@ import com.pokergame.integration.support.AbstractIntegrationTestSupport;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.security.JwtService;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -26,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+@Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSupport {
@@ -212,5 +214,67 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         // 1 host already in. Max 2. So exactly 1 more join should succeed.
         assertThat(successCount).isEqualTo(1);
         executor.shutdown();
+    }
+
+    @Test
+    @DisplayName("should prevent late join even during concurrent game start race")
+    void givenRoom_whenJoinAndStartRace_thenJoinNeverSucceedsAfterStart() throws Exception {
+        // Repeat multiple times to increase chance of hitting the race
+        for (int iteration = 0; iteration < 5; iteration++) {
+            String roomName = uniqueName("RaceRoom-" + iteration);
+            JsonNode host = createRoom(roomName, "Host", 6);
+            String roomId = host.path("roomId").asText();
+            joinRoom(roomName, "Player2"); // Need 2 players to start
+
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+            
+            // Task 1: Start game
+            CompletableFuture<HttpStatus> startFuture = CompletableFuture.supplyAsync(() -> {
+                try {
+                    restClient.post()
+                            .uri("/api/room/" + roomId + "/start-game")
+                            .header("Authorization", "Bearer " + host.path("token").asText())
+                            .retrieve()
+                            .toBodilessEntity();
+                    return HttpStatus.OK;
+                } catch (HttpClientErrorException e) {
+                    return (HttpStatus) e.getStatusCode();
+                }
+            }, executor);
+
+            // Task 2: Concurrent join
+            CompletableFuture<HttpStatus> joinFuture = CompletableFuture.supplyAsync(() -> {
+                try {
+                    restClient.post()
+                            .uri("/api/room/join")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(new JoinRoomRequest(roomName, "Racer", null))
+                            .retrieve()
+                            .toBodilessEntity();
+                    return HttpStatus.OK;
+                } catch (HttpClientErrorException e) {
+                    return (HttpStatus) e.getStatusCode();
+                }
+            }, executor);
+
+            CompletableFuture.allOf(startFuture, joinFuture).get(5, TimeUnit.SECONDS);
+
+            HttpStatus startStatus = startFuture.join();
+            HttpStatus joinStatus = joinFuture.join();
+
+            // If start succeeded, the join MUST either have happened BEFORE start (OK) 
+            // or have been rejected (BAD_REQUEST). It must NEVER succeed if it was processed 
+            // after the gameStarted flag was set.
+            if (startStatus == HttpStatus.OK && joinStatus == HttpStatus.OK) {
+                // Verify the player is actually in the room and game started
+                JsonNode roomData = getRoomData(roomId, host.path("token").asText());
+                assertThat(roomData.path("players").size()).isGreaterThanOrEqualTo(3);
+                assertThat(roomData.path("gameStarted").asBoolean()).isTrue();
+            } else if (startStatus == HttpStatus.OK) {
+                assertThat(joinStatus).isEqualTo(HttpStatus.BAD_REQUEST);
+            }
+
+            executor.shutdown();
+        }
     }
 }

@@ -139,6 +139,43 @@ class WebSocketEventListenerTest {
                         verify(roomService).leaveRoom("room-3", "Charlie", false);
                     });
         }
+
+        @Test
+        @DisplayName("should not start cleanup when one of multiple sessions for the same user disconnects")
+        void givenMultiTabUser_whenOneSessionDisconnects_thenCleanupIsNotScheduled() {
+            WebSocketEventListener listener = createListener();
+            Room room = createRoom("room-4", "Room 4", "Dave");
+
+            lenient().when(roomService.getRooms()).thenReturn(List.of(room));
+            lenient().when(gameLifecycleService.gameExists("room-4")).thenReturn(true);
+            lenient().when(gameLifecycleService.playerExistsInGame("room-4", "Dave")).thenReturn(true);
+
+            // 1. Dave connects with two tabs (two sessions)
+            listener.handleWebSocketConnectListener(connectEvent("Dave", "room-4", "session-d1"));
+            listener.handleWebSocketConnectListener(connectEvent("Dave", "room-4", "session-d2"));
+
+            // 2. Dave closes one tab
+            listener.handleWebSocketDisconnectListener(disconnectEvent("Dave", "room-4", "session-d1"));
+
+            // 3. Verify cleanup is NOT scheduled (no disconnect marking)
+            Awaitility.await()
+                    .atMost(Duration.ofSeconds(1))
+                    .pollDelay(Duration.ofMillis(200))
+                    .untilAsserted(() -> {
+                        verify(gameLifecycleService, never()).markPlayerDisconnected(eq("room-4"), eq("Dave"), anyLong());
+                        verify(roomService, never()).leaveRoom(eq("room-4"), eq("Dave"), anyBoolean());
+                    });
+
+            // 4. Dave closes the second tab
+            listener.handleWebSocketDisconnectListener(disconnectEvent("Dave", "room-4", "session-d2"));
+
+            // 5. Verify cleanup IS now scheduled
+            Awaitility.await()
+                    .atMost(Duration.ofSeconds(1))
+                    .untilAsserted(() -> {
+                        verify(gameLifecycleService).markPlayerDisconnected(eq("room-4"), eq("Dave"), anyLong());
+                    });
+        }
     }
 
     private WebSocketEventListener createListener() {

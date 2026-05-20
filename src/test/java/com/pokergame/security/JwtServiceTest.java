@@ -69,6 +69,34 @@ class JwtServiceTest {
 
             assertThat(jwtService.isTokenValid(token)).isFalse();
         }
+
+        @Test
+        @DisplayName("should reject a token with missing or blank roomId claim")
+        void givenMissingRoomId_whenValidate_thenReturnFalse() {
+            // Manually build a token with missing roomId using Jwts
+            String token = io.jsonwebtoken.Jwts.builder()
+                    .subject("TestPlayer")
+                    .signWith((javax.crypto.SecretKey) org.springframework.test.util.ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .compact();
+
+            assertThat(jwtService.isTokenValid(token)).isFalse();
+            assertThatThrownBy(() -> jwtService.extractPrincipal(token))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        @DisplayName("should reject a token with blank roomId claim")
+        void givenBlankRoomId_whenValidate_thenReturnFalse() {
+            String token = io.jsonwebtoken.Jwts.builder()
+                    .subject("TestPlayer")
+                    .claim("roomId", "   ")
+                    .signWith((javax.crypto.SecretKey) org.springframework.test.util.ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .compact();
+
+            assertThat(jwtService.isTokenValid(token)).isFalse();
+            assertThatThrownBy(() -> jwtService.extractPrincipal(token))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Nested
