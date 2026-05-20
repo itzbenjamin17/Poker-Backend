@@ -112,6 +112,33 @@ class WebSocketEventListenerTest {
                         verify(gameLifecycleService).leaveGame("room-2", "Bob");
                     });
         }
+
+        @Test
+        @DisplayName("should recover principal from session storage when event principal is null")
+        void givenNullEventPrincipal_whenDisconnectHandled_thenPrincipalIsRecoveredAndHandled() {
+            WebSocketEventListener listener = createListener();
+            Room room = createRoom("room-3", "Room 3", "Charlie");
+
+            lenient().when(roomService.getRooms()).thenReturn(List.of(room));
+            lenient().when(roomService.getRoom("room-3")).thenReturn(room);
+            lenient().when(gameLifecycleService.gameExists("room-3")).thenReturn(true);
+            lenient().when(gameLifecycleService.playerExistsInGame("room-3", "Charlie")).thenReturn(true);
+
+            // 1. Connect (this registers the session and principal)
+            listener.handleWebSocketConnectListener(connectEvent("Charlie", "room-3", "session-c"));
+
+            // 2. Disconnect with NULL principal in the event
+            listener.handleWebSocketDisconnectListener(disconnectEvent(null, null, "session-c"));
+
+            // 3. Verify it still correctly identified Charlie and started the cleanup flow
+            Awaitility.await()
+                    .atMost(Duration.ofSeconds(1))
+                    .untilAsserted(() -> {
+                        verify(gameLifecycleService).markPlayerDisconnected(eq("room-3"), eq("Charlie"), anyLong());
+                        verify(rateLimitService).cleanUpWs("Charlie:room-3");
+                        verify(roomService).leaveRoom("room-3", "Charlie", false);
+                    });
+        }
     }
 
     private WebSocketEventListener createListener() {
@@ -129,7 +156,9 @@ class WebSocketEventListenerTest {
     private SessionConnectEvent connectEvent(String username, String roomId, String sessionId) {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
         accessor.setSessionId(sessionId);
-        accessor.setUser(namedPrincipal(username, roomId));
+        if (username != null) {
+            accessor.setUser(namedPrincipal(username, roomId));
+        }
         Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
         return new SessionConnectEvent(this, message);
     }
@@ -137,9 +166,12 @@ class WebSocketEventListenerTest {
     private SessionDisconnectEvent disconnectEvent(String username, String roomId, String sessionId) {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.DISCONNECT);
         accessor.setSessionId(sessionId);
-        accessor.setUser(namedPrincipal(username, roomId));
+        Principal principal = username != null ? namedPrincipal(username, roomId) : null;
+        if (principal != null) {
+            accessor.setUser(principal);
+        }
         Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
-        return new SessionDisconnectEvent(this, message, sessionId, null, namedPrincipal(username, roomId));
+        return new SessionDisconnectEvent(this, message, sessionId, null, principal);
     }
 
     private PlayerPrincipal namedPrincipal(String username, String roomId) {

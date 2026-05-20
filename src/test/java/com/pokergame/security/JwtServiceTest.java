@@ -63,12 +63,11 @@ class JwtServiceTest {
         }
 
         @Test
-        @DisplayName("should encode an empty player name as an empty subject when extracted")
-        void givenEmptyPlayerName_whenGenerateToken_thenExtractPlayerNameReturnsEmpty() {
+        @DisplayName("should reject an empty player name subject")
+        void givenEmptyPlayerName_whenGenerateToken_thenIsTokenValidReturnsFalse() {
             String token = jwtService.generateToken("", TEST_ROOM);
 
-            assertThat(jwtService.isTokenValid(token)).isTrue();
-            assertThat(jwtService.extractPlayerName(token)).isEqualTo("");
+            assertThat(jwtService.isTokenValid(token)).isFalse();
         }
     }
 

@@ -35,7 +35,7 @@ public class WebSocketEventListener {
     private final com.pokergame.security.RateLimitService rateLimitService;
     private final long disconnectGracePeriodMs;
     private final ConcurrentMap<String, Set<String>> activeSessionsByUser = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, String> sessionToUser = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, PlayerPrincipal> sessionToPrincipal = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PendingDisconnect> pendingDisconnects = new ConcurrentHashMap<>();
     private final TaskScheduler taskScheduler;
 
@@ -72,7 +72,7 @@ public class WebSocketEventListener {
         String roomId = playerPrincipal.roomId();
 
         // Tracks specific session to user because a user can have multiple sessions (e.g. multiple browser tabs)
-        registerActiveSession(compositeName, sessionId);
+        registerActiveSession(playerPrincipal, sessionId);
         logger.debug("Registered active WebSocket session {} for user {}", sessionId, compositeName);
 
         // If the user was previously disconnected, cancel the clean-up task and mark them as reconnected
@@ -95,15 +95,23 @@ public class WebSocketEventListener {
     @EventListener
     public void handleWebSocketDisconnectListener(SessionDisconnectEvent event) {
         StompHeaderAccessor headerAccessor = StompHeaderAccessor.wrap(event.getMessage());
-        Principal principal = headerAccessor.getUser();
         String sessionId = headerAccessor.getSessionId();
+        
+        // Recover principal from session storage if not present in the event
+        PlayerPrincipal recoveredPrincipal = null;
+        if (headerAccessor.getUser() instanceof PlayerPrincipal pp) {
+            recoveredPrincipal = pp;
+        } else if (sessionId != null) {
+            recoveredPrincipal = sessionToPrincipal.get(sessionId);
+        }
 
-        String compositeName = principal != null ? principal.getName() : sessionId != null ? sessionToUser.get(sessionId) : null;
-
-        if (compositeName == null) {
-            logger.debug("WebSocket disconnected without resolvable username. sessionId={}", sessionId);
+        if (recoveredPrincipal == null) {
+            logger.debug("WebSocket disconnected without resolvable principal. sessionId={}", sessionId);
             return;
         }
+
+        final PlayerPrincipal playerPrincipal = recoveredPrincipal;
+        String compositeName = playerPrincipal.getName();
         
         // Users may have multiple sessions (e.g. multiple browser tabs),
         // So we only schedule a clean-up if there are no active sessions left
@@ -113,12 +121,6 @@ public class WebSocketEventListener {
             return;
         }
 
-        PlayerPrincipal playerPrincipal = (PlayerPrincipal) principal;
-        if (playerPrincipal == null) {
-            // Should not happen if compositeName is found from sessionToUser which was registered via PlayerPrincipal
-            return;
-        }
-        
         String playerName = playerPrincipal.playerName();
         String roomId = playerPrincipal.roomId();
 
@@ -207,38 +209,39 @@ public class WebSocketEventListener {
     /**
      * Registers an active WebSocket session for the given user.
      * 
-     * @param username The username of the user.
+     * @param principal The PlayerPrincipal of the user.
      * @param sessionId The session ID of the user.
      */
-    private void registerActiveSession(String username, String sessionId) {
+    private void registerActiveSession(PlayerPrincipal principal, String sessionId) {
+        String compositeName = principal.getName();
         // Get the set of active sessions for the user or create a new one if it
         // doesn't exist
-        Set<String> sessions = activeSessionsByUser.computeIfAbsent(username, k -> ConcurrentHashMap.newKeySet());
+        Set<String> sessions = activeSessionsByUser.computeIfAbsent(compositeName, k -> ConcurrentHashMap.newKeySet());
         // Add the new session ID to the user's set of sessions
         sessions.add(sessionId);
 
-        // Map the session ID back to the username for reverse lookup
-        sessionToUser.put(sessionId, username);
+        // Map the session ID back to the principal for recovery on disconnect
+        sessionToPrincipal.put(sessionId, principal);
     }
 
     /**
      * Unregisters an active WebSocket session for the given user.
      * 
-     * @param username The username of the user.
+     * @param compositeName The composite name of the user.
      * @param sessionId The session ID of the user.
      */
-    private void unregisterActiveSession(String username, String sessionId) {
+    private void unregisterActiveSession(String compositeName, String sessionId) {
         if (sessionId != null) {
-            sessionToUser.remove(sessionId);
+            sessionToPrincipal.remove(sessionId);
         }
 
-        Set<String> sessions = activeSessionsByUser.getOrDefault(username, Collections.emptySet());
+        Set<String> sessions = activeSessionsByUser.getOrDefault(compositeName, Collections.emptySet());
         if (sessionId != null) {
             sessions.remove(sessionId);
         }
 
         if (sessions.isEmpty()) {
-            activeSessionsByUser.remove(username);
+            activeSessionsByUser.remove(compositeName);
         }
     }
 

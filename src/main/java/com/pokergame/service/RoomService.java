@@ -104,22 +104,14 @@ public class RoomService {
         String sanitizedRoomName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.roomName());
         String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.playerName());
 
-        String roomId;
-        Room room;
-        synchronized (this) {
-            Room foundRoom = findRoomByName(sanitizedRoomName);
-            if (foundRoom == null) {
-                logger.warn("Join attempt failed: room not found for name {}", sanitizedRoomName);
-                throw new ResourceNotFoundException("Room not found");
-            }
+        Room room = findRoomByName(sanitizedRoomName);
+        if (room == null) {
+            logger.warn("Join attempt failed: room not found for name {}", sanitizedRoomName);
+            throw new ResourceNotFoundException("Room not found");
+        }
 
-            roomId = foundRoom.getRoomId();
-            room = rooms.get(roomId);
-            if (room == null) {
-                logger.warn("Join attempt failed: room not found for id {}", roomId);
-                throw new ResourceNotFoundException("Room not found");
-            }
-
+        String roomId = room.getRoomId();
+        synchronized (room) {
             if (room.isGameStarted()) {
                 logger.warn("Attempted to join room {} after game started", room.getRoomName());
                 throw new BadRequestException("Cannot join room. The game has already started.");

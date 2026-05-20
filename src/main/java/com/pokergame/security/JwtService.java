@@ -55,12 +55,14 @@ public class JwtService {
     }
 
     /**
-     * Validates the token signature and expiry.
+     * Validates the token signature, expiry, and required claims.
      */
     public boolean isTokenValid(String token) {
         try {
-            Jwts.parser().verifyWith(secretKey).build().parseSignedClaims(token);
-            return true;
+            var claims = Jwts.parser().verifyWith(secretKey).build().parseSignedClaims(token).getPayload();
+            String subject = claims.getSubject();
+            String roomId = claims.get("roomId", String.class);
+            return subject != null && !subject.isBlank() && roomId != null && !roomId.isBlank();
         } catch (Exception e) {
             return false;
         }
@@ -68,6 +70,8 @@ public class JwtService {
 
     /**
      * Extracts the player principal from a valid token.
+     * 
+     * @throws IllegalArgumentException if required claims are missing
      */
     public PlayerPrincipal extractPrincipal(String token) {
         var claims = Jwts.parser()
@@ -77,7 +81,13 @@ public class JwtService {
                 .getPayload();
         
         String subject = claims.getSubject();
-        return new PlayerPrincipal(subject == null ? "" : subject, claims.get("roomId", String.class));
+        String roomId = claims.get("roomId", String.class);
+        
+        if (subject == null || subject.isBlank() || roomId == null || roomId.isBlank()) {
+            throw new IllegalArgumentException("Token is missing required player or room identification claims.");
+        }
+        
+        return new PlayerPrincipal(subject, roomId);
     }
 
     /**
