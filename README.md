@@ -76,9 +76,15 @@ The engine has undergone a dedicated hardening pass:
 
 ## ✅ Build & Verification
 
-### Automated Testing
+### Domain-Driven & Behavior-Focused Testing
 
-The project maintains a high-quality baseline with **490+ automated tests**:
+The project adheres to strict testing guidelines designed to verify the mathematical correctness of our poker rules engine and the integrity of real-time communication flows:
+
+- **Logic & Rules Assertions:** All tests verify concrete business outcomes (e.g. correct side-pot splits, blinds posts, refund schedules, action validation) rather than brittle, implementation-specific internal component details or getters.
+- **Client-Centric Validation:** Integration tests simulate exact client behaviors and assert on the payload structures transmitted over STOMP/WebSocket channels, guaranteeing contract compliance with the React frontend.
+- **Robust and Isolated Suites:** Concurrency, task execution, and WebSocket messaging are tested with proper synchronization to ensure deterministic outcomes without port or context collisions.
+
+The project maintains a high-quality baseline with **500+ automated tests**:
 
 ```bash
 # Run full suite (Unit + Integration)
@@ -87,11 +93,11 @@ The project maintains a high-quality baseline with **490+ automated tests**:
 
 ### Key Verification Areas
 
-- `SecurityHardeningIntegrationTest`: Verifies identity isolation, sanitization consistency, and lifecycle enforcement.
+- `SecurityHardeningIntegrationTest`: Verifies identity isolation, input sanitization, and lifecycle enforcement.
 - `WebSocketSecurityTest`: Validates that private topics cannot be intercepted by other players.
 - `ResiliencyIntegrationTest`: Validates disconnect/reconnect state restoration.
-- `GameLifecycleIntegrationTest`: Full deal-to-showdown automation.
-- `HandEvaluatorServiceTest`: Mathematical correctness of poker hand ranking.
+- `GameLifecycleIntegrationTest`: Full deal-to-showdown lifecycle automation.
+- `HandEvaluatorServiceTest`: Mathematical correctness of poker hand evaluations (evaluating 7-card combinations down to best 5).
 
 ## 🗺️ Future Roadmap
 
@@ -101,4 +107,4 @@ The project maintains a high-quality baseline with **490+ automated tests**:
 
 ---
 
-**Companion frontend showcase:** ([Repo](https://github.com/itzbenjamin17/frontend-poker)). Together they demonstrate end-to-end real-time gameplay architecture.
+**Companion frontend showcase:** ([Repo](https://github.com/itzbenjamin17/Poker-Frontend)). Together they demonstrate end-to-end real-time gameplay architecture.

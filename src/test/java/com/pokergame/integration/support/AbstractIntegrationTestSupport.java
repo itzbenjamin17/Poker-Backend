@@ -164,11 +164,7 @@ public abstract class AbstractIntegrationTestSupport {
     }
 
     protected WebSocketStompClient createStompClient() {
-        List<Transport> transports = new ArrayList<>();
-        transports.add(new WebSocketTransport(new StandardWebSocketClient()));
-
-        SockJsClient sockJsClient = new SockJsClient(transports);
-        WebSocketStompClient client = new WebSocketStompClient(sockJsClient);
+        WebSocketStompClient client = new WebSocketStompClient(new StandardWebSocketClient());
 
         List<MessageConverter> converters = new ArrayList<>();
         converters.add(new StringMessageConverter());
