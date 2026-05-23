@@ -290,16 +290,16 @@ class RoomControllerTest {
 
         CreateRoomRequest request = new CreateRoomRequest("Room", "Player1", 6, 10, 20, 1000, null);
 
-        // To test rate limiting, we need requests that FAIL or at least don't trigger the cleanup.
-        // Since createRoom() success now calls cleanUpRest(), we simulate failures (e.g., duplicate name).
-        when(roomService.createRoom(any())).thenThrow(new com.pokergame.exception.BadRequestException("Room name taken"));
+        // Consume the limit (5 per 15 minutes). We don't need to simulate failures
+        // because the rate limit properly applies to successful requests too.
+        when(roomService.createRoom(any())).thenReturn("room-123");
 
         // Consume the limit (5 per 15 minutes)
         for (int i = 0; i < 5; i++) {
             mockMvc.perform(post("/api/room/create")
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(request)))
-                    .andExpect(status().isBadRequest());
+                    .andExpect(status().isOk());
         }
 
         // The 6th attempt should fail with 429

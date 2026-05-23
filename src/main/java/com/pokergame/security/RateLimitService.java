@@ -4,6 +4,7 @@ import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.Duration;
 import java.util.Map;
@@ -59,20 +60,13 @@ public class RateLimitService {
         wsBuckets.remove(username);
     }
 
-    /**
-     * Removes a REST rate limit bucket.
-     * Useful for memory management or resetting limits for a specific IP/path.
-     * @param key the key used (e.g. clientIp + ":" + path)
-     */
-    public void cleanUpRest(String key) {
-        restBuckets.remove(key);
-    }
+
 
     /**
      * Periodically clear the REST buckets to prevent memory leaks from old IPs.
      * Runs every hour.
      */
-    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 3600000)
+    @Scheduled(fixedRate = 3600000)
     public void periodicRestCleanup() {
         if (!restBuckets.isEmpty()) {
             restBuckets.clear();

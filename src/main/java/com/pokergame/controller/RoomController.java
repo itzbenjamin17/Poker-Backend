@@ -34,17 +34,14 @@ public class RoomController {
 
     private final JwtService jwtService;
 
-    private final com.pokergame.security.RateLimitService rateLimitService;
 
     // Dependency Injection
     public RoomController(RoomService roomService,
             GameLifecycleService gameLifecycleService,
-            JwtService jwtService,
-            com.pokergame.security.RateLimitService rateLimitService) {
+            JwtService jwtService) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.jwtService = jwtService;
-        this.rateLimitService = rateLimitService;
     }
 
     /**
