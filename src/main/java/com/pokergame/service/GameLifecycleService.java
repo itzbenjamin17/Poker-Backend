@@ -227,7 +227,8 @@ public class GameLifecycleService {
                 // If only one player remains, end the game immediately
                 if (game.getPlayers().size() == 1) {
                     logger.info("Only one player remaining in game {}, ending game", gameId);
-                    handleGameEnd(gameId, true);
+                    boolean isForfeit = game.getCurrentPhase() != com.pokergame.enums.GamePhase.SHOWDOWN;
+                    handleGameEnd(gameId, isForfeit);
                     return;
                 }
 
