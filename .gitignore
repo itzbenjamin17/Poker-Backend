@@ -10,6 +10,7 @@ GEMINI.md
 AGENTS.md
 gemini_files/
 .env
+docs/
 
 ### STS ###
 .apt_generated
