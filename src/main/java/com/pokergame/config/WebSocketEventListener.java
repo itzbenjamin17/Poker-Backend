@@ -190,21 +190,6 @@ public class WebSocketEventListener {
         }
     }
 
-    /**
-     * Finds the room ID of the room that the given player is in.
-     * 
-     * @param username The username of the player.
-     * @return The room ID of the room that the given player is in, or null if the player is not in any room.
-     */
-    // TODO: Make this more efficient, maybe store the room ID in the user object
-    private String findRoomIdByPlayer(String username) {
-        for (Room room : roomService.getRooms()) {
-            if (room.hasPlayer(username)) {
-                return room.getRoomId();
-            }
-        }
-        return null;
-    }
 
     /**
      * Registers an active WebSocket session for the given user.
