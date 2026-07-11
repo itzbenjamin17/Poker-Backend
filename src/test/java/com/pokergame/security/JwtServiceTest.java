@@ -2,7 +2,6 @@ package com.pokergame.security;
 
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.security.SignatureException;
-import io.jsonwebtoken.security.WeakKeyException;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -15,7 +14,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -282,9 +280,5 @@ class JwtServiceTest {
         ReflectionTestUtils.setField(service, "expirationMillis", expirationMillis);
         service.init();
         return service;
-    }
-
-    private static Stream<String> specialPlayerNames() {
-        return Stream.of("Player@123!#$%", "玩家123", "A".repeat(1000));
     }
 }
