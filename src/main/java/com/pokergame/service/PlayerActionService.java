@@ -49,8 +49,8 @@ public class PlayerActionService {
     }
 
     /**
-     * Processes a player action request and advances the game state accordingly.
-     * Validates the request, processes the decision, and handles game progression.
+     * Processes a player action request and orchestrates the resulting game state updates.
+     * Validates the request, delegates the decision to the Game model, and handles the resulting TurnOutcome by broadcasting changes.
      *
      * @param gameId        the unique identifier of the game
      * @param actionRequest the action request containing the action type and amount

@@ -211,13 +211,12 @@ public class Game {
     }
 
     /**
-     * Processes a player's betting decision and updates the game state accordingly.
+     * Processes a player's betting decision, updates the game state, and handles turn progression.
      *
      * @param player   the player making the decision
      * @param decision the player's betting decision (action and amount)
-     * @return a message if the action was converted (e.g. call to all-in), null
-     *         otherwise
-     * @throws UnauthorisedActionException if a raise amount is invalid
+     * @return a TurnOutcome detailing what happened (e.g., whether the phase advanced or the hand went to showdown)
+     * @throws UnauthorisedActionException if an action or raise amount is invalid
      */
     public TurnOutcome processPlayerDecision(Player player, PlayerDecision decision) {
         if (decision == null || decision.action() == null) {
@@ -372,6 +371,9 @@ public class Game {
         }
     }
 
+    /**
+     * Advances the game to the next logical phase by dealing the appropriate community cards.
+     */
     public void advancePhase() {
         switch (currentPhase) {
             case PRE_FLOP -> dealFlop();
