@@ -1,6 +1,7 @@
 package com.pokergame.model;
 
 import com.pokergame.dto.internal.PlayerDecision;
+import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.*;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
@@ -1215,10 +1216,10 @@ class GameTest {
 
                 Player raiser = mixedStacks.getFirst();
                 int previousBet = raiser.getCurrentBet();
-                String message = sidePotGame.processPlayerDecision(raiser,
+                TurnOutcome outcome = sidePotGame.processPlayerDecision(raiser,
                                 new PlayerDecision(PlayerAction.RAISE, 100, raiser.getPlayerId()));
 
-                assertNull(message);
+                assertNull(outcome.conversionMessage());
                 assertTrue(raiser.getCurrentBet() > previousBet);
                 assertEquals(raiser.getCurrentBet(), sidePotGame.getCurrentHighestBet());
         }
@@ -1236,12 +1237,12 @@ class GameTest {
                 shortStackGame.postBlinds();
 
                 Player shortCaller = shortStackGame.getCurrentPlayer();
-                String message = shortStackGame.processPlayerDecision(
+                TurnOutcome outcome = shortStackGame.processPlayerDecision(
                                 shortCaller,
                                 new PlayerDecision(PlayerAction.CALL, 0, shortCaller.getPlayerId()));
 
-                assertNotNull(message);
-                assertTrue(message.contains("converted to all-in"));
+                assertNotNull(outcome.conversionMessage());
+                assertTrue(outcome.conversionMessage().contains("converted to all-in"));
                 assertEquals(0, shortCaller.getChips());
                 assertTrue(shortCaller.getIsAllIn());
         }

@@ -17,7 +17,8 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+
+import com.pokergame.dto.internal.TurnOutcome;
 
 /**
  * Service class responsible for processing player actions and game progression.
@@ -46,8 +47,6 @@ public class PlayerActionService {
         this.gameStateService = gameStateService;
         this.eventPublisher = eventPublisher;
     }
-
-    private final Map<String, Set<String>> playersWhoActedInInitialTurn = new ConcurrentHashMap<>();
 
     /**
      * Processes a player action request and advances the game state accordingly.
@@ -97,65 +96,39 @@ public class PlayerActionService {
 
             logger.debug("Processing decision: {}", decision);
 
-            // Process the decision first - this is the critical operation that must succeed
-            String conversionMessage = game.processPlayerDecision(currentPlayer, decision);
+            TurnOutcome outcome = game.processPlayerDecision(currentPlayer, decision);
             logger.debug("Decision processed successfully");
 
             // If there was a conversion, notify the player
-            if (conversionMessage != null) {
-                logger.info("Sending conversion message to player {}: {}", currentPlayer.getName(), conversionMessage);
-                gameStateService.sendPlayerNotification(gameId, currentPlayer.getName(), conversionMessage);
+            if (outcome.conversionMessage() != null) {
+                logger.info("Sending conversion message to player {}: {}", currentPlayer.getName(), outcome.conversionMessage());
+                gameStateService.sendPlayerNotification(gameId, currentPlayer.getName(), outcome.conversionMessage());
             }
 
-            // Immediately check and advance to showdown if everyone else just folded.
-            if (game.isHandOver()) {
-                advanceGame(gameId);
-                return;
-            }
-
-            // After successful processing, handle game progression and broadcasting
-            // This is done in a try-catch to ensure that even if broadcasting fails,
-            // the action itself was successful
             try {
-                // Track who has acted in the initial turn
-                Set<String> actedPlayers = playersWhoActedInInitialTurn.computeIfAbsent(gameId,
-                        k -> ConcurrentHashMap.newKeySet());
-                actedPlayers.add(currentPlayer.getPlayerId());
-
-                // Check if everyone has had their initial turn
-                List<Player> playersWhoShouldAct = game.getActivePlayers().stream()
-                        .filter(p -> !p.getHasFolded() && !p.getIsAllIn())
-                        .toList();
-
-                boolean everyoneHasActed = playersWhoShouldAct.stream()
-                        .allMatch(p -> actedPlayers.contains(p.getPlayerId()));
-
-                if (everyoneHasActed && !game.isBettingRoundComplete()) {
-                    game.setEveryoneHasHadInitialTurn(true);
-                }
-
-                // Broadcast game state after player action
-                gameStateService.broadcastGameState(gameId, game);
-
-                logger.debug("Checking if betting round is complete for game {}...", gameId);
-                if (game.isBettingRoundComplete()) {
-                    logger.info("Betting round complete for game {}, advancing game", gameId);
-                    playersWhoActedInInitialTurn.remove(gameId);
-                    advanceGame(gameId);
-                } else {
-                    logger.debug("Betting round not complete for game {}, moving to next player", gameId);
-                    game.nextPlayer();
-                    gameStateService.broadcastGameState(gameId, game);
+                switch (outcome.type()) {
+                    case NEXT_PLAYER -> {
+                        gameStateService.broadcastGameState(gameId, game);
+                    }
+                    case PHASE_ADVANCED -> {
+                        gameStateService.broadcastGameState(gameId, game);
+                    }
+                    case AUTO_ADVANCING -> {
+                        gameStateService.broadcastAutoAdvanceNotification(gameId, game);
+                        eventPublisher.publishEvent(new AutoAdvanceEvent(gameId));
+                    }
+                    case SHOWDOWN -> {
+                        openReadyCountdownGate(gameId);
+                        gameStateService.broadcastShowdownResults(gameId, game, outcome.winners(), outcome.winningsPerPlayer());
+                    }
                 }
             } catch (Exception e) {
-                logger.error("Error in post-processing for game {} (action was successful): {}", gameId, e.getMessage(),
-                        e);
+                logger.error("Error in post-processing for game {} (action was successful): {}", gameId, e.getMessage(), e);
                 // Re-broadcast to ensure clients have the updated state
                 try {
                     gameStateService.broadcastGameState(gameId, game);
                 } catch (Exception broadcastError) {
-                    logger.error("Failed to re-broadcast game state for game {}: {}", gameId,
-                            broadcastError.getMessage());
+                    logger.error("Failed to re-broadcast game state for game {}: {}", gameId, broadcastError.getMessage());
                 }
             }
 
@@ -188,85 +161,7 @@ public class PlayerActionService {
         return currentPlayer;
     }
 
-    /**
-     * Advances the game to the next phase or conducts showdown if hand is over.
-     * Handles progression through betting rounds (PRE_FLOP → FLOP → TURN → RIVER →
-     * SHOWDOWN)
-     * and manages game state transitions. Automatically advances when all players
-     * are all-in.
-     *
-     * @param gameId the unique identifier of the game to advance
-     */
-    private void advanceGame(String gameId) {
-        Game game = gameLifecycleService.getGame(gameId);
-        if (game == null) {
-            logger.warn("Cannot advance game {} - game no longer exists", gameId);
-            return;
-        }
-        logger.info("Advancing game {} from phase: {}", gameId, game.getCurrentPhase());
 
-        if (game.isHandOver()) {
-            logger.info("Hand is over for game {}, conducting showdown", gameId);
-            int potBeforeDistribution = game.getPot();
-            List<Player> winners = game.conductShowdown();
-            logger.info("Showdown complete for game {} | Winners: {}",
-                    gameId, winners.stream().map(Player::getName).toList());
-
-            int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
-            openReadyCountdownGate(gameId);
-            gameStateService.broadcastShowdownResults(gameId, game, winners, winningsPerPlayer);
-            return;
-        }
-
-        // Check if we need to auto-advance because of an all-in situation
-        long playersAbleToAct = game.getActivePlayers().stream()
-                .filter(p -> !p.getHasFolded() && !p.getIsAllIn())
-                .count();
-
-        logger.debug("Game {} status | Players able to act: {} | Betting round complete: {}",
-                gameId, playersAbleToAct, game.isBettingRoundComplete());
-
-        // Auto-advance if the betting round is complete AND most players are all-in
-        if (game.isBettingRoundComplete() && playersAbleToAct <= 1) {
-            logger.info("All-in situation detected for game {}, auto-advancing to showdown", gameId);
-            gameStateService.broadcastAutoAdvanceNotification(gameId, game);
-            eventPublisher.publishEvent(new AutoAdvanceEvent(gameId));
-            return;
-        }
-
-        // Normal advancement logic
-        switch (game.getCurrentPhase()) {
-            case PRE_FLOP:
-                logger.info("Game {} advancing to FLOP phase", gameId);
-                game.dealFlop();
-                gameStateService.broadcastGameState(gameId, game);
-                break;
-            case FLOP:
-                logger.info("Game {} advancing to TURN phase", gameId);
-                game.dealTurn();
-                gameStateService.broadcastGameState(gameId, game);
-                break;
-            case TURN:
-                logger.info("Game {} advancing to RIVER phase", gameId);
-                game.dealRiver();
-                gameStateService.broadcastGameState(gameId, game);
-                break;
-            case RIVER:
-                logger.info("RIVER betting complete for game {}, conducting showdown", gameId);
-                int potBeforeDistribution = game.getPot();
-                List<Player> winners = game.conductShowdown();
-                logger.info("Showdown complete for game {} | Winners: {}",
-                        gameId, winners.stream().map(Player::getName).toList());
-
-                int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
-                openReadyCountdownGate(gameId);
-                gameStateService.broadcastShowdownResults(gameId, game, winners, winningsPerPlayer);
-                break;
-            case SHOWDOWN:
-                logger.warn("Game {} is already in SHOWDOWN phase", gameId);
-                break;
-        }
-    }
 
     private void openReadyCountdownGate(String gameId) {
         if (roundEndDelayMs <= 0) {

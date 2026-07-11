@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import com.pokergame.dto.internal.TurnOutcome;
 
 /**
  * Represents a poker game instance with players, betting rounds, and game state
@@ -42,6 +43,7 @@ public class Game {
 
     // Track if everyone has had their initial turn in the current betting round
     private boolean everyoneHasHadInitialTurn;
+    private final Set<String> actedPlayersInRound;
 
     /**
      * Creates a new poker game with the specified players and betting parameters.
@@ -84,6 +86,7 @@ public class Game {
         this.bigBlind = bigBlind;
         this.handEvaluator = handEvaluator;
         this.everyoneHasHadInitialTurn = false;
+        this.actedPlayersInRound = new HashSet<>();
         this.handContributions = new HashMap<>();
         this.readyCountdownActive = false;
         this.readyCountdownDeadlineEpochMs = null;
@@ -216,7 +219,7 @@ public class Game {
      *         otherwise
      * @throws UnauthorisedActionException if a raise amount is invalid
      */
-    public String processPlayerDecision(Player player, PlayerDecision decision) {
+    public TurnOutcome processPlayerDecision(Player player, PlayerDecision decision) {
         if (decision == null || decision.action() == null) {
             throw new BadRequestException("Invalid player action");
         }
@@ -324,7 +327,58 @@ public class Game {
                 currentHighestBet,
                 handContributions);
 
-        return conversionMessage; // Return null if no conversion, or the message if converted
+        actedPlayersInRound.add(player.getPlayerId());
+
+        List<Player> playersWhoShouldAct = getActivePlayers().stream()
+                .filter(p -> !p.getHasFolded() && !p.getIsAllIn())
+                .toList();
+
+        boolean everyoneHasActed = playersWhoShouldAct.stream()
+                .allMatch(p -> actedPlayersInRound.contains(p.getPlayerId()));
+
+        if (everyoneHasActed && !isBettingRoundComplete()) {
+            this.everyoneHasHadInitialTurn = true;
+        }
+
+        if (isHandOver()) {
+            int potBeforeDistribution = getPot();
+            List<Player> winners = conductShowdown();
+            int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
+            return new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, conversionMessage, winners, winningsPerPlayer);
+        }
+
+        long playersAbleToAct = getActivePlayers().stream()
+                .filter(p -> !p.getHasFolded() && !p.getIsAllIn())
+                .count();
+
+        if (isBettingRoundComplete() && playersAbleToAct <= 1) {
+            return new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, conversionMessage, null, 0);
+        }
+
+        if (isBettingRoundComplete()) {
+            actedPlayersInRound.clear();
+            if (currentPhase == GamePhase.RIVER) {
+                int potBeforeDistribution = getPot();
+                List<Player> winners = conductShowdown();
+                int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
+                return new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, conversionMessage, winners, winningsPerPlayer);
+            } else {
+                advancePhase();
+                return new TurnOutcome(TurnOutcome.TurnOutcomeType.PHASE_ADVANCED, conversionMessage, null, 0);
+            }
+        } else {
+            nextPlayer();
+            return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, conversionMessage, null, 0);
+        }
+    }
+
+    public void advancePhase() {
+        switch (currentPhase) {
+            case PRE_FLOP -> dealFlop();
+            case FLOP -> dealTurn();
+            case TURN -> dealRiver();
+            case RIVER -> {}
+        }
     }
 
     /**
@@ -1063,6 +1117,7 @@ public class Game {
         }
         currentHighestBet = 0;
         everyoneHasHadInitialTurn = false; // Reset for the new betting round
+        actedPlayersInRound.clear();
         // Next player is the first active player after the dealer
         currentPlayerPosition = dealerPosition;
         nextPlayer();
