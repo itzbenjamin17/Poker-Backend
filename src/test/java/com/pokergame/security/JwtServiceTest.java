@@ -281,4 +281,15 @@ class JwtServiceTest {
         service.init();
         return service;
     }
+
+    static java.util.stream.Stream<String> specialPlayerNames() {
+        return java.util.stream.Stream.of(
+            "Player with spaces",
+            "Player_with_underscores",
+            "Player-with-dashes",
+            "Player@Name.com",
+            "A very long player name that exceeds normal limits but should still be supported by the token generator",
+            "Player123!@#"
+        );
+    }
 }
