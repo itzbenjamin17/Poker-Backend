@@ -73,6 +73,23 @@ public class Player {
         this.isReadyForNextHand = false;
     }
 
+    public static Player restore(String name, String playerId, List<Card> holeCards, List<Card> bestHand,
+            HandRank handRank, int chips, int currentBet, boolean hasFolded, boolean allIn, boolean out,
+            boolean disconnected, Long disconnectDeadlineEpochMs, boolean readyForNextHand) {
+        Player player = new Player(name, playerId, chips);
+        player.holeCards = new ArrayList<>(holeCards);
+        player.bestHand = new ArrayList<>(bestHand);
+        player.handRank = handRank;
+        player.currentBet = currentBet;
+        player.hasFolded = hasFolded;
+        player.isAllIn = allIn;
+        player.isOut = out;
+        player.isDisconnected = disconnected;
+        player.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
+        player.isReadyForNextHand = readyForNextHand;
+        return player;
+    }
+
     /**
      * Resets all player attributes for a new hand.
      * Clears hole cards, best hand, and resets betting status.

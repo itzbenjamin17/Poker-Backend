@@ -18,6 +18,9 @@ FROM eclipse-temurin:25-jre-alpine
 
 WORKDIR /app
 
+ENV POKER_PERSISTENCE_DIRECTORY=/var/lib/poker/wal
+VOLUME ["/var/lib/poker/wal"]
+
 # Copy JAR from builder stage
 COPY --from=builder /app/target/*.jar app.jar
 

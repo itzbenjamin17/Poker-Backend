@@ -24,6 +24,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Component
 public class WebSocketEventListener {
@@ -37,6 +38,7 @@ public class WebSocketEventListener {
     private final ConcurrentMap<String, Set<String>> activeSessionsByUser = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PlayerPrincipal> sessionToPrincipal = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PendingDisconnect> pendingDisconnects = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ReentrantLock> sessionLocks = new ConcurrentHashMap<>();
     private final TaskScheduler taskScheduler;
 
     @Autowired
@@ -71,19 +73,25 @@ public class WebSocketEventListener {
         String playerName = playerPrincipal.playerName();
         String roomId = playerPrincipal.roomId();
 
-        // Tracks specific session to user because a user can have multiple sessions (e.g. multiple browser tabs)
-        registerActiveSession(playerPrincipal, sessionId);
-        logger.debug("Registered active WebSocket session {} for user {}", sessionId, compositeName);
+        ReentrantLock sessionLock = sessionLocks.computeIfAbsent(compositeName, ignored -> new ReentrantLock());
+        sessionLock.lock();
+        try {
+            // Registration and cleanup are linearized per player: a reconnect that wins
+            // this lock cannot be evicted by an already-running grace timer.
+            registerActiveSession(playerPrincipal, sessionId);
+            logger.debug("Registered active WebSocket session {} for user {}", sessionId, compositeName);
 
-        // If the user was previously disconnected, cancel the clean-up task and mark them as reconnected
-        PendingDisconnect pendingDisconnect = pendingDisconnects.remove(compositeName);
-        if (pendingDisconnect != null) {
-            pendingDisconnect.future().cancel(false);
+            PendingDisconnect pendingDisconnect = pendingDisconnects.remove(compositeName);
+            if (pendingDisconnect != null) {
+                pendingDisconnect.future().cancel(false);
 
-            if (gameLifecycleService.gameExists(roomId)
-                    && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
-                gameLifecycleService.markPlayerReconnected(roomId, playerName);
+                if (gameLifecycleService.gameExists(roomId)
+                        && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
+                    gameLifecycleService.markPlayerReconnected(roomId, playerName);
+                }
             }
+        } finally {
+            sessionLock.unlock();
         }
     }
 
@@ -113,39 +121,42 @@ public class WebSocketEventListener {
         final PlayerPrincipal playerPrincipal = recoveredPrincipal;
         String compositeName = playerPrincipal.getName();
         
-        // Users may have multiple sessions (e.g. multiple browser tabs),
-        // So we only schedule a clean-up if there are no active sessions left
-        unregisterActiveSession(compositeName, sessionId);
-        if (hasActiveSession(compositeName)) {
-            logger.debug("User {} still has another active session; skipping disconnect timer", compositeName);
-            return;
+        ReentrantLock sessionLock = sessionLocks.computeIfAbsent(compositeName, ignored -> new ReentrantLock());
+        sessionLock.lock();
+        try {
+            // Users may have multiple sessions (e.g. multiple browser tabs),
+            // So we only schedule a clean-up if there are no active sessions left
+            unregisterActiveSession(compositeName, sessionId);
+            if (hasActiveSession(compositeName)) {
+                logger.debug("User {} still has another active session; skipping disconnect timer", compositeName);
+                return;
+            }
+
+            String playerName = playerPrincipal.playerName();
+            String roomId = playerPrincipal.roomId();
+
+            boolean gameActive = gameLifecycleService.gameExists(roomId);
+            long disconnectDeadlineEpochMs = System.currentTimeMillis() + disconnectGracePeriodMs;
+            if (gameActive && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
+                gameLifecycleService.markPlayerDisconnected(roomId, playerName, disconnectDeadlineEpochMs);
+            }
+
+            PendingDisconnect existing = pendingDisconnects.remove(compositeName);
+            if (existing != null) {
+                existing.future().cancel(false);
+            }
+
+            logger.info("WebSocket disconnected for user {}. Scheduling delayed cleanup ({} ms)",
+                    compositeName, disconnectGracePeriodMs);
+
+            ScheduledFuture<?> future = taskScheduler.schedule(
+                    () -> cleanupDisconnectedUser(playerPrincipal),
+                    Instant.now().plusMillis(disconnectGracePeriodMs));
+
+            pendingDisconnects.put(compositeName, new PendingDisconnect(roomId, future));
+        } finally {
+            sessionLock.unlock();
         }
-
-        String playerName = playerPrincipal.playerName();
-        String roomId = playerPrincipal.roomId();
-
-        // Marks the player as disconnected and marks when they should be removed from a game
-        boolean gameActive = gameLifecycleService.gameExists(roomId);
-        long disconnectDeadlineEpochMs = System.currentTimeMillis() + disconnectGracePeriodMs;
-        if (gameActive && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
-            gameLifecycleService.markPlayerDisconnected(roomId, playerName, disconnectDeadlineEpochMs);
-        }
-
-        // Cancel any existing disconnect timer for this user
-        PendingDisconnect existing = pendingDisconnects.remove(compositeName);
-        if (existing != null) {
-            existing.future().cancel(false);
-        }
-
-        logger.info("WebSocket disconnected for user {}. Scheduling delayed cleanup ({} ms)",
-                compositeName, disconnectGracePeriodMs);
-
-        // Schedule the user to be removed from the game if they don't reconnect in 2 minutes
-        ScheduledFuture<?> future = taskScheduler.schedule(
-                () -> cleanupDisconnectedUser(playerPrincipal),
-                Instant.now().plusMillis(disconnectGracePeriodMs));
-
-        pendingDisconnects.put(compositeName, new PendingDisconnect(roomId, future));
     }
 
     /**
@@ -158,35 +169,53 @@ public class WebSocketEventListener {
         String playerName = principal.playerName();
         String roomId = principal.roomId();
         
-        pendingDisconnects.remove(compositeName);
-
-        if (hasActiveSession(compositeName)) {
-            logger.debug("Skipping disconnect cleanup for user {} because an active session exists", compositeName);
-            return;
-        }
-
-        logger.info("WebSocket grace period expired. Removing disconnected user: {}", compositeName);
-
-        // Also clean up their WebSocket rate limit bucket
-        rateLimitService.cleanUpWs(compositeName);
-
-        Room room = roomService.getRoom(roomId);
-        if (room == null || !room.hasPlayer(playerName)) {
-            return;
-        }
-
+        ReentrantLock sessionLock = sessionLocks.computeIfAbsent(compositeName, ignored -> new ReentrantLock());
+        sessionLock.lock();
         try {
-            logger.info("Automatically removing disconnected user '{}' from room '{}'", playerName,
-                    room.getRoomName());
-            boolean gameActive = gameLifecycleService.gameExists(roomId);
-            roomService.leaveRoom(roomId, playerName, !gameActive);
+            pendingDisconnects.remove(compositeName);
 
-            if (gameActive && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
-                gameLifecycleService.leaveGame(roomId, playerName);
+            if (hasActiveSession(compositeName)) {
+                logger.debug("Skipping disconnect cleanup for user {} because an active session exists", compositeName);
+                return;
             }
-        } catch (Exception e) {
-            logger.error("Failed to remove disconnected user '{}' from room '{}'", playerName,
-                    room.getRoomName(), e);
+
+            logger.info("WebSocket grace period expired. Removing disconnected user: {}", compositeName);
+            rateLimitService.cleanUpWs(compositeName);
+
+            Room room = roomService.getRoom(roomId);
+            if (room == null || !room.hasPlayer(playerName)) {
+                return;
+            }
+
+            try {
+                logger.info("Automatically removing disconnected user '{}' from room '{}'", playerName,
+                        room.getRoomName());
+                gameLifecycleService.removeDisconnectedPlayer(roomId, playerName);
+            } catch (Exception e) {
+                logger.error("Failed to remove disconnected user '{}' from room '{}'", playerName,
+                        room.getRoomName(), e);
+            }
+        } finally {
+            sessionLock.unlock();
+        }
+    }
+
+    /**
+     * Rebuilds only the runtime cleanup timer for a player restored from durable
+     * state. Session identifiers and rate-limit buckets intentionally remain empty.
+     */
+    public void scheduleRecoveredDisconnect(String roomId, String playerName, long deadlineEpochMs) {
+        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
+        String compositeName = principal.getName();
+        PendingDisconnect existing = pendingDisconnects.remove(compositeName);
+        if (existing != null) {
+            existing.future().cancel(false);
+        }
+        long delay = Math.max(0, deadlineEpochMs - System.currentTimeMillis());
+        ScheduledFuture<?> future = taskScheduler.schedule(
+                () -> cleanupDisconnectedUser(principal), Instant.now().plusMillis(delay));
+        if (future != null) {
+            pendingDisconnects.put(compositeName, new PendingDisconnect(roomId, future));
         }
     }
 

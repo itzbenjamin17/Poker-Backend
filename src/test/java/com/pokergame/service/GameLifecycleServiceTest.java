@@ -3,7 +3,7 @@ package com.pokergame.service;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.GamePhase;
-import com.pokergame.event.GameCleanupEvent;
+import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import static org.junit.jupiter.api.Assertions.*;
@@ -50,9 +49,6 @@ class GameLifecycleServiceTest {
     private SimpMessagingTemplate messagingTemplate;
 
     @Mock
-    private ApplicationEventPublisher applicationEventPublisher;
-
-    @Mock
     private TaskScheduler taskScheduler;
 
     private GameLifecycleService gameLifecycleService;
@@ -63,7 +59,7 @@ class GameLifecycleServiceTest {
     @BeforeEach
     void setUp() {
         gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
-                applicationEventPublisher, taskScheduler);
+                taskScheduler);
 
         testRoom = new Room(
                 ROOM_ID,
@@ -180,6 +176,33 @@ class GameLifecycleServiceTest {
     }
 
     @Test
+    void advanceAutoAdvanceStep_AtPreFlop_ShouldDealFlopThroughServiceSeam() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        reset(gameStateService);
+
+        boolean complete = gameLifecycleService.advanceAutoAdvanceStep(ROOM_ID);
+
+        assertFalse(complete);
+        assertEquals(GamePhase.FLOP, gameLifecycleService.getGame(ROOM_ID).getCurrentPhase());
+    }
+
+    @Test
+    void staleReadyCountdownTimeoutCannotCloseANewerCountdown() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        long staleDeadline = System.currentTimeMillis() + 1_000;
+        long currentDeadline = staleDeadline + 1_000;
+        game.openReadyCountdown(currentDeadline);
+
+        gameLifecycleService.handleReadyCountdownTimeout(ROOM_ID, staleDeadline);
+
+        assertTrue(game.isReadyCountdownActive());
+        assertEquals(currentDeadline, game.getReadyCountdownDeadlineEpochMs());
+    }
+
+    @Test
     void startNewHand_WhenGameOver_ShouldNotProceed() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
@@ -191,13 +214,12 @@ class GameLifecycleServiceTest {
         game.getActivePlayers().add(game.getPlayers().getFirst());
 
         reset(gameStateService);
-        reset(applicationEventPublisher);
         gameLifecycleService.startNewHand(ROOM_ID);
 
         // Should end the game and schedule cleanup because game became over after reset
         verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
         verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
-        verify(applicationEventPublisher).publishEvent(any(GameCleanupEvent.class));
+        assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
     }
 
     @Test
@@ -449,13 +471,12 @@ class GameLifecycleServiceTest {
         gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", System.currentTimeMillis() + 120_000);
 
         reset(gameStateService);
-        reset(applicationEventPublisher);
 
         assertDoesNotThrow(() -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
 
         verify(gameStateService).broadcastGameEnd(eq(ROOM_ID),
                 argThat(player -> player != null && player.getName().equals("Host")), anyBoolean());
-        verify(applicationEventPublisher).publishEvent(any(GameCleanupEvent.class));
+        assertNotNull(gameLifecycleService.getGame(ROOM_ID).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
     }
 
     @Test
@@ -542,8 +563,7 @@ class GameLifecycleServiceTest {
         final int iterations = 20;
         PlayerActionService playerActionService = new PlayerActionService(
                 gameLifecycleService,
-                gameStateService,
-                applicationEventPublisher);
+                gameStateService);
 
         ConcurrentHashMap<String, Room> roomsById = new ConcurrentHashMap<>();
         when(roomService.getRoom(anyString())).thenAnswer(invocation -> roomsById.get(invocation.getArgument(0)));

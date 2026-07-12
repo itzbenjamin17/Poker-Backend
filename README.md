@@ -61,6 +61,7 @@ The engine follows a strict **Layered Architecture** with unidirectional depende
 - **Heads-up & Multiplayer:** Dynamic dealer and blind positioning for 2-6 players.
 - **Resilient Connections:** 2-minute reconnect grace window allowing players to resume their seats after a drop.
 - **Ready System:** Shared countdown for starting new hands after a showdown.
+- **Encrypted Restart Recovery:** Per-room AES-256-GCM WALs preserve exact lobbies, hands, cards, chips, and deadlines across a single-server restart. See [Persistence operations](docs/persistence-operations.md).
 
 ## 🛡️ Security & Hardening
 
@@ -101,7 +102,7 @@ The project maintains a high-quality baseline with **500+ automated tests**:
 
 ## 🗺️ Future Roadmap
 
-- **Persistence:** Migration from in-memory state to PostgreSQL/JPA.
+- **Persistence Scale-out:** Optional migration from the local single-writer WAL to a multi-node durable store.
 - **Profiles:** User accounts, historical statistics, and leaderboard support.
 - **Scalability:** Distributed state using Redis and external STOMP brokers.
 

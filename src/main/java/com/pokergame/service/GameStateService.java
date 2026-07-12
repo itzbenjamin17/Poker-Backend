@@ -11,11 +11,11 @@ import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
+import com.pokergame.persistence.DurableTransactionContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.scheduling.annotation.Async;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -79,7 +79,6 @@ public class GameStateService {
      * @param game   the Game object containing the current state
      * @throws BadRequestException if the game is null
      */
-    @Async("gameExecutor")
     public void broadcastGameState(String gameId, Game game) {
         if (game == null) {
             logger.warn("Cannot broadcast game state - game {} not found", gameId);
@@ -98,13 +97,13 @@ public class GameStateService {
             }
         }
 
-        messagingTemplate.convertAndSend("/game/" + gameId, publicResponse);
+        sendAfterCommit("/game/" + gameId, publicResponse);
 
         // Sending a personalised game state to each player using secure user destinations
         playerPrivateStates.forEach((playerName, privateState) -> {
             // Principal name is playerName:roomId
             String compositeName = playerName + ":" + gameId;
-            messagingTemplate.convertAndSendToUser(
+            sendToUserAfterCommit(
                     compositeName,
                     "/queue/private",
                     privateState);
@@ -120,7 +119,6 @@ public class GameStateService {
      * @param winners           the list of Player objects who won the hand
      * @param winningsPerPlayer the number of chips each winner receives
      */
-    @Async("gameExecutor")
     public void broadcastShowdownResults(String gameId, Game game, List<Player> winners, int winningsPerPlayer) {
         if (game == null) {
             logger.warn("Cannot broadcast showdown - game {} not found", gameId);
@@ -203,7 +201,7 @@ public class GameStateService {
         }
 
         // Broadcast showdown results to all players
-        messagingTemplate.convertAndSend("/game/" + gameId, showdownResponse);
+        sendAfterCommit("/game/" + gameId, showdownResponse);
 
         logger.info("Broadcasted showdown results for game {} with {} winner(s): {}",
                 gameId, winnerNames.size(), winnerNames);
@@ -222,7 +220,6 @@ public class GameStateService {
      * @param message the message to display to players about auto-advance
      *                status
      */
-    @Async("gameExecutor")
     public void broadcastGameStateWithAutoAdvance(String gameId, Game game, String message) {
         if (game == null) {
             logger.warn("Cannot broadcast auto-advance state - game {} not found", gameId);
@@ -296,7 +293,7 @@ public class GameStateService {
         }
 
         logger.info("Broadcasting auto-advance state for game {}: {}", gameId, message);
-        messagingTemplate.convertAndSend("/game/" + gameId, autoAdvanceResponse);
+        sendAfterCommit("/game/" + gameId, autoAdvanceResponse);
     }
 
     /**
@@ -306,7 +303,6 @@ public class GameStateService {
      * @param gameId the unique identifier of the game
      * @param game   the Game object containing the current state
      */
-    @Async("gameExecutor")
     public void broadcastAutoAdvanceNotification(String gameId, Game game) {
         if (game == null) {
             logger.warn("Cannot broadcast auto-advance notification - game {} not found", gameId);
@@ -317,7 +313,7 @@ public class GameStateService {
                 "Broadcasting auto-advance notification for game {}: No further betting actions are possible, advancing to showdown",
                 gameId);
 
-        messagingTemplate.convertAndSend("/game/" + gameId,
+        sendAfterCommit("/game/" + gameId,
                 new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_START,
                         "No further betting actions are possible. Auto-advancing to showdown...", null, gameId));
     }
@@ -329,7 +325,6 @@ public class GameStateService {
      * @param gameId the unique identifier of the game
      * @param game   the Game object containing the current state
      */
-    @Async("gameExecutor")
     public void broadcastAutoAdvanceComplete(String gameId, Game game) {
         if (game == null) {
             logger.warn("Cannot broadcast auto-advance complete - game {} not found", gameId);
@@ -337,7 +332,7 @@ public class GameStateService {
         }
 
         logger.info("Broadcasting auto-advance complete for game {}: {}", gameId, game.getCommunityCards());
-        messagingTemplate.convertAndSend("/game/" + gameId,
+        sendAfterCommit("/game/" + gameId,
                 new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_COMPLETE, "", null, gameId));
     }
 
@@ -349,7 +344,6 @@ public class GameStateService {
      * @param playerName the name of the player to notify
      * @param message    the notification message content
      */
-    @Async("gameExecutor")
     public void sendPlayerNotification(String gameId, String playerName, String message) {
         PlayerNotificationResponse notification = new PlayerNotificationResponse(
                 ResponseMessage.PLAYER_NOTIFICATION,
@@ -357,7 +351,7 @@ public class GameStateService {
                 playerName,
                 gameId);
 
-        messagingTemplate.convertAndSend("/game/" + gameId, notification);
+        sendAfterCommit("/game/" + gameId, notification);
     }
 
     /**
@@ -369,7 +363,6 @@ public class GameStateService {
      * @param message    the notification message content
      * @param type       the type of notification (e.g. "ACTION_ERROR")
      */
-    @Async("gameExecutor")
     public void sendPrivatePlayerNotification(String gameId, String playerName, String message, ResponseMessage type) {
         PlayerNotificationResponse notification = new PlayerNotificationResponse(
                 type,
@@ -380,7 +373,7 @@ public class GameStateService {
         // Principal name is playerName:roomId
         String compositeName = playerName + ":" + gameId;
         
-        messagingTemplate.convertAndSendToUser(
+        sendToUserAfterCommit(
                 compositeName,
                 "/queue/private",
                 notification);
@@ -394,7 +387,6 @@ public class GameStateService {
      * @param winner    the Player object representing the game winner
      * @param isForfeit true if the game ended due to a player leaving/disconnecting
      */
-    @Async("gameExecutor")
     public void broadcastGameEnd(String gameId, Player winner, boolean isForfeit) {
         if (winner == null) {
             logger.warn("Cannot broadcast game end for {} - winner is null", gameId);
@@ -409,7 +401,7 @@ public class GameStateService {
         gameEndData.put("isForfeit", isForfeit);
         gameEndData.put("message", "🏆 " + winner.getName() + " wins the game with " + winner.getChips() + " chips!");
 
-        messagingTemplate.convertAndSend("/game/" + gameId, (Object) gameEndData);
+        sendAfterCommit("/game/" + gameId, gameEndData);
 
         logger.info("Game {} completed - Winner: {} with {} chips",
                 gameId, winner.getName(), winner.getChips());
@@ -536,6 +528,15 @@ public class GameStateService {
                 player.getPlayerId(),
                 player.getHoleCards());
 
+    }
+
+    private void sendAfterCommit(String destination, Object payload) {
+        DurableTransactionContext.afterCommit(() -> messagingTemplate.convertAndSend(destination, payload));
+    }
+
+    private void sendToUserAfterCommit(String user, String destination, Object payload) {
+        DurableTransactionContext.afterCommit(
+                () -> messagingTemplate.convertAndSendToUser(user, destination, payload));
     }
 
 }

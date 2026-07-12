@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,9 +44,6 @@ class PlayerActionServiceTest {
     @Mock
     private HandEvaluatorService handEvaluator;
 
-    @Mock
-    private ApplicationEventPublisher applicationEventPublisher;
-
     private PlayerActionService playerActionService;
 
     private Game testGame;
@@ -56,8 +52,7 @@ class PlayerActionServiceTest {
 
     @BeforeEach
     void setUp() {
-        playerActionService = new PlayerActionService(gameLifecycleService, gameStateService,
-                applicationEventPublisher);
+        playerActionService = new PlayerActionService(gameLifecycleService, gameStateService);
         testPlayers = new ArrayList<>();
         testPlayers.add(new Player("Player1", UUID.randomUUID().toString(), 1000));
         testPlayers.add(new Player("Player2", UUID.randomUUID().toString(), 1000));

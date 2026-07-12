@@ -2,18 +2,16 @@ package com.pokergame.service;
 
 import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.event.AutoAdvanceEvent;
-import com.pokergame.event.StartReadyCountdownEvent;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
+import com.pokergame.persistence.DurableMutation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 
@@ -38,13 +36,9 @@ public class PlayerActionService {
 
     private final GameStateService gameStateService;
 
-    private final ApplicationEventPublisher eventPublisher;
-
-    public PlayerActionService(GameLifecycleService gameLifecycleService, GameStateService gameStateService,
-            ApplicationEventPublisher eventPublisher) {
+    public PlayerActionService(GameLifecycleService gameLifecycleService, GameStateService gameStateService) {
         this.gameLifecycleService = gameLifecycleService;
         this.gameStateService = gameStateService;
-        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -58,6 +52,7 @@ public class PlayerActionService {
      *                                     current player
      * @throws ResourceNotFoundException   if the game is not found
      */
+    @DurableMutation(roomId = "#gameId")
     public void processPlayerAction(String gameId, PlayerActionRequest actionRequest, String playerName) {
         Game game = gameLifecycleService.getGame(gameId);
         if (game == null) {
@@ -114,7 +109,7 @@ public class PlayerActionService {
                     }
                     case AUTO_ADVANCING -> {
                         gameStateService.broadcastAutoAdvanceNotification(gameId, game);
-                        eventPublisher.publishEvent(new AutoAdvanceEvent(gameId));
+                        gameLifecycleService.scheduleAutoAdvance(gameId);
                     }
                     case SHOWDOWN -> {
                         openReadyCountdownGate(gameId);
@@ -168,7 +163,7 @@ public class PlayerActionService {
             return;
         }
 
-        eventPublisher.publishEvent(new StartReadyCountdownEvent(gameId, roundEndDelayMs, readyCountdownMs));
+        gameLifecycleService.scheduleReadyCountdownOpen(gameId, roundEndDelayMs);
     }
 
 }

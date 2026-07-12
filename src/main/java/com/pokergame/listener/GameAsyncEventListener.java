@@ -1,34 +1,22 @@
 package com.pokergame.listener;
 
-import com.pokergame.enums.GamePhase;
 import com.pokergame.event.AutoAdvanceEvent;
 import com.pokergame.event.GameCleanupEvent;
 import com.pokergame.event.StartNewHandEvent;
 import com.pokergame.event.StartReadyCountdownEvent;
-import com.pokergame.model.Game;
-import com.pokergame.model.Player;
 import com.pokergame.service.GameLifecycleService;
-import com.pokergame.service.GameStateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
-import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
-import java.util.List;
 
 /**
  * Event listener responsible for handling asynchronous game events and timing.
  * <p>
- * This class replaces blocking calls (like {@code Thread.sleep}) with
- * non-blocking
- * scheduled tasks using Spring's {@link TaskScheduler}. It manages the pacing
- * of the game by handling delays between hands, game clean-up, and the
- * automatic
- * progression of the game during all-in situations.
+ * It translates domain events into durable scheduling commands. Runtime timers
+ * are owned by {@link GameLifecycleService} so their deadlines can be persisted
+ * and rebuilt after a restart.
  * </p>
  */
 @Component
@@ -36,31 +24,16 @@ public class GameAsyncEventListener {
 
     private static final Logger logger = LoggerFactory.getLogger(GameAsyncEventListener.class);
 
-    @Value("${poker.round-end.display-delay-ms:0}")
-    private long roundEndDelayMs = 0;
-
-    @Value("${poker.ready-countdown-ms:30000}")
-    private long readyCountdownMs = 30000;
-
     private final GameLifecycleService gameLifecycleService;
-    private final GameStateService gameStateService;
-    private final TaskScheduler taskScheduler;
 
     /**
      * Constructs a new GameAsyncEventListener.
      *
      * @param gameLifecycleService service for managing game lifecycle (starting
      *                             hands, clean-up)
-     * @param gameStateService     service for broadcasting game updates to players
-     * @param taskScheduler        the scheduler used to execute tasks in the future
-     *                             without blocking threads
      */
-    public GameAsyncEventListener(GameLifecycleService gameLifecycleService,
-            GameStateService gameStateService,
-            @Qualifier("taskScheduler") TaskScheduler taskScheduler) {
+    public GameAsyncEventListener(GameLifecycleService gameLifecycleService) {
         this.gameLifecycleService = gameLifecycleService;
-        this.gameStateService = gameStateService;
-        this.taskScheduler = taskScheduler;
     }
 
     /**
@@ -72,14 +45,7 @@ public class GameAsyncEventListener {
     @EventListener
     public void handleStartNewHandDelay(StartNewHandEvent event) {
         logger.info("Scheduling new hand for game {} in {}ms", event.gameId(), event.delay());
-
-        taskScheduler.schedule(() -> {
-            try {
-                gameLifecycleService.startNewHand(event.gameId());
-            } catch (Exception e) {
-                logger.error("Error starting new hand for game {}: {}", event.gameId(), e.getMessage());
-            }
-        }, Instant.now().plusMillis(event.delay()));
+        gameLifecycleService.scheduleNewHand(event.gameId(), event.delay());
     }
 
     /**
@@ -92,22 +58,7 @@ public class GameAsyncEventListener {
     public void handleStartReadyCountdown(StartReadyCountdownEvent event) {
         logger.info("Scheduling ready countdown for game {} in {}ms", event.gameId(), event.delayMs());
 
-        if (event.delayMs() <= 0) {
-            try {
-                gameLifecycleService.startReadyCountdown(event.gameId(), event.countdownMs());
-            } catch (Exception e) {
-                logger.error("Error starting ready countdown for game {}: {}", event.gameId(), e.getMessage());
-            }
-            return;
-        }
-
-        taskScheduler.schedule(() -> {
-            try {
-                gameLifecycleService.startReadyCountdown(event.gameId(), event.countdownMs());
-            } catch (Exception e) {
-                logger.error("Error starting ready countdown for game {}: {}", event.gameId(), e.getMessage());
-            }
-        }, Instant.now().plusMillis(event.delayMs()));
+        gameLifecycleService.scheduleReadyCountdownOpen(event.gameId(), event.delayMs());
     }
 
     /**
@@ -125,13 +76,7 @@ public class GameAsyncEventListener {
     public void handleGameEndCleanup(GameCleanupEvent event) {
         logger.info("Scheduling cleanup for game {} in {}ms", event.gameId(), event.delay());
 
-        taskScheduler.schedule(() -> {
-            try {
-                gameLifecycleService.performGameCleanup(event.gameId());
-            } catch (Exception e) {
-                logger.error("Error cleaning up game {}: {}", event.gameId(), e.getMessage());
-            }
-        }, Instant.now().plusMillis(event.delay()));
+        gameLifecycleService.scheduleGameCleanup(event.gameId(), event.delay());
     }
 
     /**
@@ -147,81 +92,7 @@ public class GameAsyncEventListener {
      */
     @EventListener
     public void handleAutoAdvanceToShowdown(AutoAdvanceEvent event) {
-        // Start the chain immediately
-        scheduleNextAutoAdvanceStep(event.gameId());
+        gameLifecycleService.scheduleAutoAdvance(event.gameId());
     }
 
-    /**
-     * Recursively schedules the next step in the auto-advance sequence.
-     * <p>
-     * This method checks the current game phase and schedules the appropriate next
-     * action
-     * (e.g. dealing the Turn after the Flop) to occur after a delay. If the game
-     * reaches
-     * the end (Showdown), it processes the winners and schedules the next hand.
-     * </p>
-     *
-     * @param gameId the unique identifier of the game to advance
-     */
-    private void scheduleNextAutoAdvanceStep(String gameId) {
-        Game game = gameLifecycleService.getGame(gameId);
-        if (game == null)
-            return;
-
-        // Delay between steps (e.g. between Flop and Turn)
-        long delay = 4000;
-
-        taskScheduler.schedule(() -> {
-            try {
-                // Re-fetching the game state inside the scheduled thread ensures we have the
-                // latest state
-                Game currentGame = gameLifecycleService.getGame(gameId);
-                if (currentGame == null)
-                    return;
-
-                boolean sequenceComplete = false;
-
-                synchronized (currentGame) {
-                    GamePhase currentPhase = currentGame.getCurrentPhase();
-
-                    if (currentPhase == GamePhase.PRE_FLOP) {
-                        currentGame.dealFlop();
-                        gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing flop...");
-                    } else if (currentPhase == GamePhase.FLOP) {
-                        currentGame.dealTurn();
-                        gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing turn...");
-                    } else if (currentPhase == GamePhase.TURN) {
-                        currentGame.dealRiver();
-                        gameStateService.broadcastGameStateWithAutoAdvance(gameId, currentGame, "Dealing river...");
-                    } else {
-                        // We are at the end (SHOWDOWN)
-                        int potBeforeDistribution = currentGame.getPot();
-                        List<Player> winners = currentGame.conductShowdown();
-                        int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
-
-                        gameStateService.broadcastShowdownResults(gameId, currentGame, winners, winningsPerPlayer);
-                        gameStateService.broadcastAutoAdvanceComplete(gameId, currentGame);
-
-                        // Open ready gate for showdown review (default delay is immediate)
-                        if (roundEndDelayMs <= 0) {
-                            gameLifecycleService.startReadyCountdown(gameId, readyCountdownMs);
-                        } else {
-                            taskScheduler.schedule(
-                                    () -> gameLifecycleService.startReadyCountdown(gameId, readyCountdownMs),
-                                    Instant.now().plusMillis(roundEndDelayMs));
-                        }
-                        sequenceComplete = true;
-                    }
-                }
-
-                // If the sequence isn't done, schedule the next step recursively
-                if (!sequenceComplete) {
-                    scheduleNextAutoAdvanceStep(gameId);
-                }
-
-            } catch (Exception e) {
-                logger.error("Error during auto-advance step for game {}: {}", gameId, e.getMessage());
-            }
-        }, Instant.now().plusMillis(delay));
-    }
 }

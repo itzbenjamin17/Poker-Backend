@@ -2,17 +2,21 @@ package com.pokergame.service;
 
 import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.enums.ResponseMessage;
-import com.pokergame.event.GameCleanupEvent;
+import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
+import com.pokergame.persistence.DurableMutation;
+import com.pokergame.persistence.DurableTransactionContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
@@ -33,6 +37,13 @@ public class GameLifecycleService {
 
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
     private static final long GAME_END_DISPLAY_DELAY_MS = 7000;
+    private static final long AUTO_ADVANCE_STEP_DELAY_MS = 4000;
+
+    @Value("${poker.round-end.display-delay-ms:0}")
+    private long roundEndDisplayDelayMs;
+
+    @Value("${poker.ready-countdown-ms:30000}")
+    private long configuredReadyCountdownMs;
 
     private final RoomService roomService;
 
@@ -42,23 +53,26 @@ public class GameLifecycleService {
 
     private final SimpMessagingTemplate messagingTemplate;
 
-    private final ApplicationEventPublisher eventPublisher;
 
     private final TaskScheduler taskScheduler;
+    private GameLifecycleService self;
 
     // Dependency Injection
     GameLifecycleService(RoomService roomService,
             HandEvaluatorService handEvaluatorService,
             GameStateService gameStateService,
             SimpMessagingTemplate messagingTemplate,
-            ApplicationEventPublisher eventPublisher,
             @Qualifier("taskScheduler") TaskScheduler taskScheduler) {
         this.roomService = roomService;
         this.handEvaluator = handEvaluatorService;
         this.gameStateService = gameStateService;
         this.messagingTemplate = messagingTemplate;
-        this.eventPublisher = eventPublisher;
         this.taskScheduler = taskScheduler;
+    }
+
+    @Autowired
+    void setSelf(@Lazy GameLifecycleService self) {
+        this.self = self;
     }
 
     private final Map<String, Game> activeGames = new ConcurrentHashMap<>();
@@ -75,6 +89,7 @@ public class GameLifecycleService {
      * @throws ResourceNotFoundException   if the room is not found
      *
      */
+    @DurableMutation(roomId = "#roomId")
     public String createGameFromRoom(String roomId) {
         Room room = roomService.getRoom(roomId);
         if (room == null) {
@@ -109,8 +124,8 @@ public class GameLifecycleService {
             gameStartMessage.put("gameId", roomId);
             gameStartMessage.put("message", "Game started! Redirecting to game...");
 
-            messagingTemplate.convertAndSend("/room/" + roomId,
-                    new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), gameStartMessage));
+            DurableTransactionContext.afterCommit(() -> messagingTemplate.convertAndSend("/room/" + roomId,
+                    new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), gameStartMessage)));
 
             room.setGameStarted(true);
         }
@@ -128,6 +143,7 @@ public class GameLifecycleService {
      *
      * @param gameId The unique identifier of the game
      */
+    @DurableMutation(roomId = "#gameId")
     public void startNewHand(String gameId) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -161,6 +177,50 @@ public class GameLifecycleService {
     }
 
     /**
+     * Applies one authoritative auto-advance mutation for an all-in hand.
+     * Scheduling remains in the listener, while every deck, phase, payout, and
+     * player mutation enters through this public service seam.
+     *
+     * @param gameId game to advance
+     * @return {@code true} when the step completed showdown, otherwise false
+     */
+    @DurableMutation(roomId = "#gameId")
+    public boolean advanceAutoAdvanceStep(String gameId) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            return true;
+        }
+
+        synchronized (game) {
+            return switch (game.getCurrentPhase()) {
+                case PRE_FLOP -> {
+                    game.dealFlop();
+                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing flop...");
+                    yield false;
+                }
+                case FLOP -> {
+                    game.dealTurn();
+                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing turn...");
+                    yield false;
+                }
+                case TURN -> {
+                    game.dealRiver();
+                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing river...");
+                    yield false;
+                }
+                case RIVER, SHOWDOWN -> {
+                    int potBeforeDistribution = game.getPot();
+                    List<Player> winners = game.conductShowdown();
+                    int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
+                    gameStateService.broadcastShowdownResults(gameId, game, winners, winningsPerPlayer);
+                    gameStateService.broadcastAutoAdvanceComplete(gameId, game);
+                    yield true;
+                }
+            };
+        }
+    }
+
+    /**
      * Removes a player from an active game. If the last player leaves or only
      * one player remains, the game ends and associated resources are cleaned up.
      * If the leaving player is the current player, advances to the next player.
@@ -170,6 +230,7 @@ public class GameLifecycleService {
      * @throws BadRequestException       if game or player not found
      * @throws ResourceNotFoundException if the game is not found
      */
+    @DurableMutation(roomId = "#gameId")
     public void leaveGame(String gameId, String playerName) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -290,7 +351,7 @@ public class GameLifecycleService {
 
         // Wait a few seconds for players to see the result, then destroy the room and
         // game, on a different thread
-        eventPublisher.publishEvent(new GameCleanupEvent(gameId, GAME_END_DISPLAY_DELAY_MS));
+        scheduleGameCleanup(gameId, GAME_END_DISPLAY_DELAY_MS);
     }
 
     /**
@@ -300,6 +361,7 @@ public class GameLifecycleService {
      */
 
     @Async("gameExecutor")
+    @DurableMutation(roomId = "#gameId")
     public void performGameCleanup(String gameId) {
         activeGames.remove(gameId);
         roomService.destroyRoom(gameId);
@@ -314,6 +376,106 @@ public class GameLifecycleService {
      */
     public Game getGame(String gameId) {
         return activeGames.get(gameId);
+    }
+
+    public void restoreGame(Game game) {
+        activeGames.put(game.getGameId(), game);
+    }
+
+    public void resumeRecoveredTimers(String gameId) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            return;
+        }
+        for (Map.Entry<ScheduledGameTask, Long> task : game.getScheduledTaskDeadlinesSnapshot().entrySet()) {
+            scheduleRuntimeTask(gameId, task.getKey(), task.getValue());
+        }
+        if (game.isReadyCountdownActive()) {
+            Long deadline = game.getReadyCountdownDeadlineEpochMs();
+            long remaining = deadline == null ? 0 : Math.max(0, deadline - System.currentTimeMillis());
+            ScheduledFuture<?> future = taskScheduler.schedule(
+                    () -> mutationProxy().handleReadyCountdownTimeout(gameId, deadline == null ? 0 : deadline),
+                    Instant.now().plusMillis(remaining));
+            if (future != null) {
+                readyCountdownTimeouts.put(gameId, future);
+            }
+        }
+    }
+
+    @DurableMutation(roomId = "#gameId")
+    public void scheduleNewHand(String gameId, long delayMs) {
+        persistScheduledTask(gameId, ScheduledGameTask.NEW_HAND, System.currentTimeMillis() + Math.max(0, delayMs));
+    }
+
+    @DurableMutation(roomId = "#gameId")
+    public void scheduleReadyCountdownOpen(String gameId, long delayMs) {
+        if (delayMs <= 0) {
+            startReadyCountdown(gameId, configuredReadyCountdownMs);
+            return;
+        }
+        persistScheduledTask(gameId, ScheduledGameTask.READY_OPEN, System.currentTimeMillis() + delayMs);
+    }
+
+    @DurableMutation(roomId = "#gameId")
+    public void scheduleGameCleanup(String gameId, long delayMs) {
+        persistScheduledTask(gameId, ScheduledGameTask.CLEANUP, System.currentTimeMillis() + Math.max(0, delayMs));
+    }
+
+    @DurableMutation(roomId = "#gameId")
+    public void scheduleAutoAdvance(String gameId) {
+        persistScheduledTask(gameId, ScheduledGameTask.AUTO_ADVANCE,
+                System.currentTimeMillis() + AUTO_ADVANCE_STEP_DELAY_MS);
+    }
+
+    @DurableMutation(roomId = "#gameId")
+    public void executeScheduledTask(String gameId, ScheduledGameTask task, long expectedDeadline) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            return;
+        }
+        synchronized (game) {
+            Long currentDeadline = game.getScheduledTaskDeadline(task);
+            if (currentDeadline == null || currentDeadline != expectedDeadline) {
+                return;
+            }
+            game.clearScheduledTask(task);
+            switch (task) {
+                case NEW_HAND -> startNewHand(gameId);
+                case READY_OPEN -> startReadyCountdown(gameId, configuredReadyCountdownMs);
+                case CLEANUP -> performGameCleanup(gameId);
+                case AUTO_ADVANCE -> {
+                    boolean complete = advanceAutoAdvanceStep(gameId);
+                    if (complete) {
+                        if (roundEndDisplayDelayMs <= 0) {
+                            startReadyCountdown(gameId, configuredReadyCountdownMs);
+                        } else {
+                            persistScheduledTask(gameId, ScheduledGameTask.READY_OPEN,
+                                    System.currentTimeMillis() + roundEndDisplayDelayMs);
+                        }
+                    } else {
+                        persistScheduledTask(gameId, ScheduledGameTask.AUTO_ADVANCE,
+                                System.currentTimeMillis() + AUTO_ADVANCE_STEP_DELAY_MS);
+                    }
+                }
+            }
+        }
+    }
+
+    private void persistScheduledTask(String gameId, ScheduledGameTask task, long deadline) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            return;
+        }
+        synchronized (game) {
+            game.scheduleTask(task, deadline);
+        }
+        DurableTransactionContext.afterCommit(() -> scheduleRuntimeTask(gameId, task, deadline));
+    }
+
+    private void scheduleRuntimeTask(String gameId, ScheduledGameTask task, long deadline) {
+        long delay = Math.max(0, deadline - System.currentTimeMillis());
+        taskScheduler.schedule(() -> mutationProxy().executeScheduledTask(gameId, task, deadline),
+                Instant.now().plusMillis(delay));
     }
 
     /**
@@ -352,6 +514,7 @@ public class GameLifecycleService {
      * @param disconnectDeadlineEpochMs disconnect grace expiry timestamp (UTC epoch
      *                                  ms)
      */
+    @DurableMutation(roomId = "#gameId")
     public void markPlayerDisconnected(String gameId, String playerName, long disconnectDeadlineEpochMs) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -387,6 +550,7 @@ public class GameLifecycleService {
      * @param gameId     the game identifier
      * @param playerName the reconnecting player name
      */
+    @DurableMutation(roomId = "#gameId")
     public void markPlayerReconnected(String gameId, String playerName) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -419,18 +583,20 @@ public class GameLifecycleService {
      * @param gameId      game identifier
      * @param countdownMs countdown duration in milliseconds
      */
+    @DurableMutation(roomId = "#gameId")
     public void startReadyCountdown(String gameId, long countdownMs) {
         Game game = getGame(gameId);
         if (game == null) {
             return;
         }
 
+        long deadlineEpochMs;
         synchronized (game) {
             if (game.getCurrentPhase() != com.pokergame.enums.GamePhase.SHOWDOWN) {
                 return;
             }
 
-            long deadlineEpochMs = System.currentTimeMillis() + countdownMs;
+            deadlineEpochMs = System.currentTimeMillis() + countdownMs;
             game.openReadyCountdown(deadlineEpochMs);
             gameStateService.broadcastGameState(gameId, game);
 
@@ -446,7 +612,7 @@ public class GameLifecycleService {
         }
 
         ScheduledFuture<?> timeoutFuture = taskScheduler.schedule(
-                () -> handleReadyCountdownTimeout(gameId),
+                () -> mutationProxy().handleReadyCountdownTimeout(gameId, deadlineEpochMs),
                 Instant.now().plusMillis(countdownMs));
         if (timeoutFuture != null) {
             readyCountdownTimeouts.put(gameId, timeoutFuture);
@@ -461,6 +627,7 @@ public class GameLifecycleService {
      * @param gameId     game identifier
      * @param playerName player name from principal
      */
+    @DurableMutation(roomId = "#gameId")
     public void markPlayerReadyForNextHand(String gameId, String playerName) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -494,7 +661,8 @@ public class GameLifecycleService {
         }
     }
 
-    private void handleReadyCountdownTimeout(String gameId) {
+    @DurableMutation(roomId = "#gameId")
+    public void handleReadyCountdownTimeout(String gameId, long expectedDeadlineEpochMs) {
         Game game = getGame(gameId);
         if (game == null) {
             readyCountdownTimeouts.remove(gameId);
@@ -502,8 +670,8 @@ public class GameLifecycleService {
         }
 
         synchronized (game) {
-            if (!game.isReadyCountdownActive()) {
-                readyCountdownTimeouts.remove(gameId);
+            if (!game.isReadyCountdownActive()
+                    || !Objects.equals(game.getReadyCountdownDeadlineEpochMs(), expectedDeadlineEpochMs)) {
                 return;
             }
 
@@ -530,6 +698,7 @@ public class GameLifecycleService {
      * @param gameId     game identifier
      * @param playerName claimant name
      */
+    @DurableMutation(roomId = "#gameId")
     public void claimWin(String gameId, String playerName) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -583,5 +752,20 @@ public class GameLifecycleService {
                 .toList();
 
         return !others.isEmpty() && others.stream().allMatch(Player::getIsDisconnected);
+    }
+
+    @DurableMutation(roomId = "#gameId")
+    public void removeDisconnectedPlayer(String gameId, String playerName) {
+        boolean gameActive = gameExists(gameId);
+        if (roomService.getRoom(gameId) != null) {
+            roomService.leaveRoom(gameId, playerName, !gameActive);
+        }
+        if (gameActive && playerExistsInGame(gameId, playerName)) {
+            leaveGame(gameId, playerName);
+        }
+    }
+
+    private GameLifecycleService mutationProxy() {
+        return self == null ? this : self;
     }
 }

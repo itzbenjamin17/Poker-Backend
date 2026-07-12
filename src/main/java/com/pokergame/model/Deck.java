@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.security.SecureRandom;
 
 /**
  * Represents a standard 52-card deck for poker games.
@@ -16,6 +17,7 @@ import java.util.List;
  */
 public class Deck {
     private static final Logger logger = LoggerFactory.getLogger(Deck.class);
+    private static final SecureRandom SHUFFLE_RANDOM = new SecureRandom();
     private final List<Card> cards;
 
     /**
@@ -25,6 +27,18 @@ public class Deck {
         this.cards = new ArrayList<>();
         initializeDeck();
         shuffle();
+    }
+
+    private Deck(List<Card> cards) {
+        this.cards = new ArrayList<>(cards);
+    }
+
+    public static Deck restore(List<Card> cards) {
+        return new Deck(cards);
+    }
+
+    public List<Card> getRemainingCardsSnapshot() {
+        return List.copyOf(cards);
     }
 
     /**
@@ -42,7 +56,7 @@ public class Deck {
      * Shuffles the deck randomly.
      */
     public void shuffle() {
-        Collections.shuffle(cards);
+        Collections.shuffle(cards, SHUFFLE_RANDOM);
     }
 
     /**

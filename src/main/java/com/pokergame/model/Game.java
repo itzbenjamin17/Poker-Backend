@@ -5,6 +5,7 @@ import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.service.HandEvaluatorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +45,7 @@ public class Game {
     // Track if everyone has had their initial turn in the current betting round
     private boolean everyoneHasHadInitialTurn;
     private final Set<String> actedPlayersInRound;
+    private final Map<ScheduledGameTask, Long> scheduledTaskDeadlines;
 
     /**
      * Creates a new poker game with the specified players and betting parameters.
@@ -90,6 +92,49 @@ public class Game {
         this.handContributions = new HashMap<>();
         this.readyCountdownActive = false;
         this.readyCountdownDeadlineEpochMs = null;
+        this.scheduledTaskDeadlines = new EnumMap<>(ScheduledGameTask.class);
+    }
+
+    public static Game restore(String gameId, List<Player> players, List<String> activePlayerIds,
+            List<Card> remainingDeck, List<Card> communityCards, int pot, int dealerPosition,
+            int smallBlindPosition, int bigBlindPosition, int currentPlayerPosition, int currentHighestBet,
+            GamePhase currentPhase, boolean gameOver, int smallBlind, int bigBlind,
+            Map<String, Integer> handContributions, boolean readyCountdownActive,
+            Long readyCountdownDeadlineEpochMs, boolean everyoneHasHadInitialTurn,
+            Set<String> actedPlayersInRound, Map<ScheduledGameTask, Long> scheduledTaskDeadlines,
+            HandEvaluatorService handEvaluator) {
+        Game game = new Game(gameId, players, smallBlind, bigBlind, handEvaluator);
+        Map<String, Player> playersById = new HashMap<>();
+        players.forEach(player -> playersById.put(player.getPlayerId(), player));
+        game.activePlayers.clear();
+        for (String playerId : activePlayerIds) {
+            Player player = playersById.get(playerId);
+            if (player == null) {
+                throw new BadRequestException("Snapshot references an unknown active player");
+            }
+            game.activePlayers.add(player);
+        }
+        game.deck = Deck.restore(remainingDeck);
+        game.communityCards.clear();
+        game.communityCards.addAll(communityCards);
+        game.pot = pot;
+        game.dealerPosition = dealerPosition;
+        game.smallBlindPosition = smallBlindPosition;
+        game.bigBlindPosition = bigBlindPosition;
+        game.currentPlayerPosition = currentPlayerPosition;
+        game.currentHighestBet = currentHighestBet;
+        game.currentPhase = currentPhase;
+        game.gameOver = gameOver;
+        game.handContributions.clear();
+        game.handContributions.putAll(handContributions);
+        game.readyCountdownActive = readyCountdownActive;
+        game.readyCountdownDeadlineEpochMs = readyCountdownDeadlineEpochMs;
+        game.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
+        game.actedPlayersInRound.clear();
+        game.actedPlayersInRound.addAll(actedPlayersInRound);
+        game.scheduledTaskDeadlines.clear();
+        game.scheduledTaskDeadlines.putAll(scheduledTaskDeadlines);
+        return game;
     }
 
     /**
@@ -1345,5 +1390,57 @@ public class Game {
         normalizeBlindPositions();
 
         return activePlayers.get(bigBlindPosition).getPlayerId();
+    }
+
+    public List<Card> getRemainingDeckSnapshot() {
+        return deck.getRemainingCardsSnapshot();
+    }
+
+    public int getSmallBlindPosition() {
+        return smallBlindPosition;
+    }
+
+    public int getBigBlindPosition() {
+        return bigBlindPosition;
+    }
+
+    public int getCurrentPlayerPosition() {
+        return currentPlayerPosition;
+    }
+
+    public int getSmallBlind() {
+        return smallBlind;
+    }
+
+    public int getBigBlind() {
+        return bigBlind;
+    }
+
+    public Map<String, Integer> getHandContributionsSnapshot() {
+        return Map.copyOf(handContributions);
+    }
+
+    public boolean hasEveryoneHadInitialTurn() {
+        return everyoneHasHadInitialTurn;
+    }
+
+    public Set<String> getActedPlayerIdsSnapshot() {
+        return Set.copyOf(actedPlayersInRound);
+    }
+
+    public void scheduleTask(ScheduledGameTask task, long deadlineEpochMs) {
+        scheduledTaskDeadlines.put(task, deadlineEpochMs);
+    }
+
+    public Long getScheduledTaskDeadline(ScheduledGameTask task) {
+        return scheduledTaskDeadlines.get(task);
+    }
+
+    public void clearScheduledTask(ScheduledGameTask task) {
+        scheduledTaskDeadlines.remove(task);
+    }
+
+    public Map<ScheduledGameTask, Long> getScheduledTaskDeadlinesSnapshot() {
+        return Map.copyOf(scheduledTaskDeadlines);
     }
 }

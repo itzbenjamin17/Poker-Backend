@@ -6,7 +6,9 @@ import org.slf4j.LoggerFactory;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Represents a poker game room/lobby where players can join and play together.
@@ -31,7 +33,7 @@ public class Room {
     private final int bigBlind;
     private final int buyIn;
     private final String password;
-    private final LocalDateTime createdAt;
+    private LocalDateTime createdAt;
     private boolean isGameStarted;
 
 
@@ -90,6 +92,19 @@ public class Room {
         this.createdAt = LocalDateTime.now();
     }
 
+    public static Room restore(String roomId, String roomName, String hostName, int maxPlayers,
+            int smallBlind, int bigBlind, int buyIn, String password, LocalDateTime createdAt,
+            Map<String, LocalDateTime> playersWithJoinTime, boolean gameStarted) {
+        Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, password);
+        synchronized (room) {
+            room.playersWithJoinTime.clear();
+            room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
+            room.createdAt = createdAt;
+            room.isGameStarted = gameStarted;
+        }
+        return room;
+    }
+
     /**
      * Adds a player to the room if they are not already present.
      *
@@ -110,14 +125,13 @@ public class Room {
      * @param playerName the name of the player to remove
      */
     public synchronized void removePlayer(String playerName) {
-        if (playersWithJoinTime.containsKey(playerName)){
+        if (playersWithJoinTime.containsKey(playerName)) {
             playersWithJoinTime.remove(playerName);
-        }
-        else{
+        } else {
             throw new BadRequestException(
                 String.format("Cannot remove %s from room as they are not already in the room", playerName));
         }
-        
+
     }
 
     /**
@@ -254,6 +268,14 @@ public class Room {
         return createdAt;
     }
 
+    public synchronized Map<String, LocalDateTime> getPlayersWithJoinTimeSnapshot() {
+        return new LinkedHashMap<>(playersWithJoinTime);
+    }
+
+    public String getPasswordForPersistence() {
+        return password;
+    }
+
     public boolean isGameStarted() {
         return isGameStarted;
     }
@@ -261,4 +283,4 @@ public class Room {
     public void setGameStarted(boolean gameStarted) {
         isGameStarted = gameStarted;
     }
-}
+}

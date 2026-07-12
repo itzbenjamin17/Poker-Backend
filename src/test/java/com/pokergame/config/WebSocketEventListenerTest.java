@@ -25,11 +25,13 @@ import java.security.Principal;
 import java.time.Duration;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.lenient;
 
@@ -98,6 +100,10 @@ class WebSocketEventListenerTest {
             lenient().when(roomService.getRoom("room-2")).thenReturn(room);
             lenient().when(gameLifecycleService.gameExists("room-2")).thenReturn(true);
             lenient().when(gameLifecycleService.playerExistsInGame("room-2", "Bob")).thenReturn(true);
+            doAnswer(invocation -> {
+                room.removePlayer("Bob");
+                return null;
+            }).when(gameLifecycleService).removeDisconnectedPlayer("room-2", "Bob");
 
             listener.handleWebSocketConnectListener(connectEvent("Bob", "room-2", "session-1"));
             listener.handleWebSocketDisconnectListener(disconnectEvent("Bob", "room-2", "session-1"));
@@ -105,10 +111,8 @@ class WebSocketEventListenerTest {
             Awaitility.await()
                     .atMost(Duration.ofSeconds(1))
                     .untilAsserted(() -> {
-                        verify(gameLifecycleService).markPlayerDisconnected(eq("room-2"), eq("Bob"), anyLong());
+                        assertFalse(room.hasPlayer("Bob"));
                         verify(rateLimitService).cleanUpWs("Bob:room-2");
-                        verify(roomService).leaveRoom("room-2", "Bob", false);
-                        verify(gameLifecycleService).leaveGame("room-2", "Bob");
                     });
         }
 
@@ -122,6 +126,10 @@ class WebSocketEventListenerTest {
             lenient().when(roomService.getRoom("room-3")).thenReturn(room);
             lenient().when(gameLifecycleService.gameExists("room-3")).thenReturn(true);
             lenient().when(gameLifecycleService.playerExistsInGame("room-3", "Charlie")).thenReturn(true);
+            doAnswer(invocation -> {
+                room.removePlayer("Charlie");
+                return null;
+            }).when(gameLifecycleService).removeDisconnectedPlayer("room-3", "Charlie");
 
             // 1. Connect (this registers the session and principal)
             listener.handleWebSocketConnectListener(connectEvent("Charlie", "room-3", "session-c"));
@@ -133,9 +141,8 @@ class WebSocketEventListenerTest {
             Awaitility.await()
                     .atMost(Duration.ofSeconds(1))
                     .untilAsserted(() -> {
-                        verify(gameLifecycleService).markPlayerDisconnected(eq("room-3"), eq("Charlie"), anyLong());
+                        assertFalse(room.hasPlayer("Charlie"));
                         verify(rateLimitService).cleanUpWs("Charlie:room-3");
-                        verify(roomService).leaveRoom("room-3", "Charlie", false);
                     });
         }
 

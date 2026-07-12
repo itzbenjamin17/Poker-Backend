@@ -10,6 +10,10 @@ import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Room;
+import com.pokergame.persistence.DurableMutation;
+import com.pokergame.persistence.DurableTransactionContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -30,9 +34,15 @@ public class RoomService {
     private static final Logger logger = LoggerFactory.getLogger(RoomService.class);
 
     private final SimpMessagingTemplate messagingTemplate;
+    private RoomService self;
 
     public RoomService(SimpMessagingTemplate messagingTemplate) {
         this.messagingTemplate = messagingTemplate;
+    }
+
+    @Autowired
+    void setSelf(@Lazy RoomService self) {
+        this.self = self;
     }
 
     // Room storage
@@ -48,18 +58,21 @@ public class RoomService {
      * @throws BadRequestException if the room name is already taken
      */
     public String createRoom(CreateRoomRequest request) {
+        String roomId = UUID.randomUUID().toString();
+        return (self == null ? this : self).createRoom(roomId, request);
+    }
+
+    @DurableMutation(roomId = "#roomId")
+    public String createRoom(String roomId, CreateRoomRequest request) {
         String sanitizedRoomName = com.pokergame.util.InputSanitizer.sanitize(request.getRoomName());
         String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(request.getPlayerName());
 
-        String roomId;
         synchronized (this) {
             if (isRoomNameTaken(sanitizedRoomName)) {
                 logger.warn("Attempted to create room with duplicate name: {}", sanitizedRoomName);
                 throw new BadRequestException(
                         "Room name '" + sanitizedRoomName + "' is already taken. Please choose a different name.");
             }
-
-            roomId = UUID.randomUUID().toString();
 
             Room room = new Room(
                     roomId,
@@ -78,7 +91,7 @@ public class RoomService {
             roomHosts.put(roomId, sanitizedPlayerName);
         }
 
-        messagingTemplate.convertAndSend("/room/" + roomId,
+        sendAfterCommit("/room/" + roomId,
                 new ApiResponse<>(ResponseMessage.ROOM_CREATED.getMessage(), getRoomData(roomId)));
 
         logger.info("Room created: {} (ID: {}) by host: {}",
@@ -102,7 +115,6 @@ public class RoomService {
      */
     public String joinRoom(JoinRoomRequest joinRequest) {
         String sanitizedRoomName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.roomName());
-        String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.playerName());
 
         Room room = findRoomByName(sanitizedRoomName);
         if (room == null) {
@@ -110,7 +122,17 @@ public class RoomService {
             throw new ResourceNotFoundException("Room not found");
         }
 
-        String roomId = room.getRoomId();
+        return (self == null ? this : self).joinRoom(room.getRoomId(), joinRequest);
+    }
+
+    @DurableMutation(roomId = "#roomId")
+    public String joinRoom(String roomId, JoinRoomRequest joinRequest) {
+        String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.playerName());
+        Room room = rooms.get(roomId);
+        if (room == null) {
+            throw new ResourceNotFoundException("Room not found");
+        }
+
         synchronized (room) {
             if (room.isGameStarted()) {
                 logger.warn("Attempted to join room {} after game started", room.getRoomName());
@@ -143,7 +165,7 @@ public class RoomService {
 
         logger.info("Player {} joined room: {}", sanitizedPlayerName, room.getRoomName());
 
-        messagingTemplate.convertAndSend("/room/" + roomId,
+        sendAfterCommit("/room/" + roomId,
                 new ApiResponse<>(ResponseMessage.PLAYER_JOINED.getMessage(), getRoomData(roomId)));
 
         return roomId;
@@ -158,6 +180,7 @@ public class RoomService {
      * @param playerName the name of the player leaving
      * @throws ResourceNotFoundException if room not found
      */
+    @DurableMutation(roomId = "#roomId")
     public void leaveRoom(String roomId, String playerName) {
         leaveRoom(roomId, playerName, true);
     }
@@ -177,6 +200,7 @@ public class RoomService {
      *                                transfer host
      * @throws ResourceNotFoundException if room not found
      */
+    @DurableMutation(roomId = "#roomId")
     public void leaveRoom(String roomId, String playerName, boolean closeRoomWhenHostLeaves) {
         Room room = rooms.get(roomId);
         if (room == null) {
@@ -190,7 +214,7 @@ public class RoomService {
                 // Host is leaving the lobby phase - destroy the room.
                 logger.info("Host {} leaving room {} during lobby phase, destroying room", playerName,
                         room.getRoomName());
-                messagingTemplate.convertAndSend("/room/" + roomId,
+                sendAfterCommit("/room/" + roomId,
                         new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
                 destroyRoom(roomId);
             } else {
@@ -200,7 +224,7 @@ public class RoomService {
                 if (room.getPlayers().isEmpty()) {
                     logger.info("Host {} left room {} and no players remain, destroying room", playerName,
                             room.getRoomName());
-                    messagingTemplate.convertAndSend("/room/" + roomId,
+                    sendAfterCommit("/room/" + roomId,
                             new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
                     destroyRoom(roomId);
                 } else {
@@ -211,7 +235,7 @@ public class RoomService {
                             playerName,
                             room.getRoomName(),
                             newHost);
-                    messagingTemplate.convertAndSend("/room/" + roomId,
+                    sendAfterCommit("/room/" + roomId,
                             new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
                 }
             }
@@ -219,13 +243,13 @@ public class RoomService {
             // Regular player leaving - just remove them from the room
             room.removePlayer(playerName);
             logger.info("Player {} left room: {}", playerName, room.getRoomName());
-            messagingTemplate.convertAndSend("/room/" + roomId,
+            sendAfterCommit("/room/" + roomId,
                     new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
 
             // If no players left after removal, also destroy the room
             if (room.getPlayers().isEmpty()) {
                 logger.info("No players remaining in room {}, destroying room", room.getRoomName());
-                messagingTemplate.convertAndSend("/room/" + roomId,
+                sendAfterCommit("/room/" + roomId,
                         new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
                 destroyRoom(roomId);
             }
@@ -328,12 +352,23 @@ public class RoomService {
         return hostName != null && hostName.equals(playerName);
     }
 
+    public String getCurrentHost(String roomId) {
+        Room room = rooms.get(roomId);
+        return roomHosts.getOrDefault(roomId, room == null ? null : room.getHostName());
+    }
+
+    public void restoreRoom(Room room, String currentHost) {
+        rooms.put(room.getRoomId(), room);
+        roomHosts.put(room.getRoomId(), currentHost);
+    }
+
     /**
      * Completely destroys and removes a room from the system.
      * Removes both the room and its host mapping.
      *
      * @param roomId the unique identifier of the room to destroy
      */
+    @DurableMutation(roomId = "#roomId")
     public void destroyRoom(String roomId) {
         Room room = rooms.remove(roomId);
         roomHosts.remove(roomId);
@@ -351,5 +386,9 @@ public class RoomService {
     private boolean isRoomNameTaken(String roomName) {
         return rooms.values().stream()
                 .anyMatch(room -> room.getRoomName().equalsIgnoreCase(roomName));
+    }
+
+    private void sendAfterCommit(String destination, Object payload) {
+        DurableTransactionContext.afterCommit(() -> messagingTemplate.convertAndSend(destination, payload));
     }
 }
