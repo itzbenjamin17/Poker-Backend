@@ -1,6 +1,6 @@
 package com.pokergame.integration;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
@@ -45,14 +45,14 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenTwoPlayersAndHostToken_whenStartGame_thenReturnGameId() throws Exception {
             String roomName = uniqueName("StartGameRoom");
             JsonNode hostData = createRoom(roomName, "HostStart", 6);
-            String roomId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
+            String roomId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
             joinRoom(roomName, "SecondStartPlayer");
 
             JsonNode response = startGame(roomId, hostToken);
 
-            assertThat(response.path("message").asText()).isEqualTo("Game started successfully");
-            assertThat(response.path("data").asText()).isEqualTo(roomId);
+            assertThat(response.path("message").asString()).isEqualTo("Game started successfully");
+            assertThat(response.path("data").asString()).isEqualTo(roomId);
         }
 
         @Test
@@ -60,8 +60,8 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenNonHostToken_whenStartGame_thenReturnForbidden() throws Exception {
             String roomName = uniqueName("NonHostStartRoom");
             JsonNode hostData = createRoom(roomName, "HostOnly", 6);
-            String roomId = hostData.path("roomId").asText();
-            String nonHostToken = joinRoom(roomName, "NonHostUser").path("token").asText();
+            String roomId = hostData.path("roomId").asString();
+            String nonHostToken = joinRoom(roomName, "NonHostUser").path("token").asString();
 
             HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
                     .uri("/api/room/" + roomId + "/start-game")
@@ -77,8 +77,8 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         @DisplayName("should reject start game requests when only one player is present")
         void givenSinglePlayerRoom_whenStartGame_thenReturnForbidden() throws Exception {
             JsonNode hostData = createRoom(uniqueName("SinglePlayerStartRoom"), "SoloHost", 6);
-            String roomId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
+            String roomId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
 
             HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
                     .uri("/api/room/" + roomId + "/start-game")
@@ -100,14 +100,14 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenActivePlayer_whenGetGameState_thenReturnCurrentState() throws Exception {
             String roomName = uniqueName("StateSnapshotRoom");
             JsonNode hostData = createRoom(roomName, "StateHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
             joinRoom(roomName, "StateGuest");
             startGame(gameId, hostToken);
 
             JsonNode state = readGameState(gameId, hostToken);
 
-            assertThat(state.path("phase").asText()).isEqualTo("PRE_FLOP");
+            assertThat(state.path("phase").asString()).isEqualTo("PRE_FLOP");
             assertThat(state.path("players").isArray()).isTrue();
             assertThat(state.path("players").size()).isEqualTo(2);
         }
@@ -117,14 +117,14 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenAuthenticatedOutsider_whenGetGameState_thenReturnForbidden() throws Exception {
             String roomName = uniqueName("StateForbiddenTarget");
             JsonNode hostData = createRoom(roomName, "StateTargetHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
             joinRoom(roomName, "StateTargetGuest");
             startGame(gameId, hostToken);
 
             String outsiderToken = createRoom(uniqueName("StateForbiddenOutsider"), "StateOutsider", 6)
                     .path("token")
-                    .asText();
+                    .asString();
 
             HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.get()
                     .uri("/api/game/" + gameId + "/state")
@@ -141,18 +141,18 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenActivePlayer_whenGetPrivateState_thenReturnHoleCards() throws Exception {
             String roomName = uniqueName("PrivateStateRoom");
             JsonNode hostData = createRoom(roomName, "PrivateStateHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
             joinRoom(roomName, "PrivateStateGuest");
             startGame(gameId, hostToken);
 
-            JsonNode privateState = objectMapper.readTree(restClient.get()
+            JsonNode privateState = jsonMapper.readTree(restClient.get()
                     .uri("/api/game/" + gameId + "/private-state")
                     .header("Authorization", "Bearer " + hostToken)
                     .retrieve()
                     .body(String.class));
 
-            assertThat(privateState.path("playerId").asText()).isNotBlank();
+            assertThat(privateState.path("playerId").asString()).isNotBlank();
             assertThat(privateState.path("holeCards").size()).isEqualTo(2);
         }
 
@@ -161,14 +161,14 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenAuthenticatedOutsider_whenGetPrivateState_thenReturnForbidden() throws Exception {
             String roomName = uniqueName("PrivateStateForbiddenTarget");
             JsonNode hostData = createRoom(roomName, "PrivateStateTargetHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
             joinRoom(roomName, "PrivateStateTargetGuest");
             startGame(gameId, hostToken);
 
             String outsiderToken = createRoom(uniqueName("PrivateStateForbiddenOutsider"), "PrivateStateOutsider", 6)
                     .path("token")
-                    .asText();
+                    .asString();
 
             HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.get()
                     .uri("/api/game/" + gameId + "/private-state")
@@ -199,7 +199,7 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         @Test
         @DisplayName("should return forbidden for an unknown game id due to token mismatch")
         void givenUnknownGame_whenLeaveGame_thenReturnForbidden() throws Exception {
-            String hostToken = createRoom(uniqueName("UnknownGameRoom"), "HostUnknownGame", 6).path("token").asText();
+            String hostToken = createRoom(uniqueName("UnknownGameRoom"), "HostUnknownGame", 6).path("token").asString();
 
             HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
                     .uri("/api/game/" + uniqueName("missing-game") + "/leave")
@@ -216,9 +216,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenStartedGame_whenPlayerLeaves_thenReturnSuccessResponse() throws Exception {
             String roomName = uniqueName("LeaveGameRoom");
             JsonNode hostData = createRoom(roomName, "HostLeaveGame", 6);
-            String roomId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String secondPlayerToken = joinRoom(roomName, "SecondLeaveGame").path("token").asText();
+            String roomId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String secondPlayerToken = joinRoom(roomName, "SecondLeaveGame").path("token").asString();
             startGame(roomId, hostToken);
 
             String leaveBody = restClient.post()
@@ -235,10 +235,10 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenThreePlayerGame_whenNonCurrentPlayerLeaves_thenRemainingPlayersCanStillAct() throws Exception {
             String roomName = uniqueName("LeaveThreePlayerRoom");
             JsonNode hostData = createRoom(roomName, "HostLeaveThree", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String secondPlayerToken = joinRoom(roomName, "SecondLeaveThree").path("token").asText();
-            String thirdPlayerToken = joinRoom(roomName, "ThirdLeaveThree").path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String secondPlayerToken = joinRoom(roomName, "SecondLeaveThree").path("token").asString();
+            String thirdPlayerToken = joinRoom(roomName, "ThirdLeaveThree").path("token").asString();
             startGame(gameId, hostToken);
 
             String leaveBody = restClient.post()
@@ -255,8 +255,8 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             String secondActingToken;
             try {
                 JsonNode beforeFirstAction = readGameState(gameId, hostToken);
-                String firstCurrentPlayer = beforeFirstAction.path("currentPlayerName").asText();
-                String firstPhase = beforeFirstAction.path("phase").asText();
+                String firstCurrentPlayer = beforeFirstAction.path("currentPlayerName").asString();
+                String firstPhase = beforeFirstAction.path("phase").asString();
                 firstActingToken = performActionByCurrentPlayer(
                         gameId,
                         new PlayerActionRequest(PlayerAction.CALL, null),
@@ -264,11 +264,11 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                         thirdPlayerToken,
                         hostSession,
                         thirdSession,
-                        state -> !firstCurrentPlayer.equals(state.path("currentPlayerName").asText())
-                                || !firstPhase.equals(state.path("phase").asText()));
+                        state -> !firstCurrentPlayer.equals(state.path("currentPlayerName").asString())
+                                || !firstPhase.equals(state.path("phase").asString()));
 
                 JsonNode beforeSecondAction = readGameState(gameId, hostToken);
-                String secondCurrentPlayer = beforeSecondAction.path("currentPlayerName").asText();
+                String secondCurrentPlayer = beforeSecondAction.path("currentPlayerName").asString();
                 secondActingToken = performActionByCurrentPlayer(
                         gameId,
                         new PlayerActionRequest(PlayerAction.FOLD, null),
@@ -276,7 +276,7 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                         thirdPlayerToken,
                         hostSession,
                         thirdSession,
-                        state -> "SHOWDOWN".equals(state.path("phase").asText())
+                        state -> "SHOWDOWN".equals(state.path("phase").asString())
                                 || playerHasFolded(state, secondCurrentPlayer));
             } finally {
                 hostSession.disconnect();
@@ -299,9 +299,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenTwoPlayerGame_whenPlayersActAcrossRounds_thenGameAdvancesToTheTurn() throws Exception {
             String roomName = uniqueName("FullRoundRoom");
             JsonNode hostData = createRoom(roomName, "RoundHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String guestToken = joinRoom(roomName, "RoundGuest").path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String guestToken = joinRoom(roomName, "RoundGuest").path("token").asString();
             startGame(gameId, hostToken);
 
             var stompClient = createStompClient();
@@ -316,8 +316,8 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                         guestToken,
                         hostSession,
                         guestSession,
-                        state -> "PRE_FLOP".equals(state.path("phase").asText())
-                                && "RoundHost".equals(state.path("currentPlayerName").asText()));
+                        state -> "PRE_FLOP".equals(state.path("phase").asString())
+                                && "RoundHost".equals(state.path("currentPlayerName").asString()));
 
                 performActionByCurrentPlayer(
                         gameId,
@@ -326,9 +326,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                         guestToken,
                         hostSession,
                         guestSession,
-                        state -> "FLOP".equals(state.path("phase").asText())
+                        state -> "FLOP".equals(state.path("phase").asString())
                                 && state.path("communityCards").size() == 3
-                                && "RoundHost".equals(state.path("currentPlayerName").asText()));
+                                && "RoundHost".equals(state.path("currentPlayerName").asString()));
 
                 performActionByCurrentPlayer(
                         gameId,
@@ -337,8 +337,8 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                         guestToken,
                         hostSession,
                         guestSession,
-                        state -> "FLOP".equals(state.path("phase").asText())
-                                && "RoundGuest".equals(state.path("currentPlayerName").asText()));
+                        state -> "FLOP".equals(state.path("phase").asString())
+                                && "RoundGuest".equals(state.path("currentPlayerName").asString()));
 
                 performActionByCurrentPlayer(
                         gameId,
@@ -347,7 +347,7 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                         guestToken,
                         hostSession,
                         guestSession,
-                        state -> "TURN".equals(state.path("phase").asText())
+                        state -> "TURN".equals(state.path("phase").asString())
                                 && state.path("communityCards").size() == 4);
             } finally {
                 hostSession.disconnect();
@@ -367,9 +367,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenOnePlayerRemaining_whenGameEnds_thenRoomIsDestroyed() throws Exception {
             String roomName = uniqueName("EndGameCleanupRoom");
             JsonNode hostData = createRoom(roomName, "EndHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String guestToken = joinRoom(roomName, "EndGuest").path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String guestToken = joinRoom(roomName, "EndGuest").path("token").asString();
             startGame(gameId, hostToken);
 
             String leaveBody = restClient.post()
@@ -388,20 +388,20 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenDisconnectedOpponents_whenClaimWin_thenReturnSuccessAndCleanupRoom() throws Exception {
             String roomName = uniqueName("ClaimWinRoom");
             JsonNode hostData = createRoom(roomName, "ClaimHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
             joinRoom(roomName, "ClaimGuest");
             startGame(gameId, hostToken);
 
             gameLifecycleService.markPlayerDisconnected(gameId, "ClaimGuest", System.currentTimeMillis() + 120_000);
 
-            JsonNode response = objectMapper.readTree(restClient.post()
+            JsonNode response = jsonMapper.readTree(restClient.post()
                     .uri("/api/game/" + gameId + "/claim-win")
                     .header("Authorization", "Bearer " + hostToken)
                     .retrieve()
                     .body(String.class));
 
-            assertThat(response.path("message").asText()).isEqualTo("Win claimed successfully");
+            assertThat(response.path("message").asString()).isEqualTo("Win claimed successfully");
             awaitRoomDestruction(gameId, hostToken, Duration.ofSeconds(12));
         }
 
@@ -410,12 +410,13 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenReconnectedOpponent_whenClaimWin_thenReturnForbidden() throws Exception {
             String roomName = uniqueName("ClaimRejectRoom");
             JsonNode hostData = createRoom(roomName, "ClaimRejectHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
             joinRoom(roomName, "ClaimRejectGuest");
             startGame(gameId, hostToken);
 
-            gameLifecycleService.markPlayerDisconnected(gameId, "ClaimRejectGuest", System.currentTimeMillis() + 120_000);
+            gameLifecycleService.markPlayerDisconnected(gameId, "ClaimRejectGuest",
+                    System.currentTimeMillis() + 120_000);
             gameLifecycleService.markPlayerReconnected(gameId, "ClaimRejectGuest");
 
             HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
@@ -438,9 +439,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenShowdown_whenAllPlayersReady_thenStartNewHand() throws Exception {
             String roomName = uniqueName("ReadyFlowRoom");
             JsonNode hostData = createRoom(roomName, "ReadyHost", 2);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String guestToken = joinRoom(roomName, "ReadyGuest").path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String guestToken = joinRoom(roomName, "ReadyGuest").path("token").asString();
             startGame(gameId, hostToken);
 
             var stompClient = createStompClient();
@@ -450,18 +451,26 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             try {
                 // Reach showdown by checking down all streets
                 // Pre-flop
-                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CALL, null), hostToken, guestToken, hostSession, guestSession, s -> true);
-                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CALL, null), hostToken,
+                        guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken,
+                        guestToken, hostSession, guestSession, s -> true);
                 // Flop
-                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
-                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken,
+                        guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken,
+                        guestToken, hostSession, guestSession, s -> true);
                 // Turn
-                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
-                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken,
+                        guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken,
+                        guestToken, hostSession, guestSession, s -> true);
                 // River
-                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
-                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, 
-                    state -> "SHOWDOWN".equals(state.path("phase").asText()));
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken,
+                        guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken,
+                        guestToken, hostSession, guestSession,
+                        state -> "SHOWDOWN".equals(state.path("phase").asString()));
 
                 // Verify countdown active
                 JsonNode showdownState = readGameState(gameId, hostToken);
@@ -474,7 +483,7 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                 // Wait for new hand (PRE_FLOP)
                 await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
                     JsonNode nextHandState = readGameState(gameId, hostToken);
-                    assertThat(nextHandState.path("phase").asText()).isEqualTo("PRE_FLOP");
+                    assertThat(nextHandState.path("phase").asString()).isEqualTo("PRE_FLOP");
                     // Pot should be reset to blinds (10 + 20 = 30)
                     assertThat(nextHandState.path("pot").asInt()).isEqualTo(30);
                 });
@@ -496,7 +505,7 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             StompSession sessionB,
             Predicate<JsonNode> expectedState) throws Exception {
         JsonNode state = readGameState(gameId, tokenA);
-        String currentPlayerName = state.path("currentPlayerName").asText();
+        String currentPlayerName = state.path("currentPlayerName").asString();
         // jwtService.extractPlayerName now returns just the playerName (subject)
         boolean tokenAIsCurrentPlayer = jwtService.extractPlayerName(tokenA).equals(currentPlayerName);
         String actingToken = tokenAIsCurrentPlayer ? tokenA : tokenB;
@@ -509,8 +518,8 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(expectedState.test(nextState))
                     .as("Expected game state after %s but saw phase=%s currentPlayer=%s communityCards=%s",
                             request.action(),
-                            nextState.path("phase").asText(),
-                            nextState.path("currentPlayerName").asText(),
+                            nextState.path("phase").asString(),
+                            nextState.path("currentPlayerName").asString(),
                             nextState.path("communityCards").size())
                     .isTrue();
         });
@@ -520,7 +529,7 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
 
     private boolean playerHasFolded(JsonNode state, String playerName) {
         for (JsonNode player : state.path("players")) {
-            if (playerName.equals(player.path("name").asText())) {
+            if (playerName.equals(player.path("name").asString())) {
                 return player.path("hasFolded").asBoolean();
             }
         }

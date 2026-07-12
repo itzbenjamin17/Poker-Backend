@@ -14,6 +14,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
+import com.pokergame.wal.WalContext;
+import com.pokergame.wal.WalLogged;
+import com.pokergame.wal.WalFileService;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -30,9 +33,11 @@ public class RoomService {
     private static final Logger logger = LoggerFactory.getLogger(RoomService.class);
 
     private final SimpMessagingTemplate messagingTemplate;
+    private final WalFileService walFileService;
 
-    public RoomService(SimpMessagingTemplate messagingTemplate) {
+    public RoomService(SimpMessagingTemplate messagingTemplate, WalFileService walFileService) {
         this.messagingTemplate = messagingTemplate;
+        this.walFileService = walFileService;
     }
 
     // Room storage
@@ -47,6 +52,7 @@ public class RoomService {
      * @return The unique room ID for the created room
      * @throws BadRequestException if the room name is already taken
      */
+    @WalLogged(roomId = "#result", writeAfter = true)
     public String createRoom(CreateRoomRequest request) {
         String sanitizedRoomName = com.pokergame.util.InputSanitizer.sanitize(request.getRoomName());
         String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(request.getPlayerName());
@@ -59,7 +65,8 @@ public class RoomService {
                         "Room name '" + sanitizedRoomName + "' is already taken. Please choose a different name.");
             }
 
-            roomId = UUID.randomUUID().toString();
+            String overrideId = WalContext.getOverrideRoomId();
+            roomId = overrideId != null ? overrideId : UUID.randomUUID().toString();
 
             Room room = new Room(
                     roomId,
@@ -78,8 +85,10 @@ public class RoomService {
             roomHosts.put(roomId, sanitizedPlayerName);
         }
 
-        messagingTemplate.convertAndSend("/room/" + roomId,
-                new ApiResponse<>(ResponseMessage.ROOM_CREATED.getMessage(), getRoomData(roomId)));
+        if (!WalContext.isReplaying()) {
+            messagingTemplate.convertAndSend("/room/" + roomId,
+                    new ApiResponse<>(ResponseMessage.ROOM_CREATED.getMessage(), getRoomData(roomId)));
+        }
 
         logger.info("Room created: {} (ID: {}) by host: {}",
                 sanitizedRoomName, roomId, sanitizedPlayerName);
@@ -100,6 +109,7 @@ public class RoomService {
      *                                     name is taken
      * @throws UnauthorisedActionException if the room is full
      */
+    @WalLogged(roomId = "#result", writeAfter = true)
     public String joinRoom(JoinRoomRequest joinRequest) {
         String sanitizedRoomName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.roomName());
         String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.playerName());
@@ -143,8 +153,10 @@ public class RoomService {
 
         logger.info("Player {} joined room: {}", sanitizedPlayerName, room.getRoomName());
 
-        messagingTemplate.convertAndSend("/room/" + roomId,
-                new ApiResponse<>(ResponseMessage.PLAYER_JOINED.getMessage(), getRoomData(roomId)));
+        if (!WalContext.isReplaying()) {
+            messagingTemplate.convertAndSend("/room/" + roomId,
+                    new ApiResponse<>(ResponseMessage.PLAYER_JOINED.getMessage(), getRoomData(roomId)));
+        }
 
         return roomId;
     }
@@ -177,6 +189,7 @@ public class RoomService {
      *                                transfer host
      * @throws ResourceNotFoundException if room not found
      */
+    @WalLogged(roomId = "#roomId")
     public void leaveRoom(String roomId, String playerName, boolean closeRoomWhenHostLeaves) {
         Room room = rooms.get(roomId);
         if (room == null) {
@@ -190,8 +203,10 @@ public class RoomService {
                 // Host is leaving the lobby phase - destroy the room.
                 logger.info("Host {} leaving room {} during lobby phase, destroying room", playerName,
                         room.getRoomName());
-                messagingTemplate.convertAndSend("/room/" + roomId,
-                        new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                if (!WalContext.isReplaying()) {
+                    messagingTemplate.convertAndSend("/room/" + roomId,
+                            new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                }
                 destroyRoom(roomId);
             } else {
                 // Host is leaving during an active game - transfer host and keep room alive.
@@ -200,8 +215,10 @@ public class RoomService {
                 if (room.getPlayers().isEmpty()) {
                     logger.info("Host {} left room {} and no players remain, destroying room", playerName,
                             room.getRoomName());
-                    messagingTemplate.convertAndSend("/room/" + roomId,
-                            new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                    if (!WalContext.isReplaying()) {
+                        messagingTemplate.convertAndSend("/room/" + roomId,
+                                new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                    }
                     destroyRoom(roomId);
                 } else {
                     String newHost = room.getPlayers().getFirst();
@@ -211,22 +228,28 @@ public class RoomService {
                             playerName,
                             room.getRoomName(),
                             newHost);
-                    messagingTemplate.convertAndSend("/room/" + roomId,
-                            new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
+                    if (!WalContext.isReplaying()) {
+                        messagingTemplate.convertAndSend("/room/" + roomId,
+                                new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
+                    }
                 }
             }
         } else {
             // Regular player leaving - just remove them from the room
             room.removePlayer(playerName);
             logger.info("Player {} left room: {}", playerName, room.getRoomName());
-            messagingTemplate.convertAndSend("/room/" + roomId,
-                    new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
+            if (!WalContext.isReplaying()) {
+                messagingTemplate.convertAndSend("/room/" + roomId,
+                        new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
+            }
 
             // If no players left after removal, also destroy the room
             if (room.getPlayers().isEmpty()) {
                 logger.info("No players remaining in room {}, destroying room", room.getRoomName());
-                messagingTemplate.convertAndSend("/room/" + roomId,
-                        new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                if (!WalContext.isReplaying()) {
+                    messagingTemplate.convertAndSend("/room/" + roomId,
+                            new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                }
                 destroyRoom(roomId);
             }
         }
@@ -337,6 +360,7 @@ public class RoomService {
     public void destroyRoom(String roomId) {
         Room room = rooms.remove(roomId);
         roomHosts.remove(roomId);
+        walFileService.deleteWal(roomId);
         if (room != null) {
             logger.info("Room destroyed: {} (ID: {})", room.getRoomName(), roomId);
         }

@@ -254,4 +254,51 @@ class DeckTest {
         List<Card> remaining = deck.dealCards(41);
         assertEquals(41, remaining.size());
     }
+
+    @Test
+    @DisplayName("seeded Deck produces deterministic card order")
+    void seededDeckProducesDeterministicOrder() {
+        java.util.Random rng1 = new java.util.Random(42L);
+        java.util.Random rng2 = new java.util.Random(42L);
+
+        Deck deck1 = new Deck(rng1);
+        Deck deck2 = new Deck(rng2);
+
+        for (int i = 0; i < 52; i++) {
+            Card c1 = deck1.dealCard();
+            Card c2 = deck2.dealCard();
+            assertEquals(c1, c2, "Card " + i + " should be identical for same seed");
+        }
+    }
+
+    @Test
+    @DisplayName("different seeds produce different card orders")
+    void differentSeedsProduceDifferentOrders() {
+        java.util.Random rng1 = new java.util.Random(1L);
+        java.util.Random rng2 = new java.util.Random(2L);
+
+        Deck deck1 = new Deck(rng1);
+        Deck deck2 = new Deck(rng2);
+
+        boolean anyDifferent = false;
+        for (int i = 0; i < 52; i++) {
+            if (!deck1.dealCard().equals(deck2.dealCard())) {
+                anyDifferent = true;
+                break;
+            }
+        }
+        assertTrue(anyDifferent, "Different seeds should produce different card orders");
+    }
+
+    @Test
+    @DisplayName("seeded shuffle(Random) is deterministic")
+    void seededShuffleIsDeterministic() {
+        Deck deck1 = new Deck(new java.util.Random(100L));
+        Deck deck2 = new Deck(new java.util.Random(100L));
+
+        // Deal 5 cards from each and compare
+        for (int i = 0; i < 5; i++) {
+            assertEquals(deck1.dealCard(), deck2.dealCard());
+        }
+    }
 }

@@ -19,6 +19,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.List;
+import com.pokergame.wal.WalContext;
 
 /**
  * Event listener responsible for handling asynchronous game events and timing.
@@ -71,6 +72,10 @@ public class GameAsyncEventListener {
      */
     @EventListener
     public void handleStartNewHandDelay(StartNewHandEvent event) {
+        if (WalContext.isReplaying()) {
+            gameLifecycleService.startNewHand(event.gameId());
+            return;
+        }
         logger.info("Scheduling new hand for game {} in {}ms", event.gameId(), event.delay());
 
         taskScheduler.schedule(() -> {
@@ -90,6 +95,10 @@ public class GameAsyncEventListener {
      */
     @EventListener
     public void handleStartReadyCountdown(StartReadyCountdownEvent event) {
+        if (WalContext.isReplaying()) {
+            gameLifecycleService.startReadyCountdown(event.gameId(), event.countdownMs());
+            return;
+        }
         logger.info("Scheduling ready countdown for game {} in {}ms", event.gameId(), event.delayMs());
 
         if (event.delayMs() <= 0) {
@@ -123,6 +132,10 @@ public class GameAsyncEventListener {
      */
     @EventListener
     public void handleGameEndCleanup(GameCleanupEvent event) {
+        if (WalContext.isReplaying()) {
+            gameLifecycleService.performGameCleanup(event.gameId());
+            return;
+        }
         logger.info("Scheduling cleanup for game {} in {}ms", event.gameId(), event.delay());
 
         taskScheduler.schedule(() -> {
@@ -164,6 +177,29 @@ public class GameAsyncEventListener {
      * @param gameId the unique identifier of the game to advance
      */
     private void scheduleNextAutoAdvanceStep(String gameId) {
+        if (WalContext.isReplaying()) {
+            Game game = gameLifecycleService.getGame(gameId);
+            if (game == null) return;
+            boolean sequenceComplete = false;
+            while (!sequenceComplete) {
+                synchronized (game) {
+                    GamePhase currentPhase = game.getCurrentPhase();
+                    if (currentPhase == GamePhase.PRE_FLOP) {
+                        game.dealFlop();
+                    } else if (currentPhase == GamePhase.FLOP) {
+                        game.dealTurn();
+                    } else if (currentPhase == GamePhase.TURN) {
+                        game.dealRiver();
+                    } else {
+                        game.conductShowdown();
+                        gameLifecycleService.startReadyCountdown(gameId, readyCountdownMs);
+                        sequenceComplete = true;
+                    }
+                }
+            }
+            return;
+        }
+
         Game game = gameLifecycleService.getGame(gameId);
         if (game == null)
             return;

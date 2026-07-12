@@ -45,7 +45,7 @@ class WebSocketThrottlingIntegrationTest extends AbstractIntegrationTestSupport 
 
         String playerName = "ThrottledPlayer";
         String roomId = roomService.createRoom(new CreateRoomRequest(
-                "ThrottledRoom", playerName, 6, 10, 20, 1000, null));
+                uniqueName("ThrottledRoom"), playerName, 6, 10, 20, 1000, null));
         String token = jwtService.generateToken(playerName, roomId);
 
         WebSocketStompClient stompClient = createStompClient();

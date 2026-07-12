@@ -1,6 +1,6 @@
 package com.pokergame.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.pokergame.dto.internal.PlayerJoinInfo;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
@@ -58,7 +58,7 @@ class RoomControllerTest {
     @Autowired
     private com.pokergame.security.RateLimitService rateLimitService;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final JsonMapper jsonMapper = JsonMapper.builder().build();
 
     @MockitoBean
     private RoomService roomService;
@@ -95,7 +95,7 @@ class RoomControllerTest {
 
         mockMvc.perform(post("/api/room/create")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
+                .content(jsonMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Room created successfully"))
                 .andExpect(jsonPath("$.data.token").value("mock-token"))
@@ -116,7 +116,7 @@ class RoomControllerTest {
 
         mockMvc.perform(post("/api/room/join")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
+                .content(jsonMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully joined room"))
                 .andExpect(jsonPath("$.data.token").value("mock-token"))
@@ -215,7 +215,7 @@ class RoomControllerTest {
 
         mockMvc.perform(post("/api/room/create")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
+                .content(jsonMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Room name must be 50 characters or less"));
     }
@@ -227,7 +227,7 @@ class RoomControllerTest {
 
         mockMvc.perform(post("/api/room/create")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
+                .content(jsonMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Room name cannot contain control characters"));
     }
@@ -239,7 +239,7 @@ class RoomControllerTest {
 
         mockMvc.perform(post("/api/room/create")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
+                .content(jsonMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Minimum 2 players required"));
     }
@@ -251,7 +251,7 @@ class RoomControllerTest {
 
         mockMvc.perform(post("/api/room/join")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
+                .content(jsonMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Player name must be 30 characters or less"));
     }
@@ -298,14 +298,14 @@ class RoomControllerTest {
         for (int i = 0; i < 5; i++) {
             mockMvc.perform(post("/api/room/create")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(objectMapper.writeValueAsString(request)))
+                    .content(jsonMapper.writeValueAsString(request)))
                     .andExpect(status().isOk());
         }
 
         // The 6th attempt should fail with 429
         mockMvc.perform(post("/api/room/create")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
+                .content(jsonMapper.writeValueAsString(request)))
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.message").value("Too many requests. Please try again in 15 minutes."));
     }

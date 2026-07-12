@@ -17,6 +17,8 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 import org.springframework.scheduling.annotation.Async;
+import com.pokergame.wal.WalLogged;
+import com.pokergame.wal.WalContext;
 
 import java.time.Instant;
 import java.util.*;
@@ -75,6 +77,7 @@ public class GameLifecycleService {
      * @throws ResourceNotFoundException   if the room is not found
      *
      */
+    @WalLogged(roomId = "#roomId")
     public String createGameFromRoom(String roomId) {
         Room room = roomService.getRoom(roomId);
         if (room == null) {
@@ -105,12 +108,14 @@ public class GameLifecycleService {
             activeGames.put(roomId, game);
 
             // Broadcast to all players in the room that the game has started
-            Map<String, Object> gameStartMessage = new ConcurrentHashMap<>();
-            gameStartMessage.put("gameId", roomId);
-            gameStartMessage.put("message", "Game started! Redirecting to game...");
+            if (!WalContext.isReplaying()) {
+                Map<String, Object> gameStartMessage = new ConcurrentHashMap<>();
+                gameStartMessage.put("gameId", roomId);
+                gameStartMessage.put("message", "Game started! Redirecting to game...");
 
-            messagingTemplate.convertAndSend("/room/" + roomId,
-                    new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), gameStartMessage));
+                messagingTemplate.convertAndSend("/room/" + roomId,
+                        new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), gameStartMessage));
+            }
 
             room.setGameStarted(true);
         }
@@ -170,6 +175,7 @@ public class GameLifecycleService {
      * @throws BadRequestException       if game or player not found
      * @throws ResourceNotFoundException if the game is not found
      */
+    @WalLogged(roomId = "#gameId")
     public void leaveGame(String gameId, String playerName) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -288,9 +294,14 @@ public class GameLifecycleService {
 
         gameStateService.broadcastGameEnd(gameId, winner, isForfeit);
 
-        // Wait a few seconds for players to see the result, then destroy the room and
-        // game, on a different thread
-        eventPublisher.publishEvent(new GameCleanupEvent(gameId, GAME_END_DISPLAY_DELAY_MS));
+        if (!WalContext.isReplaying()) {
+            // Wait a few seconds for players to see the result, then destroy the room and
+            // game, on a different thread
+            eventPublisher.publishEvent(new GameCleanupEvent(gameId, GAME_END_DISPLAY_DELAY_MS));
+        } else {
+            // During replay, clean up immediately to prevent ghost states
+            performGameCleanup(gameId);
+        }
     }
 
     /**
@@ -352,6 +363,7 @@ public class GameLifecycleService {
      * @param disconnectDeadlineEpochMs disconnect grace expiry timestamp (UTC epoch
      *                                  ms)
      */
+    @WalLogged(roomId = "#gameId")
     public void markPlayerDisconnected(String gameId, String playerName, long disconnectDeadlineEpochMs) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -387,6 +399,7 @@ public class GameLifecycleService {
      * @param gameId     the game identifier
      * @param playerName the reconnecting player name
      */
+    @WalLogged(roomId = "#gameId")
     public void markPlayerReconnected(String gameId, String playerName) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -445,13 +458,15 @@ public class GameLifecycleService {
             existingTimeout.cancel(false);
         }
 
-        ScheduledFuture<?> timeoutFuture = taskScheduler.schedule(
-                () -> handleReadyCountdownTimeout(gameId),
-                Instant.now().plusMillis(countdownMs));
-        if (timeoutFuture != null) {
-            readyCountdownTimeouts.put(gameId, timeoutFuture);
-        } else {
-            logger.warn("Ready countdown timeout was not scheduled for game {}", gameId);
+        if (!WalContext.isReplaying()) {
+            ScheduledFuture<?> timeoutFuture = taskScheduler.schedule(
+                    () -> handleReadyCountdownTimeout(gameId),
+                    Instant.now().plusMillis(countdownMs));
+            if (timeoutFuture != null) {
+                readyCountdownTimeouts.put(gameId, timeoutFuture);
+            } else {
+                logger.warn("Ready countdown timeout was not scheduled for game {}", gameId);
+            }
         }
     }
 
@@ -461,6 +476,7 @@ public class GameLifecycleService {
      * @param gameId     game identifier
      * @param playerName player name from principal
      */
+    @WalLogged(roomId = "#gameId")
     public void markPlayerReadyForNextHand(String gameId, String playerName) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -530,6 +546,7 @@ public class GameLifecycleService {
      * @param gameId     game identifier
      * @param playerName claimant name
      */
+    @WalLogged(roomId = "#gameId")
     public void claimWin(String gameId, String playerName) {
         Game game = getGame(gameId);
         if (game == null) {

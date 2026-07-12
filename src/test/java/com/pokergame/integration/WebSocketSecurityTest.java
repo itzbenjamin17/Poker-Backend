@@ -1,6 +1,6 @@
 package com.pokergame.integration;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
 import org.awaitility.Awaitility;
 import org.jspecify.annotations.NonNull;
@@ -37,20 +37,26 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
 
         WebSocketStompClient stompClient = createStompClient();
         AtomicBoolean errorReceived = new AtomicBoolean(false);
-        
-        StompSession session1 = connectSessionWithErrorHandler(stompClient, player1.path("token").asText(), errorReceived);
-        
+
+        StompSession session1 = connectSessionWithErrorHandler(stompClient, player1.path("token").asString(),
+                errorReceived);
+
         // Attempt to subscribe to player2's private topic (legacy predictable path)
-        String forbiddenTopic = "/game/" + player1.path("roomId").asText() + "/player-name/Player2/private";
-        
+        String forbiddenTopic = "/game/" + player1.path("roomId").asString() + "/player-name/Player2/private";
+
         session1.subscribe(forbiddenTopic, new StompFrameHandler() {
             @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) { return String.class; }
+            public Type getPayloadType(@NonNull StompHeaders headers) {
+                return String.class;
+            }
+
             @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {}
+            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+            }
         });
 
-        // The interceptor throws MessagingException, which Spring translates to an ERROR frame.
+        // The interceptor throws MessagingException, which Spring translates to an
+        // ERROR frame.
         // Standard STOMP behavior is to close the connection after an ERROR frame.
         Awaitility.await()
                 .atMost(Duration.ofSeconds(5))
@@ -64,14 +70,18 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
         JsonNode player1 = createRoom(roomName, "Player1", 6);
 
         WebSocketStompClient stompClient = createStompClient();
-        StompSession session1 = connectSession(stompClient, player1.path("token").asText());
-        
+        StompSession session1 = connectSession(stompClient, player1.path("token").asString());
+
         // /user/queue/private is the new secure path
         session1.subscribe("/user/queue/private", new StompFrameHandler() {
             @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) { return Object.class; }
+            public Type getPayloadType(@NonNull StompHeaders headers) {
+                return Object.class;
+            }
+
             @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {}
+            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+            }
         });
 
         // Verify subscription is processed and session stays alive
@@ -80,26 +90,29 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
                 .untilAsserted(() -> assertThat(session1.isConnected()).isTrue());
     }
 
-    private StompSession connectSessionWithErrorHandler(WebSocketStompClient stompClient, String token, AtomicBoolean errorReceived) throws Exception {
+    private StompSession connectSessionWithErrorHandler(WebSocketStompClient stompClient, String token,
+            AtomicBoolean errorReceived) throws Exception {
         String wsUrl = "ws://localhost:" + port + "/ws";
         StompHeaders connectHeaders = new StompHeaders();
         connectHeaders.add("Authorization", "Bearer " + token);
 
-        return stompClient.connectAsync(wsUrl, createHandshakeHeaders(), connectHeaders, new StompSessionHandlerAdapter() {
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                // Not used
-            }
+        return stompClient
+                .connectAsync(wsUrl, createHandshakeHeaders(), connectHeaders, new StompSessionHandlerAdapter() {
+                    @Override
+                    public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                        // Not used
+                    }
 
-            @Override
-            public void handleException(@NonNull StompSession session, StompCommand command, @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
-                errorReceived.set(true);
-            }
+                    @Override
+                    public void handleException(@NonNull StompSession session, StompCommand command,
+                            @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
+                        errorReceived.set(true);
+                    }
 
-            @Override
-            public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
-                errorReceived.set(true);
-            }
-        }).get(Duration.ofSeconds(5).toSeconds(), TimeUnit.SECONDS);
+                    @Override
+                    public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
+                        errorReceived.set(true);
+                    }
+                }).get(Duration.ofSeconds(5).toSeconds(), TimeUnit.SECONDS);
     }
 }

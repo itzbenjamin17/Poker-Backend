@@ -1,6 +1,6 @@
 package com.pokergame.integration;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
@@ -41,13 +41,13 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
     @DisplayName("should isolate rate limits for same player name in different rooms")
     void givenSamePlayerNameInDifferentRooms_whenThrottlingOne_thenOtherIsUnchanged() throws Exception {
         // 1. Create two rooms with the same player name "Alice"
-        JsonNode alice1Data = createRoom("Room1", "Alice", 6);
-        JsonNode alice2Data = createRoom("Room2", "Alice", 6);
+        JsonNode alice1Data = createRoom(uniqueName("Room1"), "Alice", 6);
+        JsonNode alice2Data = createRoom(uniqueName("Room2"), "Alice", 6);
 
-        String roomId1 = alice1Data.path("roomId").asText();
-        String roomId2 = alice2Data.path("roomId").asText();
-        String token1 = alice1Data.path("token").asText();
-        String token2 = alice2Data.path("token").asText();
+        String roomId1 = alice1Data.path("roomId").asString();
+        String roomId2 = alice2Data.path("roomId").asString();
+        String token1 = alice1Data.path("token").asString();
+        String token2 = alice2Data.path("token").asString();
 
         assertThat(roomId1).isNotEqualTo(roomId2);
 
@@ -60,24 +60,27 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
             sendAction(session1, roomId1, token1);
         }
 
-        // The 6th action for Alice1 should be throttled (we expect a disconnect or dropped message)
+        // The 6th action for Alice1 should be throttled (we expect a disconnect or
+        // dropped message)
         sendAction(session1, roomId1, token1);
-        
-        // 4. Alice2 should still be able to send messages because her bucket is separate
+
+        // 4. Alice2 should still be able to send messages because her bucket is
+        // separate
         sendAction(session2, roomId2, token2);
-        
-        // If session2 is still connected, it means it wasn't affected by session1's throttling
+
+        // If session2 is still connected, it means it wasn't affected by session1's
+        // throttling
         assertThat(session2.isConnected()).isTrue();
     }
 
     @Test
     @DisplayName("should prevent Alice from Room A accessing Room B")
     void givenAliceInRoomA_whenAccessingRoomB_thenForbidden() throws Exception {
-        JsonNode aliceAData = createRoom("RoomA", "Alice", 6);
-        JsonNode aliceBData = createRoom("RoomB", "Alice", 6);
+        JsonNode aliceAData = createRoom(uniqueName("RoomA"), "Alice", 6);
+        JsonNode aliceBData = createRoom(uniqueName("RoomB"), "Alice", 6);
 
-        String roomIdB = aliceBData.path("roomId").asText();
-        String tokenA = aliceAData.path("token").asText();
+        String roomIdB = aliceBData.path("roomId").asString();
+        String tokenA = aliceAData.path("token").asString();
 
         // AliceA tries to leave RoomB
         try {
@@ -86,7 +89,7 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
                     .header("Authorization", "Bearer " + tokenA)
                     .retrieve()
                     .toBodilessEntity();
-            
+
             org.junit.jupiter.api.Assertions.fail("Should have thrown 403/Forbidden");
         } catch (org.springframework.web.client.HttpClientErrorException e) {
             assertThat(e.getStatusCode().value()).isEqualTo(403);

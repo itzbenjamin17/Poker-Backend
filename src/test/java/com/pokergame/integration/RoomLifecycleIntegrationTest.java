@@ -1,6 +1,6 @@
 package com.pokergame.integration;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
@@ -41,8 +41,8 @@ class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenCreatedRoom_whenPlayerJoins_thenRoomInfoReflectsBothPlayers() throws Exception {
             String roomName = uniqueName("LifecycleRoom");
             JsonNode createData = createRoom(roomName, "HostAlpha", 6);
-            String roomId = createData.path("roomId").asText();
-            String hostToken = createData.path("token").asText();
+            String roomId = createData.path("roomId").asString();
+            String hostToken = createData.path("token").asString();
 
             JsonNode joinData = joinRoom(roomName, "PlayerBeta");
             String roomInfoBody = restClient.get()
@@ -51,10 +51,10 @@ class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                     .retrieve()
                     .body(String.class);
 
-            JsonNode roomInfo = objectMapper.readTree(roomInfoBody);
+            JsonNode roomInfo = jsonMapper.readTree(roomInfoBody);
 
-            assertThat(joinData.path("roomId").asText()).isEqualTo(roomId);
-            assertThat(roomInfo.path("roomName").asText()).isEqualTo(roomName);
+            assertThat(joinData.path("roomId").asString()).isEqualTo(roomId);
+            assertThat(roomInfo.path("roomName").asString()).isEqualTo(roomName);
             assertThat(roomInfo.path("currentPlayers").asInt()).isEqualTo(2);
             assertThat(roomInfo.path("canStartGame").asBoolean()).isTrue();
         }
@@ -64,9 +64,9 @@ class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         void givenNonHostLeaves_whenLeaveRoom_thenRoomRemainsAvailable() throws Exception {
             String roomName = uniqueName("LeaveNonHostRoom");
             JsonNode createData = createRoom(roomName, "HostGamma", 6);
-            String roomId = createData.path("roomId").asText();
-            String hostToken = createData.path("token").asText();
-            String playerToken = joinRoom(roomName, "PlayerDelta").path("token").asText();
+            String roomId = createData.path("roomId").asString();
+            String hostToken = createData.path("token").asString();
+            String playerToken = joinRoom(roomName, "PlayerDelta").path("token").asString();
 
             String leaveResponse = restClient.post()
                     .uri("/api/room/" + roomId + "/leave")
@@ -74,7 +74,7 @@ class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                     .retrieve()
                     .body(String.class);
 
-            JsonNode roomInfo = objectMapper.readTree(restClient.get()
+            JsonNode roomInfo = jsonMapper.readTree(restClient.get()
                     .uri("/api/room/" + roomId)
                     .header("Authorization", "Bearer " + hostToken)
                     .retrieve()
@@ -82,15 +82,15 @@ class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
 
             assertThat(leaveResponse).contains("Successfully left room");
             assertThat(roomInfo.path("currentPlayers").asInt()).isEqualTo(1);
-            assertThat(roomInfo.path("hostName").asText()).isEqualTo("HostGamma");
+            assertThat(roomInfo.path("hostName").asString()).isEqualTo("HostGamma");
         }
 
         @Test
         @DisplayName("should close the room when the host leaves")
         void givenHostLeaves_whenLeaveRoom_thenRoomIsClosed() throws Exception {
             JsonNode createData = createRoom(uniqueName("HostLeaveRoom"), "HostEpsilon", 6);
-            String roomId = createData.path("roomId").asText();
-            String hostToken = createData.path("token").asText();
+            String roomId = createData.path("roomId").asString();
+            String hostToken = createData.path("token").asString();
 
             String leaveResponse = restClient.post()
                     .uri("/api/room/" + roomId + "/leave")

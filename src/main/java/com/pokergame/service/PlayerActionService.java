@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 
 import com.pokergame.dto.internal.TurnOutcome;
+import com.pokergame.wal.WalLogged;
 
 /**
  * Service class responsible for processing player actions and game progression.
@@ -58,6 +59,7 @@ public class PlayerActionService {
      *                                     current player
      * @throws ResourceNotFoundException   if the game is not found
      */
+    @WalLogged(roomId = "#gameId")
     public void processPlayerAction(String gameId, PlayerActionRequest actionRequest, String playerName) {
         Game game = gameLifecycleService.getGame(gameId);
         if (game == null) {
