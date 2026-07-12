@@ -5,6 +5,11 @@ package com.pokergame.exception;
  */
 
 public class BadRequestException extends PokerException {
+    /**
+     * Creates a client-input exception.
+     *
+     * @param message client-safe description of the invalid request
+     */
     public BadRequestException(String message) {
         super(message);
     }

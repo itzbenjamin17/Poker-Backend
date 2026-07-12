@@ -17,6 +17,15 @@ public class PayloadSizeFilter extends OncePerRequestFilter {
 
     private static final long MAX_PAYLOAD_SIZE = 10_240; // 10KB
 
+    /**
+     * Rejects declared payloads larger than 10 KiB before downstream processing.
+     *
+     * @param request current HTTP request
+     * @param response current HTTP response
+     * @param filterChain remaining servlet filter chain
+     * @throws ServletException if downstream filtering fails
+     * @throws IOException if the rejection or downstream response cannot be written
+     */
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {

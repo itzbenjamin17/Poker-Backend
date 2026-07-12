@@ -10,11 +10,17 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadPoolExecutor;
 
+/** Configures the executors used for asynchronous game work and scheduled timers. */
 @Configuration
 @EnableAsync
 @EnableScheduling
 public class AsyncConfiguration {
 
+    /**
+     * Creates the bounded executor used for asynchronous game operations.
+     *
+     * @return initialized game-task executor
+     */
     @Bean(name = "gameExecutor")
     public Executor gameExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -46,6 +52,11 @@ public class AsyncConfiguration {
         return executor;
     }
 
+    /**
+     * Creates the scheduler used for game deadlines and delayed lifecycle work.
+     *
+     * @return initialized game-task scheduler
+     */
     @Bean(name = "taskScheduler")
     public ThreadPoolTaskScheduler taskScheduler() {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();

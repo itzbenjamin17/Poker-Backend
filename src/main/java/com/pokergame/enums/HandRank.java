@@ -18,9 +18,31 @@ public enum HandRank {
     ROYAL_FLUSH(10);
 
     private final int rank;
-    HandRank(int rank) {this.rank = rank;}
-    public int getRank() {return rank;}
 
+    /**
+     * Associates a hand category with its comparison strength.
+     *
+     * @param rank numeric comparison strength
+     */
+    HandRank(int rank) {
+        this.rank = rank;
+    }
+
+    /**
+     * Returns this category's comparison strength.
+     *
+     * @return numeric rank
+     */
+    public int getRank() {
+        return rank;
+    }
+
+    /**
+     * Reports whether this category outranks another category.
+     *
+     * @param other category to compare against
+     * @return {@code true} when this category is stronger
+     */
     public boolean beats(HandRank other) {
         return this.rank > other.rank;
     }

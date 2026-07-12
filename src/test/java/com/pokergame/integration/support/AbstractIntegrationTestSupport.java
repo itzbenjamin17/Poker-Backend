@@ -36,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/** Provides abstract integration test support shared by integration tests. */
 public abstract class AbstractIntegrationTestSupport {
 
     protected static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(10);
@@ -50,6 +51,9 @@ public abstract class AbstractIntegrationTestSupport {
     protected final ObjectMapper objectMapper = new ObjectMapper();
     protected RestClient restClient;
 
+    /**
+     * Supports the test scenario for setup integration test.
+     */
     @BeforeEach
     void setupIntegrationTest() {
         // Reset rate limiting to disabled by default for each test
@@ -61,6 +65,13 @@ public abstract class AbstractIntegrationTestSupport {
                 .build();
     }
 
+    /**
+     * Creates room for the test.
+     * @param roomName room name supplied to the fixture
+     * @param hostName host name supplied to the fixture
+     * @param maxPlayers max players supplied to the fixture
+     * @return parsed room-creation payload
+     */
     protected JsonNode createRoom(String roomName, String hostName, int maxPlayers) throws Exception {
         CreateRoomRequest request = new CreateRoomRequest(roomName, hostName, maxPlayers, 10, 20, 1000, null);
 
@@ -85,6 +96,12 @@ public abstract class AbstractIntegrationTestSupport {
         return data;
     }
 
+    /**
+     * Supports the test scenario for join room.
+     * @param roomName room name supplied to the fixture
+     * @param playerName player name supplied to the fixture
+     * @return parsed room-join payload
+     */
     protected JsonNode joinRoom(String roomName, String playerName) throws Exception {
         JoinRoomRequest request = new JoinRoomRequest(roomName, playerName, null);
 
@@ -106,6 +123,13 @@ public abstract class AbstractIntegrationTestSupport {
         return data;
     }
 
+    /**
+     * Starts a room through the public REST contract and parses the success response.
+     *
+     * @param roomId room to start
+     * @param hostToken room host's bearer token
+     * @return parsed API response
+     */
     protected JsonNode startGame(String roomId, String hostToken) throws Exception {
         String body = restClient.post()
                 .uri("/api/room/" + roomId + "/start-game")
@@ -117,6 +141,13 @@ public abstract class AbstractIntegrationTestSupport {
         return objectMapper.readTree(body);
     }
 
+    /**
+     * Reads the current room projection through the REST API.
+     *
+     * @param roomId room to query
+     * @param token optional bearer token
+     * @return parsed room projection
+     */
     protected JsonNode getRoomData(String roomId, String token) throws Exception {
         RestClient.RequestHeadersSpec<?> request = restClient.get()
                 .uri("/api/room/" + roomId);
@@ -132,6 +163,13 @@ public abstract class AbstractIntegrationTestSupport {
         return objectMapper.readTree(body);
     }
 
+    /**
+     * Reads the authenticated public game projection through the REST API.
+     *
+     * @param gameId game to query
+     * @param token player's bearer token
+     * @return parsed public game projection
+     */
     protected JsonNode readGameState(String gameId, String token) throws Exception {
         String body = restClient.get()
                 .uri("/api/game/" + gameId + "/state")
@@ -143,6 +181,13 @@ public abstract class AbstractIntegrationTestSupport {
         return objectMapper.readTree(body);
     }
 
+    /**
+     * Waits until the room endpoint confirms that cleanup removed the room.
+     *
+     * @param roomId room expected to be destroyed
+     * @param token bearer token used for polling
+     * @param timeout maximum wait duration
+     */
     protected void awaitRoomDestruction(String roomId, String token, Duration timeout) {
         Awaitility.await()
                 .atMost(timeout)
@@ -160,6 +205,12 @@ public abstract class AbstractIntegrationTestSupport {
                 });
     }
 
+    /**
+     * Creates a STOMP client with the same string and JSON converters expected by
+     * the integration scenarios.
+     *
+     * @return configured STOMP client
+     */
     protected WebSocketStompClient createStompClient() {
         WebSocketStompClient client = new WebSocketStompClient(new StandardWebSocketClient());
 
@@ -170,6 +221,13 @@ public abstract class AbstractIntegrationTestSupport {
         return client;
     }
 
+    /**
+     * Connects a STOMP session using a bearer token and the allowed frontend origin.
+     *
+     * @param stompClient configured STOMP client
+     * @param token player's bearer token
+     * @return connected session
+     */
     protected StompSession connectSession(WebSocketStompClient stompClient, String token) throws Exception {
         String wsUrl = "ws://localhost:" + port + "/ws";
         StompHeaders connectHeaders = new StompHeaders();
@@ -180,11 +238,13 @@ public abstract class AbstractIntegrationTestSupport {
 
         CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
         stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders, new StompSessionHandlerAdapter() {
+            /** {@inheritDoc} */
             @Override
             public void afterConnected(@NonNull StompSession session, @NonNull StompHeaders connectedHeaders) {
                 sessionFuture.complete(session);
             }
 
+            /** {@inheritDoc} */
             @Override
             public void handleException(
                     @NonNull StompSession session,
@@ -195,6 +255,7 @@ public abstract class AbstractIntegrationTestSupport {
                 sessionFuture.completeExceptionally(exception);
             }
 
+            /** {@inheritDoc} */
             @Override
             public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
                 sessionFuture.completeExceptionally(exception);
@@ -204,12 +265,21 @@ public abstract class AbstractIntegrationTestSupport {
         return sessionFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
     }
 
+    /**
+     * Creates handshake headers for the test.
+     * @return handshake headers containing the allowed frontend origin
+     */
     protected WebSocketHttpHeaders createHandshakeHeaders() {
         WebSocketHttpHeaders handshakeHeaders = new WebSocketHttpHeaders();
         handshakeHeaders.add("Origin", FRONTEND_ORIGIN);
         return handshakeHeaders;
     }
 
+    /**
+     * Supports the test scenario for unique name.
+     * @param prefix prefix supplied to the fixture
+     * @return prefix with a random suffix
+     */
     protected String uniqueName(String prefix) {
         return prefix + "-" + UUID.randomUUID().toString().substring(0, 8);
     }

@@ -174,8 +174,8 @@ public class GameLifecycleService {
             }
             game.closeReadyCountdown();
 
-            // Weird structure here and in resetForNewHand because I wanted the game to hang
-            // at the end if the game was over and show the winner message for longer
+            // Reset determines game completion before cards are dealt so the final
+            // winner state remains visible during the configured display window.
             boolean gameEnded = game.resetForNewHand();
             if (gameEnded) {
                 logger.warn("Game {} became over after reset", gameId);

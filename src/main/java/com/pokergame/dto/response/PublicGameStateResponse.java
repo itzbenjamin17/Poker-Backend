@@ -59,7 +59,21 @@ public record PublicGameStateResponse(
                 Boolean claimWinAvailable,
                 String claimWinPlayerName) {
 
-        // For normal game state that isn't a showdown and isn't auto advance
+        /**
+         * Creates a normal in-hand projection without showdown, countdown, or
+         * claim-win metadata.
+         *
+         * @param maxPlayers maximum game capacity
+         * @param pot total committed chips
+         * @param pots main and side-pot amounts
+         * @param uncalledAmount chips refundable to the sole eligible player
+         * @param phase current game phase
+         * @param currentBet current table bet
+         * @param communityCards public board cards
+         * @param players public player projections
+         * @param currentPlayerName current player's display name
+         * @param currentPlayerId current player's stable identifier
+         */
         public PublicGameStateResponse(int maxPlayers,
                         int pot,
                         List<Integer> pots,
@@ -92,7 +106,22 @@ public record PublicGameStateResponse(
 
         }
 
-        // For normal game state with claim-win metadata
+        /**
+         * Creates a normal in-hand projection with disconnect claim-win metadata.
+         *
+         * @param maxPlayers maximum game capacity
+         * @param pot total committed chips
+         * @param pots main and side-pot amounts
+         * @param uncalledAmount chips refundable to the sole eligible player
+         * @param phase current game phase
+         * @param currentBet current table bet
+         * @param communityCards public board cards
+         * @param players public player projections
+         * @param currentPlayerName current player's display name
+         * @param currentPlayerId current player's stable identifier
+         * @param claimWinAvailable whether an immediate disconnect win is available
+         * @param claimWinPlayerName player currently eligible to claim
+         */
         public PublicGameStateResponse(int maxPlayers,
                         int pot,
                         List<Integer> pots,
@@ -126,8 +155,22 @@ public record PublicGameStateResponse(
                                 claimWinPlayerName);
 
         }
-        // For a normal showdown
-
+        /**
+         * Creates a showdown projection with winner information.
+         *
+         * @param maxPlayers maximum game capacity
+         * @param pot total committed chips
+         * @param pots main and side-pot amounts
+         * @param uncalledAmount chips refundable to the sole eligible player
+         * @param phase current game phase
+         * @param currentBet current table bet
+         * @param communityCards public board cards
+         * @param players public player projections
+         * @param currentPlayerName current player's display name
+         * @param currentPlayerId current player's stable identifier
+         * @param winners winning player names
+         * @param winningsPerPlayer equal winnings represented by this legacy projection
+         */
         public PublicGameStateResponse(int maxPlayers,
                         int pot,
                         List<Integer> pots,

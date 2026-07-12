@@ -24,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+/** Tests game lifecycle integration behavior. */
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -36,10 +37,14 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
     @Autowired
     private JwtService jwtService;
 
+    /** Groups test scenarios for start game. */
     @Nested
     @DisplayName("starting games")
     class StartGame {
 
+        /**
+         * Protects the contract that the system should allow the host to start a game when at least two players have joined.
+         */
         @Test
         @DisplayName("should allow the host to start a game when at least two players have joined")
         void givenTwoPlayersAndHostToken_whenStartGame_thenReturnGameId() throws Exception {
@@ -55,6 +60,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(response.path("data").asText()).isEqualTo(roomId);
         }
 
+        /**
+         * Protects the contract that the system should reject start game requests from non-host players.
+         */
         @Test
         @DisplayName("should reject start game requests from non-host players")
         void givenNonHostToken_whenStartGame_thenReturnForbidden() throws Exception {
@@ -73,6 +81,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(exception.getResponseBodyAsString()).contains("Only the room host can start the game");
         }
 
+        /**
+         * Protects the contract that the system should reject start game requests when only one player is present.
+         */
         @Test
         @DisplayName("should reject start game requests when only one player is present")
         void givenSinglePlayerRoom_whenStartGame_thenReturnForbidden() throws Exception {
@@ -91,10 +102,14 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /** Groups test scenarios for state endpoints. */
     @Nested
     @DisplayName("state endpoints")
     class StateEndpoints {
 
+        /**
+         * Protects the contract that the system should return the public game state to an active player.
+         */
         @Test
         @DisplayName("should return the public game state to an active player")
         void givenActivePlayer_whenGetGameState_thenReturnCurrentState() throws Exception {
@@ -112,6 +127,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(state.path("players").size()).isEqualTo(2);
         }
 
+        /**
+         * Protects the contract that the system should reject public game state requests from players outside the game.
+         */
         @Test
         @DisplayName("should reject public game state requests from players outside the game")
         void givenAuthenticatedOutsider_whenGetGameState_thenReturnForbidden() throws Exception {
@@ -136,6 +154,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(exception.getResponseBodyAsString()).contains("Token is not valid for this game.");
         }
 
+        /**
+         * Protects the contract that the system should return the private state with hole cards to an active player.
+         */
         @Test
         @DisplayName("should return the private state with hole cards to an active player")
         void givenActivePlayer_whenGetPrivateState_thenReturnHoleCards() throws Exception {
@@ -156,6 +177,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(privateState.path("holeCards").size()).isEqualTo(2);
         }
 
+        /**
+         * Protects the contract that the system should reject private state requests from players outside the game.
+         */
         @Test
         @DisplayName("should reject private state requests from players outside the game")
         void givenAuthenticatedOutsider_whenGetPrivateState_thenReturnForbidden() throws Exception {
@@ -181,10 +205,14 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /** Groups test scenarios for leave game. */
     @Nested
     @DisplayName("leaving games")
     class LeaveGame {
 
+        /**
+         * Protects the contract that the system should reject game leave requests without a token.
+         */
         @Test
         @DisplayName("should reject game leave requests without a token")
         void givenMissingToken_whenLeaveGame_thenReturnForbidden() {
@@ -196,6 +224,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         }
 
+        /**
+         * Protects the contract that the system should return forbidden for an unknown game id due to token mismatch.
+         */
         @Test
         @DisplayName("should return forbidden for an unknown game id due to token mismatch")
         void givenUnknownGame_whenLeaveGame_thenReturnForbidden() throws Exception {
@@ -211,6 +242,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(exception.getResponseBodyAsString()).contains("Token is not valid for this game.");
         }
 
+        /**
+         * Protects the contract that the system should allow a player to leave an active game.
+         */
         @Test
         @DisplayName("should allow a player to leave an active game")
         void givenStartedGame_whenPlayerLeaves_thenReturnSuccessResponse() throws Exception {
@@ -230,6 +264,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(leaveBody).contains("Successfully left game");
         }
 
+        /**
+         * Protects the contract that the system should keep a three-player game responsive after a non-current player leaves.
+         */
         @Test
         @DisplayName("should keep a three-player game responsive after a non-current player leaves")
         void givenThreePlayerGame_whenNonCurrentPlayerLeaves_thenRemainingPlayersCanStillAct() throws Exception {
@@ -290,10 +327,14 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /** Groups test scenarios for game progression. */
     @Nested
     @DisplayName("game progression")
     class GameProgression {
 
+        /**
+         * Protects the contract that the system should advance through multiple streets when players act through the public action API.
+         */
         @Test
         @DisplayName("should advance through multiple streets when players act through the public action API")
         void givenTwoPlayerGame_whenPlayersActAcrossRounds_thenGameAdvancesToTheTurn() throws Exception {
@@ -357,10 +398,14 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /** Groups test scenarios for cleanup and claim win. */
     @Nested
     @DisplayName("cleanup and claim win")
     class CleanupAndClaimWin {
 
+        /**
+         * Protects the contract that the system should eventually destroy the room when one player remains after a game leave.
+         */
         @Test
         @Tag("slow")
         @DisplayName("should eventually destroy the room when one player remains after a game leave")
@@ -382,6 +427,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             awaitRoomDestruction(gameId, hostToken, Duration.ofSeconds(12));
         }
 
+        /**
+         * Protects the contract that the system should allow claim win when every other non-out player is disconnected.
+         */
         @Test
         @Tag("slow")
         @DisplayName("should allow claim win when every other non-out player is disconnected")
@@ -405,6 +453,9 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             awaitRoomDestruction(gameId, hostToken, Duration.ofSeconds(12));
         }
 
+        /**
+         * Protects the contract that the system should reject stale claim win requests once an opponent has reconnected.
+         */
         @Test
         @DisplayName("should reject stale claim win requests once an opponent has reconnected")
         void givenReconnectedOpponent_whenClaimWin_thenReturnForbidden() throws Exception {
@@ -429,10 +480,14 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /** Groups test scenarios for ready countdown flow. */
     @Nested
     @DisplayName("ready countdown flow")
     class ReadyCountdownFlow {
 
+        /**
+         * Protects the contract that the system should start new hand when all players are ready.
+         */
         @Test
         @DisplayName("should start new hand when all players are ready")
         void givenShowdown_whenAllPlayersReady_thenStartNewHand() throws Exception {
@@ -487,6 +542,17 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /**
+     * Performs action by current player for the test.
+     * @param gameId game ID supplied to the fixture
+     * @param request request supplied to the fixture
+     * @param tokenA token a supplied to the fixture
+     * @param tokenB token b supplied to the fixture
+     * @param sessionA session a supplied to the fixture
+     * @param sessionB session b supplied to the fixture
+     * @param expectedState expected state supplied to the fixture
+     * @return public state observed after the action
+     */
     private String performActionByCurrentPlayer(
             String gameId,
             PlayerActionRequest request,
@@ -518,6 +584,12 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         return actingToken;
     }
 
+    /**
+     * Reports whether player has folded.
+     * @param state state supplied to the fixture
+     * @param playerName player name supplied to the fixture
+     * @return whether player has folded
+     */
     private boolean playerHasFolded(JsonNode state, String playerName) {
         for (JsonNode player : state.path("players")) {
             if (playerName.equals(player.path("name").asText())) {

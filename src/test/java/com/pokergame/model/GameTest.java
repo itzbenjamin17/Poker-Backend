@@ -32,6 +32,9 @@ class GameTest {
         private List<Player> players;
         private Game game;
 
+        /**
+         * Initializes the test fixtures before each scenario.
+         */
         @BeforeEach
         void setUp() {
                 MockitoAnnotations.openMocks(this);
@@ -44,6 +47,9 @@ class GameTest {
                 game = new Game("game123", players, 10, 20, mockHandEvaluator);
         }
 
+        /**
+         * Protects the expected behavior for game creation.
+         */
         @Test
         void testGameCreation() {
                 assertNotNull(game);
@@ -55,6 +61,9 @@ class GameTest {
                 assertFalse(game.isGameOver());
         }
 
+        /**
+         * Protects the expected behavior for game creation with null game ID.
+         */
         @Test
         void testGameCreationWithNullGameId() {
                 BadRequestException exception = assertThrows(
@@ -63,6 +72,9 @@ class GameTest {
                 assertEquals("Game ID cannot be null or empty", exception.getMessage());
         }
 
+        /**
+         * Protects the expected behavior for game creation with empty game ID.
+         */
         @Test
         void testGameCreationWithEmptyGameId() {
                 BadRequestException exception = assertThrows(
@@ -71,6 +83,9 @@ class GameTest {
                 assertEquals("Game ID cannot be null or empty", exception.getMessage());
         }
 
+        /**
+         * Protects the expected behavior for game creation with insufficient players.
+         */
         @Test
         void testGameCreationWithInsufficientPlayers() {
                 List<Player> onePlayer = List.of(new Player("Solo", "p1", 1000));
@@ -80,6 +95,9 @@ class GameTest {
                 assertEquals("At least 2 players are required to start a game", exception.getMessage());
         }
 
+        /**
+         * Protects the expected behavior for game creation with null players list.
+         */
         @Test
         void testGameCreationWithNullPlayersList() {
                 BadRequestException exception = assertThrows(
@@ -88,6 +106,9 @@ class GameTest {
                 assertEquals("At least 2 players are required to start a game", exception.getMessage());
         }
 
+        /**
+         * Protects the expected behavior for game creation with null player.
+         */
         @Test
         void testGameCreationWithNullPlayer() {
                 List<Player> playersWithNull = new ArrayList<>();
@@ -100,6 +121,9 @@ class GameTest {
                 assertEquals("Invalid players list. Please try again.", exception.getMessage());
         }
 
+        /**
+         * Protects the expected behavior for deal hole cards.
+         */
         @Test
         void testDealHoleCards() {
                 game.dealHoleCards();
@@ -109,6 +133,9 @@ class GameTest {
                 }
         }
 
+        /**
+         * Protects the expected behavior for post blinds.
+         */
         @Test
         void testPostBlinds() {
                 game.postBlinds();
@@ -124,6 +151,9 @@ class GameTest {
                 assertEquals(20, game.getCurrentHighestBet());
         }
 
+        /**
+         * Protects the expected behavior for post blinds with short stack.
+         */
         @Test
         void testPostBlindsWithShortStack() {
                 // Create player with insufficient chips for blind
@@ -140,6 +170,9 @@ class GameTest {
                 assertEquals(0, shortStackPlayer.getChips());
         }
 
+        /**
+         * Protects the expected behavior for post blinds small blind short big blind still posts.
+         */
         @Test
         void testPostBlindsSmallBlindShortBigBlindStillPosts() {
                 List<Player> playersWithShortSb = new ArrayList<>();
@@ -160,6 +193,9 @@ class GameTest {
                 assertEquals(25, shortSbGame.getPot());
         }
 
+        /**
+         * Protects the expected behavior for post blinds big blind short small blind still posts.
+         */
         @Test
         void testPostBlindsBigBlindShortSmallBlindStillPosts() {
                 List<Player> playersWithShortBb = new ArrayList<>();
@@ -181,6 +217,9 @@ class GameTest {
                 assertEquals(25, shortBbGame.getPot());
         }
 
+        /**
+         * Protects the expected behavior for post blinds both short includes both contributions edge case.
+         */
         @Test
         void testPostBlindsBothShortIncludesBothContributionsEdgeCase() {
                 List<Player> playersWithBothShort = new ArrayList<>();
@@ -201,6 +240,9 @@ class GameTest {
                 assertEquals(22, bothShortGame.getPot());
         }
 
+        /**
+         * Protects the expected behavior for post blinds current highest bet uses actual big blind when covered.
+         */
         @Test
         void testPostBlindsCurrentHighestBetUsesActualBigBlindWhenCovered() {
                 game.postBlinds();
@@ -208,6 +250,9 @@ class GameTest {
                 assertEquals(20, game.getCurrentHighestBet());
         }
 
+        /**
+         * Protects the expected behavior for post blinds current highest bet uses actual all in when big blind short.
+         */
         @Test
         void testPostBlindsCurrentHighestBetUsesActualAllInWhenBigBlindShort() {
                 List<Player> playersWithShortBb = new ArrayList<>();
@@ -221,6 +266,9 @@ class GameTest {
                 assertEquals(15, shortBbGame.getCurrentHighestBet());
         }
 
+        /**
+         * Protects the expected behavior for post blinds current highest bet both short uses max posted contribution edge case.
+         */
         @Test
         void testPostBlindsCurrentHighestBetBothShortUsesMaxPostedContributionEdgeCase() {
                 List<Player> playersWithBothShort = new ArrayList<>();
@@ -235,6 +283,9 @@ class GameTest {
                 assertEquals(15, bothShortGame.getCurrentHighestBet());
         }
 
+        /**
+         * Protects the expected behavior for process player decision fold.
+         */
         @Test
         void testProcessPlayerDecisionFold() {
                 Player player = game.getCurrentPlayer();
@@ -246,6 +297,9 @@ class GameTest {
                 assertEquals(0, game.getPot());
         }
 
+        /**
+         * Protects the expected behavior for process player decision check.
+         */
         @Test
         void testProcessPlayerDecisionCheck() {
                 Player player = game.getCurrentPlayer();
@@ -258,6 +312,9 @@ class GameTest {
                 assertEquals(0, player.getCurrentBet());
         }
 
+        /**
+         * Protects the expected behavior for process player decision check with active bet.
+         */
         @Test
         void testProcessPlayerDecisionCheckWithActiveBet() {
                 game.postBlinds(); // Sets highest bet to 20
@@ -271,6 +328,9 @@ class GameTest {
                 assertTrue(exception.getMessage().contains("Cannot check when there is an active bet"));
         }
 
+        /**
+         * Protects the expected behavior for process player decision bet.
+         */
         @Test
         void testProcessPlayerDecisionBet() {
                 Player player = game.getCurrentPlayer();
@@ -284,6 +344,9 @@ class GameTest {
                 assertEquals(50, game.getCurrentHighestBet());
         }
 
+        /**
+         * Protects the expected behavior for process player decision bet with active bet.
+         */
         @Test
         void testProcessPlayerDecisionBetWithActiveBet() {
                 game.postBlinds(); // Sets highest bet to 20
@@ -297,6 +360,9 @@ class GameTest {
                 assertTrue(exception.getMessage().contains("Cannot bet when there is an active bet"));
         }
 
+        /**
+         * Protects the expected behavior for process player decision call.
+         */
         @Test
         void testProcessPlayerDecisionCall() {
                 // Set up: first player bets
@@ -311,6 +377,9 @@ class GameTest {
                 assertEquals(980, caller.getChips());
         }
 
+        /**
+         * Protects the expected behavior for process player decision raise.
+         */
         @Test
         void testProcessPlayerDecisionRaise() {
                 game.postBlinds(); // Sets highest bet to 20
@@ -325,6 +394,9 @@ class GameTest {
                 assertEquals(50, game.getCurrentHighestBet());
         }
 
+        /**
+         * Protects the expected behavior for process player decision all in.
+         */
         @Test
         void testProcessPlayerDecisionAllIn() {
                 Player player = game.getCurrentPlayer();
@@ -338,6 +410,9 @@ class GameTest {
                 assertTrue(player.getIsAllIn());
         }
 
+        /**
+         * Protects the expected behavior for process player decision invalid raise.
+         */
         @Test
         void testProcessPlayerDecisionInvalidRaise() {
                 game.postBlinds(); // Sets highest bet to 20
@@ -351,6 +426,9 @@ class GameTest {
                                 () -> game.processPlayerDecision(player, decision));
         }
 
+        /**
+         * Protects the expected behavior for deal flop.
+         */
         @Test
         void testDealFlop() {
                 game.dealFlop();
@@ -360,6 +438,9 @@ class GameTest {
                 assertEquals(0, game.getCurrentHighestBet());
         }
 
+        /**
+         * Protects the expected behavior for deal turn.
+         */
         @Test
         void testDealTurn() {
                 game.dealFlop();
@@ -369,6 +450,9 @@ class GameTest {
                 assertEquals(GamePhase.TURN, game.getCurrentPhase());
         }
 
+        /**
+         * Protects the expected behavior for deal river.
+         */
         @Test
         void testDealRiver() {
                 game.dealFlop();
@@ -379,6 +463,9 @@ class GameTest {
                 assertEquals(GamePhase.RIVER, game.getCurrentPhase());
         }
 
+        /**
+         * Protects the expected behavior for is betting round complete.
+         */
         @Test
         void testIsBettingRoundComplete() {
                 // Initially not complete because no one has had an initial turn yet.
@@ -403,6 +490,9 @@ class GameTest {
                 assertTrue(game.isBettingRoundComplete());
         }
 
+        /**
+         * Protects the expected behavior for set everyone has had initial turn.
+         */
         @Test
         void testSetEveryoneHasHadInitialTurn() {
                 assertFalse(game.isBettingRoundComplete());
@@ -414,6 +504,9 @@ class GameTest {
                 assertTrue(game.isBettingRoundComplete());
         }
 
+        /**
+         * Protects the expected behavior for reset bets for round.
+         */
         @Test
         void testResetBetsForRound() {
                 game.postBlinds();
@@ -428,6 +521,9 @@ class GameTest {
                 }
         }
 
+        /**
+         * Protects the expected behavior for is hand over.
+         */
         @Test
         void testIsHandOver() {
                 assertFalse(game.isHandOver());
@@ -439,6 +535,9 @@ class GameTest {
                 assertTrue(game.isHandOver());
         }
 
+        /**
+         * Protects the expected behavior for conduct showdown with one player.
+         */
         @Test
         void testConductShowdownWithOnePlayer() {
                 // Make all but one player fold
@@ -455,6 +554,9 @@ class GameTest {
                 assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
         }
 
+        /**
+         * Protects the expected behavior for conduct showdown with multiple players.
+         */
         @Test
         void testConductShowdownWithMultiplePlayers() {
                 // Mock the hand evaluator
@@ -493,6 +595,9 @@ class GameTest {
                 verify(mockHandEvaluator, times(3)).getBestHand(any(), any());
         }
 
+        /**
+         * Protects the expected behavior for conduct showdown regression josh vs benjamin with real evaluation.
+         */
         @Test
         void testConductShowdownRegressionJoshVsBenjaminWithRealEvaluation() {
                 List<Player> headsUpPlayers = new ArrayList<>();
@@ -550,6 +655,9 @@ class GameTest {
                                 "Regression: Benjamin should win with pair of aces over josh's pair of threes");
         }
 
+        /**
+         * Protects the expected behavior for distribute pot remainder preserved after showdown split.
+         */
         @Test
         void testDistributePotRemainderPreservedAfterShowdownSplit() {
                 List<Card> highCard = List.of(
@@ -572,6 +680,9 @@ class GameTest {
                 assertEquals(1, game.getPot());
         }
 
+        /**
+         * Protects the expected behavior for reset for new hand preserves pot remainder for next hand.
+         */
         @Test
         void testResetForNewHandPreservesPotRemainderForNextHand() {
                 List<Card> highCard = List.of(
@@ -595,6 +706,9 @@ class GameTest {
                 assertEquals(1, game.getPot());
         }
 
+        /**
+         * Protects the expected behavior for reset for new hand preserves remainder across multiple hands edge case.
+         */
         @Test
         void testResetForNewHandPreservesRemainderAcrossMultipleHandsEdgeCase() {
                 List<Card> highCard = List.of(
@@ -622,6 +736,9 @@ class GameTest {
                 assertEquals(1, game.getPot());
         }
 
+        /**
+         * Protects the expected behavior for conduct showdown distributes main and side pot to different winners.
+         */
         @Test
         void testConductShowdown_DistributesMainAndSidePotToDifferentWinners() {
                 List<Player> sidePotPlayers = new ArrayList<>();
@@ -674,6 +791,9 @@ class GameTest {
                 assertEquals(0, sidePotGame.getPot());
         }
 
+        /**
+         * Protects the expected behavior for conduct showdown splits side pot between tied winners.
+         */
         @Test
         void testConductShowdown_SplitsSidePotBetweenTiedWinners() {
                 List<Player> sidePotPlayers = new ArrayList<>();
@@ -721,6 +841,9 @@ class GameTest {
                 assertEquals(0, sidePotGame.getPot());
         }
 
+        /**
+         * Protects the expected behavior for conduct showdown distributes multiple side pot layers.
+         */
         @Test
         void testConductShowdown_DistributesMultipleSidePotLayers() {
                 List<Player> sidePotPlayers = new ArrayList<>();
@@ -781,6 +904,9 @@ class GameTest {
                 assertEquals(0, sidePotGame.getPot());
         }
 
+        /**
+         * Protects the expected behavior for conduct showdown side pot ignores folded contributors edge case.
+         */
         @Test
         void testConductShowdown_SidePotIgnoresFoldedContributorsEdgeCase() {
                 List<Player> sidePotPlayers = new ArrayList<>();
@@ -827,6 +953,9 @@ class GameTest {
                 assertEquals(0, sidePotGame.getPot());
         }
 
+        /**
+         * Protects the expected behavior for conduct showdown short stack cannot win beyond main pot edge case.
+         */
         @Test
         void testConductShowdown_ShortStackCannotWinBeyondMainPotEdgeCase() {
                 List<Player> sidePotPlayers = new ArrayList<>();
@@ -879,6 +1008,9 @@ class GameTest {
                 assertEquals(150, deepStack.getChips());
         }
 
+        /**
+         * Protects the expected behavior for conduct showdown side pot split remainder stays in pot edge case.
+         */
         @Test
         void testConductShowdown_SidePotSplitRemainderStaysInPotEdgeCase() {
                 List<Player> sidePotPlayers = new ArrayList<>();
@@ -935,6 +1067,9 @@ class GameTest {
                                 "Odd side-pot split remainder should stay in the pot");
         }
 
+        /**
+         * Protects the expected behavior for get pot breakdown treats single player layer as uncalled.
+         */
         @Test
         void testGetPotBreakdown_TreatsSinglePlayerLayerAsUncalled() {
                 List<Player> playersWithShove = new ArrayList<>();
@@ -953,6 +1088,9 @@ class GameTest {
                 assertEquals(460, shoveGame.getUncalledAmount());
         }
 
+        /**
+         * Protects the expected behavior for conduct showdown refunds uncalled single player layer.
+         */
         @Test
         void testConductShowdown_RefundsUncalledSinglePlayerLayer() {
                 List<Player> playersWithShove = new ArrayList<>();
@@ -1002,6 +1140,9 @@ class GameTest {
                 assertEquals(0, shoveGame.getPot());
         }
 
+        /**
+         * Protects the expected behavior for heads up post blinds dealer posts small blind.
+         */
         @Test
         void testHeadsUpPostBlindsDealerPostsSmallBlind() {
                 List<Player> headsUpPlayers = new ArrayList<>();
@@ -1015,6 +1156,9 @@ class GameTest {
                 assertEquals(10, headsUpGame.getActivePlayers().getFirst().getCurrentBet());
         }
 
+        /**
+         * Protects the expected behavior for heads up post blinds non dealer posts big blind.
+         */
         @Test
         void testHeadsUpPostBlindsNonDealerPostsBigBlind() {
                 List<Player> headsUpPlayers = new ArrayList<>();
@@ -1027,6 +1171,9 @@ class GameTest {
                 assertEquals(20, headsUpGame.getActivePlayers().get(1).getCurrentBet());
         }
 
+        /**
+         * Protects the expected behavior for heads up advance positions blinds rotate correctly between hands edge case.
+         */
         @Test
         void testHeadsUpAdvancePositionsBlindsRotateCorrectlyBetweenHandsEdgeCase() {
                 List<Player> headsUpPlayers = new ArrayList<>();
@@ -1047,6 +1194,9 @@ class GameTest {
                 assertEquals(20, headsUpGame.getActivePlayers().get(0).getCurrentBet());
         }
 
+        /**
+         * Protects the expected behavior for advance positions.
+         */
         @Test
         void testAdvancePositions() {
                 int initialDealer = game.getDealerPosition();
@@ -1056,6 +1206,9 @@ class GameTest {
                 assertEquals((initialDealer + 1) % 3, game.getDealerPosition());
         }
 
+        /**
+         * Protects the expected behavior for next player.
+         */
         @Test
         void testNextPlayer() {
                 Player firstPlayer = game.getCurrentPlayer();
@@ -1065,6 +1218,9 @@ class GameTest {
                 assertNotEquals(firstPlayer, secondPlayer);
         }
 
+        /**
+         * Protects the contract that remove player from game when non current player leaves before current should preserve current player.
+         */
         @Test
         void removePlayerFromGame_WhenNonCurrentPlayerLeavesBeforeCurrent_ShouldPreserveCurrentPlayer() {
                 game.nextPlayer();
@@ -1082,6 +1238,9 @@ class GameTest {
                 assertEquals(2, game.getActivePlayers().size());
         }
 
+        /**
+         * Protects the contract that get big blind player ID when non current player leaves and blind index stale should not throw.
+         */
         @Test
         void getBigBlindPlayerId_WhenNonCurrentPlayerLeavesAndBlindIndexStale_ShouldNotThrow() {
                 game.postBlinds();
@@ -1097,6 +1256,9 @@ class GameTest {
                 assertTrue(game.getActivePlayers().stream().anyMatch(p -> p.getPlayerId().equals(bigBlindPlayerId)));
         }
 
+        /**
+         * Protects the expected behavior for reset for new hand clears hand state and advances dealer.
+         */
         @Test
         void testResetForNewHandClearsHandStateAndAdvancesDealer() {
                 game.dealHoleCards();
@@ -1142,6 +1304,9 @@ class GameTest {
                 }
         }
 
+        /**
+         * Protects the expected behavior for cleanup after hand.
+         */
         @Test
         void testCleanupAfterHand() {
                 // Make a player lose all chips
@@ -1158,6 +1323,9 @@ class GameTest {
                 assertFalse(game.isGameOver()); // Still 2 players
         }
 
+        /**
+         * Protects the expected behavior for cleanup after hand ends game.
+         */
         @Test
         void testCleanupAfterHandEndsGame() {
                 // Make all but one player lose all chips
@@ -1170,6 +1338,9 @@ class GameTest {
                 assertTrue(game.isGameOver());
         }
 
+        /**
+         * Protects the expected behavior for getters.
+         */
         @Test
         void testGetters() {
                 assertEquals("game123", game.getGameId());
@@ -1184,6 +1355,9 @@ class GameTest {
                 assertEquals(0, game.getDealerPosition());
         }
 
+        /**
+         * Protects the expected behavior for reset for new hand with eliminated players.
+         */
         @Test
         void testResetForNewHandWithEliminatedPlayers() {
                 // Eliminate a player
@@ -1197,6 +1371,9 @@ class GameTest {
                 assertFalse(game.getActivePlayers().contains(eliminated));
         }
 
+        /**
+         * Protects the expected behavior for process player decision allows raise with all in.
+         */
         @Test
         void testProcessPlayerDecision_AllowsRaiseWithAllIn() {
                 List<Player> mixedStacks = new ArrayList<>();
@@ -1224,6 +1401,9 @@ class GameTest {
                 assertEquals(raiser.getCurrentBet(), sidePotGame.getCurrentHighestBet());
         }
 
+        /**
+         * Protects the expected behavior for process player decision converts call to all in when call exceeds stack.
+         */
         @Test
         void testProcessPlayerDecisionConvertsCallToAllInWhenCallExceedsStack() {
                 List<Player> shortPlayers = new ArrayList<>();
@@ -1247,6 +1427,9 @@ class GameTest {
                 assertTrue(shortCaller.getIsAllIn());
         }
 
+        /**
+         * Protects the expected behavior for dealing full hand progression.
+         */
         @Test
         void testDealingFullHandProgression() {
                 // PRE_FLOP

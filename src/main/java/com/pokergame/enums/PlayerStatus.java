@@ -13,10 +13,20 @@ public enum PlayerStatus {
 
     private final String status;
 
+    /**
+     * Associates a player state with its wire value.
+     *
+     * @param status serialized status value
+     */
     PlayerStatus(String status) {
         this.status = status;
     }
 
+    /**
+     * Returns the serialized status value.
+     *
+     * @return wire-format status
+     */
     public String getStatus() {
         return status;
     }

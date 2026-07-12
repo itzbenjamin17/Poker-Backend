@@ -13,12 +13,18 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("Rank enum")
 class RankTest {
 
+    /**
+     * Protects the expected behavior for all ranks exist.
+     */
     @Test
     void testAllRanksExist() {
         Rank[] ranks = Rank.values();
         assertEquals(13, ranks.length, "Should have 13 ranks in a standard deck");
     }
 
+    /**
+     * Protects the expected behavior for rank values.
+     */
     @Test
     void testRankValues() {
         assertEquals(2, Rank.TWO.getValue());
@@ -36,6 +42,9 @@ class RankTest {
         assertEquals(14, Rank.ACE.getValue());
     }
 
+    /**
+     * Protects the expected behavior for rank display names.
+     */
     @Test
     void testRankDisplayNames() {
         assertEquals("2", Rank.TWO.getDisplayName());
@@ -53,6 +62,9 @@ class RankTest {
         assertEquals("Ace", Rank.ACE.getDisplayName());
     }
 
+    /**
+     * Protects the expected behavior for rank ordering.
+     */
     @Test
     void testRankOrdering() {
         // Verify ranks are in ascending order by value
@@ -63,12 +75,18 @@ class RankTest {
         }
     }
 
+    /**
+     * Protects the expected behavior for lowest and highest ranks.
+     */
     @Test
     void testLowestAndHighestRanks() {
         assertEquals(2, Rank.TWO.getValue(), "TWO should be lowest rank");
         assertEquals(14, Rank.ACE.getValue(), "ACE should be highest rank");
     }
 
+    /**
+     * Protects the expected behavior for face card values.
+     */
     @Test
     void testFaceCardValues() {
         assertTrue(Rank.JACK.getValue() > 10);
@@ -77,6 +95,9 @@ class RankTest {
         assertTrue(Rank.ACE.getValue() > Rank.KING.getValue());
     }
 
+    /**
+     * Protects the expected behavior for value of.
+     */
     @Test
     void testValueOf() {
         assertEquals(Rank.ACE, Rank.valueOf("ACE"));
@@ -84,6 +105,9 @@ class RankTest {
         assertEquals(Rank.TWO, Rank.valueOf("TWO"));
     }
 
+    /**
+     * Protects the expected behavior for enum equality.
+     */
     @Test
     void testEnumEquality() {
         Rank ace1 = Rank.ACE;

@@ -26,16 +26,21 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+/** Tests room lifecycle integration behavior. */
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @DisplayName("Room lifecycle integration")
 class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
 
+    /** Groups test scenarios for room lifecycle. */
     @Nested
     @DisplayName("room lifecycle")
     class RoomLifecycle {
 
+        /**
+         * Protects the contract that the system should create a room, join it, and fetch updated room details.
+         */
         @Test
         @DisplayName("should create a room, join it, and fetch updated room details")
         void givenCreatedRoom_whenPlayerJoins_thenRoomInfoReflectsBothPlayers() throws Exception {
@@ -59,6 +64,9 @@ class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(roomInfo.path("canStartGame").asBoolean()).isTrue();
         }
 
+        /**
+         * Protects the contract that the system should keep a room open when a non-host player leaves.
+         */
         @Test
         @DisplayName("should keep a room open when a non-host player leaves")
         void givenNonHostLeaves_whenLeaveRoom_thenRoomRemainsAvailable() throws Exception {
@@ -85,6 +93,9 @@ class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(roomInfo.path("hostName").asText()).isEqualTo("HostGamma");
         }
 
+        /**
+         * Protects the contract that the system should close the room when the host leaves.
+         */
         @Test
         @DisplayName("should close the room when the host leaves")
         void givenHostLeaves_whenLeaveRoom_thenRoomIsClosed() throws Exception {
@@ -108,6 +119,9 @@ class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(notFound.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
 
+        /**
+         * Protects the contract that the system should return 404 when joining an unknown room.
+         */
         @Test
         @DisplayName("should return 404 when joining an unknown room")
         void givenUnknownRoom_whenJoinRoom_thenReturnNotFound() {
@@ -123,6 +137,9 @@ class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /**
+     * Protects the contract that the system should allow only one successful create when the same room name is submitted concurrently.
+     */
     @Test
     @Tag("slow")
     @DisplayName("should allow only one successful create when the same room name is submitted concurrently")

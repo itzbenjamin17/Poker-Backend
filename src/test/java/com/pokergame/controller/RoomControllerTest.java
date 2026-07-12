@@ -34,6 +34,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+/** Tests room controller behavior. */
 @WebMvcTest(RoomController.class)
 @AutoConfigureMockMvc(addFilters = false)
 @org.springframework.context.annotation.Import({
@@ -72,6 +73,9 @@ class RoomControllerTest {
     @MockitoBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
+    /**
+     * Initializes the test fixtures before each scenario.
+     */
     @BeforeEach
     void setup() {
         // Reset rate limit buckets to ensure a fresh start for each test
@@ -85,6 +89,9 @@ class RoomControllerTest {
                 .build();
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/create - Success.
+     */
     @Test
     @DisplayName("POST /api/room/create - Success")
     void createRoom_ShouldReturnTokenResponse() throws Exception {
@@ -106,6 +113,9 @@ class RoomControllerTest {
         verify(jwtService).generateToken("Player1", roomId);
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/join - Success.
+     */
     @Test
     @DisplayName("POST /api/room/join - Success")
     void joinRoom_ShouldReturnTokenResponse() throws Exception {
@@ -127,6 +137,9 @@ class RoomControllerTest {
         verify(jwtService).generateToken("Player2", roomId);
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/{roomId}/leave - Success (No Game Active).
+     */
     @Test
     @DisplayName("POST /api/room/{roomId}/leave - Success (No Game Active)")
     void leaveRoom_NoGameActive_ShouldReturnSuccess() throws Exception {
@@ -145,6 +158,9 @@ class RoomControllerTest {
         verify(gameLifecycleService, never()).leaveGame(anyString(), anyString());
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/{roomId}/leave - Success (Game Active, Player in Game).
+     */
     @Test
     @DisplayName("POST /api/room/{roomId}/leave - Success (Game Active, Player in Game)")
     void leaveRoom_GameActive_ShouldLeaveBoth() throws Exception {
@@ -164,6 +180,9 @@ class RoomControllerTest {
         verify(gameLifecycleService).leaveGame(roomId, playerName);
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/{roomId}/leave - Success (Game Active, Player NOT in Game).
+     */
     @Test
     @DisplayName("POST /api/room/{roomId}/leave - Success (Game Active, Player NOT in Game)")
     void leaveRoom_GameActive_PlayerNotInGame() throws Exception {
@@ -183,6 +202,9 @@ class RoomControllerTest {
         verify(gameLifecycleService, never()).leaveGame(anyString(), anyString());
     }
 
+    /**
+     * Verifies the expected response for GET /api/room/{roomId} - Success.
+     */
     @Test
     @DisplayName("GET /api/room/{roomId} - Success")
     void getRoomInfo_ShouldReturnRoomData() throws Exception {
@@ -198,6 +220,9 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.hostName").value("Player1"));
     }
 
+    /**
+     * Verifies the expected response for GET /api/room/{roomId} - Not Found.
+     */
     @Test
     @DisplayName("GET /api/room/{roomId} - Not Found")
     void getRoomInfo_NotFound_ShouldReturn404() throws Exception {
@@ -208,6 +233,9 @@ class RoomControllerTest {
                 .andExpect(status().isNotFound());
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/create - Validation Error (Oversized Name).
+     */
     @Test
     @DisplayName("POST /api/room/create - Validation Error (Oversized Name)")
     void createRoom_ValidationError_OversizedName() throws Exception {
@@ -220,6 +248,9 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.message").value("Room name must be 50 characters or less"));
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/create - Validation Error (Control Characters).
+     */
     @Test
     @DisplayName("POST /api/room/create - Validation Error (Control Characters)")
     void createRoom_ValidationError_ControlChars() throws Exception {
@@ -232,6 +263,9 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.message").value("Room name cannot contain control characters"));
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/create - Validation Error (Invalid Numeric Range).
+     */
     @Test
     @DisplayName("POST /api/room/create - Validation Error (Invalid Numeric Range)")
     void createRoom_ValidationError_InvalidRange() throws Exception {
@@ -244,6 +278,9 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.message").value("Minimum 2 players required"));
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/join - Validation Error (Oversized Player Name).
+     */
     @Test
     @DisplayName("POST /api/room/join - Validation Error (Oversized Player Name)")
     void joinRoom_ValidationError_OversizedPlayerName() throws Exception {
@@ -256,6 +293,9 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.message").value("Player name must be 30 characters or less"));
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/create - Malformed JSON.
+     */
     @Test
     @DisplayName("POST /api/room/create - Malformed JSON")
     void createRoom_MalformedJson() throws Exception {
@@ -266,6 +306,9 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.message").value("Malformed JSON request payload"));
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/create - Payload Too Large.
+     */
     @Test
     @DisplayName("POST /api/room/create - Payload Too Large")
     void createRoom_PayloadTooLarge() throws Exception {
@@ -283,6 +326,9 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.message").value("Request payload too large. Maximum allowed is 10KB."));
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/create - Rate Limit Exceeded.
+     */
     @Test
     @DisplayName("POST /api/room/create - Rate Limit Exceeded")
     void createRoom_RateLimitExceeded() throws Exception {
@@ -310,6 +356,9 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.message").value("Too many requests. Please try again in 15 minutes."));
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/{roomId}/start-game - Success (Host).
+     */
     @Test
     @DisplayName("POST /api/room/{roomId}/start-game - Success (Host)")
     void startGame_Host_ShouldReturnGameId() throws Exception {
@@ -329,6 +378,9 @@ class RoomControllerTest {
         verify(gameLifecycleService).createGameFromRoom(roomId);
     }
 
+    /**
+     * Verifies the expected response for POST /api/room/{roomId}/start-game - Forbidden (Non-Host).
+     */
     @Test
     @DisplayName("POST /api/room/{roomId}/start-game - Forbidden (Non-Host)")
     void startGame_NonHost_ShouldReturn403() throws Exception {

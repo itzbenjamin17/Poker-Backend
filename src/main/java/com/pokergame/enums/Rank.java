@@ -22,11 +22,32 @@ public enum Rank {
     private final int value;
     private final String displayName;
 
+    /**
+     * Associates a card rank with its comparison value and display label.
+     *
+     * @param value numeric poker value
+     * @param displayName human-readable label
+     */
     Rank(int value, String displayName) {
         this.value = value;
         this.displayName = displayName;
     }
 
-    public int getValue() { return value; }
-    public String getDisplayName() { return displayName; }
+    /**
+     * Returns the numeric poker value of this rank.
+     *
+     * @return value from 2 through 14
+     */
+    public int getValue() {
+        return value;
+    }
+
+    /**
+     * Returns the human-readable rank label.
+     *
+     * @return display name
+     */
+    public String getDisplayName() {
+        return displayName;
+    }
 }

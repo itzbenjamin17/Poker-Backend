@@ -353,6 +353,13 @@ public class HandEvaluatorService {
         return false;
     }
 
+    /**
+     * Compares otherwise unranked hands from their highest card downward.
+     *
+     * @param sortedCombination candidate hand in ascending rank order
+     * @param bestHand incumbent hand in ascending rank order
+     * @return {@code true} when the candidate wins at the first unequal card
+     */
     private boolean compareHighCard(List<Card> sortedCombination, List<Card> bestHand) {
         for (int i = 4; i >= 0; i--) {
             int currentValue = sortedCombination.get(i).getValue();
@@ -564,6 +571,12 @@ public class HandEvaluatorService {
         return isFlush(hand) && isStraight(hand);
     }
 
+    /**
+     * Reports whether a five-card hand contains four cards of one rank.
+     *
+     * @param hand five-card hand to inspect
+     * @return {@code true} when one rank occurs four times
+     */
     private boolean isFourOfAKind(List<Card> hand) {
         Map<Rank, Long> rankCounts = hand.stream()
                 .collect(Collectors.groupingBy(Card::rank, Collectors.counting()));
@@ -626,6 +639,12 @@ public class HandEvaluatorService {
                 hand.get(4).rank().equals(Rank.ACE);
     }
 
+    /**
+     * Reports whether a five-card hand contains three cards of one rank.
+     *
+     * @param hand five-card hand to inspect
+     * @return {@code true} when one rank occurs three times
+     */
     private boolean isThreeOfAKind(List<Card> hand) {
         Map<Rank, Long> rankCounts = hand.stream()
                 .collect(Collectors.groupingBy(Card::rank, Collectors.counting()));

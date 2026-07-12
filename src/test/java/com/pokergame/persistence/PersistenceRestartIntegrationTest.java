@@ -38,11 +38,15 @@ import static org.awaitility.Awaitility.await;
 
 import java.time.Duration;
 
+/** Tests persistence restart integration behavior. */
 class PersistenceRestartIntegrationTest {
 
     @TempDir
     Path walDirectory;
 
+    /**
+     * Protects the contract that private lobby survives application restart from encrypted WAL.
+     */
     @Test
     void privateLobbySurvivesApplicationRestartFromEncryptedWal() throws Exception {
         String roomId;
@@ -66,6 +70,9 @@ class PersistenceRestartIntegrationTest {
         }
     }
 
+    /**
+     * Protects the contract that active first hand restores exact cards and accepts the next legal action.
+     */
     @Test
     void activeFirstHandRestoresExactCardsAndAcceptsTheNextLegalAction() {
         String roomId;
@@ -111,6 +118,9 @@ class PersistenceRestartIntegrationTest {
         }
     }
 
+    /**
+     * Protects the contract that recovered players get fresh grace and only missing player is removed.
+     */
     @Test
     void recoveredPlayersGetFreshGraceAndOnlyMissingPlayerIsRemoved() {
         String roomId;
@@ -135,6 +145,9 @@ class PersistenceRestartIntegrationTest {
         }
     }
 
+    /**
+     * Protects the contract that recovered lobby players get fresh grace and only missing player is removed.
+     */
     @Test
     void recoveredLobbyPlayersGetFreshGraceAndOnlyMissingPlayerIsRemoved() {
         String roomId;
@@ -157,6 +170,9 @@ class PersistenceRestartIntegrationTest {
         }
     }
 
+    /**
+     * Protects the contract that destroyed lobby does not resurrect and its WAL is removed.
+     */
     @Test
     void destroyedLobbyDoesNotResurrectAndItsWalIsRemoved() {
         String roomId;
@@ -173,6 +189,9 @@ class PersistenceRestartIntegrationTest {
         }
     }
 
+    /**
+     * Protects the contract that overdue persisted cleanup executes once after recovery.
+     */
     @Test
     void overduePersistedCleanupExecutesOnceAfterRecovery() {
         String roomId;
@@ -193,10 +212,21 @@ class PersistenceRestartIntegrationTest {
         assertFalse(Files.exists(walDirectory.resolve(roomId + ".wal")));
     }
 
+    /**
+     * Starts a persistence-enabled application with the default disconnect grace.
+     *
+     * @return running application context
+     */
     private ConfigurableApplicationContext startApplication() {
         return startApplication(120000);
     }
 
+    /**
+     * Starts an isolated persistence-enabled application against the test WAL directory.
+     *
+     * @param disconnectGracePeriodMs reconnect grace duration for the context
+     * @return running application context
+     */
     private ConfigurableApplicationContext startApplication(long disconnectGracePeriodMs) {
         String key = Base64.getEncoder().encodeToString(new byte[32]);
         return new SpringApplicationBuilder(PokerApplication.class)
@@ -216,6 +246,13 @@ class PersistenceRestartIntegrationTest {
                         "--poker.persistence.keys.current=" + key);
     }
 
+    /**
+     * Connects event for the test.
+     * @param playerName player name supplied to the fixture
+     * @param roomId room ID supplied to the fixture
+     * @param sessionId session ID supplied to the fixture
+     * @return synthetic STOMP connect event
+     */
     private SessionConnectEvent connectEvent(String playerName, String roomId, String sessionId) {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
         accessor.setSessionId(sessionId);

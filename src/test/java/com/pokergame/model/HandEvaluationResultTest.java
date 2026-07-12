@@ -18,6 +18,9 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("Hand evaluation result")
 class HandEvaluationResultTest {
 
+        /**
+         * Protects the expected behavior for record creation.
+         */
         @Test
         void testRecordCreation() {
                 List<Card> hand = List.of(
@@ -34,6 +37,9 @@ class HandEvaluationResultTest {
                 assertEquals(HandRank.ROYAL_FLUSH, result.handRank());
         }
 
+        /**
+         * Protects the expected behavior for best hand accessor.
+         */
         @Test
         void testBestHandAccessor() {
                 List<Card> hand = List.of(
@@ -48,6 +54,9 @@ class HandEvaluationResultTest {
                 assertEquals(hand, result.bestHand());
         }
 
+        /**
+         * Protects the expected behavior for hand rank accessor.
+         */
         @Test
         void testHandRankAccessor() {
                 List<Card> hand = List.of(
@@ -62,6 +71,9 @@ class HandEvaluationResultTest {
                 assertEquals(HandRank.FULL_HOUSE, result.handRank());
         }
 
+        /**
+         * Protects the expected behavior for null best hand throws exception.
+         */
         @Test
         void testNullBestHandThrowsException() {
                 BadRequestException exception = assertThrows(
@@ -70,6 +82,9 @@ class HandEvaluationResultTest {
                 assertEquals("An error occured evaluating hand. Please try again.", exception.getMessage());
         }
 
+        /**
+         * Protects the expected behavior for null hand rank throws exception.
+         */
         @Test
         void testNullHandRankThrowsException() {
                 List<Card> hand = List.of(
@@ -82,6 +97,9 @@ class HandEvaluationResultTest {
                 assertEquals("An error occured evaluating hand. Please try again.", exception.getMessage());
         }
 
+        /**
+         * Protects the expected behavior for both null throws exception.
+         */
         @Test
         void testBothNullThrowsException() {
                 assertThrows(
@@ -89,6 +107,9 @@ class HandEvaluationResultTest {
                                 () -> new HandEvaluationResult(null, null));
         }
 
+        /**
+         * Protects the expected behavior for best hand is immutable.
+         */
         @Test
         void testBestHandIsImmutable() {
                 List<Card> hand = new ArrayList<>();
@@ -111,6 +132,9 @@ class HandEvaluationResultTest {
                                 () -> result.bestHand().add(new Card(Rank.EIGHT, Suit.CLUBS)));
         }
 
+        /**
+         * Protects the expected behavior for record equality.
+         */
         @Test
         void testRecordEquality() {
                 List<Card> hand1 = List.of(
@@ -127,6 +151,9 @@ class HandEvaluationResultTest {
                 assertEquals(result1, result2);
         }
 
+        /**
+         * Protects the expected behavior for record hash code.
+         */
         @Test
         void testRecordHashCode() {
                 List<Card> hand = List.of(
@@ -139,6 +166,9 @@ class HandEvaluationResultTest {
                 assertEquals(result1.hashCode(), result2.hashCode());
         }
 
+        /**
+         * Protects the expected behavior for record to string.
+         */
         @Test
         void testRecordToString() {
                 List<Card> hand = List.of(
@@ -151,6 +181,9 @@ class HandEvaluationResultTest {
                 assertTrue(str.contains("HandEvaluationResult"));
         }
 
+        /**
+         * Protects the expected behavior for different hand ranks not equal.
+         */
         @Test
         void testDifferentHandRanksNotEqual() {
                 List<Card> hand = List.of(
@@ -163,6 +196,9 @@ class HandEvaluationResultTest {
                 assertNotEquals(result1, result2);
         }
 
+        /**
+         * Protects the expected behavior for different hands not equal.
+         */
         @Test
         void testDifferentHandsNotEqual() {
                 List<Card> hand1 = List.of(

@@ -41,7 +41,8 @@ public class Player {
     /**
      * Creates a new player with the specified name and starting chip count.
      *
-     * @param name  the player's name
+     * @param name the player's name
+     * @param playerId stable player identity
      * @param chips the starting number of chips for the player
      */
     public Player(String name, String playerId, int chips) {

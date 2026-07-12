@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+/** Tests security hardening integration behavior. */
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -35,6 +36,9 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
     @Autowired
     protected JwtService jwtService;
 
+    /**
+     * Protects the contract that the system should handle player names with colons correctly (Identity Spoofing).
+     */
     @Test
     @DisplayName("should handle player names with colons correctly (Identity Spoofing)")
     void givenNameWithColon_whenJoined_thenIdentityIsPreserved() throws Exception {
@@ -52,6 +56,9 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         assertThat(principal.roomId()).isEqualTo(data.path("roomId").asText());
     }
 
+    /**
+     * Protects the contract that the system should consistently sanitize names between token and storage.
+     */
     @Test
     @DisplayName("should consistently sanitize names between token and storage")
     void givenNameWithSpaces_whenJoined_thenTokenAndStorageAreConsistent() throws Exception {
@@ -68,6 +75,9 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         assertThat(principal.playerName()).isEqualTo(sanitizedName);
     }
 
+    /**
+     * Protects the contract that the system should prevent joining a room after game has started.
+     */
     @Test
     @DisplayName("should prevent joining a room after game has started")
     void givenStartedGame_whenJoinAttempted_thenReturnBadRequest() throws Exception {
@@ -97,6 +107,9 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         assertThat(exception.getResponseBodyAsString()).contains("The game has already started");
     }
 
+    /**
+     * Protects the contract that the system should prevent starting a game twice.
+     */
     @Test
     @DisplayName("should prevent starting a game twice")
     void givenStartedGame_whenStartAttemptedAgain_thenReturnBadRequest() throws Exception {
@@ -124,6 +137,9 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         assertThat(exception.getResponseBodyAsString()).contains("Game has already started");
     }
 
+    /**
+     * Protects the contract that the system should return 429 Too Many Requests when exceeding REST rate limit.
+     */
     @Test
     @DisplayName("should return 429 Too Many Requests when exceeding REST rate limit")
     void givenHighRequestRate_whenCreateRoomRepeatedly_thenReturn429() {
@@ -158,6 +174,9 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
     }
 
+    /**
+     * Protects the contract that the system should return 413 Payload Too Large when request body exceeds limit.
+     */
     @Test
     @DisplayName("should return 413 Payload Too Large when request body exceeds limit")
     void givenLargePayload_whenCreateRoom_thenReturn413() {
@@ -175,6 +194,9 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         assertThat(exception.getStatusCode().value()).isEqualTo(413);
     }
 
+    /**
+     * Protects the contract that the system should prevent oversubscribing room during concurrent joins.
+     */
     @Test
     @DisplayName("should prevent oversubscribing room during concurrent joins")
     void givenMaxPlayers2_whenMultipleJoinConcurrently_thenOnlyLimitSucceeds() throws Exception {
@@ -216,6 +238,9 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         executor.shutdown();
     }
 
+    /**
+     * Protects the contract that the system should prevent late join even during concurrent game start race.
+     */
     @Test
     @DisplayName("should prevent late join even during concurrent game start race")
     void givenRoom_whenJoinAndStartRace_thenJoinNeverSucceedsAfterStart() throws Exception {

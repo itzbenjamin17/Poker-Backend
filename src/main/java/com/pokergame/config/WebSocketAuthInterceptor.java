@@ -25,10 +25,23 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
     private final JwtService jwtService;
 
+    /**
+     * Creates an interceptor backed by the application's JWT service.
+     *
+     * @param jwtService token validator and principal extractor
+     */
     public WebSocketAuthInterceptor(JwtService jwtService) {
         this.jwtService = jwtService;
     }
 
+    /**
+     * Authenticates STOMP connections and authorizes subscriptions before delivery.
+     *
+     * @param message inbound STOMP message
+     * @param channel channel receiving the message
+     * @return the unchanged message when authentication and authorization succeed
+     * @throws MessagingException if a connection or subscription is unauthorized
+     */
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
@@ -46,6 +59,12 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         return message;
     }
 
+    /**
+     * Validates the connection bearer token and attaches its player principal.
+     *
+     * @param accessor mutable headers for the CONNECT frame
+     * @throws MessagingException if the authorization token is missing or invalid
+     */
     private void handleConnect(StompHeaderAccessor accessor) {
         String authHeader = accessor.getFirstNativeHeader("Authorization");
 
@@ -66,6 +85,12 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         }
     }
 
+    /**
+     * Restricts room and game subscriptions to the principal's own room.
+     *
+     * @param accessor headers for the SUBSCRIBE frame
+     * @throws MessagingException if the subscription is unauthenticated or targets another room
+     */
     private void handleSubscribe(StompHeaderAccessor accessor) {
         PlayerPrincipal principal = (PlayerPrincipal) accessor.getUser();
         if (principal == null) {

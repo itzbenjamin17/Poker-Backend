@@ -56,6 +56,9 @@ class GameLifecycleServiceTest {
     private Room testRoom;
     private static final String ROOM_ID = "test-room-id";
 
+    /**
+     * Initializes the test fixtures before each scenario.
+     */
     @BeforeEach
     void setUp() {
         gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
@@ -76,6 +79,9 @@ class GameLifecycleServiceTest {
 
     // ==================== createGameFromRoom Tests ====================
 
+    /**
+     * Protects the contract that create game from room with valid room should create game.
+     */
     @Test
     void createGameFromRoom_WithValidRoom_ShouldCreateGame() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -90,6 +96,9 @@ class GameLifecycleServiceTest {
         verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
     }
 
+    /**
+     * Protects the contract that create game from room with three players should create game with all players.
+     */
     @Test
     void createGameFromRoom_WithThreePlayers_ShouldCreateGameWithAllPlayers() {
         testRoom.addPlayer("Player3");
@@ -102,6 +111,9 @@ class GameLifecycleServiceTest {
         assertEquals(3, game.getPlayers().size());
     }
 
+    /**
+     * Protects the contract that create game from room when room not found should throw exception.
+     */
     @Test
     void createGameFromRoom_WhenRoomNotFound_ShouldThrowException() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(null);
@@ -113,6 +125,9 @@ class GameLifecycleServiceTest {
         assertEquals("Room not found", exception.getMessage());
     }
 
+    /**
+     * Protects the contract that create game from room with one player should throw exception.
+     */
     @Test
     void createGameFromRoom_WithOnePlayer_ShouldThrowException() {
         Room onePlayerRoom = new Room(
@@ -136,6 +151,9 @@ class GameLifecycleServiceTest {
                 exception.getMessage());
     }
 
+    /**
+     * Protects the contract that create game from room should set correct blinds.
+     */
     @Test
     void createGameFromRoom_ShouldSetCorrectBlinds() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -149,6 +167,9 @@ class GameLifecycleServiceTest {
         assertTrue(game.getPot() > 0);
     }
 
+    /**
+     * Protects the contract that create game from room should give players correct buy in.
+     */
     @Test
     void createGameFromRoom_ShouldGivePlayersCorrectBuyIn() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -164,6 +185,9 @@ class GameLifecycleServiceTest {
 
     // ==================== startNewHand Tests ====================
 
+    /**
+     * Protects the contract that start new hand with valid game should reset and deal.
+     */
     @Test
     void startNewHand_WithValidGame_ShouldResetAndDeal() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -175,6 +199,9 @@ class GameLifecycleServiceTest {
         verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
     }
 
+    /**
+     * Protects the contract that advance auto advance step at pre flop should deal flop through service seam.
+     */
     @Test
     void advanceAutoAdvanceStep_AtPreFlop_ShouldDealFlopThroughServiceSeam() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -187,6 +214,9 @@ class GameLifecycleServiceTest {
         assertEquals(GamePhase.FLOP, gameLifecycleService.getGame(ROOM_ID).getCurrentPhase());
     }
 
+    /**
+     * Protects the contract that stale ready countdown timeout cannot close a newer countdown.
+     */
     @Test
     void staleReadyCountdownTimeoutCannotCloseANewerCountdown() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -202,6 +232,9 @@ class GameLifecycleServiceTest {
         assertEquals(currentDeadline, game.getReadyCountdownDeadlineEpochMs());
     }
 
+    /**
+     * Protects the contract that start new hand when game over should not proceed.
+     */
     @Test
     void startNewHand_WhenGameOver_ShouldNotProceed() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -222,6 +255,9 @@ class GameLifecycleServiceTest {
         assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
     }
 
+    /**
+     * Protects the contract that start new hand should deal hole cards to players.
+     */
     @Test
     void startNewHand_ShouldDealHoleCardsToPlayers() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -233,6 +269,9 @@ class GameLifecycleServiceTest {
         }
     }
 
+    /**
+     * Protects the contract that start new hand should post blinds.
+     */
     @Test
     void startNewHand_ShouldPostBlinds() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -243,6 +282,9 @@ class GameLifecycleServiceTest {
         assertEquals(10, game.getCurrentHighestBet()); // Big blind is 10
     }
 
+    /**
+     * Protects the contract that start new hand when game missing should return without throwing.
+     */
     @Test
     void startNewHand_WhenGameMissing_ShouldReturnWithoutThrowing() {
         assertDoesNotThrow(() -> gameLifecycleService.startNewHand("missing-game-id"));
@@ -251,6 +293,9 @@ class GameLifecycleServiceTest {
 
     // ==================== leaveGame Tests ====================
 
+    /**
+     * Protects the contract that leave game when game not found should throw exception.
+     */
     @Test
     void leaveGame_WhenGameNotFound_ShouldThrowException() {
         ResourceNotFoundException exception = assertThrows(
@@ -260,6 +305,9 @@ class GameLifecycleServiceTest {
         assertEquals("Game not found", exception.getMessage());
     }
 
+    /**
+     * Protects the contract that leave game when player not found should throw exception.
+     */
     @Test
     void leaveGame_WhenPlayerNotFound_ShouldThrowException() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -272,6 +320,9 @@ class GameLifecycleServiceTest {
         assertEquals("Player not found in game", exception.getMessage());
     }
 
+    /**
+     * Protects the contract that leave game one player remains should end game.
+     */
     @Test
     void leaveGame_OnePlayerRemains_ShouldEndGame() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -285,6 +336,9 @@ class GameLifecycleServiceTest {
         verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
     }
 
+    /**
+     * Protects the contract that leave game with multiple players should continue game.
+     */
     @Test
     void leaveGame_WithMultiplePlayers_ShouldContinueGame() {
         testRoom.addPlayer("Player3");
@@ -306,6 +360,9 @@ class GameLifecycleServiceTest {
         verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
     }
 
+    /**
+     * Protects the contract that leave game non current player leaves with current at tail should not throw or corrupt turn index.
+     */
     @Test
     void leaveGame_NonCurrentPlayerLeavesWithCurrentAtTail_ShouldNotThrowOrCorruptTurnIndex() {
         testRoom.addPlayer("Player3");
@@ -331,6 +388,9 @@ class GameLifecycleServiceTest {
         verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
     }
 
+    /**
+     * Protects the contract that leave game when room missing should cleanup game without broadcast.
+     */
     @Test
     void leaveGame_WhenRoomMissing_ShouldCleanupGameWithoutBroadcast() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -348,6 +408,9 @@ class GameLifecycleServiceTest {
         verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
     }
 
+    /**
+     * Protects the contract that leave game when room destroyed mid flow should cleanup game without broadcast.
+     */
     @Test
     void leaveGame_WhenRoomDestroyedMidFlow_ShouldCleanupGameWithoutBroadcast() {
         testRoom.addPlayer("Player3");
@@ -370,6 +433,9 @@ class GameLifecycleServiceTest {
 
     // ==================== getGame Tests ====================
 
+    /**
+     * Protects the contract that get game with valid ID should return game.
+     */
     @Test
     void getGame_WithValidId_ShouldReturnGame() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -380,6 +446,9 @@ class GameLifecycleServiceTest {
         assertNotNull(game);
     }
 
+    /**
+     * Protects the contract that get game with invalid ID should return null.
+     */
     @Test
     void getGame_WithInvalidId_ShouldReturnNull() {
         Game game = gameLifecycleService.getGame("nonexistent-id");
@@ -388,6 +457,9 @@ class GameLifecycleServiceTest {
 
     // ==================== gameExists Tests ====================
 
+    /**
+     * Protects the contract that game exists when game exists should return true.
+     */
     @Test
     void gameExists_WhenGameExists_ShouldReturnTrue() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -396,11 +468,17 @@ class GameLifecycleServiceTest {
         assertTrue(gameLifecycleService.gameExists(ROOM_ID));
     }
 
+    /**
+     * Protects the contract that game exists when game does not exist should return false.
+     */
     @Test
     void gameExists_WhenGameDoesNotExist_ShouldReturnFalse() {
         assertFalse(gameLifecycleService.gameExists("nonexistent-id"));
     }
 
+    /**
+     * Protects the contract that player exists in game when player exists should return true.
+     */
     @Test
     void playerExistsInGame_WhenPlayerExists_ShouldReturnTrue() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -411,6 +489,9 @@ class GameLifecycleServiceTest {
         assertTrue(gameLifecycleService.playerExistsInGame(ROOM_ID, existingPlayer));
     }
 
+    /**
+     * Protects the contract that player exists in game when player does not exist should return false.
+     */
     @Test
     void playerExistsInGame_WhenPlayerDoesNotExist_ShouldReturnFalse() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -419,11 +500,17 @@ class GameLifecycleServiceTest {
         assertFalse(gameLifecycleService.playerExistsInGame(ROOM_ID, "NonexistentPlayer"));
     }
 
+    /**
+     * Protects the contract that player exists in game when game does not exist should return false.
+     */
     @Test
     void playerExistsInGame_WhenGameDoesNotExist_ShouldReturnFalse() {
         assertFalse(gameLifecycleService.playerExistsInGame("nonexistent-id", "Player"));
     }
 
+    /**
+     * Protects the contract that mark player disconnected when player exists should set disconnected and broadcast.
+     */
     @Test
     void markPlayerDisconnected_WhenPlayerExists_ShouldSetDisconnectedAndBroadcast() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -443,6 +530,9 @@ class GameLifecycleServiceTest {
         verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
     }
 
+    /**
+     * Protects the contract that mark player reconnected when player exists should clear disconnected and broadcast.
+     */
     @Test
     void markPlayerReconnected_WhenPlayerExists_ShouldClearDisconnectedAndBroadcast() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -461,6 +551,9 @@ class GameLifecycleServiceTest {
         verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
     }
 
+    /**
+     * Protects the contract that claim win when all other non out players disconnected should end game for claimant.
+     */
     @Test
     void claimWin_WhenAllOtherNonOutPlayersDisconnected_ShouldEndGameForClaimant() {
         testRoom.addPlayer("Player3");
@@ -479,6 +572,9 @@ class GameLifecycleServiceTest {
         assertNotNull(gameLifecycleService.getGame(ROOM_ID).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
     }
 
+    /**
+     * Protects the contract that claim win when any other non out player connected should reject claim.
+     */
     @Test
     void claimWin_WhenAnyOtherNonOutPlayerConnected_ShouldRejectClaim() {
         testRoom.addPlayer("Player3");
@@ -496,6 +592,9 @@ class GameLifecycleServiceTest {
 
     // ==================== handleGameEnd Tests ====================
 
+    /**
+     * Protects the contract that handle game end with winner should broadcast end.
+     */
     @Test
     void handleGameEnd_WithWinner_ShouldBroadcastEnd() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -507,6 +606,9 @@ class GameLifecycleServiceTest {
         verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
     }
 
+    /**
+     * Protects the contract that handle game end with null game should not broadcast.
+     */
     @Test
     void handleGameEnd_WithNullGame_ShouldNotBroadcast() {
         gameLifecycleService.handleGameEnd("nonexistent-id", false);
@@ -514,6 +616,9 @@ class GameLifecycleServiceTest {
         verify(gameStateService, never()).broadcastGameEnd(anyString(), any(Player.class), anyBoolean());
     }
 
+    /**
+     * Protects the contract that handle game end when no players remain should not throw.
+     */
     @Test
     void handleGameEnd_WhenNoPlayersRemain_ShouldNotThrow() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -528,6 +633,9 @@ class GameLifecycleServiceTest {
 
     // ==================== Integration-like Tests ====================
 
+    /**
+     * Protects the contract that create game should initialize correct game phase.
+     */
     @Test
     void createGame_ShouldInitializeCorrectGamePhase() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -537,6 +645,9 @@ class GameLifecycleServiceTest {
         assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
     }
 
+    /**
+     * Protects the contract that create game should have empty community cards.
+     */
     @Test
     void createGame_ShouldHaveEmptyCommunityCards() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -546,6 +657,9 @@ class GameLifecycleServiceTest {
         assertTrue(game.getCommunityCards().isEmpty());
     }
 
+    /**
+     * Protects the contract that create game should set current player.
+     */
     @Test
     void createGame_ShouldSetCurrentPlayer() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -557,6 +671,9 @@ class GameLifecycleServiceTest {
 
     // ==================== CONCURRENCY TESTS ====================
 
+    /**
+     * Protects the contract that leave game concurrent with player action non current disconnect should not throw or corrupt turn index.
+     */
     @Test
     void leaveGame_ConcurrentWithPlayerAction_NonCurrentDisconnect_ShouldNotThrowOrCorruptTurnIndex()
             throws InterruptedException {
@@ -636,6 +753,9 @@ class GameLifecycleServiceTest {
         }
     }
 
+    /**
+     * Protects the contract that leave game multiple players concurrently should not corrupt game state.
+     */
     @Test
     void leaveGame_MultiplePlayersConcurrently_ShouldNotCorruptGameState() throws InterruptedException {
         // Setup game with 4 players

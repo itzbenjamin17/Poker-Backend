@@ -15,11 +15,15 @@ import org.springframework.web.client.HttpClientErrorException;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+/** Tests input sanitization integration behavior. */
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 class InputSanitizationIntegrationTest extends AbstractIntegrationTestSupport {
 
+    /**
+     * Protects the contract that the system should return 400 when room name contains HTML tags.
+     */
     @Test
     @DisplayName("should return 400 when room name contains HTML tags")
     void givenHtmlInRoomName_whenCreateRoom_thenReturn400() throws Exception {
@@ -39,6 +43,9 @@ class InputSanitizationIntegrationTest extends AbstractIntegrationTestSupport {
         assertThat(exception.getResponseBodyAsString()).contains("Input contains illegal HTML tags.");
     }
 
+    /**
+     * Protects the contract that the system should return 400 when player name contains HTML tags.
+     */
     @Test
     @DisplayName("should return 400 when player name contains HTML tags")
     void givenHtmlInPlayerName_whenCreateRoom_thenReturn400() throws Exception {
@@ -57,6 +64,9 @@ class InputSanitizationIntegrationTest extends AbstractIntegrationTestSupport {
         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
+    /**
+     * Protects the contract that the system should return 400 when joining with HTML tags in player name.
+     */
     @Test
     @DisplayName("should return 400 when joining with HTML tags in player name")
     void givenHtmlInPlayerName_whenJoinRoom_thenReturn400() throws Exception {

@@ -13,11 +13,15 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/** Tests encrypted WAL store behavior. */
 class EncryptedWalStoreTest {
 
     @TempDir
     Path directory;
 
+    /**
+     * Protects the contract that committed payload recovers without appearing as plaintext.
+     */
     @Test
     void committedPayloadRecoversWithoutAppearingAsPlaintext() throws Exception {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
@@ -34,6 +38,9 @@ class EncryptedWalStoreTest {
         assertFalse(walBytes.contains("holeCards"));
     }
 
+    /**
+     * Protects the contract that uncommitted prepare does not replace last committed state.
+     */
     @Test
     void uncommittedPrepareDoesNotReplaceLastCommittedState() {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
@@ -47,6 +54,9 @@ class EncryptedWalStoreTest {
         assertEquals("first", new String(store.recoverLatest("room-2").orElseThrow(), StandardCharsets.UTF_8));
     }
 
+    /**
+     * Protects the contract that torn final frame is ignored but committed prefix tampering fails closed.
+     */
     @Test
     void tornFinalFrameIsIgnoredButCommittedPrefixTamperingFailsClosed() throws Exception {
         EncryptionKeyring keyring = keyring("current", (byte) 1);
@@ -69,6 +79,9 @@ class EncryptedWalStoreTest {
         assertFalse(recovering.isHealthy());
     }
 
+    /**
+     * Protects the contract that arbitrary short tail is corruption rather than a provable torn frame.
+     */
     @Test
     void arbitraryShortTailIsCorruptionRatherThanAProvableTornFrame() throws Exception {
         EncryptionKeyring keyring = keyring("current", (byte) 7);
@@ -82,6 +95,9 @@ class EncryptedWalStoreTest {
         assertFalse(store.isHealthy());
     }
 
+    /**
+     * Protects the contract that copied record and missing key both fail closed.
+     */
     @Test
     void copiedRecordAndMissingKeyBothFailClosed() throws Exception {
         EncryptedWalStore oldStore = new EncryptedWalStore(directory, keyring("old", (byte) 2));
@@ -95,6 +111,9 @@ class EncryptedWalStoreTest {
         assertThrows(PersistenceException.class, () -> missingKey.recoverLatest("room-a"));
     }
 
+    /**
+     * Protects the contract that rotation compacts under current key so old key can be retired.
+     */
     @Test
     void rotationCompactsUnderCurrentKeySoOldKeyCanBeRetired() {
         EncryptionKeyring oldKeys = keyring("old", (byte) 4);
@@ -118,6 +137,9 @@ class EncryptedWalStoreTest {
         assertTrue(currentOnly.recoverLatest("room-rotate").isEmpty());
     }
 
+    /**
+     * Protects the contract that commit failure marks store unhealthy and rejects later mutations.
+     */
     @Test
     void commitFailureMarksStoreUnhealthyAndRejectsLaterMutations() {
         AtomicReference<WalFaultPoint> failure = new AtomicReference<>();
@@ -135,6 +157,9 @@ class EncryptedWalStoreTest {
         assertThrows(PersistenceException.class, () -> store.prepare("other-room"));
     }
 
+    /**
+     * Protects the contract that compaction and delete failures mark their stores unhealthy.
+     */
     @Test
     void compactionAndDeleteFailuresMarkTheirStoresUnhealthy() {
         AtomicReference<WalFaultPoint> compactionFailure = new AtomicReference<>();
@@ -166,10 +191,21 @@ class EncryptedWalStoreTest {
         assertFalse(deletingStore.isHealthy());
     }
 
+    /**
+     * Supports the test scenario for keyring.
+     * @param id id supplied to the fixture
+     * @param value value supplied to the fixture
+     * @return keyring containing the requested deterministic key
+     */
     private static EncryptionKeyring keyring(String id, byte value) {
         return new EncryptionKeyring(id, Map.of(id, new SecretKeySpec(filledKey(value), "AES")));
     }
 
+    /**
+     * Supports the test scenario for filled key.
+     * @param value value supplied to the fixture
+     * @return deterministic 256-bit key material
+     */
     private static byte[] filledKey(byte value) {
         byte[] key = new byte[32];
         java.util.Arrays.fill(key, value);

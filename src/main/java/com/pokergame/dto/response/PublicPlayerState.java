@@ -23,7 +23,7 @@ import java.util.List;
  * @param isWinner                  Whether the player is the winner.
  * @param chipsWon                  The number of chips the player has won.
  * @param holeCards                 The hole cards of the player.
- * @param disconnectDeadlineEpochMs The deadline for the player to disconnect.
+ * @param disconnectDeadlineEpochMs The UTC epoch time when reconnect grace expires.
  * @param isReadyForNextHand        Whether the player has confirmed ready for
  *                                  the next hand.
  */
@@ -48,7 +48,21 @@ public record PublicPlayerState(
                 Boolean isReadyForNextHand
 
 ) {
-        // For non-showdown states
+        /**
+         * Creates the public player projection used outside showdown, leaving all
+         * showdown and reconnect metadata absent.
+         *
+         * @param id stable player identifier
+         * @param name player display name
+         * @param chips remaining chips
+         * @param currentBet current-round contribution
+         * @param status public player status
+         * @param isAllIn whether the player is all-in
+         * @param isCurrentPlayer whether it is this player's turn
+         * @param hasFolded whether the player folded this hand
+         * @param isSmallBlind whether the player posted the small blind
+         * @param isBigBlind whether the player posted the big blind
+         */
         public PublicPlayerState(String id, String name, int chips, int currentBet, String status,
                         boolean isAllIn, boolean isCurrentPlayer, boolean hasFolded, boolean isSmallBlind,
                         boolean isBigBlind) {

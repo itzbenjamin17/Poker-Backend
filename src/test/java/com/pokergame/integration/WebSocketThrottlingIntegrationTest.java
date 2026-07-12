@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/** Tests WebSocket throttling integration behavior. */
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -36,6 +37,9 @@ class WebSocketThrottlingIntegrationTest extends AbstractIntegrationTestSupport 
     @Autowired
     private RoomService roomService;
 
+    /**
+     * Protects the contract that the system should close connection when exceeding message rate limit.
+     */
     @Test
     @DisplayName("should close connection when exceeding message rate limit")
     void givenHighMessageRate_whenSendTooFast_thenConnectionClosed() throws Exception {
@@ -58,9 +62,10 @@ class WebSocketThrottlingIntegrationTest extends AbstractIntegrationTestSupport 
                 createHandshakeHeaders(),
                 connectHeaders,
                 new StompSessionHandlerAdapter() {
+                    /** {@inheritDoc} */
                     @Override
                     public void handleException(@NonNull StompSession session, StompCommand command, 
-                                               @NonNull StompHeaders headers, byte @NonNull [] payload, 
+                                               @NonNull StompHeaders headers, byte @NonNull [] payload,
                                                @NonNull Throwable exception) {
                     }
                 }

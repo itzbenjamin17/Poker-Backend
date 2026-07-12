@@ -46,6 +46,9 @@ class GameStateServiceTest {
     private List<Player> testPlayers;
     private static final String GAME_ID = "test-game-id";
 
+    /**
+     * Initializes the test fixtures before each scenario.
+     */
     @BeforeEach
     void setUp() {
         gameStateService = new GameStateService(roomService, messagingTemplate);
@@ -71,6 +74,9 @@ class GameStateServiceTest {
 
     // ==================== broadcastGameState Tests ====================
 
+    /**
+     * Protects the contract that broadcast game state with null game should not broadcast.
+     */
     @Test
     void broadcastGameState_WithNullGame_ShouldNotBroadcast() {
         assertThrows(BadRequestException.class, () -> gameStateService.broadcastGameState(GAME_ID, null));
@@ -78,6 +84,9 @@ class GameStateServiceTest {
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast game state with valid game should broadcast to game channel.
+     */
     @Test
     void broadcastGameState_WithValidGame_ShouldBroadcastToGameChannel() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -87,6 +96,9 @@ class GameStateServiceTest {
         verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast game state should send private state to each player.
+     */
     @Test
     void broadcastGameState_ShouldSendPrivateStateToEachPlayer() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -104,6 +116,9 @@ class GameStateServiceTest {
         }
     }
 
+    /**
+     * Protects the contract that broadcast game state with three players should send three private messages.
+     */
     @Test
     void broadcastGameState_WithThreePlayers_ShouldSendThreePrivateMessages() {
         testPlayers.add(new Player("Player3", UUID.randomUUID().toString(), 100));
@@ -119,6 +134,9 @@ class GameStateServiceTest {
         verify(messagingTemplate, times(3)).convertAndSendToUser(anyString(), anyString(), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast game state after non current leave with stale blind index should not throw.
+     */
     @Test
     void broadcastGameState_AfterNonCurrentLeaveWithStaleBlindIndex_ShouldNotThrow() {
         List<Player> threePlayers = new ArrayList<>();
@@ -152,6 +170,9 @@ class GameStateServiceTest {
         verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast game state when player disconnected should expose disconnected status.
+     */
     @Test
     void broadcastGameState_WhenPlayerDisconnected_ShouldExposeDisconnectedStatus() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -177,6 +198,9 @@ class GameStateServiceTest {
         assertEquals(disconnectDeadlineEpochMs, disconnectedPlayer.disconnectDeadlineEpochMs());
     }
 
+    /**
+     * Protects the contract that broadcast game state when only one connected player remains should expose claim win eligibility.
+     */
     @Test
     void broadcastGameState_WhenOnlyOneConnectedPlayerRemains_ShouldExposeClaimWinEligibility() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -202,6 +226,9 @@ class GameStateServiceTest {
 
     // ==================== broadcastShowdownResults Tests ====================
 
+    /**
+     * Protects the contract that broadcast showdown results with null game should not broadcast.
+     */
     @Test
     void broadcastShowdownResults_WithNullGame_ShouldNotBroadcast() {
         gameStateService.broadcastShowdownResults(GAME_ID, null, List.of(), 0);
@@ -209,6 +236,9 @@ class GameStateServiceTest {
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast showdown results with valid data should broadcast.
+     */
     @Test
     void broadcastShowdownResults_WithValidData_ShouldBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -219,6 +249,9 @@ class GameStateServiceTest {
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast showdown results with no room should still broadcast.
+     */
     @Test
     void broadcastShowdownResults_WithNoRoom_ShouldStillBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(null);
@@ -229,6 +262,9 @@ class GameStateServiceTest {
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast showdown results with multiple winners should include all winners.
+     */
     @Test
     void broadcastShowdownResults_WithMultipleWinners_ShouldIncludeAllWinners() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -242,6 +278,9 @@ class GameStateServiceTest {
     // ==================== broadcastGameStateWithAutoAdvance Tests
     // ====================
 
+    /**
+     * Protects the contract that broadcast game state with auto advance with null game should not broadcast.
+     */
     @Test
     void broadcastGameStateWithAutoAdvance_WithNullGame_ShouldNotBroadcast() {
         gameStateService.broadcastGameStateWithAutoAdvance(GAME_ID, null, "Auto-advancing...");
@@ -249,6 +288,9 @@ class GameStateServiceTest {
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast game state with auto advance with valid data should broadcast.
+     */
     @Test
     void broadcastGameStateWithAutoAdvance_WithValidData_ShouldBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -261,6 +303,9 @@ class GameStateServiceTest {
     // ==================== broadcastAutoAdvanceNotification Tests
     // ====================
 
+    /**
+     * Protects the contract that broadcast auto advance notification with null game should not broadcast.
+     */
     @Test
     void broadcastAutoAdvanceNotification_WithNullGame_ShouldNotBroadcast() {
         gameStateService.broadcastAutoAdvanceNotification(GAME_ID, null);
@@ -268,6 +313,9 @@ class GameStateServiceTest {
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast auto advance notification with valid game should broadcast.
+     */
     @Test
     void broadcastAutoAdvanceNotification_WithValidGame_ShouldBroadcast() {
         gameStateService.broadcastAutoAdvanceNotification(GAME_ID, testGame);
@@ -277,6 +325,9 @@ class GameStateServiceTest {
 
     // ==================== broadcastAutoAdvanceComplete Tests ====================
 
+    /**
+     * Protects the contract that broadcast auto advance complete with null game should not broadcast.
+     */
     @Test
     void broadcastAutoAdvanceComplete_WithNullGame_ShouldNotBroadcast() {
         gameStateService.broadcastAutoAdvanceComplete(GAME_ID, null);
@@ -284,6 +335,9 @@ class GameStateServiceTest {
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast auto advance complete with valid game should broadcast.
+     */
     @Test
     void broadcastAutoAdvanceComplete_WithValidGame_ShouldBroadcast() {
         gameStateService.broadcastAutoAdvanceComplete(GAME_ID, testGame);
@@ -293,6 +347,9 @@ class GameStateServiceTest {
 
     // ==================== sendPlayerNotification Tests ====================
 
+    /**
+     * Protects the contract that send player notification should broadcast to game channel.
+     */
     @Test
     void sendPlayerNotification_ShouldBroadcastToGameChannel() {
         gameStateService.sendPlayerNotification(GAME_ID, "Player1", "Test message");
@@ -300,6 +357,9 @@ class GameStateServiceTest {
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
+    /**
+     * Protects the contract that send player notification with different players should broadcast.
+     */
     @Test
     void sendPlayerNotification_WithDifferentPlayers_ShouldBroadcast() {
         gameStateService.sendPlayerNotification(GAME_ID, "Player1", "Message 1");
@@ -310,6 +370,9 @@ class GameStateServiceTest {
 
     // ==================== broadcastGameEnd Tests ====================
 
+    /**
+     * Protects the contract that broadcast game end should broadcast winner info.
+     */
     @Test
     void broadcastGameEnd_ShouldBroadcastWinnerInfo() {
         Player winner = testPlayers.getFirst();
@@ -332,6 +395,9 @@ class GameStateServiceTest {
         assertEquals(GAME_ID, gameEndData.get("gameId"));
     }
 
+    /**
+     * Protects the contract that broadcast game end message should contain winner name.
+     */
     @Test
     void broadcastGameEnd_MessageShouldContainWinnerName() {
         Player winner = testPlayers.getFirst();
@@ -349,6 +415,9 @@ class GameStateServiceTest {
         assertTrue(message.contains("wins"));
     }
 
+    /**
+     * Protects the contract that broadcast game end with null winner should not throw.
+     */
     @Test
     void broadcastGameEnd_WithNullWinner_ShouldNotThrow() {
         assertDoesNotThrow(() -> gameStateService.broadcastGameEnd(GAME_ID, null, false));
@@ -356,6 +425,9 @@ class GameStateServiceTest {
 
     // ==================== Edge Case Tests ====================
 
+    /**
+     * Protects the contract that broadcast showdown results with folded player should mark as folded.
+     */
     @Test
     void broadcastShowdownResults_WithFoldedPlayer_ShouldMarkAsFolded() {
         testPlayers.get(1).doAction(PlayerAction.FOLD, 0, 0);
@@ -367,6 +439,9 @@ class GameStateServiceTest {
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast showdown results with all in player should mark as all in.
+     */
     @Test
     void broadcastShowdownResults_WithAllInPlayer_ShouldMarkAsAllIn() {
         testPlayers.getFirst().doAction(PlayerAction.ALL_IN, 0, 0);
@@ -380,6 +455,9 @@ class GameStateServiceTest {
 
     // ==================== GamePhase Tests ====================
 
+    /**
+     * Protects the contract that broadcast game state during preflop should broadcast.
+     */
     @Test
     void broadcastGameState_DuringPreflop_ShouldBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -389,6 +467,9 @@ class GameStateServiceTest {
         verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast game state should include single small blind and big blind flags.
+     */
     @Test
     void broadcastGameState_ShouldIncludeSingleSmallBlindAndBigBlindFlags() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -411,6 +492,9 @@ class GameStateServiceTest {
         assertEquals(1, bigBlindCount);
     }
 
+    /**
+     * Protects the contract that broadcast game state after dealing flop should broadcast.
+     */
     @Test
     void broadcastGameState_AfterDealingFlop_ShouldBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -424,6 +508,9 @@ class GameStateServiceTest {
         assertEquals(3, testGame.getCommunityCards().size());
     }
 
+    /**
+     * Protects the contract that broadcast game state after dealing flop should keep blind flags.
+     */
     @Test
     void broadcastGameState_AfterDealingFlop_ShouldKeepBlindFlags() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -449,6 +536,9 @@ class GameStateServiceTest {
 
     // ==================== Multiple Broadcast Tests ====================
 
+    /**
+     * Protects the contract that multiple broadcasts should all succeed.
+     */
     @Test
     void multipleBroadcasts_ShouldAllSucceed() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -462,6 +552,9 @@ class GameStateServiceTest {
         verify(messagingTemplate, times(6)).convertAndSendToUser(anyString(), anyString(), any(Object.class));
     }
 
+    /**
+     * Protects the contract that broadcast game state when current player missing should not throw.
+     */
     @Test
     void broadcastGameState_WhenCurrentPlayerMissing_ShouldNotThrow() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);

@@ -23,6 +23,11 @@ public record PlayerActionRequest(
         Integer amount
 
 ) {
+    /**
+     * Validates the amount contract for betting and non-betting actions.
+     *
+     * @throws BadRequestException if an amount is missing, non-positive, or not applicable
+     */
     public PlayerActionRequest {
         // Validate amount is provided for betting actions
         if ((action == PlayerAction.BET || action == PlayerAction.RAISE)) {

@@ -7,6 +7,7 @@ import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBr
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
+/** Configures STOMP endpoints, broker destinations, and inbound interceptors. */
 @Configuration
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
@@ -14,12 +15,23 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final WebSocketAuthInterceptor webSocketAuthInterceptor;
     private final WebSocketRateLimitInterceptor webSocketRateLimitInterceptor;
 
+    /**
+     * Creates the WebSocket configuration with its inbound security interceptors.
+     *
+     * @param webSocketAuthInterceptor authenticates and authorizes STOMP frames
+     * @param webSocketRateLimitInterceptor throttles client SEND frames
+     */
     public WebSocketConfig(WebSocketAuthInterceptor webSocketAuthInterceptor,
                            WebSocketRateLimitInterceptor webSocketRateLimitInterceptor) {
         this.webSocketAuthInterceptor = webSocketAuthInterceptor;
         this.webSocketRateLimitInterceptor = webSocketRateLimitInterceptor;
     }
 
+    /**
+     * Configures application, broker, and user-destination prefixes.
+     *
+     * @param config message-broker registry to configure
+     */
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
         // Enable simple broker for destinations the server broadcasts to:
@@ -35,6 +47,11 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         config.setUserDestinationPrefix("/user");
     }
 
+    /**
+     * Registers the STOMP handshake endpoint and its allowed browser origins.
+     *
+     * @param registry endpoint registry to configure
+     */
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         registry.addEndpoint("/ws")
@@ -48,6 +65,11 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                 "https://*.ngrok-free.app");
     }
 
+    /**
+     * Applies authentication before rate limiting on inbound client messages.
+     *
+     * @param registration inbound-channel registration to configure
+     */
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
         // Register interceptors to authenticate STOMP CONNECT and throttle messages

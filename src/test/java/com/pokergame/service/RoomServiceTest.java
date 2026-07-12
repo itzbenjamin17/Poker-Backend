@@ -34,6 +34,7 @@ import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+/** Tests room service behavior. */
 @Tag("unit")
 @ExtendWith(MockitoExtension.class)
 @DisplayName("Room service")
@@ -47,16 +48,23 @@ class RoomServiceTest {
     private RoomService roomService;
     private CreateRoomRequest validCreateRequest;
 
+    /**
+     * Initializes the test fixtures before each scenario.
+     */
     @BeforeEach
     void setUp() {
         roomService = new RoomService(messagingTemplate);
         validCreateRequest = new CreateRoomRequest("Test Room", "HostPlayer", 6, 5, 10, 100, null);
     }
 
+    /** Groups test scenarios for create room. */
     @Nested
     @DisplayName("room creation")
     class CreateRoom {
 
+        /**
+         * Protects the contract that the system should create a room and add the host as the first player.
+         */
         @Test
         @DisplayName("should create a room and add the host as the first player")
         void givenValidRequest_whenCreateRoom_thenReturnPersistedRoomId() {
@@ -72,6 +80,9 @@ class RoomServiceTest {
             verify(messagingTemplate).convertAndSend(anyString(), org.mockito.ArgumentMatchers.any(Object.class));
         }
 
+        /**
+         * Protects the contract that the system should create a password protected room when a password is supplied.
+         */
         @Test
         @DisplayName("should create a password protected room when a password is supplied")
         void givenPasswordProtectedRoom_whenCreateRoom_thenPasswordIsStoredAndValidated() {
@@ -92,6 +103,9 @@ class RoomServiceTest {
             assertThat(room.checkPassword("wrongpassword")).isFalse();
         }
 
+        /**
+         * Protects the contract that the system should reject duplicate room names regardless of case.
+         */
         @Test
         @DisplayName("should reject duplicate room names regardless of case")
         void givenDuplicateRoomName_whenCreateRoom_thenThrowBadRequestException() {
@@ -109,6 +123,9 @@ class RoomServiceTest {
                     .hasMessageContaining("already taken");
         }
 
+        /**
+         * Protects the contract that the system should trim room and player names during creation.
+         */
         @Test
         @DisplayName("should trim room and player names during creation")
         void createRoom_TrimsNames() {
@@ -123,10 +140,14 @@ class RoomServiceTest {
         }
     }
 
+    /** Groups test scenarios for join room. */
     @Nested
     @DisplayName("joining rooms")
     class JoinRoom {
 
+        /**
+         * Protects the contract that the system should allow joining a room with leading/trailing whitespace in the search name.
+         */
         @Test
         @DisplayName("should allow joining a room with leading/trailing whitespace in the search name")
         void joinRoom_TrimsSearchName() {
@@ -138,6 +159,9 @@ class RoomServiceTest {
             assertThat(roomService.getRoom(roomId).getPlayers()).contains("Player2");
         }
 
+        /**
+         * Protects the contract that the system should trim player name when joining.
+         */
         @Test
         @DisplayName("should trim player name when joining")
         void joinRoom_TrimsPlayerName() {
@@ -148,6 +172,9 @@ class RoomServiceTest {
             assertThat(roomService.findRoomByName("Test Room").getPlayers()).contains("P2");
         }
 
+        /**
+         * Protects the contract that the system should add a second player to an existing public room.
+         */
         @Test
         @DisplayName("should add a second player to an existing public room")
         void givenJoinRequestForPublicRoom_whenJoinRoom_thenPlayerIsAdded() {
@@ -160,6 +187,9 @@ class RoomServiceTest {
             verify(messagingTemplate).convertAndSend(anyString(), org.mockito.ArgumentMatchers.any(Object.class));
         }
 
+        /**
+         * Protects the contract that the system should allow joining a private room with the correct password.
+         */
         @Test
         @DisplayName("should allow joining a private room with the correct password")
         void givenCorrectPassword_whenJoinRoom_thenJoinSucceeds() {
@@ -177,6 +207,9 @@ class RoomServiceTest {
             assertThat(roomService.getRoom(roomId).getPlayers()).containsExactly("Host", "NewPlayer");
         }
 
+        /**
+         * Protects the contract that the system should reject joins with the wrong password.
+         */
         @Test
         @DisplayName("should reject joins with the wrong password")
         void givenWrongPassword_whenJoinRoom_thenThrowBadRequestException() {
@@ -197,6 +230,9 @@ class RoomServiceTest {
                     .hasMessage("Invalid password");
         }
 
+        /**
+         * Protects the contract that the system should reject joins for missing rooms, full rooms, and duplicate player names.
+         */
         @Test
         @DisplayName("should reject joins for missing rooms, full rooms, and duplicate player names")
         void givenInvalidJoinScenarios_whenJoinRoom_thenThrowMeaningfulExceptions() {
@@ -218,10 +254,14 @@ class RoomServiceTest {
         }
     }
 
+    /** Groups test scenarios for leave room. */
     @Nested
     @DisplayName("leaving rooms")
     class LeaveRoom {
 
+        /**
+         * Protects the contract that the system should remove a non-host player and keep the room open.
+         */
         @Test
         @DisplayName("should remove a non-host player and keep the room open")
         void givenRegularPlayer_whenLeaveRoom_thenOnlyThatPlayerIsRemoved() {
@@ -236,6 +276,9 @@ class RoomServiceTest {
             verify(messagingTemplate).convertAndSend(anyString(), org.mockito.ArgumentMatchers.any(Object.class));
         }
 
+        /**
+         * Protects the contract that the system should destroy the room when the host leaves the lobby.
+         */
         @Test
         @DisplayName("should destroy the room when the host leaves the lobby")
         void givenHostLeavesLobby_whenLeaveRoom_thenRoomIsDestroyed() {
@@ -248,6 +291,9 @@ class RoomServiceTest {
                     .convertAndSend(anyString(), org.mockito.ArgumentMatchers.any(Object.class));
         }
 
+        /**
+         * Protects the contract that the system should transfer the host when the host leaves an active room.
+         */
         @Test
         @DisplayName("should transfer the host when the host leaves an active room")
         void givenHostLeavesActiveRoom_whenLeaveRoom_thenHostTransfersToNextPlayer() {
@@ -273,6 +319,9 @@ class RoomServiceTest {
                     .isEqualTo(true);
         }
 
+        /**
+         * Protects the contract that the system should reject leave requests for missing rooms.
+         */
         @Test
         @DisplayName("should reject leave requests for missing rooms")
         void givenMissingRoom_whenLeaveRoom_thenThrowResourceNotFoundException() {
@@ -282,10 +331,14 @@ class RoomServiceTest {
         }
     }
 
+    /** Groups test scenarios for room queries. */
     @Nested
     @DisplayName("room queries")
     class RoomQueries {
 
+        /**
+         * Protects the contract that the system should expose room data including host flags and start eligibility.
+         */
         @Test
         @DisplayName("should expose room data including host flags and start eligibility")
         void givenRoomDataRequest_whenGetRoomData_thenReturnProjectedLobbyState() {
@@ -303,6 +356,9 @@ class RoomServiceTest {
                     .containsExactly("HostPlayer:true", "Player2:false");
         }
 
+        /**
+         * Protects the contract that the system should validate room identifiers when retrieving room data.
+         */
         @Test
         @DisplayName("should validate room identifiers when retrieving room data")
         void givenInvalidRoomIdentifiers_whenGetRoomData_thenThrowMeaningfulExceptions() {
@@ -315,6 +371,9 @@ class RoomServiceTest {
                     .hasMessage("Room not found");
         }
 
+        /**
+         * Protects the contract that the system should return rooms, hosts, and lookups consistently.
+         */
         @Test
         @DisplayName("should return rooms, hosts, and lookups consistently")
         void givenRoomsExist_whenQuerying_thenReturnExpectedResults() {
@@ -330,6 +389,9 @@ class RoomServiceTest {
             assertThat(roomService.isRoomHost(roomId, "Player2")).isFalse();
         }
 
+        /**
+         * Protects the contract that the system should destroy rooms safely even when the room does not exist.
+         */
         @Test
         @DisplayName("should destroy rooms safely even when the room does not exist")
         void givenDestroyRoomRequest_whenDestroyRoom_thenRemoveRoomWithoutThrowing() {
@@ -343,10 +405,14 @@ class RoomServiceTest {
         }
     }
 
+    /** Groups test scenarios for concurrency. */
     @Nested
     @DisplayName("concurrency")
     class Concurrency {
 
+        /**
+         * Protects the contract that the system should allow only one successful room creation when requests race on the same room name.
+         */
         @Test
         @DisplayName("should allow only one successful room creation when requests race on the same room name")
         void givenConcurrentDuplicateCreates_whenCreateRoom_thenOnlyOneSucceeds() throws InterruptedException {

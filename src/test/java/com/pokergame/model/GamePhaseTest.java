@@ -13,12 +13,18 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("Game phase enum")
 class GamePhaseTest {
 
+    /**
+     * Protects the expected behavior for all phases exist.
+     */
     @Test
     void testAllPhasesExist() {
         GamePhase[] phases = GamePhase.values();
         assertEquals(5, phases.length, "Should have 5 game phases");
     }
 
+    /**
+     * Protects the expected behavior for phase names.
+     */
     @Test
     void testPhaseNames() {
         assertNotNull(GamePhase.PRE_FLOP);
@@ -28,6 +34,9 @@ class GamePhaseTest {
         assertNotNull(GamePhase.SHOWDOWN);
     }
 
+    /**
+     * Protects the expected behavior for value of.
+     */
     @Test
     void testValueOf() {
         assertEquals(GamePhase.PRE_FLOP, GamePhase.valueOf("PRE_FLOP"));
@@ -37,6 +46,9 @@ class GamePhaseTest {
         assertEquals(GamePhase.SHOWDOWN, GamePhase.valueOf("SHOWDOWN"));
     }
 
+    /**
+     * Protects the expected behavior for phase ordering.
+     */
     @Test
     void testPhaseOrdering() {
         // Verify phases are in the expected game order
@@ -48,6 +60,9 @@ class GamePhaseTest {
         assertEquals(GamePhase.SHOWDOWN, phases[4]);
     }
 
+    /**
+     * Protects the expected behavior for enum equality.
+     */
     @Test
     void testEnumEquality() {
         GamePhase preFlop1 = GamePhase.PRE_FLOP;
@@ -55,6 +70,9 @@ class GamePhaseTest {
         assertSame(preFlop1, preFlop2, "Enum instances should be identical");
     }
 
+    /**
+     * Protects the expected behavior for all phases unique.
+     */
     @Test
     void testAllPhasesUnique() {
         GamePhase[] phases = GamePhase.values();

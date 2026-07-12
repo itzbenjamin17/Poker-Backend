@@ -19,11 +19,17 @@ class RoomTest {
 
     private Room room;
 
+    /**
+     * Initializes the test fixtures before each scenario.
+     */
     @BeforeEach
     void setUp() {
         room = new Room("room123", "Test Room", "HostPlayer", 6, 10, 20, 1000, null);
     }
 
+    /**
+     * Protects the expected behavior for room creation.
+     */
     @Test
     void testRoomCreation() {
         assertNotNull(room);
@@ -38,6 +44,9 @@ class RoomTest {
         assertEquals(0, room.getPlayers().size());
     }
 
+    /**
+     * Protects the expected behavior for room creation with password.
+     */
     @Test
     void testRoomCreationWithPassword() {
         Room secureRoom = new Room("room456", "Private Room", "Host", 4, 5, 10, 500, "secret123");
@@ -47,6 +56,9 @@ class RoomTest {
         assertFalse(secureRoom.checkPassword("wrong"));
     }
 
+    /**
+     * Protects the expected behavior for room creation with null room ID.
+     */
     @Test
     void testRoomCreationWithNullRoomId() {
         BadRequestException exception = assertThrows(
@@ -55,6 +67,9 @@ class RoomTest {
         assertEquals("Room ID cannot be null or empty.", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for room creation with empty room ID.
+     */
     @Test
     void testRoomCreationWithEmptyRoomId() {
         BadRequestException exception = assertThrows(
@@ -63,6 +78,9 @@ class RoomTest {
         assertEquals("Room ID cannot be null or empty.", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for room creation with null room name.
+     */
     @Test
     void testRoomCreationWithNullRoomName() {
         BadRequestException exception = assertThrows(
@@ -71,6 +89,9 @@ class RoomTest {
         assertEquals("Room name cannot be null or empty.", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for room creation with empty room name.
+     */
     @Test
     void testRoomCreationWithEmptyRoomName() {
         BadRequestException exception = assertThrows(
@@ -79,6 +100,9 @@ class RoomTest {
         assertEquals("Room name cannot be null or empty.", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for room creation with null host name.
+     */
     @Test
     void testRoomCreationWithNullHostName() {
         BadRequestException exception = assertThrows(
@@ -87,6 +111,9 @@ class RoomTest {
         assertEquals("Host name cannot be null or empty.", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for room creation with empty host name.
+     */
     @Test
     void testRoomCreationWithEmptyHostName() {
         BadRequestException exception = assertThrows(
@@ -95,6 +122,9 @@ class RoomTest {
         assertEquals("Host name cannot be null or empty.", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for room creation with too few players.
+     */
     @Test
     void testRoomCreationWithTooFewPlayers() {
         BadRequestException exception = assertThrows(
@@ -103,6 +133,9 @@ class RoomTest {
         assertEquals("Max players must be between 2 and 10.", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for room creation with too many players.
+     */
     @Test
     void testRoomCreationWithTooManyPlayers() {
         BadRequestException exception = assertThrows(
@@ -111,18 +144,27 @@ class RoomTest {
         assertEquals("Max players must be between 2 and 10.", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for room creation with minimum players.
+     */
     @Test
     void testRoomCreationWithMinimumPlayers() {
         Room minRoom = new Room("room123", "Room", "Host", 2, 10, 20, 1000, null);
         assertEquals(2, minRoom.getMaxPlayers());
     }
 
+    /**
+     * Protects the expected behavior for room creation with maximum players.
+     */
     @Test
     void testRoomCreationWithMaximumPlayers() {
         Room maxRoom = new Room("room123", "Room", "Host", 10, 10, 20, 1000, null);
         assertEquals(10, maxRoom.getMaxPlayers());
     }
 
+    /**
+     * Protects the expected behavior for room creation with invalid small blind.
+     */
     @Test
     void testRoomCreationWithInvalidSmallBlind() {
         BadRequestException exception = assertThrows(
@@ -131,6 +173,9 @@ class RoomTest {
         assertEquals("Small blind must be at least 1.", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for room creation with negative small blind.
+     */
     @Test
     void testRoomCreationWithNegativeSmallBlind() {
         BadRequestException exception = assertThrows(
@@ -139,6 +184,9 @@ class RoomTest {
         assertEquals("Small blind must be at least 1.", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for room creation with big blind less than small blind.
+     */
     @Test
     void testRoomCreationWithBigBlindLessThanSmallBlind() {
         BadRequestException exception = assertThrows(
@@ -147,11 +195,17 @@ class RoomTest {
         assertEquals("Big blind must be at least twice the small blind.", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for room creation with big blind equal to small blind.
+     */
     @Test
     void testRoomCreationWithBigBlindEqualToSmallBlind() {
         assertThrows(BadRequestException.class, () -> new Room("room123", "Room", "Host", 6, 10, 10, 1000, null));
     }
 
+    /**
+     * Protects the expected behavior for room creation with big blind greater than small blind.
+     */
     @Test
     void testRoomCreationWithBigBlindGreaterThanSmallBlind() {
         Room validRoom = new Room("room123", "Room", "Host", 6, 10, 20, 1000, null);
@@ -159,6 +213,9 @@ class RoomTest {
         assertEquals(20, validRoom.getBigBlind());
     }
 
+    /**
+     * Protects the expected behavior for add player.
+     */
     @Test
     void testAddPlayer() {
         room.addPlayer("Player1");
@@ -167,6 +224,9 @@ class RoomTest {
         assertTrue(room.hasPlayer("Player1"));
     }
 
+    /**
+     * Protects the expected behavior for add multiple players.
+     */
     @Test
     void testAddMultiplePlayers() {
         room.addPlayer("Player1");
@@ -179,6 +239,9 @@ class RoomTest {
         assertTrue(room.hasPlayer("Player3"));
     }
 
+    /**
+     * Protects the expected behavior for add duplicate player.
+     */
     @Test
     void testAddDuplicatePlayer() {
         room.addPlayer("Player1");
@@ -187,6 +250,9 @@ class RoomTest {
         assertTrue(room.hasPlayer("Player1"));
     }
 
+    /**
+     * Protects the expected behavior for remove player.
+     */
     @Test
     void testRemovePlayer() {
         room.addPlayer("Player1");
@@ -201,6 +267,9 @@ class RoomTest {
         assertTrue(room.hasPlayer("Player2"));
     }
 
+    /**
+     * Protects the expected behavior for remove non existent player.
+     */
     @Test
     void testRemoveNonExistentPlayer() {
         room.addPlayer("Player1");
@@ -211,6 +280,9 @@ class RoomTest {
         assertTrue(room.hasPlayer("Player1"));
     }
 
+    /**
+     * Protects the expected behavior for has player.
+     */
     @Test
     void testHasPlayer() {
         assertFalse(room.hasPlayer("Player1"));
@@ -221,29 +293,44 @@ class RoomTest {
         assertFalse(room.hasPlayer("Player2"));
     }
 
+    /**
+     * Protects the expected behavior for has password for public room.
+     */
     @Test
     void testHasPasswordForPublicRoom() {
         assertFalse(room.hasPassword());
     }
 
+    /**
+     * Protects the expected behavior for has password for private room.
+     */
     @Test
     void testHasPasswordForPrivateRoom() {
         Room privateRoom = new Room("room456", "Private", "Host", 6, 10, 20, 1000, "password");
         assertTrue(privateRoom.hasPassword());
     }
 
+    /**
+     * Protects the expected behavior for has password with empty password.
+     */
     @Test
     void testHasPasswordWithEmptyPassword() {
         Room emptyPasswordRoom = new Room("room456", "Room", "Host", 6, 10, 20, 1000, "");
         assertFalse(emptyPasswordRoom.hasPassword());
     }
 
+    /**
+     * Protects the expected behavior for has password with whitespace password.
+     */
     @Test
     void testHasPasswordWithWhitespacePassword() {
         Room whitespaceRoom = new Room("room456", "Room", "Host", 6, 10, 20, 1000, "   ");
         assertFalse(whitespaceRoom.hasPassword());
     }
 
+    /**
+     * Protects the expected behavior for check password for public room.
+     */
     @Test
     void testCheckPasswordForPublicRoom() {
         assertTrue(room.checkPassword(null));
@@ -251,6 +338,9 @@ class RoomTest {
         assertTrue(room.checkPassword("anything"));
     }
 
+    /**
+     * Protects the expected behavior for check password for private room.
+     */
     @Test
     void testCheckPasswordForPrivateRoom() {
         Room privateRoom = new Room("room456", "Private", "Host", 6, 10, 20, 1000, "secret123");
@@ -261,6 +351,9 @@ class RoomTest {
         assertFalse(privateRoom.checkPassword(null));
     }
 
+    /**
+     * Protects the expected behavior for check password case sensitive.
+     */
     @Test
     void testCheckPasswordCaseSensitive() {
         Room privateRoom = new Room("room456", "Private", "Host", 6, 10, 20, 1000, "Secret123");
@@ -270,6 +363,9 @@ class RoomTest {
         assertFalse(privateRoom.checkPassword("SECRET123"));
     }
 
+    /**
+     * Protects the expected behavior for to string.
+     */
     @Test
     void testToString() {
         String result = room.toString();
@@ -280,6 +376,9 @@ class RoomTest {
         assertTrue(result.contains("0 players"));
     }
 
+    /**
+     * Protects the expected behavior for to string with players.
+     */
     @Test
     void testToStringWithPlayers() {
         room.addPlayer("Player1");
@@ -290,21 +389,33 @@ class RoomTest {
         assertTrue(result.contains("2 players"));
     }
 
+    /**
+     * Protects the expected behavior for get room ID.
+     */
     @Test
     void testGetRoomId() {
         assertEquals("room123", room.getRoomId());
     }
 
+    /**
+     * Protects the expected behavior for get room name.
+     */
     @Test
     void testGetRoomName() {
         assertEquals("Test Room", room.getRoomName());
     }
 
+    /**
+     * Protects the expected behavior for get host name.
+     */
     @Test
     void testGetHostName() {
         assertEquals("HostPlayer", room.getHostName());
     }
 
+    /**
+     * Protects the expected behavior for get players.
+     */
     @Test
     void testGetPlayers() {
         assertNotNull(room.getPlayers());
@@ -315,26 +426,41 @@ class RoomTest {
         assertEquals("Player1", room.getPlayers().getFirst());
     }
 
+    /**
+     * Protects the expected behavior for get max players.
+     */
     @Test
     void testGetMaxPlayers() {
         assertEquals(6, room.getMaxPlayers());
     }
 
+    /**
+     * Protects the expected behavior for get small blind.
+     */
     @Test
     void testGetSmallBlind() {
         assertEquals(10, room.getSmallBlind());
     }
 
+    /**
+     * Protects the expected behavior for get big blind.
+     */
     @Test
     void testGetBigBlind() {
         assertEquals(20, room.getBigBlind());
     }
 
+    /**
+     * Protects the expected behavior for get buy in.
+     */
     @Test
     void testGetBuyIn() {
         assertEquals(1000, room.getBuyIn());
     }
 
+    /**
+     * Protects the expected behavior for get created at.
+     */
     @Test
     void testGetCreatedAt() {
         LocalDateTime createdAt = room.getCreatedAt();
@@ -343,6 +469,9 @@ class RoomTest {
         assertTrue(createdAt.isAfter(LocalDateTime.now().minusSeconds(10)));
     }
 
+    /**
+     * Protects the expected behavior for room immutability.
+     */
     @Test
     void testRoomImmutability() {
         // Room properties should be immutable
@@ -361,6 +490,9 @@ class RoomTest {
         assertEquals(6, room.getMaxPlayers());
     }
 
+    /**
+     * Protects the expected behavior for multiple player operations.
+     */
     @Test
     void testMultiplePlayerOperations() {
         // Add players
@@ -385,6 +517,9 @@ class RoomTest {
         assertTrue(room.hasPlayer("Bob"));
     }
 
+    /**
+     * Protects the expected behavior for room with various blinds.
+     */
     @Test
     void testRoomWithVariousBlinds() {
         Room lowStakes = new Room("low", "Low Stakes", "Host", 6, 1, 2, 100, null);
@@ -396,12 +531,18 @@ class RoomTest {
         assertEquals(200, highStakes.getBigBlind());
     }
 
+    /**
+     * Protects the expected behavior for room with zero buy in.
+     */
     @Test
     void testRoomWithZeroBuyIn() {
         Room freeBuyIn = new Room("free", "Free Game", "Host", 6, 10, 20, 0, null);
         assertEquals(0, freeBuyIn.getBuyIn());
     }
 
+    /**
+     * Protects the expected behavior for room with negative buy in.
+     */
     @Test
     void testRoomWithNegativeBuyIn() {
         Room negativeBuyIn = new Room("negative", "Negative Buy-in", "Host", 6, 10, 20, -100, null);

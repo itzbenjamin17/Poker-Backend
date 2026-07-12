@@ -35,6 +35,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.lenient;
 
+/** Tests WebSocket event listener behavior. */
 @Tag("unit")
 @ExtendWith(MockitoExtension.class)
 @DisplayName("WebSocket event listener")
@@ -53,6 +54,9 @@ class WebSocketEventListenerTest {
 
     private ThreadPoolTaskScheduler scheduler;
 
+    /**
+     * Releases test resources after each scenario.
+     */
     @AfterEach
     void tearDown() {
         if (scheduler != null) {
@@ -60,10 +64,14 @@ class WebSocketEventListenerTest {
         }
     }
 
+    /** Groups test scenarios for disconnect handling. */
     @Nested
     @DisplayName("disconnect handling")
     class DisconnectHandling {
 
+        /**
+         * Protects the contract that the system should skip permanent removal when the player reconnects inside the grace period.
+         */
         @Test
         @DisplayName("should skip permanent removal when the player reconnects inside the grace period")
         void givenReconnectInsideGracePeriod_whenDisconnectHandled_thenPlayerIsNotRemoved() {
@@ -90,6 +98,9 @@ class WebSocketEventListenerTest {
                     });
         }
 
+        /**
+         * Protects the contract that the system should permanently remove the player when the grace period expires.
+         */
         @Test
         @DisplayName("should permanently remove the player when the grace period expires")
         void givenNoReconnect_whenGracePeriodExpires_thenPlayerIsRemoved() {
@@ -116,6 +127,9 @@ class WebSocketEventListenerTest {
                     });
         }
 
+        /**
+         * Protects the contract that the system should recover principal from session storage when event principal is null.
+         */
         @Test
         @DisplayName("should recover principal from session storage when event principal is null")
         void givenNullEventPrincipal_whenDisconnectHandled_thenPrincipalIsRecoveredAndHandled() {
@@ -146,6 +160,9 @@ class WebSocketEventListenerTest {
                     });
         }
 
+        /**
+         * Protects the contract that the system should not start cleanup when one of multiple sessions for the same user disconnects.
+         */
         @Test
         @DisplayName("should not start cleanup when one of multiple sessions for the same user disconnects")
         void givenMultiTabUser_whenOneSessionDisconnects_thenCleanupIsNotScheduled() {
@@ -184,18 +201,38 @@ class WebSocketEventListenerTest {
         }
     }
 
+    /**
+     * Creates a listener backed by a real scheduler so grace-period behavior can
+     * be observed asynchronously.
+     *
+     * @return listener backed by the test scheduler
+     */
     private WebSocketEventListener createListener() {
         scheduler = new ThreadPoolTaskScheduler();
         scheduler.initialize();
         return new WebSocketEventListener(roomService, gameLifecycleService, rateLimitService, scheduler, DISCONNECT_GRACE_PERIOD_MS);
     }
 
+    /**
+     * Creates room for the test.
+     * @param roomId room ID supplied to the fixture
+     * @param roomName room name supplied to the fixture
+     * @param playerName player name supplied to the fixture
+     * @return room populated with its host player
+     */
     private Room createRoom(String roomId, String roomName, String playerName) {
         Room room = new Room(roomId, roomName, playerName, 6, 5, 10, 1000, null);
         room.addPlayer(playerName);
         return room;
     }
 
+    /**
+     * Connects event for the test.
+     * @param username username supplied to the fixture
+     * @param roomId room ID supplied to the fixture
+     * @param sessionId session ID supplied to the fixture
+     * @return synthetic STOMP connect event
+     */
     private SessionConnectEvent connectEvent(String username, String roomId, String sessionId) {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
         accessor.setSessionId(sessionId);
@@ -206,6 +243,13 @@ class WebSocketEventListenerTest {
         return new SessionConnectEvent(this, message);
     }
 
+    /**
+     * Supports the test scenario for disconnect event.
+     * @param username username supplied to the fixture
+     * @param roomId room ID supplied to the fixture
+     * @param sessionId session ID supplied to the fixture
+     * @return synthetic STOMP disconnect event
+     */
     private SessionDisconnectEvent disconnectEvent(String username, String roomId, String sessionId) {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.DISCONNECT);
         accessor.setSessionId(sessionId);
@@ -217,6 +261,12 @@ class WebSocketEventListenerTest {
         return new SessionDisconnectEvent(this, message, sessionId, null, principal);
     }
 
+    /**
+     * Supports the test scenario for named principal.
+     * @param username username supplied to the fixture
+     * @param roomId room ID supplied to the fixture
+     * @return room-bound player principal
+     */
     private PlayerPrincipal namedPrincipal(String username, String roomId) {
         return new PlayerPrincipal(username, roomId);
     }

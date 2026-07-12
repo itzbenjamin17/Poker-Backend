@@ -9,8 +9,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/** Tests input sanitizer behavior. */
 class InputSanitizerTest {
 
+    /**
+     * Protects the contract that the system should trim whitespace from input.
+     */
     @Test
     @DisplayName("should trim whitespace from input")
     void sanitize_TrimsWhitespace() {
@@ -18,6 +22,10 @@ class InputSanitizerTest {
         assertThat(InputSanitizer.sanitize("\tplayer\n")).isEqualTo("player");
     }
 
+    /**
+     * Protects the contract that sanitize handles null and empty.
+     * @param input input supplied to the fixture
+     */
     @ParameterizedTest(name = "should return same value for null/empty/blank: {0}")
     @NullAndEmptySource
     @ValueSource(strings = {"  ", "\t", "\n"})
@@ -29,6 +37,9 @@ class InputSanitizerTest {
         }
     }
 
+    /**
+     * Protects the contract that the system should preserve casing and special characters.
+     */
     @Test
     @DisplayName("should preserve casing and special characters")
     void sanitize_PreservesCasingAndSpecialChars() {
@@ -36,6 +47,9 @@ class InputSanitizerTest {
         assertThat(InputSanitizer.sanitize("Player_One")).isEqualTo("Player_One");
     }
 
+    /**
+     * Protects the contract that the system should reject control characters.
+     */
     @Test
     @DisplayName("should reject control characters")
     void sanitize_RejectsControlCharacters() {
@@ -45,6 +59,9 @@ class InputSanitizerTest {
                 .hasMessageContaining("control characters");
     }
 
+    /**
+     * Protects the contract that the system should reject scripts or other malicious-looking tags (basic check).
+     */
     @Test
     @DisplayName("should reject scripts or other malicious-looking tags (basic check)")
     void sanitize_RejectsTags() {

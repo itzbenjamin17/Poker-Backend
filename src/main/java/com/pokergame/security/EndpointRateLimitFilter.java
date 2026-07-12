@@ -18,10 +18,24 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
 
     private final RateLimitService rateLimitService;
 
+    /**
+     * Creates the endpoint filter with its shared bucket service.
+     *
+     * @param rateLimitService REST rate limiter
+     */
     public EndpointRateLimitFilter(RateLimitService rateLimitService) {
         this.rateLimitService = rateLimitService;
     }
 
+    /**
+     * Applies per-client limits to room creation and join requests.
+     *
+     * @param request current HTTP request
+     * @param response current HTTP response
+     * @param filterChain remaining servlet filter chain
+     * @throws ServletException if downstream filtering fails
+     * @throws IOException if the rejection or downstream response cannot be written
+     */
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
@@ -46,6 +60,13 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
     @Value("${poker.security.trust-proxy:false}")
     private boolean trustProxy;
 
+    /**
+     * Resolves the client address, honoring the first forwarded address only when
+     * proxy trust is explicitly enabled.
+     *
+     * @param request current HTTP request
+     * @return address used as the rate-limit identity
+     */
     private String getClientIp(HttpServletRequest request) {
         if (trustProxy) {
             String xfHeader = request.getHeader("X-Forwarded-For");
@@ -56,6 +77,12 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
         return request.getRemoteAddr();
     }
 
+    /**
+     * Writes the REST rate-limit response.
+     *
+     * @param response current HTTP response
+     * @throws IOException if the response body cannot be written
+     */
     private void sendRateLimitError(HttpServletResponse response) throws IOException {
         response.setStatus(429); // Too Many Requests
         response.setContentType("application/json");

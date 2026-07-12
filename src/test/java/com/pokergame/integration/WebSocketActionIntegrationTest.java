@@ -35,6 +35,7 @@ import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/** Tests WebSocket action integration behavior. */
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -54,6 +55,9 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
     private static final String OTHER_NAME = "OtherPlayer";
     private WebSocketStompClient activeClient;
 
+    /**
+     * Releases test resources after each scenario.
+     */
     @AfterEach
     void tearDownClient() {
         if (activeClient != null) {
@@ -62,10 +66,14 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /** Groups test scenarios for player actions. */
     @Nested
     @DisplayName("player actions")
     class PlayerActions {
 
+        /**
+         * Protects the contract that the system should publish ACTION_ERROR to the player's private topic for invalid actions.
+         */
         @Test
         @DisplayName("should publish ACTION_ERROR to the player's private topic for invalid actions")
         void givenInvalidAction_whenSendOverWebSocket_thenReceivePrivateErrorNotification() throws Exception {
@@ -83,11 +91,13 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             session.subscribe(
                     "/user/queue/private",
                     new StompFrameHandler() {
+                        /** {@inheritDoc} */
                         @Override
                         public Type getPayloadType(@NonNull StompHeaders headers) {
                             return PlayerNotificationResponse.class;
                         }
 
+                        /** {@inheritDoc} */
                         @Override
                         public void handleFrame(@NonNull StompHeaders headers, Object payload) {
                             if (payload instanceof PlayerNotificationResponse notification
@@ -110,6 +120,9 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             stompClient.stop();
         }
 
+        /**
+         * Protects the contract that the system should broadcast a public game update when a valid action is sent.
+         */
         @Test
         @DisplayName("should broadcast a public game update when a valid action is sent")
         void givenValidAction_whenSendOverWebSocket_thenBroadcastUpdatedGameState() throws Exception {
@@ -151,6 +164,9 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             stompClient.stop();
         }
 
+        /**
+         * Protects the contract that the system should continue processing actions after the active client reconnects.
+         */
         @Test
         @DisplayName("should continue processing actions after the active client reconnects")
         void givenReconnectDuringGame_whenActionIsSent_thenGameStillBroadcastsState() throws Exception {
@@ -184,6 +200,9 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             stompClient.stop();
         }
 
+        /**
+         * Protects the contract that the system should advance immediately when all eligible players mark READY.
+         */
         @Test
         @DisplayName("should advance immediately when all eligible players mark READY")
         void givenReadyGate_whenAllEligiblePlayersReady_thenAdvanceWithoutWaitingForTimeout() throws Exception {
@@ -228,6 +247,9 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             otherSession.disconnect();
         }
 
+        /**
+         * Protects the contract that the system should auto-advance on ready timeout when some players stay unready.
+         */
         @Test
         @DisplayName("should auto-advance on ready timeout when some players stay unready")
         void givenReadyGate_whenOnePlayerStaysUnready_thenTimeoutForcesAdvance() throws Exception {
@@ -244,11 +266,13 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             AtomicBoolean readyGateSeen = new AtomicBoolean(false);
 
             StompFrameHandler stateHandler = new StompFrameHandler() {
+                /** {@inheritDoc} */
                 @Override
                 public Type getPayloadType(@NonNull StompHeaders headers) {
                     return PublicGameStateResponse.class;
                 }
 
+                /** {@inheritDoc} */
                 @Override
                 public void handleFrame(@NonNull StompHeaders headers, Object payload) {
                     if (!(payload instanceof PublicGameStateResponse response)) {
@@ -326,15 +350,26 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /**
+     * Creates a frame handler that completes each future at its corresponding
+     * ready-countdown transition.
+     *
+     * @param initialStateFuture receives the initial pre-flop state
+     * @param readyGateOpenFuture receives the showdown state with an open ready gate
+     * @param nextHandFuture receives the next hand's pre-flop state
+     * @return state-transition frame handler
+     */
     private static @NonNull StompFrameHandler getStompFrameHandler(CompletableFuture<PublicGameStateResponse> initialStateFuture, CompletableFuture<PublicGameStateResponse> readyGateOpenFuture, CompletableFuture<PublicGameStateResponse> nextHandFuture) {
         AtomicBoolean readyGateSeen = new AtomicBoolean(false);
 
         return new StompFrameHandler() {
+            /** {@inheritDoc} */
             @Override
             public Type getPayloadType(@NonNull StompHeaders headers) {
                 return PublicGameStateResponse.class;
             }
 
+            /** {@inheritDoc} */
             @Override
             public void handleFrame(@NonNull StompHeaders headers, Object payload) {
                 if (!(payload instanceof PublicGameStateResponse response)) {
@@ -364,14 +399,32 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
         };
     }
 
+    /**
+     * Reports whether a player participates in the next-hand ready gate.
+     *
+     * @param player public player projection
+     * @return {@code true} unless the player is out or disconnected
+     */
     private static boolean isReadyEligible(PublicPlayerState player) {
         return !"OUT".equals(player.status()) && !"DISCONNECTED".equals(player.status());
     }
 
+    /**
+     * Sends a ready confirmation through the same STOMP destination used by clients.
+     *
+     * @param session connected player session
+     * @param roomId target game identifier
+     */
     private static void sendReady(StompSession session, String roomId) {
         session.send("/app/" + roomId + "/ready", "");
     }
 
+    /**
+     * Creates a two-player room and returns the identifiers needed to start its
+     * WebSocket scenarios.
+     *
+     * @return room identifier and both player tokens
+     */
     private TestGameSession createStartedGame() {
         String roomId = roomService.createRoom(new CreateRoomRequest(
                 uniqueName("ActionTestRoom"),
@@ -389,22 +442,30 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
                 jwtService.generateToken(OTHER_NAME, roomId));
     }
 
+    /** Holds a room identifier and both player tokens for a game scenario. */
     private record TestGameSession(String roomId, String hostToken, String otherToken) {
     }
 
+    /** Handles public state frame handler callbacks for integration tests. */
     private static final class PublicStateFrameHandler implements StompFrameHandler {
 
         private final CompletableFuture<PublicGameStateResponse> future;
 
+        /**
+         * Creates a public state frame handler fixture.
+         * @param future future supplied to the fixture
+         */
         private PublicStateFrameHandler(CompletableFuture<PublicGameStateResponse> future) {
             this.future = future;
         }
 
+        /** {@inheritDoc} */
         @Override
         public Type getPayloadType(@NonNull StompHeaders headers) {
             return PublicGameStateResponse.class;
         }
 
+        /** {@inheritDoc} */
         @Override
         public void handleFrame(@NonNull StompHeaders headers, Object payload) {
             if (payload instanceof PublicGameStateResponse response && !future.isDone()) {
@@ -413,11 +474,17 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /** Handles matching public state frame handler callbacks for integration tests. */
     private static final class MatchingPublicStateFrameHandler implements StompFrameHandler {
 
         private final CompletableFuture<PublicGameStateResponse> future;
         private final Predicate<PublicGameStateResponse> predicate;
 
+        /**
+         * Creates a matching public state frame handler fixture.
+         * @param future future supplied to the fixture
+         * @param predicate predicate supplied to the fixture
+         */
         private MatchingPublicStateFrameHandler(
                 CompletableFuture<PublicGameStateResponse> future,
                 Predicate<PublicGameStateResponse> predicate) {
@@ -425,11 +492,13 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             this.predicate = predicate;
         }
 
+        /** {@inheritDoc} */
         @Override
         public Type getPayloadType(@NonNull StompHeaders headers) {
             return PublicGameStateResponse.class;
         }
 
+        /** {@inheritDoc} */
         @Override
         public void handleFrame(@NonNull StompHeaders headers, Object payload) {
             if (payload instanceof PublicGameStateResponse response

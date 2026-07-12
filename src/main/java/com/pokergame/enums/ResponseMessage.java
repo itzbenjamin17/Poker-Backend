@@ -18,10 +18,20 @@ public enum ResponseMessage {
 
     private final String message;
 
+    /**
+     * Associates a notification category with its wire value.
+     *
+     * @param message serialized message category
+     */
     ResponseMessage(String message) {
         this.message = message;
     }
 
+    /**
+     * Returns the serialized notification category.
+     *
+     * @return wire-format message value
+     */
     public String getMessage() {
         return message;
     }

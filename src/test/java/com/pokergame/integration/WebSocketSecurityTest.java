@@ -23,11 +23,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/** Tests WebSocket security behavior. */
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
 
+    /**
+     * Protects the contract that the system should prevent player from subscribing to another player's private topic.
+     */
     @Test
     @DisplayName("should prevent player from subscribing to another player's private topic")
     void givenTwoPlayers_whenOneSubscribesToOthersPrivate_thenBlockSubscription() throws Exception {
@@ -44,8 +48,10 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
         String forbiddenTopic = "/game/" + player1.path("roomId").asText() + "/player-name/Player2/private";
         
         session1.subscribe(forbiddenTopic, new StompFrameHandler() {
+            /** {@inheritDoc} */
             @Override
             public Type getPayloadType(@NonNull StompHeaders headers) { return String.class; }
+            /** {@inheritDoc} */
             @Override
             public void handleFrame(@NonNull StompHeaders headers, Object payload) {}
         });
@@ -57,6 +63,9 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
                 .untilAsserted(() -> assertThat(session1.isConnected()).isFalse());
     }
 
+    /**
+     * Protects the contract that the system should allow subscription to own secure user destination.
+     */
     @Test
     @DisplayName("should allow subscription to own secure user destination")
     void givenAuthenticatedPlayer_whenSubscribesToOwnPrivate_thenSuccess() throws Exception {
@@ -68,8 +77,10 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
         
         // /user/queue/private is the new secure path
         session1.subscribe("/user/queue/private", new StompFrameHandler() {
+            /** {@inheritDoc} */
             @Override
             public Type getPayloadType(@NonNull StompHeaders headers) { return Object.class; }
+            /** {@inheritDoc} */
             @Override
             public void handleFrame(@NonNull StompHeaders headers, Object payload) {}
         });
@@ -80,22 +91,32 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
                 .untilAsserted(() -> assertThat(session1.isConnected()).isTrue());
     }
 
+    /**
+     * Connects session with error handler for the test.
+     * @param stompClient STOMP client supplied to the fixture
+     * @param token token supplied to the fixture
+     * @param errorReceived error received supplied to the fixture
+     * @return connected session that records transport errors
+     */
     private StompSession connectSessionWithErrorHandler(WebSocketStompClient stompClient, String token, AtomicBoolean errorReceived) throws Exception {
         String wsUrl = "ws://localhost:" + port + "/ws";
         StompHeaders connectHeaders = new StompHeaders();
         connectHeaders.add("Authorization", "Bearer " + token);
 
         return stompClient.connectAsync(wsUrl, createHandshakeHeaders(), connectHeaders, new StompSessionHandlerAdapter() {
+            /** {@inheritDoc} */
             @Override
             public void handleFrame(@NonNull StompHeaders headers, Object payload) {
                 // Not used
             }
 
+            /** {@inheritDoc} */
             @Override
             public void handleException(@NonNull StompSession session, StompCommand command, @NonNull StompHeaders headers, byte @NonNull [] payload, @NonNull Throwable exception) {
                 errorReceived.set(true);
             }
 
+            /** {@inheritDoc} */
             @Override
             public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
                 errorReceived.set(true);

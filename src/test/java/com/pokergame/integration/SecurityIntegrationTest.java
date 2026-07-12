@@ -21,6 +21,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+/** Tests security integration behavior. */
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -33,10 +34,14 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
     @Autowired
     private RoomService roomService;
 
+    /** Groups test scenarios for public endpoints. */
     @Nested
     @DisplayName("public endpoints")
     class PublicEndpoints {
 
+        /**
+         * Protects the contract that the system should allow creating a room without a token and return a JWT.
+         */
         @Test
         @DisplayName("should allow creating a room without a token and return a JWT")
         void givenAnonymousRequest_whenCreateRoom_thenReturnRoomDataAndToken() throws Exception {
@@ -54,6 +59,9 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(response.path("data").path("roomId").asText()).isNotBlank();
         }
 
+        /**
+         * Protects the contract that the system should allow joining a room without a token and return a JWT.
+         */
         @Test
         @DisplayName("should allow joining a room without a token and return a JWT")
         void givenAnonymousRequest_whenJoinRoom_thenReturnJoinPayloadAndToken() throws Exception {
@@ -72,10 +80,14 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /** Groups test scenarios for secured endpoints. */
     @Nested
     @DisplayName("secured endpoints")
     class SecuredEndpoints {
 
+        /**
+         * Protects the contract that the system should reject leave room requests without a token.
+         */
         @Test
         @DisplayName("should reject leave room requests without a token")
         void givenMissingToken_whenLeaveRoom_thenReturnForbidden() {
@@ -96,6 +108,9 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         }
 
+        /**
+         * Protects the contract that the system should allow leaving a room with a valid token.
+         */
         @Test
         @DisplayName("should allow leaving a room with a valid token")
         void givenValidToken_whenLeaveRoom_thenReturnSuccessResponse() {
@@ -112,6 +127,9 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(response).contains("\"message\":\"Successfully left room\"");
         }
 
+        /**
+         * Protects the contract that the system should reject invalid JWTs on secured endpoints.
+         */
         @Test
         @DisplayName("should reject invalid JWTs on secured endpoints")
         void givenInvalidToken_whenLeaveRoom_thenReturnForbidden() {
@@ -133,6 +151,9 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         }
 
+        /**
+         * Protects the contract that the system should reject missing tokens for start game, leave game, and claim win.
+         */
         @Test
         @DisplayName("should reject missing tokens for start game, leave game, and claim win")
         void givenMissingTokens_whenCallingProtectedEndpoints_thenReturnForbidden() {
@@ -162,10 +183,14 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /** Groups test scenarios for authorization. */
     @Nested
     @DisplayName("authorization")
     class Authorization {
 
+        /**
+         * Protects the contract that the system should reject start game requests from non-host players.
+         */
         @Test
         @DisplayName("should reject start game requests from non-host players")
         void givenNonHostToken_whenStartGame_thenReturnClientError() throws Exception {
@@ -185,6 +210,9 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(exception.getStatusCode().is4xxClientError()).isTrue();
         }
 
+        /**
+         * Protects the contract that the system should allow hosts to start a game once enough players have joined.
+         */
         @Test
         @DisplayName("should allow hosts to start a game once enough players have joined")
         void givenHostTokenAndEnoughPlayers_whenStartGame_thenReturnSuccessResponse() throws Exception {
@@ -200,10 +228,14 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /** Groups test scenarios for token validation. */
     @Nested
     @DisplayName("token validation")
     class TokenValidation {
 
+        /**
+         * Protects the contract that the system should round-trip the player name through the JWT subject.
+         */
         @Test
         @DisplayName("should round-trip the player name through the JWT subject")
         void givenPlayerName_whenGenerateToken_thenExtractSamePlayerName() {
@@ -218,6 +250,9 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(principal.roomId()).isEqualTo(roomId);
         }
 
+        /**
+         * Protects the contract that the system should validate fresh tokens and reject invalid or tampered ones.
+         */
         @Test
         @DisplayName("should validate fresh tokens and reject invalid or tampered ones")
         void givenDifferentTokenStates_whenValidate_thenReturnExpectedResult() {

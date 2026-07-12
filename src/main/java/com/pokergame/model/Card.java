@@ -13,6 +13,9 @@ import org.jspecify.annotations.NonNull;
  * Type safety is enforced through the use of Suit and Rank enums,
  * eliminating the need for validation.
  * </p>
+ *
+ * @param rank card rank
+ * @param suit card suit
  */
 public record Card(Rank rank, Suit suit) {
     /**
@@ -24,7 +27,12 @@ public record Card(Rank rank, Suit suit) {
     public Card {
     }
     
-    // Needed this for frontend to change card objects to strings in the format "AS", "TD", etc. instead of JSON objects like {"rank":"ACE","suit":"SPADES"}
+    /**
+     * Serializes the card using the compact rank-and-suit wire format expected by
+     * the frontend instead of exposing a JSON object.
+     *
+     * @return compact card code such as {@code AS} or {@code 10D}
+     */
     @JsonValue
     public String toJsonString() {
         String r;

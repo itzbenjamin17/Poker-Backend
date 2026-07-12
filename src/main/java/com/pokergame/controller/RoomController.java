@@ -33,8 +33,13 @@ public class RoomController {
 
     private final JwtService jwtService;
 
-
-    // Dependency Injection
+    /**
+     * Creates the room controller with its room, game, and token services.
+     *
+     * @param roomService owns lobby state and membership
+     * @param gameLifecycleService transitions rooms into active games
+     * @param jwtService issues room-bound player tokens
+     */
     public RoomController(RoomService roomService,
             GameLifecycleService gameLifecycleService,
             JwtService jwtService) {
@@ -48,6 +53,7 @@ public class RoomController {
      * PUBLIC ENDPOINT - Issues JWT token.
      *
      * @param createRequest room configuration (name, max players, etc.)
+     * @param request current servlet request
      * @return room ID and JWT token
      */
     @PostMapping("/create")
@@ -74,6 +80,7 @@ public class RoomController {
      * PUBLIC ENDPOINT - Issues JWT token.
      *
      * @param joinRequest room name and player information
+     * @param request current servlet request
      * @return room ID and JWT token
      */
     @PostMapping("/join")
@@ -182,6 +189,13 @@ public class RoomController {
         return ResponseEntity.ok(ApiResponse.success("Game started successfully", gameId));
     }
 
+    /**
+     * Extracts the application principal from an HTTP authentication.
+     *
+     * @param authentication current Spring Security authentication
+     * @return authenticated player principal
+     * @throws UnauthorisedActionException if the authentication has an unexpected principal
+     */
     private PlayerPrincipal extractPrincipal(Authentication authentication) {
         if (authentication.getPrincipal() instanceof PlayerPrincipal principal) {
             return principal;

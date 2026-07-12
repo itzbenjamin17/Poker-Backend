@@ -14,6 +14,11 @@ public record ApiResponse<T>(
         T data) {
     /**
      * Creates a successful response with data.
+     *
+     * @param message client-facing outcome message
+     * @param data response payload
+     * @param <T> payload type
+     * @return successful API response
      */
     public static <T> ApiResponse<T> success(String message, T data) {
         return new ApiResponse<>(message, data);
@@ -21,6 +26,10 @@ public record ApiResponse<T>(
 
     /**
      * Creates a successful response without data.
+     *
+     * @param message client-facing outcome message
+     * @param <T> response payload type
+     * @return successful API response with a {@code null} payload
      */
     public static <T> ApiResponse<T> success(String message) {
         return new ApiResponse<>(message, null);

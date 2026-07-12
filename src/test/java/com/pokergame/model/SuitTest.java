@@ -13,12 +13,18 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("Suit enum")
 class SuitTest {
 
+    /**
+     * Protects the expected behavior for all suits exist.
+     */
     @Test
     void testAllSuitsExist() {
         Suit[] suits = Suit.values();
         assertEquals(4, suits.length, "Should have 4 suits in a standard deck");
     }
 
+    /**
+     * Protects the expected behavior for suit display names.
+     */
     @Test
     void testSuitDisplayNames() {
         assertEquals("Hearts", Suit.HEARTS.getDisplayName());
@@ -27,6 +33,9 @@ class SuitTest {
         assertEquals("Spades", Suit.SPADES.getDisplayName());
     }
 
+    /**
+     * Protects the expected behavior for suit symbols.
+     */
     @Test
     void testSuitSymbols() {
         assertEquals("♥", Suit.HEARTS.getSymbol());
@@ -35,6 +44,9 @@ class SuitTest {
         assertEquals("♠", Suit.SPADES.getSymbol());
     }
 
+    /**
+     * Protects the expected behavior for value of.
+     */
     @Test
     void testValueOf() {
         assertEquals(Suit.HEARTS, Suit.valueOf("HEARTS"));
@@ -43,6 +55,9 @@ class SuitTest {
         assertEquals(Suit.SPADES, Suit.valueOf("SPADES"));
     }
 
+    /**
+     * Protects the expected behavior for enum equality.
+     */
     @Test
     void testEnumEquality() {
         Suit hearts1 = Suit.HEARTS;
@@ -50,6 +65,9 @@ class SuitTest {
         assertSame(hearts1, hearts2, "Enum instances should be identical");
     }
 
+    /**
+     * Protects the expected behavior for all suits unique.
+     */
     @Test
     void testAllSuitsUnique() {
         Suit[] suits = Suit.values();

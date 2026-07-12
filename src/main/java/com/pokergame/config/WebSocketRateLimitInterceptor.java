@@ -19,10 +19,23 @@ public class WebSocketRateLimitInterceptor implements ChannelInterceptor {
 
     private final RateLimitService rateLimitService;
 
+    /**
+     * Creates an interceptor backed by the shared rate-limit service.
+     *
+     * @param rateLimitService per-player WebSocket rate limiter
+     */
     public WebSocketRateLimitInterceptor(RateLimitService rateLimitService) {
         this.rateLimitService = rateLimitService;
     }
 
+    /**
+     * Consumes a rate-limit token for each authenticated STOMP SEND frame.
+     *
+     * @param message inbound STOMP message
+     * @param channel channel receiving the message
+     * @return the unchanged message when it is allowed
+     * @throws MessageDeliveryException when the sender exceeds the configured limit
+     */
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = StompHeaderAccessor.wrap(message);

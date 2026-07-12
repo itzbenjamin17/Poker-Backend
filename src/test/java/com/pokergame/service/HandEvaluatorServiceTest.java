@@ -23,6 +23,9 @@ class HandEvaluatorServiceTest {
 
         private HandEvaluatorService service;
 
+        /**
+         * Initializes the test fixtures before each scenario.
+         */
         @BeforeEach
         void setUp() {
                 service = new HandEvaluatorService();
@@ -30,6 +33,9 @@ class HandEvaluatorServiceTest {
 
         // Indirectly validates internal combination/high-card helpers through public
         // getBestHand API.
+        /**
+         * Protects the expected behavior for get best hand with insufficient total cards should return sorted available cards.
+         */
         @Test
         void testGetBestHand_WithInsufficientTotalCards_ShouldReturnSortedAvailableCards() {
                 List<Card> communityCards = List.of(
@@ -50,6 +56,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(Rank.TWO, result.bestHand().get(3).rank());
         }
 
+        /**
+         * Protects the expected behavior for get best hand with exactly five cards should evaluate the only combination.
+         */
         @Test
         void testGetBestHand_WithExactlyFiveCards_ShouldEvaluateTheOnlyCombination() {
                 List<Card> communityCards = List.of(
@@ -68,6 +77,9 @@ class HandEvaluatorServiceTest {
         }
 
         // Test evaluateHand - Royal Flush
+        /**
+         * Protects the expected behavior for evaluate hand royal flush.
+         */
         @Test
         void testEvaluateHandRoyalFlush() {
                 List<Card> royalFlush = List.of(
@@ -80,6 +92,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.ROYAL_FLUSH, service.evaluateHand(royalFlush));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand straight flush.
+         */
         @Test
         void testEvaluateHandStraightFlush() {
                 List<Card> straightFlush = List.of(
@@ -92,6 +107,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.STRAIGHT_FLUSH, service.evaluateHand(straightFlush));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand low ace straight flush.
+         */
         @Test
         void testEvaluateHandLowAceStraightFlush() {
                 List<Card> lowAceStraightFlush = List.of(
@@ -104,6 +122,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.STRAIGHT_FLUSH, service.evaluateHand(lowAceStraightFlush));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand four of a kind.
+         */
         @Test
         void testEvaluateHandFourOfAKind() {
                 List<Card> fourOfAKind = List.of(
@@ -116,6 +137,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.FOUR_OF_A_KIND, service.evaluateHand(fourOfAKind));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand full house.
+         */
         @Test
         void testEvaluateHandFullHouse() {
                 List<Card> fullHouse = List.of(
@@ -128,6 +152,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.FULL_HOUSE, service.evaluateHand(fullHouse));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand flush.
+         */
         @Test
         void testEvaluateHandFlush() {
                 List<Card> flush = List.of(
@@ -140,6 +167,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.FLUSH, service.evaluateHand(flush));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand straight.
+         */
         @Test
         void testEvaluateHandStraight() {
                 List<Card> straight = List.of(
@@ -152,6 +182,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.STRAIGHT, service.evaluateHand(straight));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand low ace straight.
+         */
         @Test
         void testEvaluateHandLowAceStraight() {
                 List<Card> lowAceStraight = List.of(
@@ -164,6 +197,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.STRAIGHT, service.evaluateHand(lowAceStraight));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand three of a kind.
+         */
         @Test
         void testEvaluateHandThreeOfAKind() {
                 List<Card> threeOfAKind = List.of(
@@ -176,6 +212,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.THREE_OF_A_KIND, service.evaluateHand(threeOfAKind));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand two pair.
+         */
         @Test
         void testEvaluateHandTwoPair() {
                 List<Card> twoPair = List.of(
@@ -188,6 +227,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.TWO_PAIR, service.evaluateHand(twoPair));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand one pair.
+         */
         @Test
         void testEvaluateHandOnePair() {
                 List<Card> onePair = List.of(
@@ -200,6 +242,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.ONE_PAIR, service.evaluateHand(onePair));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand high card.
+         */
         @Test
         void testEvaluateHandHighCard() {
                 List<Card> highCard = List.of(
@@ -212,6 +257,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.HIGH_CARD, service.evaluateHand(highCard));
         }
 
+        /**
+         * Protects the expected behavior for evaluate hand invalid size.
+         */
         @Test
         void testEvaluateHandInvalidSize() {
                 List<Card> tooFewCards = List.of(
@@ -225,6 +273,9 @@ class HandEvaluatorServiceTest {
         }
 
         // Test getBestHand
+        /**
+         * Protects the expected behavior for get best hand royal flush.
+         */
         @Test
         void testGetBestHandRoyalFlush() {
                 List<Card> communityCards = List.of(
@@ -244,6 +295,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(5, result.bestHand().size());
         }
 
+        /**
+         * Protects the expected behavior for get best hand chooses best combination.
+         */
         @Test
         void testGetBestHandChoosesBestCombination() {
                 List<Card> communityCards = List.of(
@@ -262,6 +316,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.FULL_HOUSE, result.handRank());
         }
 
+        /**
+         * Protects the expected behavior for get best hand high card.
+         */
         @Test
         void testGetBestHandHighCard() {
                 List<Card> communityCards = List.of(
@@ -283,6 +340,9 @@ class HandEvaluatorServiceTest {
                 assertTrue(result.bestHand().stream().anyMatch(c -> c.rank() == Rank.KING));
         }
 
+        /**
+         * Protects the expected behavior for get best hand high card selection should keep top five cards.
+         */
         @Test
         void testGetBestHand_HighCardSelection_ShouldKeepTopFiveCards() {
                 List<Card> communityCards = List.of(
@@ -309,6 +369,9 @@ class HandEvaluatorServiceTest {
         }
 
         // Test isBetterHandOfSameRank - One Pair
+        /**
+         * Protects the expected behavior for compare one pair higher pair wins.
+         */
         @Test
         void testCompareOnePairHigherPairWins() {
                 List<Card> hand1 = List.of(
@@ -329,6 +392,9 @@ class HandEvaluatorServiceTest {
                 assertFalse(service.isBetterHandOfSameRank(hand2, hand1, HandRank.ONE_PAIR));
         }
 
+        /**
+         * Protects the expected behavior for compare one pair higher wins2.
+         */
         @Test
         void testCompareOnePairHigherWins2() {
                 List<Card> hand1 = List.of(
@@ -349,6 +415,9 @@ class HandEvaluatorServiceTest {
                 assertFalse(service.isBetterHandOfSameRank(hand1, hand2, HandRank.ONE_PAIR));
         }
 
+        /**
+         * Protects the expected behavior for compare one pair same pair better kicker.
+         */
         @Test
         void testCompareOnePairSamePairBetterKicker() {
                 List<Card> hand1 = List.of(
@@ -369,6 +438,9 @@ class HandEvaluatorServiceTest {
         }
 
         // Test isBetterHandOfSameRank - Two Pair
+        /**
+         * Protects the expected behavior for compare two pair higher top pair wins.
+         */
         @Test
         void testCompareTwoPairHigherTopPairWins() {
                 List<Card> hand1 = List.of(
@@ -388,6 +460,9 @@ class HandEvaluatorServiceTest {
                 assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.TWO_PAIR));
         }
 
+        /**
+         * Protects the expected behavior for compare two pair same top pair better bottom pair.
+         */
         @Test
         void testCompareTwoPairSameTopPairBetterBottomPair() {
                 List<Card> hand1 = List.of(
@@ -408,6 +483,9 @@ class HandEvaluatorServiceTest {
         }
 
         // Test isBetterHandOfSameRank - Three of a Kind
+        /**
+         * Protects the expected behavior for compare three of a kind higher triplet wins.
+         */
         @Test
         void testCompareThreeOfAKindHigherTripletWins() {
                 List<Card> hand1 = List.of(
@@ -428,6 +506,9 @@ class HandEvaluatorServiceTest {
         }
 
         // Test isBetterHandOfSameRank - Straight
+        /**
+         * Protects the expected behavior for compare straight higher top card wins.
+         */
         @Test
         void testCompareStraightHigherTopCardWins() {
                 List<Card> hand1 = List.of(
@@ -447,6 +528,9 @@ class HandEvaluatorServiceTest {
                 assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.STRAIGHT));
         }
 
+        /**
+         * Protects the expected behavior for compare straight low ace loses to regular straight.
+         */
         @Test
         void testCompareStraightLowAceLosesToRegularStraight() {
                 List<Card> lowAceStraight = List.of(
@@ -467,6 +551,9 @@ class HandEvaluatorServiceTest {
         }
 
         // Test isBetterHandOfSameRank - Flush
+        /**
+         * Protects the expected behavior for compare flush higher cards win.
+         */
         @Test
         void testCompareFlushHigherCardsWin() {
                 List<Card> hand1 = List.of(
@@ -487,6 +574,9 @@ class HandEvaluatorServiceTest {
         }
 
         // Test isBetterHandOfSameRank - Full House
+        /**
+         * Protects the expected behavior for compare full house higher triplet wins.
+         */
         @Test
         void testCompareFullHouseHigherTripletWins() {
                 List<Card> hand1 = List.of(
@@ -506,6 +596,9 @@ class HandEvaluatorServiceTest {
                 assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.FULL_HOUSE));
         }
 
+        /**
+         * Protects the expected behavior for compare full house same triplet better pair wins.
+         */
         @Test
         void testCompareFullHouseSameTripletBetterPairWins() {
                 List<Card> hand1 = List.of(
@@ -526,6 +619,9 @@ class HandEvaluatorServiceTest {
         }
 
         // Test isBetterHandOfSameRank - Four of a Kind
+        /**
+         * Protects the expected behavior for compare four of a kind higher quad wins.
+         */
         @Test
         void testCompareFourOfAKindHigherQuadWins() {
                 List<Card> hand1 = List.of(
@@ -545,6 +641,9 @@ class HandEvaluatorServiceTest {
                 assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.FOUR_OF_A_KIND));
         }
 
+        /**
+         * Protects the expected behavior for compare four of a kind same quad better kicker.
+         */
         @Test
         void testCompareFourOfAKindSameQuadBetterKicker() {
                 List<Card> hand1 = List.of(
@@ -565,6 +664,9 @@ class HandEvaluatorServiceTest {
         }
 
         // Test edge cases
+        /**
+         * Protects the expected behavior for compare IDentical hands.
+         */
         @Test
         void testCompareIdenticalHands() {
                 List<Card> hand1 = List.of(
@@ -585,6 +687,9 @@ class HandEvaluatorServiceTest {
                 assertFalse(service.isBetterHandOfSameRank(hand2, hand1, HandRank.ONE_PAIR));
         }
 
+        /**
+         * Protects the expected behavior for compare high card ace high beats king high.
+         */
         @Test
         void testCompareHighCardAceHighBeatsKingHigh() {
                 List<Card> aceHigh = List.of(
@@ -605,6 +710,9 @@ class HandEvaluatorServiceTest {
                 assertFalse(service.isBetterHandOfSameRank(kingHigh, aceHigh, HandRank.HIGH_CARD));
         }
 
+        /**
+         * Protects the expected behavior for compare high card same top card uses next kicker.
+         */
         @Test
         void testCompareHighCardSameTopCardUsesNextKicker() {
                 List<Card> betterKicker = List.of(
@@ -625,6 +733,9 @@ class HandEvaluatorServiceTest {
                 assertFalse(service.isBetterHandOfSameRank(weakerKicker, betterKicker, HandRank.HIGH_CARD));
         }
 
+        /**
+         * Protects the expected behavior for compare high card IDentical returns tie edge case.
+         */
         @Test
         void testCompareHighCardIdenticalReturnsTieEdgeCase() {
                 List<Card> hand1 = List.of(
@@ -645,6 +756,9 @@ class HandEvaluatorServiceTest {
                 assertFalse(service.isBetterHandOfSameRank(hand2, hand1, HandRank.HIGH_CARD));
         }
 
+        /**
+         * Protects the expected behavior for get best hand with seven cards.
+         */
         @Test
         void testGetBestHandWithSevenCards() {
                 List<Card> communityCards = List.of(
@@ -664,6 +778,9 @@ class HandEvaluatorServiceTest {
                 assertEquals(HandRank.STRAIGHT, result.handRank());
         }
 
+        /**
+         * Protects the expected behavior for straight flush comparison in get best hand.
+         */
         @Test
         void testStraightFlushComparisonInGetBestHand() {
                 List<Card> communityCards = List.of(

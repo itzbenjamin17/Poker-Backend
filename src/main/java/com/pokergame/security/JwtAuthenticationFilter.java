@@ -27,10 +27,25 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
 
+    /**
+     * Creates the request filter with the service used to validate bearer tokens.
+     *
+     * @param jwtService token validator and principal extractor
+     */
     public JwtAuthenticationFilter(JwtService jwtService) {
         this.jwtService = jwtService;
     }
 
+    /**
+     * Adds a pre-authenticated player token to the security context when a valid
+     * bearer token is present, then continues the filter chain.
+     *
+     * @param request current HTTP request
+     * @param response current HTTP response
+     * @param filterChain remaining servlet filter chain
+     * @throws ServletException if downstream filtering fails
+     * @throws IOException if downstream processing cannot read or write the request
+     */
     @Override
     protected void doFilterInternal(HttpServletRequest request,
             HttpServletResponse response,

@@ -2,7 +2,6 @@ package com.pokergame.config;
 
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -20,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
+/** Tests WebSocket auth interceptor behavior. */
 @Tag("unit")
 @ExtendWith(MockitoExtension.class)
 class WebSocketAuthInterceptorTest {
@@ -35,10 +35,9 @@ class WebSocketAuthInterceptorTest {
     private static final String PLAYER_NAME = "Alice";
     private static final PlayerPrincipal PRINCIPAL = new PlayerPrincipal(PLAYER_NAME, ROOM_ID);
 
-    @BeforeEach
-    void setUp() {
-    }
-
+    /**
+     * Protects the contract that the system should allow CONNECT with valid token.
+     */
     @Test
     @DisplayName("should allow CONNECT with valid token")
     void givenValidToken_whenConnect_thenPrincipalIsSet() {
@@ -59,6 +58,9 @@ class WebSocketAuthInterceptorTest {
         assertThat(p.roomId()).isEqualTo(ROOM_ID);
     }
 
+    /**
+     * Protects the contract that the system should throw MessagingException on CONNECT with missing token.
+     */
     @Test
     @DisplayName("should throw MessagingException on CONNECT with missing token")
     void givenMissingToken_whenConnect_thenThrowException() {
@@ -70,6 +72,9 @@ class WebSocketAuthInterceptorTest {
                 .hasMessageContaining("Missing WebSocket authorization token");
     }
 
+    /**
+     * Protects the contract that the system should throw MessagingException on CONNECT with invalid token.
+     */
     @Test
     @DisplayName("should throw MessagingException on CONNECT with invalid token")
     void givenInvalidToken_whenConnect_thenThrowException() {
@@ -84,6 +89,9 @@ class WebSocketAuthInterceptorTest {
                 .hasMessageContaining("Invalid WebSocket authorization token");
     }
 
+    /**
+     * Protects the contract that the system should allow SUBSCRIBE to own room.
+     */
     @Test
     @DisplayName("should allow SUBSCRIBE to own room")
     void givenAuthenticated_whenSubscribeToOwnRoom_thenAllow() {
@@ -96,6 +104,9 @@ class WebSocketAuthInterceptorTest {
         assertThat(result).isNotNull();
     }
 
+    /**
+     * Protects the contract that the system should block SUBSCRIBE to another room.
+     */
     @Test
     @DisplayName("should block SUBSCRIBE to another room")
     void givenAuthenticated_whenSubscribeToOtherRoom_thenThrowException() {
@@ -109,6 +120,9 @@ class WebSocketAuthInterceptorTest {
                 .hasMessageContaining("Forbidden");
     }
 
+    /**
+     * Protects the contract that the system should block SUBSCRIBE to another game.
+     */
     @Test
     @DisplayName("should block SUBSCRIBE to another game")
     void givenAuthenticated_whenSubscribeToOtherGame_thenThrowException() {
@@ -122,6 +136,9 @@ class WebSocketAuthInterceptorTest {
                 .hasMessageContaining("Forbidden");
     }
 
+    /**
+     * Protects the contract that the system should allow SUBSCRIBE to user queue.
+     */
     @Test
     @DisplayName("should allow SUBSCRIBE to user queue")
     void givenAuthenticated_whenSubscribeToUserQueue_thenAllow() {

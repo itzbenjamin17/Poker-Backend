@@ -50,6 +50,9 @@ class PlayerActionServiceTest {
     private List<Player> testPlayers;
     private static final String GAME_ID = "test-game-id";
 
+    /**
+     * Initializes the test fixtures before each scenario.
+     */
     @BeforeEach
     void setUp() {
         playerActionService = new PlayerActionService(gameLifecycleService, gameStateService);
@@ -66,6 +69,9 @@ class PlayerActionServiceTest {
 
     // ==================== processPlayerAction - Basic Tests ====================
 
+    /**
+     * Protects the contract that process player action when game not found should throw exception.
+     */
     @Test
     void processPlayerAction_WhenGameNotFound_ShouldThrowException() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(null);
@@ -79,6 +85,9 @@ class PlayerActionServiceTest {
         assertTrue(exception.getMessage().contains("Game not found"));
     }
 
+    /**
+     * Protects the contract that process player action when not player turn should throw security exception.
+     */
     @Test
     void processPlayerAction_WhenNotPlayerTurn_ShouldThrowSecurityException() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -99,6 +108,9 @@ class PlayerActionServiceTest {
         assertTrue(exception.getMessage().contains("not your turn"));
     }
 
+    /**
+     * Protects the contract that process player action when current player disconnected should throw security exception.
+     */
     @Test
     void processPlayerAction_WhenCurrentPlayerDisconnected_ShouldThrowSecurityException() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -115,6 +127,9 @@ class PlayerActionServiceTest {
         assertTrue(exception.getMessage().toLowerCase().contains("reconnect"));
     }
 
+    /**
+     * Protects the contract that process player action with valid fold should process.
+     */
     @Test
     void processPlayerAction_WithValidFold_ShouldProcess() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -128,6 +143,9 @@ class PlayerActionServiceTest {
         verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
+    /**
+     * Protects the contract that process player action with valid call should process.
+     */
     @Test
     void processPlayerAction_WithValidCall_ShouldProcess() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -142,6 +160,9 @@ class PlayerActionServiceTest {
         verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
+    /**
+     * Protects the contract that process player action with valid check when allowed should process.
+     */
     @Test
     void processPlayerAction_WithValidCheck_WhenAllowed_ShouldProcess() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -162,6 +183,9 @@ class PlayerActionServiceTest {
 
     // ==================== processPlayerAction - Raise Tests ====================
 
+    /**
+     * Protects the contract that process player action with valid raise should process.
+     */
     @Test
     void processPlayerAction_WithValidRaise_ShouldProcess() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -175,6 +199,9 @@ class PlayerActionServiceTest {
         verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
+    /**
+     * Protects the contract that process player action with invalid raise amount should throw exception.
+     */
     @Test
     void processPlayerAction_WithInvalidRaiseAmount_ShouldThrowException() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -188,6 +215,9 @@ class PlayerActionServiceTest {
                 () -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
     }
 
+    /**
+     * Protects the contract that process player action with raise larger than stack should throw bad request.
+     */
     @Test
     void processPlayerAction_WithRaiseLargerThanStack_ShouldThrowBadRequest() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -200,6 +230,9 @@ class PlayerActionServiceTest {
                 () -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
     }
 
+    /**
+     * Protects the contract that process player action with call larger than stack should convert to all in.
+     */
     @Test
     void processPlayerAction_WithCallLargerThanStack_ShouldConvertToAllIn() {
         List<Player> shortStackPlayers = new ArrayList<>();
@@ -226,6 +259,9 @@ class PlayerActionServiceTest {
 
     // ==================== processPlayerAction - All-In Tests ====================
 
+    /**
+     * Protects the contract that process player action with all in should process.
+     */
     @Test
     void processPlayerAction_WithAllIn_ShouldProcess() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -239,6 +275,9 @@ class PlayerActionServiceTest {
         verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
+    /**
+     * Protects the contract that process player action all in with low chips should go all in.
+     */
     @Test
     void processPlayerAction_AllInWithLowChips_ShouldGoAllIn() {
         // Create a player with very few chips
@@ -261,6 +300,9 @@ class PlayerActionServiceTest {
 
     // ==================== processPlayerAction - Bet Tests ====================
 
+    /**
+     * Protects the contract that process player action with valid bet should process.
+     */
     @Test
     void processPlayerAction_WithValidBet_ShouldProcess() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -282,6 +324,9 @@ class PlayerActionServiceTest {
 
     // ==================== Broadcasting Tests ====================
 
+    /**
+     * Protects the contract that process player action should broadcast game state.
+     */
     @Test
     void processPlayerAction_ShouldBroadcastGameState() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -296,6 +341,9 @@ class PlayerActionServiceTest {
 
     // ==================== Game Progression Tests ====================
 
+    /**
+     * Protects the contract that process player action when betting round complete should advance game.
+     */
     @Test
     void processPlayerAction_WhenBettingRoundComplete_ShouldAdvanceGame() {
         // Create a 2-player game for simpler betting round
@@ -319,6 +367,9 @@ class PlayerActionServiceTest {
         verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
+    /**
+     * Protects the contract that process player action pre flop all calls should return action to big blind.
+     */
     @Test
     void processPlayerAction_PreFlop_AllCalls_ShouldReturnActionToBigBlind() {
         List<Player> players = new ArrayList<>();
@@ -347,6 +398,9 @@ class PlayerActionServiceTest {
                 "Action should return to the big blind after everyone else calls");
     }
 
+    /**
+     * Protects the contract that process player action pre flop big blind should be able to raise after calls.
+     */
     @Test
     void processPlayerAction_PreFlop_BigBlindShouldBeAbleToRaiseAfterCalls() {
         List<Player> players = new ArrayList<>();
@@ -384,6 +438,9 @@ class PlayerActionServiceTest {
                 "Big blind raise should increase the highest bet");
     }
 
+    /**
+     * Protects the contract that process player action pre flop heads up call should still give big blind option.
+     */
     @Test
     void processPlayerAction_PreFlop_HeadsUp_CallShouldStillGiveBigBlindOption() {
         List<Player> players = new ArrayList<>();
@@ -411,6 +468,9 @@ class PlayerActionServiceTest {
 
     // ==================== Multiple Actions Tests ====================
 
+    /**
+     * Protects the contract that process player action multiple actions in sequence should work.
+     */
     @Test
     void processPlayerAction_MultipleActionsInSequence_ShouldWork() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -430,6 +490,9 @@ class PlayerActionServiceTest {
 
     // ==================== Edge Cases ====================
 
+    /**
+     * Protects the contract that process player action with null amount for fold should work.
+     */
     @Test
     void processPlayerAction_WithNullAmount_ForFold_ShouldWork() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -440,6 +503,9 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
     }
 
+    /**
+     * Protects the contract that process player action same game ID different actions should track correctly.
+     */
     @Test
     void processPlayerAction_SameGameId_DifferentActions_ShouldTrackCorrectly() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -460,6 +526,9 @@ class PlayerActionServiceTest {
 
     // ==================== Conversion Tests ====================
 
+    /**
+     * Protects the contract that process player action raise with all in players should remain raise.
+     */
     @Test
     void processPlayerAction_RaiseWithAllInPlayers_ShouldRemainRaise() {
         // Set up a game where a short stack can go all-in and action continues.
@@ -500,6 +569,9 @@ class PlayerActionServiceTest {
 
     // ==================== Pot Updates Tests ====================
 
+    /**
+     * Protects the contract that process player action call should update pot.
+     */
     @Test
     void processPlayerAction_Call_ShouldUpdatePot() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -513,6 +585,9 @@ class PlayerActionServiceTest {
         assertTrue(testGame.getPot() >= initialPot);
     }
 
+    /**
+     * Protects the contract that process player action fold should not change pot.
+     */
     @Test
     void processPlayerAction_Fold_ShouldNotChangePot() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -528,6 +603,9 @@ class PlayerActionServiceTest {
 
     // ==================== Player State Tests ====================
 
+    /**
+     * Protects the contract that process player action after fold player should be folded.
+     */
     @Test
     void processPlayerAction_AfterFold_PlayerShouldBeFolded() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -541,6 +619,9 @@ class PlayerActionServiceTest {
         assertTrue(currentPlayer.getHasFolded());
     }
 
+    /**
+     * Protects the contract that process player action after all in player should be all in.
+     */
     @Test
     void processPlayerAction_AfterAllIn_PlayerShouldBeAllIn() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -559,6 +640,9 @@ class PlayerActionServiceTest {
 
     // ==================== Concurrent Access Tests ====================
 
+    /**
+     * Protects the contract that process player action two players acting simultaneously only one succeeds.
+     */
     @Test
     void processPlayerAction_TwoPlayersActingSimultaneously_OnlyOneSucceeds() throws InterruptedException {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -758,7 +842,7 @@ class PlayerActionServiceTest {
 
     /**
      * Tests all-in scenarios with concurrent player actions.
-     * Verifies that when multiple players try to go all-in simultaneously,
+     * Protects the contract that when multiple players try to go all-in simultaneously,
      * only the current player succeeds.
      */
     @Test
@@ -800,6 +884,9 @@ class PlayerActionServiceTest {
         assertEquals(successCount.get(), allInCount, "Game state should match successful actions");
     }
 
+    /**
+     * Protects the contract that process player action on same game should be synchronized.
+     */
     @Test
     void processPlayerAction_OnSameGame_ShouldBeSynchronized() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
@@ -811,6 +898,9 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
     }
 
+    /**
+     * Protects the contract that process player action when game deleted during advance should not throw.
+     */
     @Test
     void processPlayerAction_WhenGameDeletedDuringAdvance_ShouldNotThrow() {
         List<Player> players = new ArrayList<>();

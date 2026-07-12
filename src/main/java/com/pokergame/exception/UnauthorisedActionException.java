@@ -5,6 +5,11 @@ package com.pokergame.exception;
  */
 
 public class UnauthorisedActionException extends PokerException {
+    /**
+     * Creates an exception for an action the current player may not perform.
+     *
+     * @param message client-safe authorization failure description
+     */
     public UnauthorisedActionException(String message) {
         super(message);
     }

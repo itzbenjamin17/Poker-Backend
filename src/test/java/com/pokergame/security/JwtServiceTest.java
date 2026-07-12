@@ -18,6 +18,7 @@ import java.time.Duration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/** Tests JWT service behavior. */
 @Tag("unit")
 @DisplayName("JWT service")
 class JwtServiceTest {
@@ -29,10 +30,14 @@ class JwtServiceTest {
     private final JwtService jwtService = createService(TEST_SECRET, DEFAULT_EXPIRATION_MILLIS);
     private static final String TEST_ROOM = "test-room";
 
+    /** Groups test scenarios for token generation. */
     @Nested
     @DisplayName("token generation")
     class TokenGeneration {
 
+        /**
+         * Protects the contract that the system should generate a non-empty token for a valid player name.
+         */
         @Test
         @DisplayName("should generate a non-empty token for a valid player name")
         void givenValidPlayerName_whenGenerateToken_thenReturnSignedToken() {
@@ -42,6 +47,9 @@ class JwtServiceTest {
             assertThat(jwtService.isTokenValid(token)).isTrue();
         }
 
+        /**
+         * Protects the contract that the system should generate different tokens for different players.
+         */
         @Test
         @DisplayName("should generate different tokens for different players")
         void givenDifferentPlayers_whenGenerateToken_thenReturnDifferentTokens() {
@@ -51,6 +59,10 @@ class JwtServiceTest {
             assertThat(firstToken).isNotEqualTo(secondToken);
         }
 
+        /**
+         * Protects the scenario: given special or long player names, when generate token, then player name can be extracted.
+         * @param playerName player name supplied to the fixture
+         */
         @ParameterizedTest(name = "should preserve player name \"{0}\"")
         @MethodSource("com.pokergame.security.JwtServiceTest#specialPlayerNames")
         void givenSpecialOrLongPlayerNames_whenGenerateToken_thenPlayerNameCanBeExtracted(String playerName) {
@@ -60,6 +72,9 @@ class JwtServiceTest {
             assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName);
         }
 
+        /**
+         * Protects the contract that the system should reject an empty player name subject.
+         */
         @Test
         @DisplayName("should reject an empty player name subject")
         void givenEmptyPlayerName_whenGenerateToken_thenIsTokenValidReturnsFalse() {
@@ -68,6 +83,9 @@ class JwtServiceTest {
             assertThat(jwtService.isTokenValid(token)).isFalse();
         }
 
+        /**
+         * Protects the contract that the system should reject a token with missing or blank roomId claim.
+         */
         @Test
         @DisplayName("should reject a token with missing or blank roomId claim")
         void givenMissingRoomId_whenValidate_thenReturnFalse() {
@@ -82,6 +100,9 @@ class JwtServiceTest {
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
+        /**
+         * Protects the contract that the system should reject a token with blank roomId claim.
+         */
         @Test
         @DisplayName("should reject a token with blank roomId claim")
         void givenBlankRoomId_whenValidate_thenReturnFalse() {
@@ -97,10 +118,14 @@ class JwtServiceTest {
         }
     }
 
+    /** Groups test scenarios for token validation. */
     @Nested
     @DisplayName("token validation")
     class TokenValidation {
 
+        /**
+         * Protects the contract that the system should report valid tokens as valid.
+         */
         @Test
         @DisplayName("should report valid tokens as valid")
         void givenFreshToken_whenValidate_thenReturnTrue() {
@@ -109,6 +134,10 @@ class JwtServiceTest {
             assertThat(jwtService.isTokenValid(token)).isTrue();
         }
 
+        /**
+         * Protects the scenario: given malformed token, when validate, then return false.
+         * @param malformedToken malformed token supplied to the fixture
+         */
         @ParameterizedTest(name = "should reject malformed token \"{0}\"")
         @NullAndEmptySource
         @ValueSource(strings = {
@@ -123,6 +152,9 @@ class JwtServiceTest {
             assertThat(jwtService.isTokenValid(malformedToken)).isFalse();
         }
 
+        /**
+         * Protects the contract that the system should reject a tampered token.
+         */
         @Test
         @DisplayName("should reject a tampered token")
         void givenTamperedToken_whenValidate_thenReturnFalse() {
@@ -132,6 +164,9 @@ class JwtServiceTest {
             assertThat(jwtService.isTokenValid(tamperedToken)).isFalse();
         }
 
+        /**
+         * Protects the contract that the system should reject a token signed with a different secret.
+         */
         @Test
         @DisplayName("should reject a token signed with a different secret")
         void givenTokenSignedWithDifferentSecret_whenValidate_thenReturnFalse() {
@@ -144,6 +179,9 @@ class JwtServiceTest {
             assertThat(jwtService.isTokenValid(token)).isFalse();
         }
 
+        /**
+         * Protects the contract that the system should report an expired token as invalid without using hard coded sleeps.
+         */
         @Test
         @DisplayName("should report an expired token as invalid without using hard coded sleeps")
         void givenExpiredToken_whenValidate_thenReturnFalse() {
@@ -158,10 +196,15 @@ class JwtServiceTest {
         }
     }
 
+    /** Groups test scenarios for player extraction. */
     @Nested
     @DisplayName("player extraction")
     class PlayerExtraction {
 
+        /**
+         * Protects the scenario: given valid token, when extract player name, then return subject.
+         * @param playerName player name supplied to the fixture
+         */
         @ParameterizedTest(name = "should extract player name \"{0}\"")
         @ValueSource(strings = { "Player1", "Player2", "Alice", "Bob", "Admin" })
         void givenValidToken_whenExtractPlayerName_thenReturnSubject(String playerName) {
@@ -170,6 +213,9 @@ class JwtServiceTest {
             assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName);
         }
 
+        /**
+         * Protects the contract that the system should extract full principal including room ID.
+         */
         @Test
         @DisplayName("should extract full principal including room ID")
         void givenValidToken_whenExtractPrincipal_thenReturnPlayerPrincipal() {
@@ -183,6 +229,9 @@ class JwtServiceTest {
             assertThat(principal.getName()).isEqualTo(playerName + ":" + TEST_ROOM);
         }
 
+        /**
+         * Protects the contract that the system should throw when extracting from an invalid token.
+         */
         @Test
         @DisplayName("should throw when extracting from an invalid token")
         void givenInvalidToken_whenExtractPlayerName_thenThrow() {
@@ -190,6 +239,9 @@ class JwtServiceTest {
                     .isInstanceOf(Exception.class);
         }
 
+        /**
+         * Protects the contract that the system should throw ExpiredJwtException when the token has expired.
+         */
         @Test
         @DisplayName("should throw ExpiredJwtException when the token has expired")
         void givenExpiredToken_whenExtractPlayerName_thenThrowExpiredJwtException() {
@@ -203,6 +255,9 @@ class JwtServiceTest {
                             .isInstanceOf(ExpiredJwtException.class));
         }
 
+        /**
+         * Protects the contract that the system should throw SignatureException when the token has been tampered with.
+         */
         @Test
         @DisplayName("should throw SignatureException when the token has been tampered with")
         void givenTamperedToken_whenExtractPlayerName_thenThrowSignatureException() {
@@ -214,10 +269,15 @@ class JwtServiceTest {
         }
     }
 
+    /** Groups test scenarios for initialization. */
     @Nested
     @DisplayName("service initialization")
     class Initialization {
 
+        /**
+         * Protects the scenario: given valid secret, when initialise, then do not throw.
+         * @param secret secret supplied to the fixture
+         */
         @ParameterizedTest(name = "should accept secret \"{0}\"")
         @ValueSource(strings = {
                 "Y2VudHVyeS1vbGQtc2VjcmV0LWtleS10aGF0LWlzLWRlZmluaXRlbHktbG9uZy1lbm91Z2gtZm9yLWhtYWMtc2hhLTUxMg==",
@@ -233,6 +293,9 @@ class JwtServiceTest {
             org.junit.jupiter.api.Assertions.assertDoesNotThrow(service::init);
         }
 
+        /**
+         * Protects the contract that the system should reject a weak secret key.
+         */
         @Test
         @DisplayName("should reject a weak secret key")
         void givenShortSecret_whenInitialise_thenThrowIllegalStateException() {
@@ -245,6 +308,10 @@ class JwtServiceTest {
                     .hasMessageContaining("parsing failed");
         }
 
+        /**
+         * Protects the scenario: given missing secret, when initialise, then throw illegal state exception.
+         * @param secret secret supplied to the fixture
+         */
         @ParameterizedTest(name = "should reject missing secret \"{0}\"")
         @NullAndEmptySource
         @ValueSource(strings = {"  ", "\t", "\n"})
@@ -259,6 +326,9 @@ class JwtServiceTest {
         }
     }
 
+    /**
+     * Protects the contract that the system should keep the generate validate extract lifecycle consistent.
+     */
     @Test
     @DisplayName("should keep the generate validate extract lifecycle consistent")
     void givenGeneratedToken_whenRunningLifecycle_thenValidateAndExtractSuccessfully() {
@@ -274,6 +344,12 @@ class JwtServiceTest {
         assertThat(token.split("\\.")).hasSize(3).allSatisfy(part -> assertThat(part).isNotBlank());
     }
 
+    /**
+     * Creates service for the test.
+     * @param secret secret supplied to the fixture
+     * @param expirationMillis expiration millis supplied to the fixture
+     * @return initialized JWT service
+     */
     private JwtService createService(String secret, long expirationMillis) {
         JwtService service = new JwtService();
         ReflectionTestUtils.setField(service, "secretKeyString", secret);
@@ -282,6 +358,10 @@ class JwtServiceTest {
         return service;
     }
 
+    /**
+     * Supports the test scenario for special player names.
+     * @return player names that must round-trip through token subjects
+     */
     static java.util.stream.Stream<String> specialPlayerNames() {
         return java.util.stream.Stream.of(
             "Player with spaces",

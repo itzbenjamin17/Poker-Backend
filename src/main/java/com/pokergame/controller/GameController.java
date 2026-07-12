@@ -40,7 +40,13 @@ public class GameController {
 
     private final PlayerActionService playerActionService;
 
-    // Dependency Injection
+    /**
+     * Creates the game controller with its action, lifecycle, and projection services.
+     *
+     * @param playerActionService validates and applies player actions
+     * @param gameLifecycleService owns active games and lifecycle transitions
+     * @param gameStateService creates and publishes client state
+     */
     public GameController(PlayerActionService playerActionService,
             GameLifecycleService gameLifecycleService,
             GameStateService gameStateService) {
@@ -102,6 +108,15 @@ public class GameController {
         return ResponseEntity.ok(gameStateService.getPrivatePlayerStateSnapshot(game, playerName));
     }
 
+    /**
+     * Resolves a game only when it exists and still contains the requesting player.
+     *
+     * @param gameId requested game identifier
+     * @param playerName authenticated player name
+     * @return authorized active game
+     * @throws ResourceNotFoundException if the game does not exist
+     * @throws UnauthorisedActionException if the player is no longer in the game
+     */
     private Game getAuthorisedGame(String gameId, String playerName) {
         if (!gameLifecycleService.gameExists(gameId)) {
             throw new ResourceNotFoundException("Game not found");
@@ -171,6 +186,10 @@ public class GameController {
      * Handles exceptions occurring during WebSocket message processing.
      * Propagates errors back to the specific initiating player via their private
      * channel.
+     *
+     * @param exception message-processing failure to translate
+     * @param principal player that sent the failed message
+     * @param message original message used to recover the game destination
      */
     @MessageExceptionHandler
     public void handleMessageException(Exception exception, Principal principal,
@@ -266,6 +285,13 @@ public class GameController {
         return ResponseEntity.ok(ApiResponse.success("Win claimed successfully"));
     }
 
+    /**
+     * Extracts the application principal from an HTTP authentication.
+     *
+     * @param authentication current Spring Security authentication
+     * @return authenticated player principal
+     * @throws UnauthorisedActionException if the authentication has an unexpected principal
+     */
     private PlayerPrincipal extractPrincipal(Authentication authentication) {
         if (authentication.getPrincipal() instanceof PlayerPrincipal principal) {
             return principal;
@@ -273,6 +299,13 @@ public class GameController {
         throw new UnauthorisedActionException("Invalid authentication principal");
     }
 
+    /**
+     * Extracts the application principal from a STOMP principal or authentication wrapper.
+     *
+     * @param principal current WebSocket principal
+     * @return authenticated player principal
+     * @throws UnauthorisedActionException if no player principal can be resolved
+     */
     private PlayerPrincipal extractPrincipalFromPrincipal(Principal principal) {
         if (principal instanceof PlayerPrincipal playerPrincipal) {
             return playerPrincipal;

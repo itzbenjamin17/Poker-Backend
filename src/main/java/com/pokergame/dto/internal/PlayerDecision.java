@@ -12,6 +12,11 @@ import com.pokergame.enums.PlayerAction;
  */
 
 public record PlayerDecision(PlayerAction action, int amount, String playerId) {
+    /**
+     * Validates that a decision identifies an action, player, and non-negative amount.
+     *
+     * @throws BadRequestException if any required decision value is invalid
+     */
     public PlayerDecision {
         if (action == null) {
             throw new BadRequestException("No action specified. Please select an action");

@@ -8,15 +8,9 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
- * Represents a request to create a new room.
- * 
- * @param roomName     The name of the room.
- * @param playerName   The name of the player creating the room.
- * @param maxPlayers   The maximum number of players allowed in the room.
- * @param smallBlind   The small blind amount.
- * @param bigBlind     The big blind amount.
- * @param buyIn        The buy-in amount.
- * @param password     The password for the room (optional).
+ * Mutable request model for creating a room. The player name may be replaced by
+ * its sanitized form before the request reaches the room service; all other room
+ * settings remain immutable after deserialization.
  */
 
 public class CreateRoomRequest {
@@ -56,7 +50,17 @@ public class CreateRoomRequest {
     private final String password; // Optional - can be null/empty for public rooms
 
 
-    // Constructor
+    /**
+     * Creates a room request from client-supplied settings.
+     *
+     * @param roomName room display name
+     * @param playerName creating player's display name
+     * @param maxPlayers maximum room capacity
+     * @param smallBlind small blind amount
+     * @param bigBlind big blind amount
+     * @param buyIn starting chips per player
+     * @param password optional room password
+     */
     public CreateRoomRequest(String roomName, String playerName, Integer maxPlayers,
                              Integer smallBlind, Integer bigBlind, Integer buyIn, String password) {
         this.roomName = roomName;
@@ -68,45 +72,93 @@ public class CreateRoomRequest {
         this.password = password;
     }
 
-    // Getters and Setters
+    /**
+     * Returns the room display name.
+     *
+     * @return room name
+     */
     public String getRoomName() {
         return roomName;
     }
 
+    /**
+     * Returns the creating player's display name.
+     *
+     * @return player name
+     */
     public String getPlayerName() {
         return playerName;
     }
 
+    /**
+     * Replaces the player name, typically with its sanitized representation.
+     *
+     * @param playerName player name to retain
+     */
     @SuppressWarnings("unused")
     public void setPlayerName(String playerName) {
         this.playerName = playerName;
     }
 
+    /**
+     * Returns the maximum room capacity.
+     *
+     * @return maximum player count
+     */
     public Integer getMaxPlayers() {
         return maxPlayers;
     }
 
+    /**
+     * Returns the small blind amount.
+     *
+     * @return small blind
+     */
     public Integer getSmallBlind() {
         return smallBlind;
     }
 
+    /**
+     * Returns the big blind amount.
+     *
+     * @return big blind
+     */
     public Integer getBigBlind() {
         return bigBlind;
     }
 
+    /**
+     * Returns each player's starting chip count.
+     *
+     * @return room buy-in
+     */
     public Integer getBuyIn() {
         return buyIn;
     }
 
+    /**
+     * Returns the optional room password.
+     *
+     * @return password, possibly {@code null} or blank
+     */
     public String getPassword() {
         return password;
     }
 
-    // Validation method
+    /**
+     * Reports whether the request protects the room with a non-blank password.
+     *
+     * @return {@code true} when a password was supplied
+     */
     public boolean hasPassword() {
         return password != null && !password.trim().isEmpty();
     }
 
+    /**
+     * Returns a log-safe description that deliberately omits password contents.
+     *
+     * @return request settings and password-presence flag
+     */
     @Override
     public String toString() {
         return "CreateRoomRequest{" +

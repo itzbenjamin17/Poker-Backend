@@ -13,12 +13,16 @@ import java.util.Properties;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/** Tests config contract behavior. */
 @Tag("unit")
 class ConfigContractTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withUserConfiguration(JwtService.class);
 
+    /**
+     * Protects the contract that the system should ensure application.properties has no default JWT secret.
+     */
     @Test
     @DisplayName("should ensure application.properties has no default JWT secret")
     void givenProductionProperties_whenChecked_thenNoSecretExists() throws Exception {
@@ -38,6 +42,9 @@ class ConfigContractTest {
                 .isNullOrEmpty();
     }
 
+    /**
+     * Protects the contract that the system should fail context startup when JWT secret is missing.
+     */
     @Test
     @DisplayName("should fail context startup when JWT secret is missing")
     void givenMissingSecret_whenContextStarts_thenThrowException() {
@@ -55,6 +62,9 @@ class ConfigContractTest {
                 });
     }
 
+    /**
+     * Protects the contract that the system should fail context startup when JWT secret is too weak.
+     */
     @Test
     @DisplayName("should fail context startup when JWT secret is too weak")
     void givenWeakSecret_whenContextStarts_thenThrowException() {

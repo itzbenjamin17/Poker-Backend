@@ -9,8 +9,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Represents the result of a hand evaluation. Tuple like structure as I wanted to
- * return two values from the evaluateHand method.
+ * Immutable result of evaluating a hand, pairing the best five cards with their
+ * poker rank.
  * 
  * @param bestHand the best 5-card hand found
  * @param handRank the rank of the best hand
@@ -18,6 +18,11 @@ import org.slf4j.LoggerFactory;
 public record HandEvaluationResult(List<Card> bestHand, HandRank handRank) {
     private static final Logger logger = LoggerFactory.getLogger(HandEvaluationResult.class);
 
+    /**
+     * Validates and defensively copies an evaluated hand result.
+     *
+     * @throws BadRequestException if the cards or rank are absent
+     */
     public HandEvaluationResult {
         if (bestHand == null || handRank == null) {
             logger.error("Null bestHand or handRank: bestHand={}, handRank={}", bestHand, handRank);

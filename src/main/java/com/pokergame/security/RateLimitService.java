@@ -56,6 +56,11 @@ public class RateLimitService {
         return bucket.tryConsume(1);
     }
 
+    /**
+     * Removes the WebSocket bucket for a player that no longer has active sessions.
+     *
+     * @param username composite principal name used as the bucket key
+     */
     public void cleanUpWs(String username) {
         wsBuckets.remove(username);
     }

@@ -32,6 +32,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+/** Tests game controller behavior. */
 @WebMvcTest(GameController.class)
 @AutoConfigureMockMvc(addFilters = false)
 class GameControllerTest {
@@ -65,12 +66,18 @@ class GameControllerTest {
     private PlayerPrincipal principal;
     private Authentication auth;
 
+    /**
+     * Initializes the test fixtures before each scenario.
+     */
     @BeforeEach
     void setUp() {
         principal = new PlayerPrincipal(playerName, gameId);
         auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
     }
 
+    /**
+     * Verifies the expected response for GET /api/game/{gameId}/state - Success.
+     */
     @Test
     @DisplayName("GET /api/game/{gameId}/state - Success")
     void getGameState_Success() throws Exception {
@@ -92,6 +99,9 @@ class GameControllerTest {
                 .andExpect(jsonPath("$.phase").value("PRE_FLOP"));
     }
 
+    /**
+     * Verifies the expected response for GET /api/game/{gameId}/state - Game Not Found.
+     */
     @Test
     @DisplayName("GET /api/game/{gameId}/state - Game Not Found")
     void getGameState_NotFound() throws Exception {
@@ -103,6 +113,9 @@ class GameControllerTest {
                 .andExpect(jsonPath("$.message").value("Game not found"));
     }
 
+    /**
+     * Verifies the expected response for GET /api/game/{gameId}/state - Game Null (404).
+     */
     @Test
     @DisplayName("GET /api/game/{gameId}/state - Game Null (404)")
     void getGameState_GameNull() throws Exception {
@@ -116,6 +129,9 @@ class GameControllerTest {
                 .andExpect(jsonPath("$.message").value("Game not found"));
     }
 
+    /**
+     * Verifies the expected response for GET /api/game/{gameId}/state - Not In Game (403).
+     */
     @Test
     @DisplayName("GET /api/game/{gameId}/state - Not In Game (403)")
     void getGameState_NotInGame() throws Exception {
@@ -128,6 +144,9 @@ class GameControllerTest {
                 .andExpect(jsonPath("$.message").value("You are no longer part of this game."));
     }
 
+    /**
+     * Verifies the expected response for GET /api/game/{gameId}/private-state - Success.
+     */
     @Test
     @DisplayName("GET /api/game/{gameId}/private-state - Success")
     void getPrivateState_Success() throws Exception {
@@ -145,6 +164,9 @@ class GameControllerTest {
                 .andExpect(jsonPath("$.playerId").value("p1-id"));
     }
 
+    /**
+     * Verifies the expected response for GET /api/game/{gameId}/private-state - Not In Game (403).
+     */
     @Test
     @DisplayName("GET /api/game/{gameId}/private-state - Not In Game (403)")
     void getPrivateState_NotInGame() throws Exception {
@@ -157,6 +179,9 @@ class GameControllerTest {
                 .andExpect(jsonPath("$.message").value("You are no longer part of this game."));
     }
 
+    /**
+     * Verifies the expected response for POST /api/game/{gameId}/leave - Success.
+     */
     @Test
     @DisplayName("POST /api/game/{gameId}/leave - Success")
     void leaveGame_Success() throws Exception {
@@ -168,6 +193,9 @@ class GameControllerTest {
         verify(gameLifecycleService).leaveGame(gameId, playerName);
     }
 
+    /**
+     * Verifies the expected response for POST /api/game/{gameId}/claim-win - Success.
+     */
     @Test
     @DisplayName("POST /api/game/{gameId}/claim-win - Success")
     void claimWin_Success() throws Exception {
@@ -180,6 +208,10 @@ class GameControllerTest {
     }
 
 
+    /**
+     * Protects the contract that WebSocket actions delegate the authenticated
+     * player identity and request to the action service.
+     */
     @Test
     @DisplayName("WS performAction - Success")
     void performAction_ShouldCallService() {
@@ -190,6 +222,9 @@ class GameControllerTest {
         verify(playerActionService).processPlayerAction(eq(gameId), eq(request), eq(playerName));
     }
 
+    /**
+     * Protects the contract that ready messages mark the authenticated player ready.
+     */
     @Test
     @DisplayName("WS markReady - Success")
     void markReady_ShouldCallService() {
@@ -199,6 +234,10 @@ class GameControllerTest {
     }
 
     // Exception Handler Test
+    /**
+     * Protects clients from receiving technical deserialization details in private
+     * WebSocket error notifications.
+     */
     @Test
     @DisplayName("WS handleMessageException - Sanitizes Technical Errors")
     void handleMessageException_SanitizesJacksonErrors() {
@@ -217,6 +256,9 @@ class GameControllerTest {
         );
     }
 
+    /**
+     * Protects the private-notification contract from unbounded exception messages.
+     */
     @Test
     @DisplayName("WS handleMessageException - Truncates Long Messages")
     void handleMessageException_TruncatesLongMessages() {
@@ -237,6 +279,9 @@ class GameControllerTest {
         );
     }
 
+    /**
+     * Protects error delivery when a failed WebSocket message has no destination.
+     */
     @Test
     @DisplayName("WS handleMessageException - Null Destination")
     void handleMessageException_NullDestination() {
@@ -253,6 +298,9 @@ class GameControllerTest {
         );
     }
 
+    /**
+     * Protects error delivery when a destination does not contain a game identifier.
+     */
     @Test
     @DisplayName("WS handleMessageException - Short Destination")
     void handleMessageException_ShortDestination() {
@@ -271,6 +319,9 @@ class GameControllerTest {
         );
     }
 
+    /**
+     * Protects the boundary where an 80-character error must remain untruncated.
+     */
     @Test
     @DisplayName("WS handleMessageException - Exact 80 Characters")
     void handleMessageException_Exact80Characters() {

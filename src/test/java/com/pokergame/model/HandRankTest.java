@@ -13,12 +13,18 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("Hand rank enum")
 class HandRankTest {
 
+    /**
+     * Protects the expected behavior for all hand ranks exist.
+     */
     @Test
     void testAllHandRanksExist() {
         HandRank[] ranks = HandRank.values();
         assertEquals(11, ranks.length, "Should have 11 hand ranks");
     }
 
+    /**
+     * Protects the expected behavior for hand rank values.
+     */
     @Test
     void testHandRankValues() {
         assertEquals(-1, HandRank.NO_HAND.getRank());
@@ -34,6 +40,9 @@ class HandRankTest {
         assertEquals(10, HandRank.ROYAL_FLUSH.getRank());
     }
 
+    /**
+     * Protects the expected behavior for beats method.
+     */
     @Test
     void testBeatsMethod() {
         assertTrue(HandRank.ROYAL_FLUSH.beats(HandRank.STRAIGHT_FLUSH));
@@ -48,6 +57,9 @@ class HandRankTest {
         assertTrue(HandRank.HIGH_CARD.beats(HandRank.NO_HAND));
     }
 
+    /**
+     * Protects the expected behavior for beats returns false for lower or equal ranks.
+     */
     @Test
     void testBeatsReturnsFalseForLowerOrEqualRanks() {
         assertFalse(HandRank.ONE_PAIR.beats(HandRank.TWO_PAIR));
@@ -55,6 +67,9 @@ class HandRankTest {
         assertFalse(HandRank.HIGH_CARD.beats(HandRank.HIGH_CARD));
     }
 
+    /**
+     * Protects the expected behavior for equals method.
+     */
     @Test
     void testEqualsMethod() {
         assertTrue(HandRank.ROYAL_FLUSH.equals(HandRank.ROYAL_FLUSH));
@@ -65,6 +80,9 @@ class HandRankTest {
         assertFalse(HandRank.TWO_PAIR.equals(HandRank.ONE_PAIR));
     }
 
+    /**
+     * Protects the expected behavior for royal flush is strongest.
+     */
     @Test
     void testRoyalFlushIsStrongest() {
         HandRank[] ranks = HandRank.values();
@@ -76,6 +94,9 @@ class HandRankTest {
         }
     }
 
+    /**
+     * Protects the expected behavior for no hand is weakest.
+     */
     @Test
     void testNoHandIsWeakest() {
         HandRank[] ranks = HandRank.values();
@@ -87,6 +108,9 @@ class HandRankTest {
         }
     }
 
+    /**
+     * Protects the expected behavior for hand rank ordering.
+     */
     @Test
     void testHandRankOrdering() {
         // Verify ranks are in ascending order (except NO_HAND)
@@ -109,6 +133,9 @@ class HandRankTest {
         }
     }
 
+    /**
+     * Protects the expected behavior for value of.
+     */
     @Test
     void testValueOf() {
         assertEquals(HandRank.ROYAL_FLUSH, HandRank.valueOf("ROYAL_FLUSH"));
@@ -117,6 +144,9 @@ class HandRankTest {
         assertEquals(HandRank.NO_HAND, HandRank.valueOf("NO_HAND"));
     }
 
+    /**
+     * Protects the expected behavior for enum equality.
+     */
     @Test
     void testEnumEquality() {
         HandRank flush1 = HandRank.FLUSH;

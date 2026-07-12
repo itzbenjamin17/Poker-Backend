@@ -13,12 +13,18 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("Player action enum")
 class PlayerActionTest {
 
+    /**
+     * Protects the expected behavior for all actions exist.
+     */
     @Test
     void testAllActionsExist() {
         PlayerAction[] actions = PlayerAction.values();
         assertEquals(6, actions.length, "Should have 6 player actions");
     }
 
+    /**
+     * Protects the expected behavior for action names.
+     */
     @Test
     void testActionNames() {
         assertNotNull(PlayerAction.FOLD);
@@ -29,6 +35,9 @@ class PlayerActionTest {
         assertNotNull(PlayerAction.ALL_IN);
     }
 
+    /**
+     * Protects the expected behavior for value of.
+     */
     @Test
     void testValueOf() {
         assertEquals(PlayerAction.FOLD, PlayerAction.valueOf("FOLD"));
@@ -39,6 +48,9 @@ class PlayerActionTest {
         assertEquals(PlayerAction.ALL_IN, PlayerAction.valueOf("ALL_IN"));
     }
 
+    /**
+     * Protects the expected behavior for enum equality.
+     */
     @Test
     void testEnumEquality() {
         PlayerAction fold1 = PlayerAction.FOLD;
@@ -46,6 +58,9 @@ class PlayerActionTest {
         assertSame(fold1, fold2, "Enum instances should be identical");
     }
 
+    /**
+     * Protects the expected behavior for all actions unique.
+     */
     @Test
     void testAllActionsUnique() {
         PlayerAction[] actions = PlayerAction.values();

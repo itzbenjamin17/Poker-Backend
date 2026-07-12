@@ -31,6 +31,13 @@ public class SecurityConfig {
     private final PayloadSizeFilter payloadSizeFilter;
     private final EndpointRateLimitFilter endpointRateLimitFilter;
 
+    /**
+     * Creates the security configuration with the filters that protect HTTP traffic.
+     *
+     * @param jwtAuthenticationFilter authenticates bearer tokens
+     * @param payloadSizeFilter rejects oversized request bodies
+     * @param endpointRateLimitFilter throttles sensitive public endpoints
+     */
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
                           com.pokergame.security.PayloadSizeFilter payloadSizeFilter,
                           com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter) {
@@ -50,7 +57,13 @@ public class SecurityConfig {
         };
     }
 
-    // All requests go through this filter chain
+    /**
+     * Builds the stateless HTTP security chain and orders the application filters.
+     *
+     * @param http Spring Security's chain builder
+     * @return configured security filter chain
+     * @throws Exception if Spring Security cannot build the chain
+     */
     @SuppressWarnings("RedundantThrows")
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -99,7 +112,11 @@ public class SecurityConfig {
     @Value("${app.security.cors.allowed-origins}")
     private List<String> allowedOrigins;
 
-    // CORS configuration to allow requests from frontend from certain origins
+    /**
+     * Defines the cross-origin policy for configured frontend origins.
+     *
+     * @return URL-based CORS configuration for all endpoints
+     */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();

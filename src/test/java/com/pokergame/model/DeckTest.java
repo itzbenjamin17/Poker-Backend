@@ -22,16 +22,25 @@ class DeckTest {
 
     private Deck deck;
 
+    /**
+     * Initializes the test fixtures before each scenario.
+     */
     @BeforeEach
     void setUp() {
         deck = new Deck();
     }
 
+    /**
+     * Protects the expected behavior for deck creation.
+     */
     @Test
     void testDeckCreation() {
         assertNotNull(deck);
     }
 
+    /**
+     * Protects the expected behavior for deck contains52 cards.
+     */
     @Test
     void testDeckContains52Cards() {
         // Deal all cards to verify deck size
@@ -46,6 +55,9 @@ class DeckTest {
         assertEquals(52, dealtCards.size());
     }
 
+    /**
+     * Protects the expected behavior for deck contains all cards.
+     */
     @Test
     void testDeckContainsAllCards() {
         Set<Card> dealtCards = new HashSet<>();
@@ -64,6 +76,9 @@ class DeckTest {
         }
     }
 
+    /**
+     * Protects the expected behavior for deal card.
+     */
     @Test
     void testDealCard() {
         Card card = deck.dealCard();
@@ -72,6 +87,9 @@ class DeckTest {
         assertNotNull(card.suit());
     }
 
+    /**
+     * Protects the expected behavior for deal card removes card from deck.
+     */
     @Test
     void testDealCardRemovesCardFromDeck() {
         // Deal all 52 cards
@@ -83,6 +101,9 @@ class DeckTest {
         assertThrows(BadRequestException.class, () -> deck.dealCard());
     }
 
+    /**
+     * Protects the expected behavior for deal card throws exception when empty.
+     */
     @Test
     void testDealCardThrowsExceptionWhenEmpty() {
         // Deal all cards
@@ -96,6 +117,9 @@ class DeckTest {
         assertEquals("No more cards in the deck", exception.getMessage());
     }
 
+    /**
+     * Protects the expected behavior for deal multiple cards.
+     */
     @Test
     void testDealMultipleCards() {
         List<Card> cards = deck.dealCards(5);
@@ -108,6 +132,9 @@ class DeckTest {
         assertEquals(5, uniqueCards.size());
     }
 
+    /**
+     * Protects the expected behavior for deal multiple cards removes from deck.
+     */
     @Test
     void testDealMultipleCardsRemovesFromDeck() {
         deck.dealCards(10);
@@ -122,6 +149,9 @@ class DeckTest {
         assertThrows(BadRequestException.class, () -> deck.dealCard());
     }
 
+    /**
+     * Protects the expected behavior for deal multiple cards with invalid number.
+     */
     @Test
     void testDealMultipleCardsWithInvalidNumber() {
         BadRequestException exception = assertThrows(
@@ -133,6 +163,9 @@ class DeckTest {
         assertThrows(BadRequestException.class, () -> deck.dealCards(-5));
     }
 
+    /**
+     * Protects the expected behavior for deal multiple cards not enough in deck.
+     */
     @Test
     void testDealMultipleCardsNotEnoughInDeck() {
         BadRequestException exception = assertThrows(
@@ -143,6 +176,9 @@ class DeckTest {
         assertTrue(exception.getMessage().contains("Available: 52"));
     }
 
+    /**
+     * Protects the expected behavior for deal multiple cards partially empty deck.
+     */
     @Test
     void testDealMultipleCardsPartiallyEmptyDeck() {
         // Deal 50 cards
@@ -156,6 +192,9 @@ class DeckTest {
         assertThrows(BadRequestException.class, () -> deck.dealCards(1));
     }
 
+    /**
+     * Protects the expected behavior for shuffle.
+     */
     @Test
     void testShuffle() {
         // Create two decks and deal all cards to compare
@@ -185,6 +224,9 @@ class DeckTest {
         assertTrue(different, "After shuffle, card order should be different");
     }
 
+    /**
+     * Protects the expected behavior for multiple shuffle.
+     */
     @Test
     void testMultipleShuffle() {
         // Shuffle should work multiple times on the same deck
@@ -199,6 +241,9 @@ class DeckTest {
         assertEquals(52, cards.size());
     }
 
+    /**
+     * Protects the expected behavior for shuffle after dealing.
+     */
     @Test
     void testShuffleAfterDealing() {
         // Deal some cards
@@ -212,6 +257,9 @@ class DeckTest {
         assertEquals(42, remainingCards.size());
     }
 
+    /**
+     * Protects the expected behavior for deal all cards individually.
+     */
     @Test
     void testDealAllCardsIndividually() {
         Set<Card> dealtCards = new HashSet<>();
@@ -226,6 +274,9 @@ class DeckTest {
         assertEquals(52, dealtCards.size());
     }
 
+    /**
+     * Protects the expected behavior for mixed dealing scenario.
+     */
     @Test
     void testMixedDealingScenario() {
         // Simulate a real poker game scenario

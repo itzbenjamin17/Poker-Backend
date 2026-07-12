@@ -26,6 +26,11 @@ public class JwtService {
 
     private SecretKey secretKey;
 
+    /**
+     * Decodes and validates the configured signing key after dependency injection.
+     *
+     * @throws IllegalStateException if the key is absent, malformed, or too weak
+     */
     @PostConstruct
     public void init() {
         if (secretKeyString == null || secretKeyString.isBlank()) {
@@ -42,6 +47,10 @@ public class JwtService {
 
     /**
      * Generates a signed JWT for the given player and room.
+     *
+     * @param playerName player identity stored as the token subject
+     * @param roomId room identity stored as a required claim
+     * @return signed token with the configured expiry
      */
     public String generateToken(String playerName, String roomId) {
         long now = System.currentTimeMillis();
@@ -56,6 +65,9 @@ public class JwtService {
 
     /**
      * Validates the token signature, expiry, and required claims.
+     *
+     * @param token encoded JWT to validate
+     * @return {@code true} when the token is trusted and identifies a player and room
      */
     public boolean isTokenValid(String token) {
         try {
@@ -70,7 +82,9 @@ public class JwtService {
 
     /**
      * Extracts the player principal from a valid token.
-     * 
+     *
+     * @param token encoded, valid JWT
+     * @return principal containing the player and room identities
      * @throws IllegalArgumentException if required claims are missing
      */
     public PlayerPrincipal extractPrincipal(String token) {
@@ -92,6 +106,9 @@ public class JwtService {
 
     /**
      * Extracts the player name (subject) from a valid token.
+     *
+     * @param token encoded, valid JWT
+     * @return token subject, or an empty string when the subject is absent
      */
     public String extractPlayerName(String token) {
         String subject = Jwts.parser()

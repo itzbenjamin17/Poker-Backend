@@ -5,6 +5,11 @@ package com.pokergame.exception;
  */
 
 public class ResourceNotFoundException extends PokerException {
+    /**
+     * Creates an exception for a requested resource that does not exist.
+     *
+     * @param message client-safe description of the missing resource
+     */
     public ResourceNotFoundException(String message) {
         super(message);
     }

@@ -11,8 +11,12 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/** Tests aggregate snapshot mapper behavior. */
 class AggregateSnapshotMapperTest {
 
+    /**
+     * Protects the contract that active game round trip preserves exact next cards and authoritative state.
+     */
     @Test
     void activeGameRoundTripPreservesExactNextCardsAndAuthoritativeState() {
         HandEvaluatorService evaluator = new HandEvaluatorService();

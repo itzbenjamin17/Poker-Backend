@@ -19,6 +19,7 @@ import org.springframework.web.socket.messaging.WebSocketStompClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/** Tests identity isolation integration behavior. */
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -30,6 +31,9 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
 
     private WebSocketStompClient stompClient;
 
+    /**
+     * Initializes the test fixtures before each scenario.
+     */
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(rateLimitService, "enabled", true);
@@ -37,6 +41,9 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
         stompClient = createStompClient();
     }
 
+    /**
+     * Protects the contract that the system should isolate rate limits for same player name in different rooms.
+     */
     @Test
     @DisplayName("should isolate rate limits for same player name in different rooms")
     void givenSamePlayerNameInDifferentRooms_whenThrottlingOne_thenOtherIsUnchanged() throws Exception {
@@ -70,6 +77,9 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
         assertThat(session2.isConnected()).isTrue();
     }
 
+    /**
+     * Protects the contract that the system should prevent Alice from Room A accessing Room B.
+     */
     @Test
     @DisplayName("should prevent Alice from Room A accessing Room B")
     void givenAliceInRoomA_whenAccessingRoomB_thenForbidden() throws Exception {
@@ -94,6 +104,12 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
+    /**
+     * Sends action for the test.
+     * @param session session supplied to the fixture
+     * @param roomId room ID supplied to the fixture
+     * @param token token supplied to the fixture
+     */
     private void sendAction(StompSession session, String roomId, String token) {
         StompHeaders headers = new StompHeaders();
         headers.setDestination("/app/" + roomId + "/action");

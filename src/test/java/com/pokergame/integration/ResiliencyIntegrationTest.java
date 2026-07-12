@@ -17,6 +17,7 @@ import org.springframework.test.context.ActiveProfiles;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+/** Tests resiliency integration behavior. */
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -26,6 +27,9 @@ class ResiliencyIntegrationTest extends AbstractIntegrationTestSupport {
     @Autowired
     private GameLifecycleService gameLifecycleService;
 
+    /**
+     * Protects the contract that the system should allow a player to reconnect and continue acting in a game.
+     */
     @Test
     @DisplayName("should allow a player to reconnect and continue acting in a game")
     void givenActiveGame_whenPlayerDisconnectsAndReconnects_thenPlayerCanStillAct() throws Exception {

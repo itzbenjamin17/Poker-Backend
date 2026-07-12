@@ -19,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
+/** Tests filter security behavior. */
 @Tag("unit")
 @ExtendWith(MockitoExtension.class)
 class FilterSecurityTest {
@@ -41,6 +42,9 @@ class FilterSecurityTest {
     @InjectMocks
     private PayloadSizeFilter payloadSizeFilter;
 
+    /**
+     * Protects the contract that the system should use remote address when trust-proxy is false.
+     */
     @Test
     @DisplayName("should use remote address when trust-proxy is false")
     void givenTrustProxyFalse_whenGetIp_thenUseRemoteAddr() throws Exception {
@@ -55,6 +59,9 @@ class FilterSecurityTest {
         verify(filterChain).doFilter(request, response);
     }
 
+    /**
+     * Protects the contract that the system should use X-Forwarded-For when trust-proxy is true.
+     */
     @Test
     @DisplayName("should use X-Forwarded-For when trust-proxy is true")
     void givenTrustProxyTrue_whenGetIp_thenUseXForwardedFor() throws Exception {
@@ -68,6 +75,9 @@ class FilterSecurityTest {
         verify(rateLimitService).tryConsumeRest("5.6.7.8:/api/room/create");
     }
 
+    /**
+     * Protects the contract that the system should use separate buckets for different endpoints.
+     */
     @Test
     @DisplayName("should use separate buckets for different endpoints")
     void givenDifferentPaths_whenRateLimited_thenUseDifferentKeys() throws Exception {
@@ -86,6 +96,9 @@ class FilterSecurityTest {
         verify(rateLimitService).tryConsumeRest("1.2.3.4:/api/room/join");
     }
 
+    /**
+     * Protects the contract that the system should block request when rate limit exceeded.
+     */
     @Test
     @DisplayName("should block request when rate limit exceeded")
     void givenRateLimitExceeded_whenDoFilter_thenSend429() throws Exception {
@@ -104,6 +117,9 @@ class FilterSecurityTest {
         verify(filterChain, never()).doFilter(request, response);
     }
 
+    /**
+     * Protects the contract that the system should allow small payload.
+     */
     @Test
     @DisplayName("should allow small payload")
     void givenSmallPayload_whenDoFilter_thenAllow() throws Exception {
@@ -114,6 +130,9 @@ class FilterSecurityTest {
         verify(filterChain).doFilter(request, response);
     }
 
+    /**
+     * Protects the contract that the system should reject large payload.
+     */
     @Test
     @DisplayName("should reject large payload")
     void givenLargePayload_whenDoFilter_thenSend413() throws Exception {
@@ -130,6 +149,9 @@ class FilterSecurityTest {
         verify(filterChain, never()).doFilter(request, response);
     }
 
+    /**
+     * Protects the contract that the system should allow chunked transfer (Content-Length: -1) with current simple filter.
+     */
     @Test
     @DisplayName("should allow chunked transfer (Content-Length: -1) with current simple filter")
     void givenChunkedTransfer_whenDoFilter_thenAllowByBypassing() throws Exception {
