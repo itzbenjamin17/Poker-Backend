@@ -36,6 +36,13 @@ public class PlayerActionService {
 
     private final GameStateService gameStateService;
 
+    /**
+     * Creates the action orchestrator with lifecycle scheduling and client-state
+     * publishing behind the same room durability boundary.
+     *
+     * @param gameLifecycleService authoritative game registry and scheduler owner
+     * @param gameStateService     committed client-state publisher
+     */
     public PlayerActionService(GameLifecycleService gameLifecycleService, GameStateService gameStateService) {
         this.gameLifecycleService = gameLifecycleService;
         this.gameStateService = gameStateService;
@@ -130,6 +137,15 @@ public class PlayerActionService {
         }
     }
 
+    /**
+     * Validates request shape and chip bounds before the domain model mutates, keeping
+     * rejected actions out of both memory and the committed state image.
+     *
+     * @param actionRequest requested action
+     * @param game          authoritative game
+     * @return current player after request validation
+     * @throws BadRequestException if the action or amount is invalid
+     */
     private static Player getCurrentPlayer(PlayerActionRequest actionRequest, Game game) {
         Player currentPlayer = game.getCurrentPlayer();
 
@@ -157,6 +173,12 @@ public class PlayerActionService {
 
 
 
+    /**
+     * Opens immediately when no display delay is configured; otherwise it persists an
+     * absolute opening deadline so a crash cannot lose the transition.
+     *
+     * @param gameId game that completed showdown
+     */
     private void openReadyCountdownGate(String gameId) {
         if (roundEndDelayMs <= 0) {
             gameLifecycleService.startReadyCountdown(gameId, readyCountdownMs);

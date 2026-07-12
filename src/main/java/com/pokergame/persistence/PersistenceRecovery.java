@@ -17,6 +17,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Rebuilds every durable aggregate and its runtime-only work before the process is
+ * considered ready.
+ * <p>
+ * Recovery is global rather than room-lazy because clients may immediately query
+ * the lobby list, and exposing a partially restored registry would make durable
+ * rooms appear deleted.
+ * </p>
+ */
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public final class PersistenceRecovery implements ApplicationRunner {
     private final EncryptedWalStore store;
@@ -28,6 +37,18 @@ public final class PersistenceRecovery implements ApplicationRunner {
     private final long disconnectGracePeriodMs;
     private volatile boolean complete;
 
+    /**
+     * Creates the coordinator with both state registries and the runtime schedulers
+     * that must be rebuilt from persisted deadlines.
+     *
+     * @param store                   encrypted WAL store
+     * @param mapper                  explicit state-image mapper
+     * @param roomService             authoritative room registry
+     * @param gameLifecycleService    authoritative game registry and timer owner
+     * @param webSocketEventListener  reconnect cleanup scheduler
+     * @param applicationContext      source for readiness state changes
+     * @param disconnectGracePeriodMs fresh grace granted because socket sessions do not survive restart
+     */
     public PersistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper, RoomService roomService,
             GameLifecycleService gameLifecycleService, WebSocketEventListener webSocketEventListener,
             ApplicationContext applicationContext, long disconnectGracePeriodMs) {
@@ -40,6 +61,18 @@ public final class PersistenceRecovery implements ApplicationRunner {
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
     }
 
+    /**
+     * Restores all committed images, removes durable tombstones, and reconstructs
+     * runtime timers before accepting traffic.
+     * <p>
+     * Every prior socket is treated as disconnected because session identifiers are
+     * process-local. The later of the stored deadline and a fresh grace period avoids
+     * evicting players merely because the server restarted.
+     * </p>
+     *
+     * @param args application startup arguments; recovery behavior is configuration-driven
+     * @throws PersistenceException if any WAL or state image cannot be trusted
+     */
     @Override
     public void run(ApplicationArguments args) {
         AvailabilityChangeEvent.publish(applicationContext, ReadinessState.REFUSING_TRAFFIC);
@@ -89,6 +122,12 @@ public final class PersistenceRecovery implements ApplicationRunner {
         AvailabilityChangeEvent.publish(applicationContext, ReadinessState.ACCEPTING_TRAFFIC);
     }
 
+    /**
+     * Reports completion separately from storage health because a healthy directory
+     * is still not ready while aggregate reconstruction is in progress.
+     *
+     * @return {@code true} only after all aggregates and timers are restored
+     */
     public boolean isComplete() {
         return complete;
     }

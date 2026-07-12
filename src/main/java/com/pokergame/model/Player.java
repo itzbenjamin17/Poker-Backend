@@ -73,6 +73,25 @@ public class Player {
         this.isReadyForNextHand = false;
     }
 
+    /**
+     * Rehydrates a player without invoking gameplay transitions that would clear
+     * cards, bets, reconnect state, or readiness after a process restart.
+     *
+     * @param name                      player display name
+     * @param playerId                  stable player identity
+     * @param holeCards                 exact private cards
+     * @param bestHand                  evaluated best hand
+     * @param handRank                  evaluated hand rank
+     * @param chips                     remaining stack
+     * @param currentBet                current-round contribution
+     * @param hasFolded                 fold marker
+     * @param allIn                     all-in marker
+     * @param out                       game-elimination marker
+     * @param disconnected              disconnect marker
+     * @param disconnectDeadlineEpochMs absolute reconnect deadline
+     * @param readyForNextHand          post-hand readiness marker
+     * @return player with the exact persisted state
+     */
     public static Player restore(String name, String playerId, List<Card> holeCards, List<Card> bestHand,
             HandRank handRank, int chips, int currentBet, boolean hasFolded, boolean allIn, boolean out,
             boolean disconnected, Long disconnectDeadlineEpochMs, boolean readyForNextHand) {
@@ -352,14 +371,32 @@ public class Player {
         return handRank;
     }
 
+    /**
+     * Stores evaluated cards separately from hole cards so showdown results can be
+     * rendered without recomputing against a later board state.
+     *
+     * @param cards evaluated best five-card hand
+     */
     public void setBestHand(List<Card> cards) {
         bestHand = cards;
     }
 
+    /**
+     * Stores the rank paired with {@link #setBestHand(List)} for stable comparison
+     * and recovery.
+     *
+     * @param handRank evaluated rank
+     */
     public void setHandRank(HandRank handRank) {
         this.handRank = handRank;
     }
 
+    /**
+     * Compares stable player identity rather than mutable display or game state.
+     *
+     * @param o object to compare
+     * @return whether both values represent the same player identity
+     */
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -371,6 +408,12 @@ public class Player {
         return Objects.equals(playerId, player.playerId);
     }
 
+    /**
+     * Hashes the same stable identity used by {@link #equals(Object)} so players can
+     * safely participate in sets while their chips and status change.
+     *
+     * @return identity-based hash code
+     */
     @Override
     public int hashCode() {
         return Objects.hash(playerId);

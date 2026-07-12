@@ -27,7 +27,8 @@ public class GameAsyncEventListener {
     private final GameLifecycleService gameLifecycleService;
 
     /**
-     * Constructs a new GameAsyncEventListener.
+     * Creates the event adapter; lifecycle ownership stays in the service so an event
+     * cannot bypass durable deadline creation.
      *
      * @param gameLifecycleService service for managing game lifecycle (starting
      *                             hands, clean-up)
@@ -37,8 +38,8 @@ public class GameAsyncEventListener {
     }
 
     /**
-     * Handles the {@link StartNewHandEvent} by scheduling the start of a new hand
-     * after a specified delay.
+     * Converts a legacy {@link StartNewHandEvent} into durable scheduled intent. The
+     * listener never owns a raw future because that future would disappear on restart.
      *
      * @param event the event containing the game ID and the delay in milliseconds
      */
@@ -49,8 +50,8 @@ public class GameAsyncEventListener {
     }
 
     /**
-     * Opens the post-round ready countdown gate using a configured delay.
-     * Default behaviour is immediate open on showdown reveal.
+     * Persists the ready-gate opening before scheduling it so a crash during the
+     * post-showdown display delay cannot stall the game.
      *
      * @param event event containing game id, display delay, and countdown duration
      */
@@ -62,8 +63,7 @@ public class GameAsyncEventListener {
     }
 
     /**
-     * Handles the {@link GameCleanupEvent} by scheduling the destruction of game
-     * resources.
+     * Persists terminal cleanup before scheduling destruction.
      * <p>
      * This ensures that when a game ends (e.g. only one player left), the "Game
      * Over" state
@@ -80,7 +80,7 @@ public class GameAsyncEventListener {
     }
 
     /**
-     * Initiates the auto-advance sequence when all active players are all-in.
+     * Persists the first auto-advance deadline when all active players are all-in.
      * <p>
      * Unlike simple delays, this event triggers a chain of scheduled tasks that
      * deal the remaining community cards (Flop, Turn, River) one by one with visual

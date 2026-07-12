@@ -29,14 +29,33 @@ public class Deck {
         shuffle();
     }
 
+    /**
+     * Reconstructs an already shuffled remainder without consuming randomness. This
+     * path exists only for exact restart recovery; normal games use {@link #Deck()}.
+     *
+     * @param cards remaining cards in their persisted draw order
+     */
     private Deck(List<Card> cards) {
         this.cards = new ArrayList<>(cards);
     }
 
+    /**
+     * Restores the future draw order exactly because reshuffling after restart would
+     * change private cards and game outcomes.
+     *
+     * @param cards remaining cards in persisted draw order
+     * @return deck that will deal the same future sequence
+     */
     public static Deck restore(List<Card> cards) {
         return new Deck(cards);
     }
 
+    /**
+     * Returns an immutable copy so persistence can capture exact draw order without
+     * exposing the live deck to mutation.
+     *
+     * @return remaining cards in draw order
+     */
     public List<Card> getRemainingCardsSnapshot() {
         return List.copyOf(cards);
     }
@@ -53,7 +72,8 @@ public class Deck {
     }
 
     /**
-     * Shuffles the deck randomly.
+     * Uses a cryptographically strong random source so future private cards are not
+     * predictable from the weaker default pseudo-random generator.
      */
     public void shuffle() {
         Collections.shuffle(cards, SHUFFLE_RANDOM);

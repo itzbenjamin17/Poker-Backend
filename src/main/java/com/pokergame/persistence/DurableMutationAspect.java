@@ -22,6 +22,15 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * Enforces the durability boundary around {@link DurableMutation} service seams.
+ * <p>
+ * One outer transaction owns a room lock and WAL pair while nested same-room
+ * service calls join it. This keeps business services composable without allowing
+ * partial snapshots or cross-room transactions that the per-room WAL cannot make
+ * atomic.
+ * </p>
+ */
 @Aspect
 public final class DurableMutationAspect {
     private static final Logger logger = LoggerFactory.getLogger(DurableMutationAspect.class);
@@ -35,6 +44,16 @@ public final class DurableMutationAspect {
     private final ExpressionParser expressionParser = new SpelExpressionParser();
     private final DefaultParameterNameDiscoverer parameterNames = new DefaultParameterNameDiscoverer();
 
+    /**
+     * Creates the advice with lazy service providers to avoid a circular dependency
+     * between proxied mutation services and the snapshot capture boundary.
+     *
+     * @param store                encrypted WAL store
+     * @param snapshotMapper       aggregate compatibility mapper
+     * @param roomService          lazy room service provider
+     * @param gameLifecycleService lazy game service provider
+     * @param properties           compaction policy
+     */
     public DurableMutationAspect(EncryptedWalStore store, AggregateSnapshotMapper snapshotMapper,
             ObjectProvider<RoomService> roomService, ObjectProvider<GameLifecycleService> gameLifecycleService,
             PersistenceProperties properties) {
@@ -45,6 +64,19 @@ public final class DurableMutationAspect {
         this.properties = properties;
     }
 
+    /**
+     * Flushes prepare state before mutation, commits the resulting state image, and
+     * releases client-visible callbacks only after that commit succeeds.
+     * <p>
+     * Post-commit compaction and deletion failures degrade health rather than
+     * retroactively failing an already durable and possibly visible command.
+     * </p>
+     *
+     * @param joinPoint intercepted mutation invocation
+     * @param mutation durable-mutation metadata
+     * @return intercepted method result
+     * @throws Throwable if preparation, mutation, snapshot capture, or commit fails
+     */
     @Around("@annotation(mutation)")
     public Object persist(ProceedingJoinPoint joinPoint, DurableMutation mutation) throws Throwable {
         String roomId = resolveRoomId(joinPoint, mutation.roomId());
@@ -103,6 +135,13 @@ public final class DurableMutationAspect {
         }
     }
 
+    /**
+     * Applies both record-count and byte-size thresholds because many small updates
+     * and a few unusually large snapshots create different operational pressure.
+     *
+     * @param roomId room whose WAL was just extended
+     * @return whether the WAL should be replaced with its latest committed image
+     */
     private boolean shouldCompact(String roomId) {
         int records = recordsSinceCompaction.computeIfAbsent(roomId, ignored -> new AtomicInteger())
                 .addAndGet(2);
@@ -110,6 +149,15 @@ public final class DurableMutationAspect {
                 || store.walSize(roomId) >= properties.getCompactAfterBytes();
     }
 
+    /**
+     * Resolves room identity from the service contract so transaction ownership is
+     * stable before any mutable aggregate is inspected.
+     *
+     * @param joinPoint intercepted invocation and arguments
+     * @param expression configured room-ID expression
+     * @return resolved nonblank room ID
+     * @throws PersistenceException if the expression does not resolve a room ID
+     */
     private String resolveRoomId(ProceedingJoinPoint joinPoint, String expression) {
         Method method = ((MethodSignature) joinPoint.getSignature()).getMethod();
         String[] names = parameterNames.getParameterNames(method);

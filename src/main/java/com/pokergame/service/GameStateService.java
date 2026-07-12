@@ -35,6 +35,13 @@ public class GameStateService {
 
     private final RoomService roomService;
 
+    /**
+     * Creates the projection service with room authorization context and the STOMP
+     * publisher used after durable commits.
+     *
+     * @param roomService       room membership and host context
+     * @param messagingTemplate STOMP publisher
+     */
     public GameStateService(RoomService roomService, SimpMessagingTemplate messagingTemplate) {
         this.roomService = roomService;
         this.messagingTemplate = messagingTemplate;
@@ -479,6 +486,13 @@ public class GameStateService {
 
     }
 
+    /**
+     * Applies a single precedence order to overlapping player flags so clients receive
+     * one unambiguous render state.
+     *
+     * @param player player whose status is projected
+     * @return client-visible status value
+     */
     private String resolvePlayerStatus(Player player) {
         if (player.getIsOut()) {
             return PlayerStatus.OUT.getStatus();
@@ -495,6 +509,13 @@ public class GameStateService {
         return PlayerStatus.ACTIVE.getStatus();
     }
 
+    /**
+     * Projects claim availability only when exactly one eligible player is connected
+     * and at least one opponent is disconnected.
+     *
+     * @param game game whose claim affordance is projected
+     * @return eligible claimant name, or {@code null} when no claim is legal
+     */
     private String computeClaimWinPlayerName(Game game) {
         List<Player> eligiblePlayers = game.getPlayers().stream()
                 .filter(player -> !player.getIsOut())
@@ -530,10 +551,25 @@ public class GameStateService {
 
     }
 
+    /**
+     * Defers shared game-state visibility until recovery can reproduce the same
+     * snapshot after a crash.
+     *
+     * @param destination shared STOMP destination
+     * @param payload     committed public payload
+     */
     private void sendAfterCommit(String destination, Object payload) {
         DurableTransactionContext.afterCommit(() -> messagingTemplate.convertAndSend(destination, payload));
     }
 
+    /**
+     * Applies the same commit barrier to private player data so a player never sees
+     * hole cards or action results that exist only in memory.
+     *
+     * @param user        composite WebSocket principal name
+     * @param destination private user destination
+     * @param payload     committed private payload
+     */
     private void sendToUserAfterCommit(String user, String destination, Object payload) {
         DurableTransactionContext.afterCommit(
                 () -> messagingTemplate.convertAndSendToUser(user, destination, payload));

@@ -95,6 +95,35 @@ public class Game {
         this.scheduledTaskDeadlines = new EnumMap<>(ScheduledGameTask.class);
     }
 
+    /**
+     * Rehydrates an exact in-progress game without running normal initialization,
+     * which would reshuffle, repost blinds, and select a new current player.
+     *
+     * @param gameId                       stable game identity
+     * @param players                      fully restored players
+     * @param activePlayerIds              active-player ordering by stable ID
+     * @param remainingDeck                exact future draw order
+     * @param communityCards               board cards already dealt
+     * @param pot                           undistributed pot
+     * @param dealerPosition                dealer index
+     * @param smallBlindPosition            small-blind index
+     * @param bigBlindPosition              big-blind index
+     * @param currentPlayerPosition         current turn index
+     * @param currentHighestBet             amount players must match
+     * @param currentPhase                  current betting phase
+     * @param gameOver                      terminal marker
+     * @param smallBlind                    game small blind
+     * @param bigBlind                      game big blind
+     * @param handContributions             side-pot contribution ledger
+     * @param readyCountdownActive          post-hand gate marker
+     * @param readyCountdownDeadlineEpochMs absolute ready-gate deadline
+     * @param everyoneHasHadInitialTurn     betting-round progress marker
+     * @param actedPlayersInRound           players that acted in the current round
+     * @param scheduledTaskDeadlines        durable delayed-work deadlines
+     * @param handEvaluator                 runtime hand evaluator to reattach
+     * @return game with the exact persisted hand state
+     * @throws BadRequestException if active-player IDs do not exist in the player list
+     */
     public static Game restore(String gameId, List<Player> players, List<String> activePlayerIds,
             List<Card> remainingDeck, List<Card> communityCards, int pot, int dealerPosition,
             int smallBlindPosition, int bigBlindPosition, int currentPlayerPosition, int currentHighestBet,
@@ -1021,6 +1050,11 @@ public class Game {
         updatePositionsForCurrentTable();
     }
 
+    /**
+     * Recomputes blind and first-action positions after table-size changes. Heads-up
+     * poker is handled separately because the dealer is also the small blind and acts
+     * first pre-flop.
+     */
     private void updatePositionsForCurrentTable() {
         int tableSize = activePlayers.size();
 
@@ -1147,6 +1181,12 @@ public class Game {
         }
     }
 
+    /**
+     * Excludes disconnected and eliminated players from the ready gate so an absent
+     * player cannot stall the next hand indefinitely.
+     *
+     * @return players whose readiness is required
+     */
     private List<Player> getReadyEligiblePlayers() {
         return players.stream()
                 .filter(player -> !player.getIsOut())
@@ -1392,54 +1432,130 @@ public class Game {
         return activePlayers.get(bigBlindPosition).getPlayerId();
     }
 
+    /**
+     * Captures future draw order without exposing the live deck to mutation.
+     *
+     * @return immutable remaining-deck snapshot
+     */
     public List<Card> getRemainingDeckSnapshot() {
         return deck.getRemainingCardsSnapshot();
     }
 
+    /**
+     * Persists blind placement because recalculating it would alter turn order.
+     *
+     * @return small-blind index
+     */
     public int getSmallBlindPosition() {
         return smallBlindPosition;
     }
 
+    /**
+     * Persists blind placement because recalculating it would alter turn order.
+     *
+     * @return big-blind index
+     */
     public int getBigBlindPosition() {
         return bigBlindPosition;
     }
 
+    /**
+     * Persists the exact actor so recovery cannot grant a different player the turn.
+     *
+     * @return current-player index
+     */
     public int getCurrentPlayerPosition() {
         return currentPlayerPosition;
     }
 
+    /**
+     * Keeps the game snapshot as the authoritative compatibility boundary instead of
+     * coupling recovery to a separate room snapshot.
+     *
+     * @return small blind
+     */
     public int getSmallBlind() {
         return smallBlind;
     }
 
+    /**
+     * Keeps the game snapshot as the authoritative compatibility boundary instead of
+     * coupling recovery to a separate room snapshot.
+     *
+     * @return big blind
+     */
     public int getBigBlind() {
         return bigBlind;
     }
 
+    /**
+     * Copies the contribution ledger because exact side-pot settlement depends on
+     * amounts that may no longer be represented by current bets.
+     *
+     * @return immutable player contribution ledger
+     */
     public Map<String, Integer> getHandContributionsSnapshot() {
         return Map.copyOf(handContributions);
     }
 
+    /**
+     * Exposes a betting-round progress invariant needed to preserve legal action
+     * transitions after recovery.
+     *
+     * @return whether every eligible player received an initial turn
+     */
     public boolean hasEveryoneHadInitialTurn() {
         return everyoneHasHadInitialTurn;
     }
 
+    /**
+     * Copies per-round action history so a restart cannot end or extend a betting
+     * round incorrectly.
+     *
+     * @return immutable IDs of players that acted this round
+     */
     public Set<String> getActedPlayerIdsSnapshot() {
         return Set.copyOf(actedPlayersInRound);
     }
 
+    /**
+     * Records delayed work as domain state before a runtime timer is created, closing
+     * the crash window between a committed game transition and scheduler submission.
+     *
+     * @param task            delayed work type
+     * @param deadlineEpochMs absolute execution deadline
+     */
     public void scheduleTask(ScheduledGameTask task, long deadlineEpochMs) {
         scheduledTaskDeadlines.put(task, deadlineEpochMs);
     }
 
+    /**
+     * Returns the current generation token for a delayed task. Timer callbacks compare
+     * it with their expected deadline so stale callbacks become harmless no-ops.
+     *
+     * @param task delayed work type
+     * @return current absolute deadline, or {@code null} when not scheduled
+     */
     public Long getScheduledTaskDeadline(ScheduledGameTask task) {
         return scheduledTaskDeadlines.get(task);
     }
 
+    /**
+     * Clears durable intent in the same mutation that performs the work, making
+     * overdue recovery execution idempotent.
+     *
+     * @param task completed delayed work type
+     */
     public void clearScheduledTask(ScheduledGameTask task) {
         scheduledTaskDeadlines.remove(task);
     }
 
+    /**
+     * Copies scheduled intent for state-image capture without exposing the live task
+     * map to mutation.
+     *
+     * @return immutable task-to-deadline map
+     */
     public Map<ScheduledGameTask, Long> getScheduledTaskDeadlinesSnapshot() {
         return Map.copyOf(scheduledTaskDeadlines);
     }

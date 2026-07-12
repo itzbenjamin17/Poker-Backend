@@ -57,7 +57,17 @@ public class GameLifecycleService {
     private final TaskScheduler taskScheduler;
     private GameLifecycleService self;
 
-    // Dependency Injection
+    /**
+     * Creates the lifecycle service with the scheduler that owns runtime timers.
+     * Scheduled intent itself lives on {@link Game} so timers can be rebuilt after a
+     * restart.
+     *
+     * @param roomService          authoritative room service
+     * @param handEvaluatorService hand evaluator attached to new and restored games
+     * @param gameStateService     client state publisher
+     * @param messagingTemplate    direct messaging collaborator
+     * @param taskScheduler        runtime timer scheduler
+     */
     GameLifecycleService(RoomService roomService,
             HandEvaluatorService handEvaluatorService,
             GameStateService gameStateService,
@@ -70,6 +80,12 @@ public class GameLifecycleService {
         this.taskScheduler = taskScheduler;
     }
 
+    /**
+     * Retains the Spring proxy because scheduler callbacks run outside the original
+     * call stack and must re-enter through {@link DurableMutation} advice.
+     *
+     * @param self proxied lifecycle service
+     */
     @Autowired
     void setSelf(@Lazy GameLifecycleService self) {
         this.self = self;
@@ -178,8 +194,8 @@ public class GameLifecycleService {
 
     /**
      * Applies one authoritative auto-advance mutation for an all-in hand.
-     * Scheduling remains in the listener, while every deck, phase, payout, and
-     * player mutation enters through this public service seam.
+     * Every deck, phase, payout, and player mutation enters through this public
+     * service seam so each step receives its own committed state image.
      *
      * @param gameId game to advance
      * @return {@code true} when the step completed showdown, otherwise false
@@ -378,10 +394,23 @@ public class GameLifecycleService {
         return activeGames.get(gameId);
     }
 
+    /**
+     * Registers an already rehydrated game without executing normal creation logic,
+     * which would start a replacement hand.
+     *
+     * @param game exact game restored from a committed state image
+     */
     public void restoreGame(Game game) {
         activeGames.put(game.getGameId(), game);
     }
 
+    /**
+     * Rebuilds runtime futures from absolute persisted deadlines. Overdue work is
+     * scheduled immediately and remains safe because callbacks verify the expected
+     * deadline before mutating state.
+     *
+     * @param gameId recovered game whose runtime work must resume
+     */
     public void resumeRecoveredTimers(String gameId) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -402,11 +431,25 @@ public class GameLifecycleService {
         }
     }
 
+    /**
+     * Persists the next-hand deadline in the same room transaction that requested
+     * it, preventing a crash from leaving a completed countdown with no next hand.
+     *
+     * @param gameId  game awaiting a new hand
+     * @param delayMs delay before execution
+     */
     @DurableMutation(roomId = "#gameId")
     public void scheduleNewHand(String gameId, long delayMs) {
         persistScheduledTask(gameId, ScheduledGameTask.NEW_HAND, System.currentTimeMillis() + Math.max(0, delayMs));
     }
 
+    /**
+     * Persists the post-showdown display delay. An immediate opening stays in the
+     * current durable transaction so no scheduler handoff is needed.
+     *
+     * @param gameId  game entering its ready gate
+     * @param delayMs display delay before the gate opens
+     */
     @DurableMutation(roomId = "#gameId")
     public void scheduleReadyCountdownOpen(String gameId, long delayMs) {
         if (delayMs <= 0) {
@@ -416,17 +459,39 @@ public class GameLifecycleService {
         persistScheduledTask(gameId, ScheduledGameTask.READY_OPEN, System.currentTimeMillis() + delayMs);
     }
 
+    /**
+     * Persists terminal cleanup intent before returning the game-end mutation, so a
+     * restart cannot leave a permanently finished room in memory.
+     *
+     * @param gameId  finished game
+     * @param delayMs client display delay before deletion
+     */
     @DurableMutation(roomId = "#gameId")
     public void scheduleGameCleanup(String gameId, long delayMs) {
         persistScheduledTask(gameId, ScheduledGameTask.CLEANUP, System.currentTimeMillis() + Math.max(0, delayMs));
     }
 
+    /**
+     * Persists the first all-in progression deadline before clients observe the
+     * auto-advance state.
+     *
+     * @param gameId game requiring automatic board progression
+     */
     @DurableMutation(roomId = "#gameId")
     public void scheduleAutoAdvance(String gameId) {
         persistScheduledTask(gameId, ScheduledGameTask.AUTO_ADVANCE,
                 System.currentTimeMillis() + AUTO_ADVANCE_STEP_DELAY_MS);
     }
 
+    /**
+     * Executes delayed work only when its deadline still matches persisted intent.
+     * The deadline acts as a generation token, making cancelled or duplicated timer
+     * callbacks harmless.
+     *
+     * @param gameId          game owning the work
+     * @param task            delayed work type
+     * @param expectedDeadline deadline captured by this timer callback
+     */
     @DurableMutation(roomId = "#gameId")
     public void executeScheduledTask(String gameId, ScheduledGameTask task, long expectedDeadline) {
         Game game = getGame(gameId);
@@ -461,6 +526,14 @@ public class GameLifecycleService {
         }
     }
 
+    /**
+     * Records scheduler intent as aggregate state first, then submits the runtime
+     * future only after the surrounding WAL commit succeeds.
+     *
+     * @param gameId  game owning the work
+     * @param task    delayed work type
+     * @param deadline absolute execution deadline
+     */
     private void persistScheduledTask(String gameId, ScheduledGameTask task, long deadline) {
         Game game = getGame(gameId);
         if (game == null) {
@@ -472,6 +545,14 @@ public class GameLifecycleService {
         DurableTransactionContext.afterCommit(() -> scheduleRuntimeTask(gameId, task, deadline));
     }
 
+    /**
+     * Converts an absolute deadline to a process-local future. Keeping this step
+     * separate lets startup recovery rebuild the same runtime mechanism.
+     *
+     * @param gameId  game owning the work
+     * @param task    delayed work type
+     * @param deadline absolute execution deadline
+     */
     private void scheduleRuntimeTask(String gameId, ScheduledGameTask task, long deadline) {
         long delay = Math.max(0, deadline - System.currentTimeMillis());
         taskScheduler.schedule(() -> mutationProxy().executeScheduledTask(gameId, task, deadline),
@@ -661,6 +742,13 @@ public class GameLifecycleService {
         }
     }
 
+    /**
+     * Closes a ready gate only for the deadline that created this callback. Without
+     * the comparison, a cancelled old timer could close a newly opened countdown.
+     *
+     * @param gameId                 game whose ready gate may expire
+     * @param expectedDeadlineEpochMs deadline captured when the timer was submitted
+     */
     @DurableMutation(roomId = "#gameId")
     public void handleReadyCountdownTimeout(String gameId, long expectedDeadlineEpochMs) {
         Game game = getGame(gameId);
@@ -681,6 +769,13 @@ public class GameLifecycleService {
         }
     }
 
+    /**
+     * Cancels the process-local timeout before closing durable ready state and
+     * starting the hand, preventing a racing timeout from advancing twice.
+     *
+     * @param gameId game leaving the ready gate
+     * @param game   authoritative game state
+     */
     private void completeReadyCountdownAndStartNextHand(String gameId, Game game) {
         ScheduledFuture<?> existingTimeout = readyCountdownTimeouts.remove(gameId);
         if (existingTimeout != null) {
@@ -729,6 +824,15 @@ public class GameLifecycleService {
         }
     }
 
+    /**
+     * Allows a claim only when one connected participant remains against at least one
+     * disconnected opponent. This prevents ordinary heads-up games or disconnected
+     * claimants from bypassing gameplay.
+     *
+     * @param game       game being evaluated
+     * @param playerName prospective claimant
+     * @return whether an immediate disconnect win is legal
+     */
     private boolean canPlayerClaimWin(Game game, String playerName) {
         List<Player> eligiblePlayers = game.getPlayers().stream()
                 .filter(player -> !player.getIsOut())
@@ -754,6 +858,13 @@ public class GameLifecycleService {
         return !others.isEmpty() && others.stream().allMatch(Player::getIsDisconnected);
     }
 
+    /**
+     * Removes a grace-expired player from room and game under one room transaction,
+     * avoiding a recoverable snapshot where only one registry was updated.
+     *
+     * @param gameId    room/game identity
+     * @param playerName player whose reconnect grace expired
+     */
     @DurableMutation(roomId = "#gameId")
     public void removeDisconnectedPlayer(String gameId, String playerName) {
         boolean gameActive = gameExists(gameId);
@@ -765,6 +876,12 @@ public class GameLifecycleService {
         }
     }
 
+    /**
+     * Returns the Spring proxy for timer callbacks while preserving direct unit-test
+     * construction, where no proxy is available.
+     *
+     * @return proxied service in production, otherwise this instance
+     */
     private GameLifecycleService mutationProxy() {
         return self == null ? this : self;
     }

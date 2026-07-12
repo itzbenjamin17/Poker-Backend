@@ -26,6 +26,14 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * Reconciles process-local WebSocket sessions with durable player membership.
+ * <p>
+ * Sessions and futures are intentionally transient, while disconnect deadlines and
+ * resulting room/game mutations are durable. Per-player locks linearize reconnects
+ * with grace-expiry cleanup so a player cannot be removed after reconnecting.
+ * </p>
+ */
 @Component
 public class WebSocketEventListener {
 
@@ -41,6 +49,16 @@ public class WebSocketEventListener {
     private final ConcurrentMap<String, ReentrantLock> sessionLocks = new ConcurrentHashMap<>();
     private final TaskScheduler taskScheduler;
 
+    /**
+     * Creates the listener with the authoritative cleanup service and process-local
+     * scheduler used to enforce reconnect grace.
+     *
+     * @param roomService              authoritative room registry
+     * @param gameLifecycleService     durable game and cleanup service
+     * @param rateLimitService         transient WebSocket rate-limit registry
+     * @param taskScheduler            runtime grace-period scheduler
+     * @param disconnectGracePeriodMs allowed reconnect interval
+     */
     @Autowired
     public WebSocketEventListener(RoomService roomService,
             GameLifecycleService gameLifecycleService,
@@ -202,7 +220,12 @@ public class WebSocketEventListener {
 
     /**
      * Rebuilds only the runtime cleanup timer for a player restored from durable
-     * state. Session identifiers and rate-limit buckets intentionally remain empty.
+     * state. Session identifiers and rate-limit buckets intentionally remain empty
+     * because they identify the previous process, not durable player state.
+     *
+     * @param roomId         restored room identity
+     * @param playerName     restored player awaiting reconnection
+     * @param deadlineEpochMs absolute cleanup deadline
      */
     public void scheduleRecoveredDisconnect(String roomId, String playerName, long deadlineEpochMs) {
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
@@ -270,6 +293,13 @@ public class WebSocketEventListener {
         return sessions != null && !sessions.isEmpty();
     }
 
+    /**
+     * Associates a transient cleanup future with its room so reconnect handling can
+     * cancel only the timer belonging to that player membership.
+     *
+     * @param roomId room awaiting cleanup
+     * @param future process-local cleanup future
+     */
     private record PendingDisconnect(String roomId, ScheduledFuture<?> future) {
     }
 }

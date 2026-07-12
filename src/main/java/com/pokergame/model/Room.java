@@ -92,6 +92,23 @@ public class Room {
         this.createdAt = LocalDateTime.now();
     }
 
+    /**
+     * Rehydrates a room without regenerating creation time or join order, both of
+     * which affect client-visible lobby behavior and host succession.
+     *
+     * @param roomId              stable room identity
+     * @param roomName            client-visible room name
+     * @param hostName            original room host
+     * @param maxPlayers          room capacity
+     * @param smallBlind          configured small blind
+     * @param bigBlind            configured big blind
+     * @param buyIn               configured starting stack
+     * @param password            private-room password protected by WAL encryption
+     * @param createdAt           original creation time
+     * @param playersWithJoinTime player order and join timestamps
+     * @param gameStarted         whether the lobby entered gameplay
+     * @return room with the exact persisted lobby state
+     */
     public static Room restore(String roomId, String roomName, String hostName, int maxPlayers,
             int smallBlind, int bigBlind, int buyIn, String password, LocalDateTime createdAt,
             Map<String, LocalDateTime> playersWithJoinTime, boolean gameStarted) {
@@ -268,18 +285,40 @@ public class Room {
         return createdAt;
     }
 
+    /**
+     * Captures join order and timestamps without exposing the synchronized live map
+     * to persistence serialization.
+     *
+     * @return independent ordered player-to-join-time snapshot
+     */
     public synchronized Map<String, LocalDateTime> getPlayersWithJoinTimeSnapshot() {
         return new LinkedHashMap<>(playersWithJoinTime);
     }
 
+    /**
+     * Exposes the password only to the encrypted aggregate mapper. Public room DTOs
+     * continue to reveal only whether a password exists.
+     *
+     * @return room password, or {@code null} for a public room
+     */
     public String getPasswordForPersistence() {
         return password;
     }
 
+    /**
+     * Distinguishes lobby host-leave behavior from active-game host transfer.
+     *
+     * @return whether gameplay has started
+     */
     public boolean isGameStarted() {
         return isGameStarted;
     }
 
+    /**
+     * Records the lifecycle boundary that changes host and cleanup rules.
+     *
+     * @param gameStarted whether gameplay has started
+     */
     public void setGameStarted(boolean gameStarted) {
         isGameStarted = gameStarted;
     }
