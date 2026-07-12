@@ -54,7 +54,8 @@ This is a **Java 25 + Spring Boot 4.0.6** backend for a multiplayer poker game. 
 - **Error Handling:** Centralized via `ControllerExceptionHandler`. Custom exceptions extend `PokerException`.
 - **Validation:** Uses `@Valid` on request DTOs.
 - **Logging:** Uses SLF4J with Logback. Significant game events (betting, phase changes, showdowns) are logged at `DEBUG` level.
-- **Comments** Create/Update Javadoc on any function/class you are creating or working on, also add helpful comments that capture decisions (why) not implementation (how). If it's not obvious why something is done, document why it's done that way.
+- **Javadoc** Create/Update Javadoc on any function/class you are creating or working on.
+**Comments** Industry standard practice for code comments dictates that they should explain the why rather than the what. Use comments to clarify business logic, document assumptions and explain complex workarounds. Well-written code should be self-documenting, making step-by-step narration redundant
 - **Testing Conventions:**
   - **Test Behavior and Logic, Not Implementation:** Focus assertions on the public behavior of the game engine, domain rules (e.g., side pot splits, blinds deductions, uncalled chip refunds), and published messages rather than reflecting or asserting on private fields or internal method delegation.
   - **Query and Validate Like a Client:** Verify state updates by inspecting public state snapshots (DTOs sent to players) and websocket frames. Ensure that the client gets exactly the semantic information they need to render the game correctly.
