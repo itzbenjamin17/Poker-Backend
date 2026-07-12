@@ -67,6 +67,9 @@ public class SecurityConfig {
 
                 // Authorisation rules
                 .authorizeHttpRequests(auth -> auth
+                    // Docker healthcheck must be public so the container can report healthy
+                    .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+
                         // Public endpoints - where tokens are ISSUED (no token required)
                         .requestMatchers("/api/room/create", "/api/room/join").permitAll()
 

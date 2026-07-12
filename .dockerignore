@@ -1,0 +1,19 @@
+# Build outputs
+
+/target
+
+# VCS and editor files
+
+.git
+.gitignore
+.idea
+.junie
+
+# Local environment files
+
+.env
+.env.\*
+
+# Misc
+
+README.md
