@@ -9,7 +9,6 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Random;
 
 /**
  * Represents a standard 52-card deck for poker games.
@@ -23,16 +22,9 @@ public class Deck {
      * Creates a new shuffled deck containing all 52 standard playing cards.
      */
     public Deck() {
-        this(new Random());
-    }
-
-    /**
-     * Creates a new shuffled deck using a specific Random instance.
-     */
-    public Deck(Random random) {
         this.cards = new ArrayList<>();
         initializeDeck();
-        shuffle(random);
+        shuffle();
     }
 
     /**
@@ -50,14 +42,7 @@ public class Deck {
      * Shuffles the deck randomly.
      */
     public void shuffle() {
-        shuffle(new Random());
-    }
-
-    /**
-     * Shuffles the deck randomly using the provided Random instance.
-     */
-    public void shuffle(Random random) {
-        Collections.shuffle(cards, random);
+        Collections.shuffle(cards);
     }
 
     /**

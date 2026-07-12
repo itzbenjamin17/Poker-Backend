@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import com.pokergame.wal.WalFileService;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -45,15 +44,12 @@ class RoomServiceTest {
     @Mock
     private SimpMessagingTemplate messagingTemplate;
 
-    @Mock
-    private WalFileService walFileService;
-
     private RoomService roomService;
     private CreateRoomRequest validCreateRequest;
 
     @BeforeEach
     void setUp() {
-        roomService = new RoomService(messagingTemplate, walFileService);
+        roomService = new RoomService(messagingTemplate);
         validCreateRequest = new CreateRoomRequest("Test Room", "HostPlayer", 6, 5, 10, 100, null);
     }
 

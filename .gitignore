@@ -10,7 +10,7 @@ GEMINI.md
 AGENTS.md
 .env
 docs/
-data/
+
 ### STS ###
 .apt_generated
 .classpath

@@ -1,6 +1,6 @@
 package com.pokergame.integration;
 
-import tools.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.test.context.ActiveProfiles;
+
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -30,33 +31,32 @@ class ResiliencyIntegrationTest extends AbstractIntegrationTestSupport {
     void givenActiveGame_whenPlayerDisconnectsAndReconnects_thenPlayerCanStillAct() throws Exception {
         String roomName = uniqueName("ReconnectRoom");
         JsonNode hostData = createRoom(roomName, "ReconnectHost", 2);
-        String gameId = hostData.path("roomId").asString();
-        String hostToken = hostData.path("token").asString();
-        String guestToken = joinRoom(roomName, "ReconnectGuest").path("token").asString();
+        String gameId = hostData.path("roomId").asText();
+        String hostToken = hostData.path("token").asText();
+        String guestToken = joinRoom(roomName, "ReconnectGuest").path("token").asText();
         startGame(gameId, hostToken);
 
         // Determine current player
         JsonNode initialState = readGameState(gameId, hostToken);
-        String currentPlayerName = initialState.path("currentPlayerName").asString();
+        String currentPlayerName = initialState.path("currentPlayerName").asText();
         String currentToken = currentPlayerName.equals("ReconnectHost") ? hostToken : guestToken;
         String otherToken = currentPlayerName.equals("ReconnectHost") ? guestToken : hostToken;
         String otherPlayerName = currentPlayerName.equals("ReconnectHost") ? "ReconnectGuest" : "ReconnectHost";
 
         var stompClient = createStompClient();
         StompSession currentSession = connectSession(stompClient, currentToken);
-
+        
         // 1. Current player acts (Pre-flop: Call)
         currentSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CALL, null));
-
+        
         // 2. Simulate other player disconnecting
         gameLifecycleService.markPlayerDisconnected(gameId, otherPlayerName, System.currentTimeMillis() + 120_000);
-
+        
         // 3. Verify state shows DISCONNECTED for other player
         JsonNode stateAfterDisconnect = readGameState(gameId, currentToken);
-        assertThat(stateAfterDisconnect.path("players").iterator())
+        assertThat(stateAfterDisconnect.path("players").elements())
                 .toIterable()
-                .anyMatch(p -> otherPlayerName.equals(p.path("name").asString())
-                        && "DISCONNECTED".equals(p.path("status").asString()));
+                .anyMatch(p -> otherPlayerName.equals(p.path("name").asText()) && "DISCONNECTED".equals(p.path("status").asText()));
 
         // 4. Other player reconnects
         StompSession reconnectedOtherSession = connectSession(stompClient, otherToken);
@@ -64,19 +64,18 @@ class ResiliencyIntegrationTest extends AbstractIntegrationTestSupport {
 
         // 5. Current player (now the other one) acts to finish Pre-flop
         reconnectedOtherSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CHECK, null));
-
+        
         // 6. Wait for Flop
         await().atMost(java.time.Duration.ofSeconds(2)).untilAsserted(() -> {
             JsonNode flopState = readGameState(gameId, hostToken);
-            assertThat(flopState.path("phase").asString()).isEqualTo("FLOP");
+            assertThat(flopState.path("phase").asText()).isEqualTo("FLOP");
         });
-
+        
         // 7. Verify reconnected player is ACTIVE
         JsonNode stateAfterReconnect = readGameState(gameId, hostToken);
-        assertThat(stateAfterReconnect.path("players").iterator())
+        assertThat(stateAfterReconnect.path("players").elements())
                 .toIterable()
-                .anyMatch(p -> otherPlayerName.equals(p.path("name").asString())
-                        && "ACTIVE".equals(p.path("status").asString()));
+                .anyMatch(p -> otherPlayerName.equals(p.path("name").asText()) && "ACTIVE".equals(p.path("status").asText()));
 
         currentSession.disconnect();
         reconnectedOtherSession.disconnect();

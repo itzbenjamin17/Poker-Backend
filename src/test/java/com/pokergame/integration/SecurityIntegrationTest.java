@@ -1,6 +1,6 @@
 package com.pokergame.integration;
 
-import tools.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
@@ -42,16 +42,16 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         void givenAnonymousRequest_whenCreateRoom_thenReturnRoomDataAndToken() throws Exception {
             String roomName = uniqueName("PublicCreateRoom");
 
-            JsonNode response = jsonMapper.readTree(restClient.post()
+            JsonNode response = objectMapper.readTree(restClient.post()
                     .uri("/api/room/create")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(new CreateRoomRequest(roomName, "NewPlayer", 6, 10, 20, 1000, null))
                     .retrieve()
                     .body(String.class));
 
-            assertThat(response.path("message").asString()).isEqualTo("Room created successfully");
-            assertThat(response.path("data").path("token").asString()).isNotBlank();
-            assertThat(response.path("data").path("roomId").asString()).isNotBlank();
+            assertThat(response.path("message").asText()).isEqualTo("Room created successfully");
+            assertThat(response.path("data").path("token").asText()).isNotBlank();
+            assertThat(response.path("data").path("roomId").asText()).isNotBlank();
         }
 
         @Test
@@ -60,15 +60,15 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             String roomName = uniqueName("PublicJoinRoom");
             createRoom(roomName, "Host", 6);
 
-            JsonNode response = jsonMapper.readTree(restClient.post()
+            JsonNode response = objectMapper.readTree(restClient.post()
                     .uri("/api/room/join")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(new JoinRoomRequest(roomName, "JoiningPlayer", null))
                     .retrieve()
                     .body(String.class));
 
-            assertThat(response.path("message").asString()).isEqualTo("Successfully joined room");
-            assertThat(response.path("data").path("token").asString()).isNotBlank();
+            assertThat(response.path("message").asText()).isEqualTo("Successfully joined room");
+            assertThat(response.path("data").path("token").asText()).isNotBlank();
         }
     }
 
@@ -171,7 +171,7 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         void givenNonHostToken_whenStartGame_thenReturnClientError() throws Exception {
             String roomName = uniqueName("AuthRoom");
             JsonNode createData = createRoom(roomName, "ActualHost", 6);
-            String roomId = createData.path("roomId").asString();
+            String roomId = createData.path("roomId").asText();
             joinRoom(roomName, "NonHostPlayer");
 
             String nonHostToken = jwtService.generateToken("NonHostPlayer", roomId);
@@ -190,13 +190,13 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         void givenHostTokenAndEnoughPlayers_whenStartGame_thenReturnSuccessResponse() throws Exception {
             String roomName = uniqueName("HostStartRoom");
             JsonNode createData = createRoom(roomName, "GameHost", 6);
-            String roomId = createData.path("roomId").asString();
-            String hostToken = createData.path("token").asString();
+            String roomId = createData.path("roomId").asText();
+            String hostToken = createData.path("token").asText();
             joinRoom(roomName, "SecondPlayer");
 
             JsonNode response = startGame(roomId, hostToken);
 
-            assertThat(response.path("message").asString()).isEqualTo("Game started successfully");
+            assertThat(response.path("message").asText()).isEqualTo("Game started successfully");
         }
     }
 

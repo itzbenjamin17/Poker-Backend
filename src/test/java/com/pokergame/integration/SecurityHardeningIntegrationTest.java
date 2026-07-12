@@ -1,6 +1,6 @@
 package com.pokergame.integration;
 
-import tools.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
@@ -40,16 +40,16 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
     void givenNameWithColon_whenJoined_thenIdentityIsPreserved() throws Exception {
         String spoofedName = "Alice:anything";
         String roomName = uniqueName("ColonRoom");
-
+        
         JsonNode data = createRoom(roomName, spoofedName, 6);
 
-        assertThat(data.path("playerName").asString()).isEqualTo(spoofedName);
-
+        assertThat(data.path("playerName").asText()).isEqualTo(spoofedName);
+        
         // Verify token extracts correctly
-        String token = data.path("token").asString();
+        String token = data.path("token").asText();
         PlayerPrincipal principal = jwtService.extractPrincipal(token);
         assertThat(principal.playerName()).isEqualTo(spoofedName);
-        assertThat(principal.roomId()).isEqualTo(data.path("roomId").asString());
+        assertThat(principal.roomId()).isEqualTo(data.path("roomId").asText());
     }
 
     @Test
@@ -58,12 +58,12 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         String rawName = "  Bob  ";
         String sanitizedName = "Bob";
         String roomName = uniqueName("SanitizeRoom");
-
+        
         JsonNode data = createRoom(roomName, rawName, 6);
 
-        // Token should be for "Bob", not " Bob "
-        assertThat(data.path("playerName").asString()).isEqualTo(sanitizedName);
-        String token = data.path("token").asString();
+        // Token should be for "Bob", not "  Bob  "
+        assertThat(data.path("playerName").asText()).isEqualTo(sanitizedName);
+        String token = data.path("token").asText();
         PlayerPrincipal principal = jwtService.extractPrincipal(token);
         assertThat(principal.playerName()).isEqualTo(sanitizedName);
     }
@@ -73,24 +73,25 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
     void givenStartedGame_whenJoinAttempted_thenReturnBadRequest() throws Exception {
         String roomName = uniqueName("StartedRoom");
         JsonNode host = createRoom(roomName, "Host", 6);
-        String roomId = host.path("roomId").asString();
-
+        String roomId = host.path("roomId").asText();
+        
         joinRoom(roomName, "Player2");
-
+        
         // Start game
         restClient.post()
                 .uri("/api/room/" + roomId + "/start-game")
-                .header("Authorization", "Bearer " + host.path("token").asString())
+                .header("Authorization", "Bearer " + host.path("token").asText())
                 .retrieve()
                 .toBodilessEntity();
 
         // Attempt late join
-        HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
-                .uri("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(new JoinRoomRequest(roomName, "LateComer", null))
-                .retrieve()
-                .toBodilessEntity());
+        HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> 
+            restClient.post()
+                    .uri("/api/room/join")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(new JoinRoomRequest(roomName, "LateComer", null))
+                    .retrieve()
+                    .toBodilessEntity());
 
         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(exception.getResponseBodyAsString()).contains("The game has already started");
@@ -101,22 +102,23 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
     void givenStartedGame_whenStartAttemptedAgain_thenReturnBadRequest() throws Exception {
         String roomName = uniqueName("DoubleStartRoom");
         JsonNode host = createRoom(roomName, "Host", 6);
-        String roomId = host.path("roomId").asString();
+        String roomId = host.path("roomId").asText();
         joinRoom(roomName, "Player2");
-
+        
         // Start game 1
         restClient.post()
                 .uri("/api/room/" + roomId + "/start-game")
-                .header("Authorization", "Bearer " + host.path("token").asString())
+                .header("Authorization", "Bearer " + host.path("token").asText())
                 .retrieve()
                 .toBodilessEntity();
 
         // Start game 2
-        HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
-                .uri("/api/room/" + roomId + "/start-game")
-                .header("Authorization", "Bearer " + host.path("token").asString())
-                .retrieve()
-                .toBodilessEntity());
+        HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> 
+            restClient.post()
+                    .uri("/api/room/" + roomId + "/start-game")
+                    .header("Authorization", "Bearer " + host.path("token").asText())
+                    .retrieve()
+                    .toBodilessEntity());
 
         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(exception.getResponseBodyAsString()).contains("Game has already started");
@@ -127,9 +129,9 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
     void givenHighRequestRate_whenCreateRoomRepeatedly_thenReturn429() {
         // Explicitly enable rate limiting for this test
         ReflectionTestUtils.setField(rateLimitService, "enabled", true);
-
+        
         String invalidRoomName = "A".repeat(51); // Triggers validation error, which prevents any "success" cleanup
-
+        
         // Limit is 5 per 15 mins. Send 5 failing requests.
         for (int i = 0; i < 5; i++) {
             try {
@@ -145,12 +147,13 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         }
 
         // 6th request should fail with 429
-        HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
-                .uri("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(new CreateRoomRequest(invalidRoomName, "Player6", 6, 10, 20, 1000, null))
-                .retrieve()
-                .toBodilessEntity());
+        HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> 
+            restClient.post()
+                    .uri("/api/room/create")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(new CreateRoomRequest(invalidRoomName, "Player6", 6, 10, 20, 1000, null))
+                    .retrieve()
+                    .toBodilessEntity());
 
         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
     }
@@ -160,13 +163,14 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
     void givenLargePayload_whenCreateRoom_thenReturn413() {
         StringBuilder largeContent = new StringBuilder();
         largeContent.append("A".repeat(11000)); // Limit is 10KB
-
-        HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
-                .uri("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body("{\"roomName\": \"" + largeContent.toString() + "\"}")
-                .retrieve()
-                .toBodilessEntity());
+        
+        HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> 
+            restClient.post()
+                    .uri("/api/room/create")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body("{\"roomName\": \"" + largeContent.toString() + "\"}")
+                    .retrieve()
+                    .toBodilessEntity());
 
         assertThat(exception.getStatusCode().value()).isEqualTo(413);
     }
@@ -177,10 +181,10 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         String roomName = uniqueName("ConcurrentRoom");
         int maxPlayers = 2;
         createRoom(roomName, "Host", maxPlayers);
-
+        
         ExecutorService executor = Executors.newFixedThreadPool(10);
         List<CompletableFuture<HttpStatus>> futures = new ArrayList<>();
-
+        
         for (int i = 0; i < 8; i++) {
             final int id = i;
             futures.add(CompletableFuture.supplyAsync(() -> {
@@ -201,7 +205,7 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         }
 
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(10, TimeUnit.SECONDS);
-
+        
         long successCount = futures.stream()
                 .map(CompletableFuture::join)
                 .filter(s -> s == HttpStatus.OK)
@@ -219,17 +223,17 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         for (int iteration = 0; iteration < 5; iteration++) {
             String roomName = uniqueName("RaceRoom-" + iteration);
             JsonNode host = createRoom(roomName, "Host", 6);
-            String roomId = host.path("roomId").asString();
+            String roomId = host.path("roomId").asText();
             joinRoom(roomName, "Player2"); // Need 2 players to start
 
             ExecutorService executor = Executors.newFixedThreadPool(2);
-
+            
             // Task 1: Start game
             CompletableFuture<HttpStatus> startFuture = CompletableFuture.supplyAsync(() -> {
                 try {
                     restClient.post()
                             .uri("/api/room/" + roomId + "/start-game")
-                            .header("Authorization", "Bearer " + host.path("token").asString())
+                            .header("Authorization", "Bearer " + host.path("token").asText())
                             .retrieve()
                             .toBodilessEntity();
                     return HttpStatus.OK;
@@ -258,13 +262,12 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
             HttpStatus startStatus = startFuture.join();
             HttpStatus joinStatus = joinFuture.join();
 
-            // If start succeeded, the join MUST either have happened BEFORE start (OK)
-            // or have been rejected (BAD_REQUEST). It must NEVER succeed if it was
-            // processed
+            // If start succeeded, the join MUST either have happened BEFORE start (OK) 
+            // or have been rejected (BAD_REQUEST). It must NEVER succeed if it was processed 
             // after the gameStarted flag was set.
             if (startStatus == HttpStatus.OK && joinStatus == HttpStatus.OK) {
                 // Verify the player is actually in the room and game started
-                JsonNode roomData = getRoomData(roomId, host.path("token").asString());
+                JsonNode roomData = getRoomData(roomId, host.path("token").asText());
                 assertThat(roomData.path("players").size()).isGreaterThanOrEqualTo(3);
                 assertThat(roomData.path("gameStarted").asBoolean()).isTrue();
             } else if (startStatus == HttpStatus.OK) {

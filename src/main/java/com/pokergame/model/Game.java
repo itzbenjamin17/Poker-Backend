@@ -44,7 +44,6 @@ public class Game {
     // Track if everyone has had their initial turn in the current betting round
     private boolean everyoneHasHadInitialTurn;
     private final Set<String> actedPlayersInRound;
-    private int handCount;
 
     /**
      * Creates a new poker game with the specified players and betting parameters.
@@ -75,8 +74,7 @@ public class Game {
         this.gameId = gameId;
         this.players = new ArrayList<>(players);
         this.activePlayers = new ArrayList<>(players);
-        this.handCount = 0;
-        this.deck = new Deck(new java.util.Random((long) gameId.hashCode() + this.handCount++));
+        this.deck = new Deck();
         this.communityCards = new ArrayList<>();
         this.pot = 0;
         this.dealerPosition = 0;
@@ -117,7 +115,7 @@ public class Game {
             return true;
         }
 
-        deck = new Deck(new java.util.Random((long) gameId.hashCode() + this.handCount++));
+        deck = new Deck();
         communityCards.clear();
         pot = carryOverPot;
         currentHighestBet = 0;

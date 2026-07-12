@@ -16,7 +16,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Async;
-import com.pokergame.wal.WalContext;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -82,7 +81,6 @@ public class GameStateService {
      */
     @Async("gameExecutor")
     public void broadcastGameState(String gameId, Game game) {
-        if (WalContext.isReplaying()) return;
         if (game == null) {
             logger.warn("Cannot broadcast game state - game {} not found", gameId);
             throw new BadRequestException("Trying to broadcast state for a non existent room: " + gameId);
@@ -124,7 +122,6 @@ public class GameStateService {
      */
     @Async("gameExecutor")
     public void broadcastShowdownResults(String gameId, Game game, List<Player> winners, int winningsPerPlayer) {
-        if (WalContext.isReplaying()) return;
         if (game == null) {
             logger.warn("Cannot broadcast showdown - game {} not found", gameId);
             return;
@@ -227,7 +224,6 @@ public class GameStateService {
      */
     @Async("gameExecutor")
     public void broadcastGameStateWithAutoAdvance(String gameId, Game game, String message) {
-        if (WalContext.isReplaying()) return;
         if (game == null) {
             logger.warn("Cannot broadcast auto-advance state - game {} not found", gameId);
             return;
@@ -312,7 +308,6 @@ public class GameStateService {
      */
     @Async("gameExecutor")
     public void broadcastAutoAdvanceNotification(String gameId, Game game) {
-        if (WalContext.isReplaying()) return;
         if (game == null) {
             logger.warn("Cannot broadcast auto-advance notification - game {} not found", gameId);
             return;
@@ -336,7 +331,6 @@ public class GameStateService {
      */
     @Async("gameExecutor")
     public void broadcastAutoAdvanceComplete(String gameId, Game game) {
-        if (WalContext.isReplaying()) return;
         if (game == null) {
             logger.warn("Cannot broadcast auto-advance complete - game {} not found", gameId);
             return;
@@ -357,7 +351,6 @@ public class GameStateService {
      */
     @Async("gameExecutor")
     public void sendPlayerNotification(String gameId, String playerName, String message) {
-        if (WalContext.isReplaying()) return;
         PlayerNotificationResponse notification = new PlayerNotificationResponse(
                 ResponseMessage.PLAYER_NOTIFICATION,
                 message,
@@ -378,7 +371,6 @@ public class GameStateService {
      */
     @Async("gameExecutor")
     public void sendPrivatePlayerNotification(String gameId, String playerName, String message, ResponseMessage type) {
-        if (WalContext.isReplaying()) return;
         PlayerNotificationResponse notification = new PlayerNotificationResponse(
                 type,
                 message,
@@ -404,7 +396,6 @@ public class GameStateService {
      */
     @Async("gameExecutor")
     public void broadcastGameEnd(String gameId, Player winner, boolean isForfeit) {
-        if (WalContext.isReplaying()) return;
         if (winner == null) {
             logger.warn("Cannot broadcast game end for {} - winner is null", gameId);
             return;

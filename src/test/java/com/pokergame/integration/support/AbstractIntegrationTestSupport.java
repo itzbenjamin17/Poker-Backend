@@ -1,7 +1,7 @@
 package com.pokergame.integration.support;
 
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.security.RateLimitService;
@@ -47,7 +47,7 @@ public abstract class AbstractIntegrationTestSupport {
     @Autowired
     protected RateLimitService rateLimitService;
 
-    protected final JsonMapper jsonMapper = JsonMapper.builder().build();
+    protected final ObjectMapper objectMapper = new ObjectMapper();
     protected RestClient restClient;
 
     @BeforeEach
@@ -72,15 +72,15 @@ public abstract class AbstractIntegrationTestSupport {
                 .body(String.class);
 
         assertThat(body).isNotBlank();
-        JsonNode response = jsonMapper.readTree(body);
-        assertThat(response.path("message").asString()).isEqualTo("Room created successfully");
+        JsonNode response = objectMapper.readTree(body);
+        assertThat(response.path("message").asText()).isEqualTo("Room created successfully");
 
         JsonNode data = response.path("data");
-        assertThat(data.path("roomId").asString()).isNotBlank();
-        assertThat(data.path("token").asString()).isNotBlank();
+        assertThat(data.path("roomId").asText()).isNotBlank();
+        assertThat(data.path("token").asText()).isNotBlank();
         // Relaxing this assertion to allow for server-side sanitisation
         if (!hostName.contains(" ")) {
-            assertThat(data.path("playerName").asString()).isEqualTo(hostName);
+            assertThat(data.path("playerName").asText()).isEqualTo(hostName);
         }
         return data;
     }
@@ -96,13 +96,13 @@ public abstract class AbstractIntegrationTestSupport {
                 .body(String.class);
 
         assertThat(body).isNotBlank();
-        JsonNode response = jsonMapper.readTree(body);
-        assertThat(response.path("message").asString()).isEqualTo("Successfully joined room");
+        JsonNode response = objectMapper.readTree(body);
+        assertThat(response.path("message").asText()).isEqualTo("Successfully joined room");
 
         JsonNode data = response.path("data");
-        assertThat(data.path("roomId").asString()).isNotBlank();
-        assertThat(data.path("token").asString()).isNotBlank();
-        assertThat(data.path("playerName").asString()).isEqualTo(playerName);
+        assertThat(data.path("roomId").asText()).isNotBlank();
+        assertThat(data.path("token").asText()).isNotBlank();
+        assertThat(data.path("playerName").asText()).isEqualTo(playerName);
         return data;
     }
 
@@ -114,13 +114,13 @@ public abstract class AbstractIntegrationTestSupport {
                 .body(String.class);
 
         assertThat(body).isNotBlank();
-        return jsonMapper.readTree(body);
+        return objectMapper.readTree(body);
     }
 
     protected JsonNode getRoomData(String roomId, String token) throws Exception {
         RestClient.RequestHeadersSpec<?> request = restClient.get()
                 .uri("/api/room/" + roomId);
-
+        
         if (token != null) {
             request.header("Authorization", "Bearer " + token);
         }
@@ -129,7 +129,7 @@ public abstract class AbstractIntegrationTestSupport {
                 .body(String.class);
 
         assertThat(body).isNotBlank();
-        return jsonMapper.readTree(body);
+        return objectMapper.readTree(body);
     }
 
     protected JsonNode readGameState(String gameId, String token) throws Exception {
@@ -140,7 +140,7 @@ public abstract class AbstractIntegrationTestSupport {
                 .body(String.class);
 
         assertThat(body).isNotBlank();
-        return jsonMapper.readTree(body);
+        return objectMapper.readTree(body);
     }
 
     protected void awaitRoomDestruction(String roomId, String token, Duration timeout) {
