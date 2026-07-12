@@ -70,6 +70,11 @@ public class PlayerActionService {
 
         // Synchronise on the game object to prevent concurrent modifications
         synchronized (game) {
+            if (game.getScheduledTaskDeadline(com.pokergame.enums.ScheduledGameTask.AUTO_ADVANCE) != null) {
+                logger.warn("Player {} attempted to act in game {} while it is auto-advancing", playerName, gameId);
+                throw new BadRequestException("Actions are not allowed while the game is auto-advancing.");
+            }
+
             Player currentPlayer = getCurrentPlayer(actionRequest, game);
 
             logger.debug("Processing player action - Game: {}, Player: {}, Action: {}",
