@@ -333,6 +333,13 @@ public class Game {
                                 ", so you need to raise by at least "
                                 + (currentHighestBet - player.getCurrentBet() + 1));
             }
+
+            int raiseIncrement = totalBetAfterRaise - currentHighestBet;
+            if (raiseIncrement < bigBlind && actualDecision.amount() < player.getChips()) {
+                throw new BadRequestException(
+                        "Raise amount must be at least the big blind of " + bigBlind +
+                        ". You tried to raise by " + raiseIncrement);
+            }
         }
 
         if (actualDecision.action() == PlayerAction.BET) {
@@ -347,6 +354,10 @@ public class Game {
 
             if (actualDecision.amount() > player.getChips()) {
                 throw new BadRequestException("Bet amount cannot exceed available chips");
+            }
+
+            if (actualDecision.amount() < bigBlind && actualDecision.amount() < player.getChips()) {
+                throw new BadRequestException("Bet amount must be at least the big blind of " + bigBlind);
             }
         }
 

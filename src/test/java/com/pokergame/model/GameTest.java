@@ -426,6 +426,59 @@ class GameTest {
                                 () -> game.processPlayerDecision(player, decision));
         }
 
+        @Test
+        void testProcessPlayerDecisionBetLessThanBigBlind() {
+                Player player = game.getCurrentPlayer();
+                // Big blind is 20. Try to bet 10.
+                PlayerDecision decision = new PlayerDecision(PlayerAction.BET, 10, player.getPlayerId());
+
+                BadRequestException exception = assertThrows(
+                                BadRequestException.class,
+                                () -> game.processPlayerDecision(player, decision));
+
+                assertTrue(exception.getMessage().contains("Bet amount must be at least the big blind"));
+        }
+
+        @Test
+        void testProcessPlayerDecisionRaiseLessThanBigBlind() {
+                game.postBlinds(); // Sets highest bet to 20
+                Player raiser = game.getActivePlayers().getFirst(); // Player1
+                // Current highest bet is 20. Try to raise to 30 (increment is 10, which is less than big blind of 20).
+                // Raiser's current bet is 0, so raise amount is 30.
+                PlayerDecision decision = new PlayerDecision(PlayerAction.RAISE, 30, raiser.getPlayerId());
+
+                BadRequestException exception = assertThrows(
+                                BadRequestException.class,
+                                () -> game.processPlayerDecision(raiser, decision));
+
+                assertTrue(exception.getMessage().contains("Raise amount must be at least the big blind"));
+        }
+
+        @Test
+        void testProcessPlayerDecisionAllowsBetLessThanBigBlindIfAllIn() {
+                Player player = game.getCurrentPlayer();
+                player.setChips(15); // Stack is less than big blind of 20
+                // Bet all chips (15) which is less than big blind but all-in.
+                PlayerDecision decision = new PlayerDecision(PlayerAction.BET, 15, player.getPlayerId());
+
+                assertDoesNotThrow(() -> game.processPlayerDecision(player, decision));
+                assertEquals(15, player.getCurrentBet());
+                assertTrue(player.getIsAllIn());
+        }
+
+        @Test
+        void testProcessPlayerDecisionAllowsRaiseLessThanBigBlindIfAllIn() {
+                game.postBlinds(); // Sets highest bet to 20
+                Player raiser = game.getActivePlayers().getFirst(); // Player1
+                raiser.setChips(25); // Stack is less than big blind of 20 above the current highest bet
+                // Current highest bet is 20. Raise all-in by putting in all 25 chips (increment is 5, less than 20 big blind).
+                PlayerDecision decision = new PlayerDecision(PlayerAction.RAISE, 25, raiser.getPlayerId());
+
+                assertDoesNotThrow(() -> game.processPlayerDecision(raiser, decision));
+                assertEquals(25, raiser.getCurrentBet());
+                assertTrue(raiser.getIsAllIn());
+        }
+
         /**
          * Protects the expected behavior for deal flop.
          */

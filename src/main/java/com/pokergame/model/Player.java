@@ -216,6 +216,15 @@ public class Player {
     }
 
     /**
+     * Sets the number of chips the player has.
+     *
+     * @param chips the new chips amount
+     */
+    public void setChips(int chips) {
+        this.chips = chips;
+    }
+
+    /**
      * Returns the player's hole cards.
      *
      * @return the player's hole card list

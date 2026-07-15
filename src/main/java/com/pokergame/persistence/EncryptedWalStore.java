@@ -42,6 +42,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * </p>
  */
 public final class EncryptedWalStore {
+    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(EncryptedWalStore.class);
     private static final int MAGIC = 0x504B574C; // PKWL
     private static final short FORMAT_VERSION = 1;
     private static final short SCHEMA_VERSION = 1;
@@ -188,7 +189,13 @@ public final class EncryptedWalStore {
                     .sorted(Comparator.comparing(Path::toString)).toList()) {
                 String fileName = path.getFileName().toString();
                 String roomId = fileName.substring(0, fileName.length() - 4);
-                recoverLatest(roomId).ifPresent(payload -> recovered.put(roomId, payload));
+                Optional<byte[]> latest = recoverLatest(roomId);
+                if (latest.isPresent()) {
+                    recovered.put(roomId, latest.get());
+                } else {
+                    logger.info("Cleaning up uncommitted WAL file for room {}", roomId);
+                    delete(roomId);
+                }
             }
             return Map.copyOf(recovered);
         } catch (IOException e) {

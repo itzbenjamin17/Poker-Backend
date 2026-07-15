@@ -213,6 +213,81 @@ class PersistenceRestartIntegrationTest {
     }
 
     /**
+     * Protects the contract that a normal game end deletes the WAL file from disk.
+     */
+    @Test
+    void normalGameEndDeletesWalFile() throws Exception {
+        String roomId;
+        try (ConfigurableApplicationContext context = startApplication()) {
+            RoomService rooms = context.getBean(RoomService.class);
+            roomId = rooms.createRoom(new CreateRoomRequest("End Room", "Alice", 6, 5, 10, 1000, null));
+            rooms.joinRoom(new JoinRoomRequest("End Room", "Bob", null));
+            GameLifecycleService games = context.getBean(GameLifecycleService.class);
+            games.createGameFromRoom(roomId);
+
+            // Bob leaves the game, ending the game and triggering the cleanup schedule
+            games.leaveGame(roomId, "Bob");
+
+            // Wait for display delay (7s) plus a bit extra for cleanup task to execute
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                assertNull(rooms.getRoom(roomId));
+                assertNull(games.getGame(roomId));
+            });
+
+            assertFalse(Files.exists(walDirectory.resolve(roomId + ".wal")));
+        }
+    }
+
+    /**
+     * Protects the contract that a failed room creation does not leak a WAL file on disk.
+     */
+    @Test
+    void failedRoomCreationDoesNotLeaveWalFile() throws Exception {
+        String uniqueRoomName = "Duplicate Room";
+        try (ConfigurableApplicationContext context = startApplication()) {
+            RoomService rooms = context.getBean(RoomService.class);
+            // Create first room successfully
+            String firstRoomId = rooms.createRoom(new CreateRoomRequest(uniqueRoomName, "Alice", 6, 5, 10, 1000, null));
+            assertTrue(Files.exists(walDirectory.resolve(firstRoomId + ".wal")));
+
+            // Attempt to create second room with duplicate name - should fail
+            assertThrows(com.pokergame.exception.BadRequestException.class, () -> {
+                rooms.createRoom(new CreateRoomRequest(uniqueRoomName, "Bob", 6, 5, 10, 1000, null));
+            });
+
+            // Verify that no other WAL file was leaked
+            try (var paths = Files.list(walDirectory)) {
+                List<Path> walFiles = paths.filter(p -> p.toString().endsWith(".wal")).toList();
+                assertEquals(1, walFiles.size());
+                assertEquals(firstRoomId + ".wal", walFiles.getFirst().getFileName().toString());
+            }
+        }
+    }
+
+    /**
+     * Protects the contract that uncommitted WAL files are cleaned up during startup recovery.
+     */
+    @Test
+    void uncommittedWalFilesAreCleanedUpAtStartupRecovery() throws Exception {
+        String leakedRoomId = "leaked-room-id";
+        // Create an uncommitted WAL file manually in the walDirectory
+        Path walFile = walDirectory.resolve(leakedRoomId + ".wal");
+        Files.createFile(walFile);
+        assertTrue(Files.exists(walFile));
+
+        // Start the application, which should run PersistenceRecovery and clean up the file
+        try (ConfigurableApplicationContext context = startApplication()) {
+            // File should be deleted during startup recovery
+            assertFalse(Files.exists(walFile));
+        }
+    }
+
+
+
+
+
+
+    /**
      * Starts a persistence-enabled application with the default disconnect grace.
      *
      * @return running application context

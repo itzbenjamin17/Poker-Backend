@@ -129,6 +129,13 @@ public final class DurableMutationAspect {
             return result;
         } catch (Throwable failure) {
             DurableTransactionContext.discard();
+            try {
+                if (store.recoverLatest(roomId).isEmpty()) {
+                    store.delete(roomId);
+                }
+            } catch (Exception cleanupError) {
+                logger.error("Failed to clean up aborted WAL for room {}", roomId, cleanupError);
+            }
             throw failure;
         } finally {
             lock.unlock();
