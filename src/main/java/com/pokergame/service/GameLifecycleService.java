@@ -37,6 +37,7 @@ public class GameLifecycleService {
 
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
     private static final long GAME_END_DISPLAY_DELAY_MS = 7000;
+    public static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = 6000;
     private static final long AUTO_ADVANCE_STEP_DELAY_MS = 4000;
 
     @Value("${poker.round-end.display-delay-ms:0}")
@@ -472,6 +473,18 @@ public class GameLifecycleService {
     }
 
     /**
+     * Persists the final game-end deadline before notifying clients of victory,
+     * allowing a review window of the final board before the game-over overlay.
+     *
+     * @param gameId  game whose tournament has concluded
+     * @param delayMs client review delay before game-over broadcast
+     */
+    @DurableMutation(roomId = "#gameId")
+    public void scheduleGameEnd(String gameId, long delayMs) {
+        persistScheduledTask(gameId, ScheduledGameTask.GAME_END, System.currentTimeMillis() + Math.max(0, delayMs));
+    }
+
+    /**
      * Persists the first all-in progression deadline before clients observe the
      * auto-advance state.
      *
@@ -508,10 +521,13 @@ public class GameLifecycleService {
                 case NEW_HAND -> startNewHand(gameId);
                 case READY_OPEN -> startReadyCountdown(gameId, configuredReadyCountdownMs);
                 case CLEANUP -> performGameCleanup(gameId);
+                case GAME_END -> handleGameEnd(gameId, false);
                 case AUTO_ADVANCE -> {
                     boolean complete = advanceAutoAdvanceStep(gameId);
                     if (complete) {
-                        if (roundEndDisplayDelayMs <= 0) {
+                        if (game.isTournamentOver()) {
+                            scheduleGameEnd(gameId, FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
+                        } else if (roundEndDisplayDelayMs <= 0) {
                             startReadyCountdown(gameId, configuredReadyCountdownMs);
                         } else {
                             persistScheduledTask(gameId, ScheduledGameTask.READY_OPEN,

@@ -124,7 +124,11 @@ public class PlayerActionService {
                         gameLifecycleService.scheduleAutoAdvance(gameId);
                     }
                     case SHOWDOWN -> {
-                        openReadyCountdownGate(gameId);
+                        if (game.isTournamentOver()) {
+                            gameLifecycleService.scheduleGameEnd(gameId, GameLifecycleService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
+                        } else {
+                            openReadyCountdownGate(gameId);
+                        }
                         gameStateService.broadcastShowdownResults(gameId, game, outcome.winners(), outcome.winningsPerPlayer());
                     }
                 }

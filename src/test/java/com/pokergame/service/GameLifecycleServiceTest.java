@@ -606,6 +606,20 @@ class GameLifecycleServiceTest {
         verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
     }
 
+    @Test
+    void executeScheduledTask_WhenGameEnd_ShouldBroadcastGameEnd() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        long deadline = System.currentTimeMillis() + 5000;
+        game.scheduleTask(ScheduledGameTask.GAME_END, deadline);
+        reset(gameStateService);
+
+        gameLifecycleService.executeScheduledTask(ROOM_ID, ScheduledGameTask.GAME_END, deadline);
+
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
+    }
+
     /**
      * Protects the contract that handle game end with null game should not broadcast.
      */

@@ -1424,6 +1424,33 @@ class GameTest {
                 assertFalse(game.getActivePlayers().contains(eliminated));
         }
 
+        @Test
+        void testIsTournamentOverWhenOnePlayerHasChips() {
+                assertFalse(game.isTournamentOver());
+
+                // Set 2 players out of 3 to 0 chips
+                game.getPlayers().get(1).doAction(PlayerAction.ALL_IN, 0, 0); // chips = 0
+                game.getPlayers().get(2).doAction(PlayerAction.ALL_IN, 0, 0); // chips = 0
+
+                assertTrue(game.isTournamentOver());
+        }
+
+        @Test
+        void testAreAllReadyEligiblePlayersReadyExcludesZeroChipPlayers() {
+                game.openReadyCountdown(System.currentTimeMillis() + 10_000);
+
+                // Set player 1 to 0 chips
+                game.getPlayers().get(1).doAction(PlayerAction.ALL_IN, 0, 0);
+
+                // Only player 0 and player 2 have chips > 0
+                game.getPlayers().get(0).setReadyForNextHand(true);
+                assertFalse(game.areAllReadyEligiblePlayersReady());
+
+                game.getPlayers().get(2).setReadyForNextHand(true);
+                // Player 1 has 0 chips, so with player 0 and 2 ready, all eligible should be ready
+                assertTrue(game.areAllReadyEligiblePlayersReady());
+        }
+
         /**
          * Protects the expected behavior for process player decision allows raise with all in.
          */

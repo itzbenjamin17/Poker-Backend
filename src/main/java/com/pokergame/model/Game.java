@@ -1193,8 +1193,20 @@ public class Game {
     }
 
     /**
-     * Excludes disconnected and eliminated players from the ready gate so an absent
-     * player cannot stall the next hand indefinitely.
+     * Checks if the tournament/game is over (one or zero players with chips remain).
+     *
+     * @return true if the tournament is over, false otherwise
+     */
+    public boolean isTournamentOver() {
+        long playersWithChips = players.stream()
+                .filter(player -> !player.getIsOut() && player.getChips() > 0)
+                .count();
+        return playersWithChips <= 1;
+    }
+
+    /**
+     * Excludes disconnected, eliminated, and zero-chip players from the ready gate so an absent
+     * or knocked-out player cannot stall the next hand indefinitely.
      *
      * @return players whose readiness is required
      */
@@ -1202,6 +1214,7 @@ public class Game {
         return players.stream()
                 .filter(player -> !player.getIsOut())
                 .filter(player -> !player.getIsDisconnected())
+                .filter(player -> player.getChips() > 0)
                 .toList();
     }
 

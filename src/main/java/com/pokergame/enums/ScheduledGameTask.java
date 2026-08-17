@@ -8,5 +8,6 @@ public enum ScheduledGameTask {
     AUTO_ADVANCE,
     READY_OPEN,
     NEW_HAND,
-    CLEANUP
+    CLEANUP,
+    GAME_END
 }

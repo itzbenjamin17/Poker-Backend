@@ -1,11 +1,14 @@
 package com.pokergame.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+
+import java.util.List;
 
 /** Configures STOMP endpoints, broker destinations, and inbound interceptors. */
 @Configuration
@@ -14,17 +17,21 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     private final WebSocketAuthInterceptor webSocketAuthInterceptor;
     private final WebSocketRateLimitInterceptor webSocketRateLimitInterceptor;
+    private final List<String> allowedOrigins;
 
     /**
      * Creates the WebSocket configuration with its inbound security interceptors.
      *
      * @param webSocketAuthInterceptor authenticates and authorizes STOMP frames
      * @param webSocketRateLimitInterceptor throttles client SEND frames
+     * @param allowedOrigins allowed origin patterns for WebSocket handshake
      */
     public WebSocketConfig(WebSocketAuthInterceptor webSocketAuthInterceptor,
-                           WebSocketRateLimitInterceptor webSocketRateLimitInterceptor) {
+                           WebSocketRateLimitInterceptor webSocketRateLimitInterceptor,
+                           @Value("${app.security.cors.allowed-origins}") List<String> allowedOrigins) {
         this.webSocketAuthInterceptor = webSocketAuthInterceptor;
         this.webSocketRateLimitInterceptor = webSocketRateLimitInterceptor;
+        this.allowedOrigins = allowedOrigins;
     }
 
     /**
@@ -54,15 +61,13 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
      */
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
+        String[] patterns = allowedOrigins.stream()
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toArray(String[]::new);
+
         registry.addEndpoint("/ws")
-            .setAllowedOriginPatterns(
-                "http://localhost:5173",
-                "http://localhost",
-                "https://benjamins.page",
-                "https://www.benjamins.page",
-                "http://benjamins.page",
-                "http://www.benjamins.page",
-                "https://*.ngrok-free.app");
+                .setAllowedOriginPatterns(patterns.length > 0 ? patterns : new String[]{"*"});
     }
 
     /**
