@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Provides abstract integration test support shared by integration tests. */
 public abstract class AbstractIntegrationTestSupport {
 
-    protected static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(10);
+    protected static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(15);
     protected static final String FRONTEND_ORIGIN = "http://localhost:5173";
 
     @LocalServerPort

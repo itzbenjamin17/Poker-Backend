@@ -1409,6 +1409,31 @@ public class Game {
     }
 
     /**
+     * Marks the game as terminal without running {@link #cleanupAfterHand()}, so the
+     * game-end path can flag the game as finished while leaving the showdown
+     * projection (active players, revealed hands) untouched for the review broadcast.
+     */
+    public void markGameOver() {
+        gameOver = true;
+    }
+
+    /**
+     * Determines the actual winner of the tournament by chip count rather than by seat
+     * order. Among players who are not out, returns the one holding the most chips.
+     * Ties (which should not occur once {@link #isTournamentOver()} holds) are resolved
+     * deterministically by seat index in {@link #getPlayers()}.
+     *
+     * @return the winning player, or null if no eligible player remains
+     */
+    public Player resolveGameWinner() {
+        return players.stream()
+                .filter(player -> !player.getIsOut())
+                .max(Comparator.comparingInt(Player::getChips)
+                        .thenComparing(Comparator.comparingInt(players::indexOf).reversed()))
+                .orElse(null);
+    }
+
+    /**
      * Returns the current highest bet in the current betting round.
      *
      * @return the highest bet amount

@@ -345,11 +345,10 @@ public class GameLifecycleService {
 
         Player winner;
         synchronized (game) {
-            // Find the winner (last remaining player)
-            winner = game.getActivePlayers().stream()
-                    .filter(player -> !player.getIsDisconnected())
-                    .findFirst()
-                    .orElse(null);
+            // Find the winner by chip count, not seat order (activePlayers still
+            // contains the busted player at this point since conductShowdown() does
+            // not run cleanupAfterHand())
+            winner = game.resolveGameWinner();
 
             if (winner == null) {
                 winner = game.getPlayers().stream()
@@ -357,6 +356,9 @@ public class GameLifecycleService {
                         .findFirst()
                         .orElse(game.getPlayers().stream().findFirst().orElse(null));
             }
+
+            game.markGameOver();
+            game.closeReadyCountdown();
         }
 
         if (winner == null) {
@@ -364,7 +366,7 @@ public class GameLifecycleService {
             return;
         }
 
-        gameStateService.broadcastGameEnd(gameId, winner, isForfeit);
+        gameStateService.broadcastGameEnd(gameId, game, winner, isForfeit);
 
         // Wait a few seconds for players to see the result, then destroy the room and
         // game, on a different thread

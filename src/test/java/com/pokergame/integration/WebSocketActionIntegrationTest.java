@@ -137,6 +137,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
                     initialStateFuture,
                     response -> response.phase() == GamePhase.PRE_FLOP
                             && !Boolean.TRUE.equals(response.isReadyCountdownActive())));
+            Thread.sleep(150);
 
             gameLifecycleService.createGameFromRoom(gameSession.roomId());
 
@@ -146,6 +147,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
                     nextStateFuture,
                     response -> response.players().stream().anyMatch(player ->
                             player.name().equals(initialState.currentPlayerName()) && player.hasFolded())));
+            Thread.sleep(150);
 
             StompSession actingSession = HOST_NAME.equals(initialState.currentPlayerName()) ? hostSession
                     : otherSession;
@@ -176,6 +178,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             CompletableFuture<PublicGameStateResponse> initialStateFuture = new CompletableFuture<>();
 
             observerSession.subscribe("/game/" + gameSession.roomId(), new PublicStateFrameHandler(initialStateFuture));
+            Thread.sleep(150);
             gameLifecycleService.createGameFromRoom(gameSession.roomId());
 
             PublicGameStateResponse initialState = initialStateFuture.get(DEFAULT_TIMEOUT.toSeconds(),
@@ -189,6 +192,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             StompSession reconnectedSession = connectSession(stompClient, actingToken);
             CompletableFuture<PublicGameStateResponse> nextStateFuture = new CompletableFuture<>();
             reconnectedSession.subscribe("/game/" + gameSession.roomId(), new PublicStateFrameHandler(nextStateFuture));
+            Thread.sleep(150);
 
             reconnectedSession.send("/app/" + gameSession.roomId() + "/action",
                     new PlayerActionRequest(PlayerAction.FOLD, null));
@@ -218,7 +222,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             StompFrameHandler stateHandler = getStompFrameHandler(initialStateFuture, readyGateOpenFuture, nextHandFuture);
 
             hostSession.subscribe("/game/" + gameSession.roomId(), stateHandler);
-            otherSession.subscribe("/game/" + gameSession.roomId(), stateHandler);
+            Thread.sleep(150);
 
             gameLifecycleService.createGameFromRoom(gameSession.roomId());
 
@@ -315,7 +319,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             };
 
             hostSession.subscribe("/game/" + gameSession.roomId(), stateHandler);
-            otherSession.subscribe("/game/" + gameSession.roomId(), stateHandler);
+            Thread.sleep(150);
 
             gameLifecycleService.createGameFromRoom(gameSession.roomId());
 

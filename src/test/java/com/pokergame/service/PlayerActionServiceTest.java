@@ -85,6 +85,23 @@ class PlayerActionServiceTest {
         assertTrue(exception.getMessage().contains("Game not found"));
     }
 
+    @Test
+    @DisplayName("processPlayerAction should throw BadRequestException when game is over")
+    void processPlayerAction_WhenGameOver_ShouldThrowBadRequestException() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        spyGame.markGameOver();
+
+        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.FOLD, null);
+
+        BadRequestException exception = assertThrows(
+                BadRequestException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, "Player1"));
+
+        assertEquals("This game has finished.", exception.getMessage());
+        verify(spyGame, never()).processPlayerDecision(any(), any());
+    }
+
     /**
      * Protects the contract that process player action when not player turn should throw security exception.
      */

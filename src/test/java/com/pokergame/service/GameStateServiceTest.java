@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.PlayerAction;
@@ -275,6 +276,28 @@ class GameStateServiceTest {
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
+    /**
+     * Protects the contract that no player is reported as having the turn during a
+     * showdown broadcast. Previously the stale currentPlayerId let the client
+     * briefly render Fold/Check controls for the losing player between the
+     * showdown broadcast and the later GAME_END broadcast.
+     */
+    @Test
+    void broadcastShowdownResults_ShouldNotReportACurrentPlayer() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        List<Player> winners = List.of(testPlayers.getFirst());
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        gameStateService.broadcastShowdownResults(GAME_ID, testGame, winners, 50);
+
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        PublicGameStateResponse response = (PublicGameStateResponse) captor.getValue();
+
+        assertNull(response.currentPlayerId());
+        assertNull(response.currentPlayerName());
+        assertTrue(response.players().stream().noneMatch(PublicPlayerState::isCurrentPlayer));
+    }
+
     // ==================== broadcastGameStateWithAutoAdvance Tests
     // ====================
 
@@ -377,22 +400,23 @@ class GameStateServiceTest {
     void broadcastGameEnd_ShouldBroadcastWinnerInfo() {
         Player winner = testPlayers.getFirst();
         winner.addChips(50); // Winner has more chips
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
-        gameStateService.broadcastGameEnd(GAME_ID, winner, false);
+        gameStateService.broadcastGameEnd(GAME_ID, testGame, winner, false);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
 
         Object captured = captor.getValue();
         assertNotNull(captured);
-        assertTrue(captured instanceof Map<?, ?>);
+        assertTrue(captured instanceof GameEndResponse);
 
-        Map<?, ?> gameEndData = (Map<?, ?>) captured;
-        assertEquals("GAME_END", gameEndData.get("type"));
-        assertEquals(winner.getName(), gameEndData.get("winner"));
-        assertEquals(winner.getChips(), gameEndData.get("winnerChips"));
-        assertEquals(GAME_ID, gameEndData.get("gameId"));
+        GameEndResponse gameEndResponse = (GameEndResponse) captured;
+        assertEquals("GAME_END", gameEndResponse.type());
+        assertEquals(winner.getName(), gameEndResponse.winner());
+        assertEquals(winner.getChips(), gameEndResponse.winnerChips());
+        assertEquals(GAME_ID, gameEndResponse.gameId());
     }
 
     /**
@@ -401,16 +425,15 @@ class GameStateServiceTest {
     @Test
     void broadcastGameEnd_MessageShouldContainWinnerName() {
         Player winner = testPlayers.getFirst();
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        gameStateService.broadcastGameEnd(GAME_ID, winner, false);
+        gameStateService.broadcastGameEnd(GAME_ID, testGame, winner, false);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
 
-        Map<?, ?> gameEndData = (Map<?, ?>) captor.getValue();
-        Object messageObj = gameEndData.get("message");
-        assertTrue(messageObj instanceof String);
-        String message = (String) messageObj;
+        GameEndResponse gameEndResponse = (GameEndResponse) captor.getValue();
+        String message = gameEndResponse.message();
         assertTrue(message.contains(winner.getName()));
         assertTrue(message.contains("wins"));
     }
@@ -420,7 +443,56 @@ class GameStateServiceTest {
      */
     @Test
     void broadcastGameEnd_WithNullWinner_ShouldNotThrow() {
-        assertDoesNotThrow(() -> gameStateService.broadcastGameEnd(GAME_ID, null, false));
+        assertDoesNotThrow(() -> gameStateService.broadcastGameEnd(GAME_ID, testGame, null, false));
+    }
+
+    /**
+     * Protects the contract that a showdown game end reveals both players' hole cards
+     * and the full five-card community board in the final-state snapshot.
+     */
+    @Test
+    void broadcastGameEnd_ShowdownPath_ShouldRevealHoleCardsAndFullBoard() {
+        Player winner = testPlayers.getFirst();
+        Player loser = testPlayers.get(1);
+        loser.setIsOut();
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        gameStateService.broadcastGameEnd(GAME_ID, testGame, winner, false);
+
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+
+        GameEndResponse gameEndResponse = (GameEndResponse) captor.getValue();
+        PublicGameStateResponse finalState = gameEndResponse.finalState();
+        assertNotNull(finalState);
+
+        PublicPlayerState winnerState = finalState.players().stream()
+                .filter(p -> p.name().equals(winner.getName()))
+                .findFirst()
+                .orElseThrow();
+        assertNotNull(winnerState.holeCards());
+        assertTrue(winnerState.isWinner());
+    }
+
+    /**
+     * Protects the contract that a forfeit game end does not reveal any hole cards.
+     */
+    @Test
+    void broadcastGameEnd_ForfeitPath_ShouldNotRevealHoleCards() {
+        Player winner = testPlayers.getFirst();
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        gameStateService.broadcastGameEnd(GAME_ID, testGame, winner, true);
+
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+
+        GameEndResponse gameEndResponse = (GameEndResponse) captor.getValue();
+        assertTrue(gameEndResponse.isForfeit());
+        PublicGameStateResponse finalState = gameEndResponse.finalState();
+        assertNotNull(finalState);
+
+        assertTrue(finalState.players().stream().allMatch(p -> p.holeCards() == null));
     }
 
     // ==================== Edge Case Tests ====================

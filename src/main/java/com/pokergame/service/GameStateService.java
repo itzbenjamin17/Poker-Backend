@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.dto.response.PlayerNotificationResponse;
@@ -140,16 +141,12 @@ public class GameStateService {
             Room room = roomService.getRoom(gameId);
             int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
-            // Get current player information
-            Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
-            if (currentPlayer != null) {
-                logger.debug("Showdown - current player: {} (ID: {})", currentPlayer.getName(),
-                        currentPlayer.getPlayerId());
-            } else {
-                logger.debug("Showdown - no active players found");
-            }
-            String currentPlayerName = currentPlayer != null ? currentPlayer.getName() : null;
-            String currentPlayerId = currentPlayer != null ? currentPlayer.getPlayerId() : null;
+            // Showdown means no one is waiting to act - reporting a stale "current
+            // player" pointer here previously made the client briefly think it was
+            // someone's turn (showing Fold/Check) between the showdown broadcast and
+            // the later GAME_END/next-hand broadcast, so these are intentionally null.
+            String currentPlayerName = null;
+            String currentPlayerId = null;
 
             // Get winner names
             winnerNames = winners.stream().map(Player::getName).toList();
@@ -388,30 +385,111 @@ public class GameStateService {
 
     /**
      * Broadcasts a game end message when a winner is determined.
-     * Sent when only one player remains with chips.
+     * Sent when only one player remains with chips. Carries a complete, revealed
+     * final-state snapshot so the client can freeze it for the post-game review
+     * screen, independent of subsequent server cleanup.
      *
      * @param gameId    the unique identifier of the game
+     * @param game      the Game object containing the final state
      * @param winner    the Player object representing the game winner
      * @param isForfeit true if the game ended due to a player leaving/disconnecting
      */
-    public void broadcastGameEnd(String gameId, Player winner, boolean isForfeit) {
+    public void broadcastGameEnd(String gameId, Game game, Player winner, boolean isForfeit) {
         if (winner == null) {
             logger.warn("Cannot broadcast game end for {} - winner is null", gameId);
             return;
         }
 
-        Map<String, Object> gameEndData = new HashMap<>();
-        gameEndData.put("type", ResponseMessage.GAME_END.getMessage());
-        gameEndData.put("winner", winner.getName());
-        gameEndData.put("winnerChips", winner.getChips());
-        gameEndData.put("gameId", gameId);
-        gameEndData.put("isForfeit", isForfeit);
-        gameEndData.put("message", "🏆 " + winner.getName() + " wins the game with " + winner.getChips() + " chips!");
+        String message = "🏆 " + winner.getName() + " wins the game with " + winner.getChips() + " chips!";
+        PublicGameStateResponse finalState = null;
 
-        sendAfterCommit("/game/" + gameId, gameEndData);
+        if (game != null) {
+            synchronized (game) {
+                finalState = buildFinalStateResponse(gameId, game, winner, !isForfeit);
+            }
+        }
+
+        GameEndResponse gameEndResponse = new GameEndResponse(
+                ResponseMessage.GAME_END.getMessage(),
+                gameId,
+                winner.getName(),
+                winner.getChips(),
+                isForfeit,
+                message,
+                finalState);
+
+        sendAfterCommit("/game/" + gameId, gameEndResponse);
 
         logger.info("Game {} completed - Winner: {} with {} chips",
                 gameId, winner.getName(), winner.getChips());
+    }
+
+    /**
+     * Builds a revealed final-state projection for the game-end review screen. Unlike
+     * the live-game projection, this reveals hole cards, hand ranks, and best hands
+     * for all non-folded, non-out players when {@code revealHoleCards} is true, and
+     * marks the winner explicitly.
+     *
+     * @param gameId          the unique identifier of the game
+     * @param game            the Game object containing the final state
+     * @param winner          the winning player, or null if undetermined
+     * @param revealHoleCards true to reveal hole cards (showdown path); false to
+     *                        withhold them (forfeit path)
+     * @return a {@link PublicGameStateResponse} representing the frozen final state
+     */
+    private PublicGameStateResponse buildFinalStateResponse(String gameId, Game game, Player winner,
+            boolean revealHoleCards) {
+        Room room = roomService.getRoom(gameId);
+        int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+
+        String smallBlindPlayerId = game.getSmallBlindPlayerId();
+        String bigBlindPlayerId = game.getBigBlindPlayerId();
+
+        List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
+            boolean isWinner = winner != null && winner.equals(player);
+            boolean isActive = !player.getHasFolded() && !player.getIsOut();
+            String status = resolvePlayerStatus(player);
+            return new PublicPlayerState(
+                    player.getPlayerId(),
+                    player.getName(),
+                    player.getChips(),
+                    player.getCurrentBet(),
+                    status,
+                    player.getIsAllIn(),
+                    false,
+                    player.getHasFolded(),
+                    player.getPlayerId().equals(smallBlindPlayerId),
+                    player.getPlayerId().equals(bigBlindPlayerId),
+                    isActive ? player.getHandRank() : null,
+                    isActive ? player.getBestHand() : List.of(),
+                    isWinner,
+                    null,
+                    (revealHoleCards && isActive) ? player.getHoleCards() : null,
+                    player.getDisconnectDeadlineEpochMs(),
+                    player.getIsReadyForNextHand());
+        }).toList();
+
+        List<String> winnerNames = winner != null ? List.of(winner.getName()) : List.of();
+
+        return new PublicGameStateResponse(
+                maxPlayers,
+                game.getPot(),
+                game.getPotBreakdown(),
+                game.getUncalledAmount(),
+                game.getCurrentPhase(),
+                game.getCurrentHighestBet(),
+                game.getCommunityCards(),
+                playersList,
+                null,
+                null,
+                winnerNames,
+                winner != null ? winner.getChips() : null,
+                false,
+                null,
+                game.isReadyCountdownActive(),
+                game.getReadyCountdownDeadlineEpochMs(),
+                null,
+                null);
     }
 
     /**

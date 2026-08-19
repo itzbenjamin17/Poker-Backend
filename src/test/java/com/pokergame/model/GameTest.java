@@ -1539,4 +1539,35 @@ class GameTest {
                 game.conductShowdown();
                 assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
         }
+
+        @Test
+        @DisplayName("should mark game as over")
+        void testMarkGameOver() {
+                assertFalse(game.isGameOver());
+                game.markGameOver();
+                assertTrue(game.isGameOver());
+        }
+
+        @Test
+        @DisplayName("should resolve game winner by chip count and index tiebreak")
+        void testResolveGameWinner() {
+                // Setup: Player 1 (index 0) has 0 chips and is out
+                // Player 2 (index 1) has 1000 chips
+                // Player 3 (index 2) has 1000 chips
+                players.get(0).setChips(0);
+                players.get(0).setIsOut();
+                players.get(1).setChips(1000);
+                players.get(2).setChips(1000);
+
+                Player winner = game.resolveGameWinner();
+
+                // Should pick Player 2 (index 1) over Player 3 (index 2) due to lower index tiebreak
+                assertNotNull(winner);
+                assertEquals("Player2", winner.getName());
+
+                // Now give Player 3 more chips
+                players.get(2).setChips(2000);
+                winner = game.resolveGameWinner();
+                assertEquals("Player3", winner.getName());
+        }
 }

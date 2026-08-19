@@ -1,10 +1,15 @@
 package com.pokergame.service;
 
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.HandRank;
+import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.Rank;
 import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.enums.Suit;
+import com.pokergame.model.Card;
 import com.pokergame.model.Game;
+import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import org.junit.jupiter.api.BeforeEach;
@@ -251,7 +256,7 @@ class GameLifecycleServiceTest {
 
         // Should end the game and schedule cleanup because game became over after reset
         verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
-        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Game.class), any(Player.class), anyBoolean());
         assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
     }
 
@@ -333,7 +338,7 @@ class GameLifecycleServiceTest {
 
         gameLifecycleService.leaveGame(ROOM_ID, playerToLeave);
 
-        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Game.class), any(Player.class), anyBoolean());
     }
 
     /**
@@ -567,7 +572,7 @@ class GameLifecycleServiceTest {
 
         assertDoesNotThrow(() -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
 
-        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID),
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Game.class),
                 argThat(player -> player != null && player.getName().equals("Host")), anyBoolean());
         assertNotNull(gameLifecycleService.getGame(ROOM_ID).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
     }
@@ -603,7 +608,7 @@ class GameLifecycleServiceTest {
 
         gameLifecycleService.handleGameEnd(ROOM_ID, false);
 
-        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Game.class), any(Player.class), anyBoolean());
     }
 
     @Test
@@ -617,7 +622,7 @@ class GameLifecycleServiceTest {
 
         gameLifecycleService.executeScheduledTask(ROOM_ID, ScheduledGameTask.GAME_END, deadline);
 
-        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Player.class), anyBoolean());
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Game.class), any(Player.class), anyBoolean());
     }
 
     /**
@@ -627,7 +632,7 @@ class GameLifecycleServiceTest {
     void handleGameEnd_WithNullGame_ShouldNotBroadcast() {
         gameLifecycleService.handleGameEnd("nonexistent-id", false);
 
-        verify(gameStateService, never()).broadcastGameEnd(anyString(), any(Player.class), anyBoolean());
+        verify(gameStateService, never()).broadcastGameEnd(anyString(), any(Game.class), any(Player.class), anyBoolean());
     }
 
     /**
@@ -643,6 +648,50 @@ class GameLifecycleServiceTest {
         game.getActivePlayers().clear();
 
         assertDoesNotThrow(() -> gameLifecycleService.handleGameEnd(ROOM_ID, false));
+    }
+
+    @Test
+    @DisplayName("handleGameEnd should pick winner with chips in heads-up all-in")
+    void handleGameEnd_HeadsUpAllIn_ShouldPickWinnerWithChips() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+
+        // Host is index 0, Player2 is index 1
+        Player host = game.getPlayers().get(0);
+        Player p2 = game.getPlayers().get(1);
+
+        // Host is busted (0 chips)
+        host.setChips(0);
+        p2.setChips(2000);
+
+        reset(gameStateService);
+        gameLifecycleService.handleGameEnd(ROOM_ID, false);
+
+        // Should broadcast p2 as winner
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), eq(game), eq(p2), eq(false));
+        assertTrue(game.isGameOver());
+    }
+
+    @Test
+    @DisplayName("handleGameEnd should broadcast forfeit when opponent is removed")
+    void handleGameEnd_ForfeitPath_ShouldBroadcastForfeit() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+
+        Player host = game.getPlayers().get(0);
+        Player p2 = game.getPlayers().get(1);
+
+        // p2 is out
+        p2.setIsOut();
+
+        reset(gameStateService);
+        gameLifecycleService.handleGameEnd(ROOM_ID, true);
+
+        // Host should be winner
+        verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), eq(game), eq(host), eq(true));
+        assertTrue(game.isGameOver());
     }
 
     // ==================== Integration-like Tests ====================
