@@ -5,6 +5,7 @@ import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
@@ -73,6 +74,12 @@ public class PlayerActionService {
             if (game.isGameOver()) {
                 logger.warn("Player {} attempted to act in game {} after it has finished", playerName, gameId);
                 throw new BadRequestException("This game has finished.");
+            }
+
+            if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
+                logger.warn("Player {} attempted to act in game {} after the hand was resolved (phase=SHOWDOWN)",
+                        playerName, gameId);
+                throw new BadRequestException("This hand is already complete.");
             }
 
             if (game.getScheduledTaskDeadline(com.pokergame.enums.ScheduledGameTask.AUTO_ADVANCE) != null) {

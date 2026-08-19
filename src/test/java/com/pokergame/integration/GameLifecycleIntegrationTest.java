@@ -540,6 +540,56 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
                 stompClient.stop();
             }
         }
+
+        @Test
+        @DisplayName("should reject stray action after showdown and conserve total chips")
+        void givenShowdown_whenStrayActionSubmitted_thenRejectAndConserveChips() throws Exception {
+            String roomName = uniqueName("GhostActionRoom");
+            JsonNode hostData = createRoom(roomName, "GhostHost", 2);
+            String gameId = hostData.path("roomId").asText();
+            String hostToken = hostData.path("token").asText();
+            String guestToken = joinRoom(roomName, "GhostGuest").path("token").asText();
+            startGame(gameId, hostToken);
+
+            var stompClient = createStompClient();
+            StompSession hostSession = connectSession(stompClient, hostToken);
+            StompSession guestSession = connectSession(stompClient, guestToken);
+
+            try {
+                // Reach showdown by checking down all streets
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CALL, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession, s -> true);
+                performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), hostToken, guestToken, hostSession, guestSession,
+                        state -> "SHOWDOWN".equals(state.path("phase").asText()));
+
+                int totalExpectedChips = 2000;
+
+                // Send stray CHECK action from host in SHOWDOWN phase
+                hostSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CHECK, null));
+
+                // Small pause to allow any asynchronous processing to attempt execution
+                Thread.sleep(500);
+
+                // Verify state remains SHOWDOWN and chips are conserved
+                JsonNode showdownState = readGameState(gameId, hostToken);
+                assertThat(showdownState.path("phase").asText()).isEqualTo("SHOWDOWN");
+
+                int sumChips = 0;
+                for (JsonNode player : showdownState.path("players")) {
+                    sumChips += player.path("chips").asInt();
+                }
+                assertThat(sumChips + showdownState.path("pot").asInt()).isEqualTo(totalExpectedChips);
+            } finally {
+                hostSession.disconnect();
+                guestSession.disconnect();
+                stompClient.stop();
+            }
+        }
     }
 
     /**

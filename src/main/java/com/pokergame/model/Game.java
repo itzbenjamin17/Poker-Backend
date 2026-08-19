@@ -567,6 +567,11 @@ public class Game {
      * @return list of winning players
      */
     public List<Player> conductShowdown() {
+        if (currentPhase == GamePhase.SHOWDOWN && handContributions.isEmpty()) {
+            logger.warn("Ignoring duplicate showdown for game {} - hand already resolved", gameId);
+            return List.of();
+        }
+
         logger.info("Conducting showdown for game {}", gameId);
         currentPhase = GamePhase.SHOWDOWN;
 
@@ -580,6 +585,7 @@ public class Game {
         if (showdownPlayers.size() == 1) {
             logger.info("Only one player remaining, auto-win for {}", showdownPlayers.getFirst().getName());
             distributePot(showdownPlayers);
+            resetHandAccountingAfterShowdown();
             return showdownPlayers;
         }
 
@@ -605,6 +611,8 @@ public class Game {
             logger.info("Side-pot winners: {}", winners.stream().map(Player::getName).toList());
         }
 
+        resetHandAccountingAfterShowdown();
+
         logger.debug("Pot after distribution: {}", pot);
         if (logger.isDebugEnabled()) {
             winners.forEach(p -> logger.debug("Player {} now has {} chips", p.getName(), p.getChips()));
@@ -612,6 +620,16 @@ public class Game {
 
         logger.info("Showdown complete");
         return winners;
+    }
+
+    /**
+     * Clears per-hand contribution ledger and round action bookkeeping
+     * after showdown distribution completes.
+     */
+    private void resetHandAccountingAfterShowdown() {
+        handContributions.clear();
+        actedPlayersInRound.clear();
+        logger.debug("Reset hand accounting after showdown for game {} | potRemainder={}", gameId, pot);
     }
 
     /**

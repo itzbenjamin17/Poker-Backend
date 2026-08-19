@@ -732,6 +732,34 @@ class GameLifecycleServiceTest {
         assertNotNull(game.getCurrentPlayer());
     }
 
+    @Test
+    @DisplayName("advanceAutoAdvanceStep in SHOWDOWN phase yields true and does not re-distribute")
+    void autoAdvanceStepInShowdownDoesNotRedistribute() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+
+        when(handEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
+
+        // Put game into SHOWDOWN
+        game.conductShowdown();
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+
+        int chipsHostBefore = game.getPlayers().get(0).getChips();
+        int chipsP2Before = game.getPlayers().get(1).getChips();
+
+        reset(gameStateService);
+
+        boolean complete = gameLifecycleService.advanceAutoAdvanceStep(ROOM_ID);
+
+        assertTrue(complete);
+        assertEquals(chipsHostBefore, game.getPlayers().get(0).getChips());
+        assertEquals(chipsP2Before, game.getPlayers().get(1).getChips());
+        verify(gameStateService, never()).broadcastShowdownResults(anyString(), any(), any(), anyInt());
+        verify(gameStateService, never()).broadcastAutoAdvanceComplete(anyString(), any());
+    }
+
     // ==================== CONCURRENCY TESTS ====================
 
     /**

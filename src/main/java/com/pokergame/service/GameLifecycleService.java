@@ -36,9 +36,11 @@ import java.util.stream.Collectors;
 public class GameLifecycleService {
 
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
-    private static final long GAME_END_DISPLAY_DELAY_MS = 7000;
     public static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = 6000;
     private static final long AUTO_ADVANCE_STEP_DELAY_MS = 4000;
+
+    @Value("${poker.game-end.display-delay-ms:20000}")
+    private long gameEndDisplayDelayMs = 20000;
 
     @Value("${poker.round-end.display-delay-ms:0}")
     private long roundEndDisplayDelayMs;
@@ -225,12 +227,16 @@ public class GameLifecycleService {
                     gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing river...");
                     yield false;
                 }
-                case RIVER, SHOWDOWN -> {
+                case RIVER -> {
                     int potBeforeDistribution = game.getPot();
                     List<Player> winners = game.conductShowdown();
                     int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
                     gameStateService.broadcastShowdownResults(gameId, game, winners, winningsPerPlayer);
                     gameStateService.broadcastAutoAdvanceComplete(gameId, game);
+                    yield true;
+                }
+                case SHOWDOWN -> {
+                    logger.warn("Auto-advance step invoked for game {} already in SHOWDOWN - skipping duplicate distribution", gameId);
                     yield true;
                 }
             };
@@ -370,7 +376,7 @@ public class GameLifecycleService {
 
         // Wait a few seconds for players to see the result, then destroy the room and
         // game, on a different thread
-        scheduleGameCleanup(gameId, GAME_END_DISPLAY_DELAY_MS);
+        scheduleGameCleanup(gameId, gameEndDisplayDelayMs);
     }
 
     /**

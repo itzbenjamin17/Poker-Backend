@@ -315,6 +315,7 @@ class PersistenceRestartIntegrationTest {
                         "poker.rate-limiting.enabled=false")
                 .run(
                         "--poker.disconnect.grace-period-ms=" + disconnectGracePeriodMs,
+                        "--poker.game-end.display-delay-ms=500",
                         "--poker.persistence.enabled=true",
                         "--poker.persistence.directory=" + walDirectory.toString().replace('\\', '/'),
                         "--poker.persistence.current-key-id=current",

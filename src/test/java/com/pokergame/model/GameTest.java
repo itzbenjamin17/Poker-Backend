@@ -593,12 +593,12 @@ class GameTest {
          */
         @Test
         void testConductShowdownWithOnePlayer() {
+                game.processPlayerDecision(game.getActivePlayers().get(2),
+                                new PlayerDecision(PlayerAction.BET, 100, "p3"));
+
                 // Make all but one player fold
                 game.getActivePlayers().get(0).doAction(PlayerAction.FOLD, 0, 0);
                 game.getActivePlayers().get(1).doAction(PlayerAction.FOLD, 0, 0);
-
-                game.processPlayerDecision(game.getActivePlayers().get(2),
-                                new PlayerDecision(PlayerAction.BET, 100, "p3"));
 
                 List<Player> winners = game.conductShowdown();
 
@@ -1569,5 +1569,77 @@ class GameTest {
                 players.get(2).setChips(2000);
                 winner = game.resolveGameWinner();
                 assertEquals("Player3", winner.getName());
+        }
+
+        @Test
+        @DisplayName("conductShowdown is idempotent and does not duplicate chip payouts on second call")
+        void conductShowdownIsIdempotent() {
+                List<Player> testPlayers = new ArrayList<>();
+                Player p1 = new Player("Pieter", "p1", 1000);
+                Player p2 = new Player("BoshMan", "p2", 1000);
+                testPlayers.add(p1);
+                testPlayers.add(p2);
+
+                Game testGame = new Game("double-showdown-game", testPlayers, 10, 20, mockHandEvaluator);
+                testGame.dealHoleCards();
+                testGame.postBlinds();
+
+                testGame.processPlayerDecision(p1, new PlayerDecision(PlayerAction.ALL_IN, 0, p1.getPlayerId()));
+                testGame.processPlayerDecision(p2, new PlayerDecision(PlayerAction.CALL, 0, p2.getPlayerId()));
+
+                List<Card> p1Best = List.of(new Card(Rank.ACE, Suit.SPADES));
+                List<Card> p2Best = List.of(new Card(Rank.KING, Suit.SPADES));
+                when(mockHandEvaluator.getBestHand(any(), any()))
+                                .thenReturn(new HandEvaluationResult(p1Best, HandRank.ONE_PAIR))
+                                .thenReturn(new HandEvaluationResult(p2Best, HandRank.HIGH_CARD));
+
+                List<Player> firstWinners = testGame.conductShowdown();
+                assertEquals(1, firstWinners.size());
+                assertEquals(2000, p1.getChips());
+                assertEquals(0, p2.getChips());
+                assertEquals(0, testGame.getPot());
+
+                // Second showdown invocation must be idempotent
+                testGame.conductShowdown();
+                assertEquals(2000, p1.getChips(), "Chips should not increase on second showdown");
+                assertEquals(0, p2.getChips());
+                assertEquals(0, testGame.getPot());
+        }
+
+        @Test
+        @DisplayName("chip total is strictly conserved across showdown and repeated showdowns")
+        void chipTotalIsConservedAcrossShowdown() {
+                List<Player> testPlayers = new ArrayList<>();
+                Player p1 = new Player("P1", "p1", 1000);
+                Player p2 = new Player("P2", "p2", 1000);
+                Player p3 = new Player("P3", "p3", 1000);
+                testPlayers.add(p1);
+                testPlayers.add(p2);
+                testPlayers.add(p3);
+
+                int totalBuyIn = 3000;
+                Game testGame = new Game("conservation-game", testPlayers, 10, 20, mockHandEvaluator);
+                testGame.dealHoleCards();
+                testGame.postBlinds();
+
+                testGame.processPlayerDecision(p1, new PlayerDecision(PlayerAction.ALL_IN, 0, p1.getPlayerId()));
+                testGame.processPlayerDecision(p2, new PlayerDecision(PlayerAction.ALL_IN, 0, p2.getPlayerId()));
+                testGame.processPlayerDecision(p3, new PlayerDecision(PlayerAction.FOLD, 0, p3.getPlayerId()));
+
+                List<Card> p1Best = List.of(new Card(Rank.ACE, Suit.SPADES));
+                List<Card> p2Best = List.of(new Card(Rank.KING, Suit.SPADES));
+                when(mockHandEvaluator.getBestHand(any(), any()))
+                                .thenReturn(new HandEvaluationResult(p1Best, HandRank.ONE_PAIR))
+                                .thenReturn(new HandEvaluationResult(p2Best, HandRank.HIGH_CARD));
+
+                testGame.conductShowdown();
+
+                int sumChipsAfterFirst = testPlayers.stream().mapToInt(Player::getChips).sum() + testGame.getPot();
+                assertEquals(totalBuyIn, sumChipsAfterFirst);
+
+                testGame.conductShowdown();
+
+                int sumChipsAfterSecond = testPlayers.stream().mapToInt(Player::getChips).sum() + testGame.getPot();
+                assertEquals(totalBuyIn, sumChipsAfterSecond);
         }
 }

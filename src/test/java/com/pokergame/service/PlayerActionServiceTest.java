@@ -2,7 +2,10 @@ package com.pokergame.service;
 
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.Rank;
+import com.pokergame.enums.Suit;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.*;
@@ -100,6 +103,28 @@ class PlayerActionServiceTest {
 
         assertEquals("This game has finished.", exception.getMessage());
         verify(spyGame, never()).processPlayerDecision(any(), any());
+    }
+
+    @Test
+    @DisplayName("processPlayerAction should throw BadRequestException when game is in SHOWDOWN phase")
+    void rejectsActionDuringShowdownPhase() {
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
+        when(handEvaluator.getBestHand(any(), any()))
+                .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
+        testGame.conductShowdown();
+        assertEquals(GamePhase.SHOWDOWN, testGame.getCurrentPhase());
+
+        int initialChips = testPlayers.stream().mapToInt(Player::getChips).sum();
+
+        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CHECK, 0);
+
+        BadRequestException exception = assertThrows(
+                BadRequestException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, testGame.getCurrentPlayer().getName()));
+
+        assertEquals("This hand is already complete.", exception.getMessage());
+        int finalChips = testPlayers.stream().mapToInt(Player::getChips).sum();
+        assertEquals(initialChips, finalChips);
     }
 
     /**
