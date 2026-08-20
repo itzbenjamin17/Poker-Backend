@@ -37,6 +37,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(GameController.class)
 @AutoConfigureMockMvc(addFilters = false)
 @ActiveProfiles("test")
+@org.springframework.test.context.TestPropertySource(locations = "classpath:application-test.properties")
 class GameControllerTest {
 
     @Autowired

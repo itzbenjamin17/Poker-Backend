@@ -34,9 +34,11 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import org.springframework.test.context.TestPropertySource;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Provides abstract integration test support shared by integration tests. */
+@TestPropertySource(locations = "classpath:application-test.properties")
 public abstract class AbstractIntegrationTestSupport {
 
     protected static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(15);

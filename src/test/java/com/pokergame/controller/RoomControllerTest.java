@@ -39,6 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(RoomController.class)
 @AutoConfigureMockMvc(addFilters = false)
 @ActiveProfiles("test")
+@org.springframework.test.context.TestPropertySource(locations = "classpath:application-test.properties")
 @org.springframework.context.annotation.Import({
         com.pokergame.security.RateLimitService.class,
         com.pokergame.security.EndpointRateLimitFilter.class,

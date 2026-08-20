@@ -77,4 +77,43 @@ class ConfigContractTest {
                             .hasStackTraceContaining("Ensure it is a valid Base64 string and provides at least 512 bits");
                 });
     }
+
+    /**
+     * Protects the contract that all placeholders in application.properties have no fallback defaults, enforcing fail-fast.
+     */
+    @Test
+    @DisplayName("should ensure application.properties placeholders have no fallback defaults")
+    void givenApplicationProperties_whenChecked_thenAllPlaceholdersHaveNoDefaults() throws Exception {
+        Properties props = new Properties();
+        try (InputStream is = new ClassPathResource("application.properties").getInputStream()) {
+            props.load(is);
+        }
+
+        for (String key : props.stringPropertyNames()) {
+            String value = props.getProperty(key);
+            if (value != null && value.startsWith("${") && value.endsWith("}")) {
+                assertThat(value)
+                        .withFailMessage("Property '%s' with value '%s' must NOT contain a fallback default ':' to ensure fail-fast startup.", key, value)
+                        .doesNotContain(":");
+            }
+        }
+    }
+
+    /**
+     * Protects the contract that missing placeholders fail fast during bean resolution.
+     */
+    @Test
+    @DisplayName("should fail fast when required placeholder is missing")
+    void givenMissingPlaceholder_whenContextStarts_thenFailFast() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(org.springframework.context.support.PropertySourcesPlaceholderConfigurer.class, JwtService.class)
+                .withPropertyValues("app.jwt.base64-secret=${UNRESOLVED_MANDATORY_ENV_VAR}")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .isNotNull()
+                            .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                            .hasStackTraceContaining("Could not resolve placeholder 'UNRESOLVED_MANDATORY_ENV_VAR'");
+                });
+    }
 }
