@@ -20,6 +20,7 @@ data/
 *.iws
 *.iml
 *.ipr
+.junie
 
 ### NetBeans ###
 /nbproject/private/

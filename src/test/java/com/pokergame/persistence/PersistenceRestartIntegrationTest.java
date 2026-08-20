@@ -232,9 +232,8 @@ class PersistenceRestartIntegrationTest {
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
                 assertNull(rooms.getRoom(roomId));
                 assertNull(games.getGame(roomId));
+                assertFalse(Files.exists(walDirectory.resolve(roomId + ".wal")));
             });
-
-            assertFalse(Files.exists(walDirectory.resolve(roomId + ".wal")));
         }
     }
 
@@ -305,6 +304,7 @@ class PersistenceRestartIntegrationTest {
     private ConfigurableApplicationContext startApplication(long disconnectGracePeriodMs) {
         String key = Base64.getEncoder().encodeToString(new byte[32]);
         return new SpringApplicationBuilder(PokerApplication.class)
+                .profiles("test")
                 .web(WebApplicationType.NONE)
                 .properties(
                         "server.port=0",

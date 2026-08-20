@@ -20,6 +20,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -37,6 +38,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /** Tests room controller behavior. */
 @WebMvcTest(RoomController.class)
 @AutoConfigureMockMvc(addFilters = false)
+@ActiveProfiles("test")
 @org.springframework.context.annotation.Import({
         com.pokergame.security.RateLimitService.class,
         com.pokergame.security.EndpointRateLimitFilter.class,

@@ -22,6 +22,7 @@ import org.springframework.messaging.Message;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -35,6 +36,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /** Tests game controller behavior. */
 @WebMvcTest(GameController.class)
 @AutoConfigureMockMvc(addFilters = false)
+@ActiveProfiles("test")
 class GameControllerTest {
 
     @Autowired
