@@ -7,9 +7,14 @@ import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * Exception handler for all exceptions in the application.
@@ -135,6 +140,81 @@ public class ControllerExceptionHandler {
         ErrorResponse error = new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", "Malformed JSON request payload");
         // returns 400 Bad Request
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Maps wrong HTTP method to HTTP 405.  Logged at DEBUG — scanners commonly
+     * try arbitrary methods against every discovered path.
+     *
+     * @param ex method-not-allowed failure
+     * @return structured method-not-allowed response
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMethodNotSupportedException(HttpRequestMethodNotSupportedException ex) {
+        logger.debug("Method not allowed: {}", ex.getMessage());
+        ErrorResponse error = new ErrorResponse(HttpStatus.METHOD_NOT_ALLOWED.value(), "Method Not Allowed",
+                "HTTP method not supported for this endpoint");
+        // returns 405 Method Not Allowed
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(error);
+    }
+
+    /**
+     * Maps a missing required query/form parameter to HTTP 400.
+     *
+     * @param ex missing-parameter failure
+     * @return structured bad-request response
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ErrorResponse> handleMissingServletRequestParameterException(MissingServletRequestParameterException ex) {
+        logger.warn("Missing request parameter: {}", ex.getMessage());
+        ErrorResponse error = new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request",
+                "Required parameter '" + ex.getParameterName() + "' is missing");
+        // returns 400 Bad Request
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Maps an unsupported request Content-Type to HTTP 415.
+     *
+     * @param ex unsupported-media-type failure
+     * @return structured unsupported-media-type response
+     */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMediaTypeNotSupportedException(HttpMediaTypeNotSupportedException ex) {
+        logger.debug("Unsupported media type: {}", ex.getMessage());
+        ErrorResponse error = new ErrorResponse(HttpStatus.UNSUPPORTED_MEDIA_TYPE.value(), "Unsupported Media Type",
+                "Content-Type not supported");
+        // returns 415 Unsupported Media Type
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).body(error);
+    }
+
+    /**
+     * Maps an unacceptable Accept header to HTTP 406.
+     *
+     * @param ex not-acceptable failure
+     * @return structured not-acceptable response
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ErrorResponse> handleMediaTypeNotAcceptableException(HttpMediaTypeNotAcceptableException ex) {
+        logger.debug("Not acceptable media type: {}", ex.getMessage());
+        ErrorResponse error = new ErrorResponse(HttpStatus.NOT_ACCEPTABLE.value(), "Not Acceptable",
+                "Requested media type is not supported");
+        // returns 406 Not Acceptable
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE).body(error);
+    }
+
+    /**
+     * Handles requests for static resources that do not exist (e.g. automated
+     * vulnerability scanner probes).  Logged at DEBUG to avoid polluting ERROR
+     * logs with expected 404s.
+     *
+     * @param ex missing-static-resource failure raised by Spring MVC
+     * @return 404 Not Found with no body
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Void> handleNoResourceFoundException(NoResourceFoundException ex) {
+        logger.debug("No static resource found: {}", ex.getMessage());
+        return ResponseEntity.notFound().build();
     }
 
     /**
