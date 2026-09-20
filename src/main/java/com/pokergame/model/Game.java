@@ -48,23 +48,15 @@ public class Game {
     private final Map<ScheduledGameTask, Long> scheduledTaskDeadlines;
 
     /**
-     * Creates a new poker game with the specified players and betting parameters.
-     *
-     * @param gameId        unique identifier for the game
-     * @param players       list of players participating in the game (must have at
-     *                      least 2 players)
-     * @param smallBlind    the small blind amount
-     * @param bigBlind      the big blind amount
-     * @param handEvaluator service for evaluating poker hands
-     * @throws BadRequestException if gameId is null/empty, players list is
-     *                             invalid, or contains null elements
+     * Internal constructor that allows bypassing initial player count validation,
+     * which is required when restoring a snapshot of a game where players have left.
      */
-    public Game(String gameId, List<Player> players, int smallBlind, int bigBlind, HandEvaluatorService handEvaluator) {
+    private Game(String gameId, List<Player> players, int smallBlind, int bigBlind, HandEvaluatorService handEvaluator, boolean skipValidation) {
         if (gameId == null || gameId.trim().isEmpty()) {
             logger.error("[Game] Invalid gameId: '{}'", gameId);
             throw new BadRequestException("Game ID cannot be null or empty");
         }
-        if (players == null || players.size() < 2) {
+        if (!skipValidation && (players == null || players.size() < 2)) {
             logger.error("[Game] Invalid players list: null or too few players (size: {})",
                     players == null ? 0 : players.size());
             throw new BadRequestException("At least 2 players are required to start a game");
@@ -93,6 +85,22 @@ public class Game {
         this.readyCountdownActive = false;
         this.readyCountdownDeadlineEpochMs = null;
         this.scheduledTaskDeadlines = new EnumMap<>(ScheduledGameTask.class);
+    }
+
+    /**
+     * Creates a new poker game with the specified players and betting parameters.
+     *
+     * @param gameId        unique identifier for the game
+     * @param players       list of players participating in the game (must have at
+     *                      least 2 players)
+     * @param smallBlind    the small blind amount
+     * @param bigBlind      the big blind amount
+     * @param handEvaluator service for evaluating poker hands
+     * @throws BadRequestException if gameId is null/empty, players list is
+     *                             invalid, or contains null elements
+     */
+    public Game(String gameId, List<Player> players, int smallBlind, int bigBlind, HandEvaluatorService handEvaluator) {
+        this(gameId, players, smallBlind, bigBlind, handEvaluator, false);
     }
 
     /**
@@ -132,7 +140,7 @@ public class Game {
             Long readyCountdownDeadlineEpochMs, boolean everyoneHasHadInitialTurn,
             Set<String> actedPlayersInRound, Map<ScheduledGameTask, Long> scheduledTaskDeadlines,
             HandEvaluatorService handEvaluator) {
-        Game game = new Game(gameId, players, smallBlind, bigBlind, handEvaluator);
+        Game game = new Game(gameId, players, smallBlind, bigBlind, handEvaluator, true);
         Map<String, Player> playersById = new HashMap<>();
         players.forEach(player -> playersById.put(player.getPlayerId(), player));
         game.activePlayers.clear();
