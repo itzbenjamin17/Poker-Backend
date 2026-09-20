@@ -349,7 +349,7 @@ public class Game {
     }
 
     /**
-     * Posts the small blind and big blind at the start of a hand.
+     * Deducts the small and big blind from the appropriate players.
      * If a player has insufficient chips, they automatically go all-in.
      * Updates the pot and sets the current highest bet to the big blind amount.
      */
@@ -367,25 +367,8 @@ public class Game {
                     bigBlindPlayer.getChips(),
                     pot);
 
-            @SuppressWarnings("DuplicatedCode")
-            int smallBlindBefore = smallBlindPlayer.getCurrentBet();
-
-            if (smallBlindPlayer.getChips() <= smallBlind) {
-                this.pot = smallBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
-            } else {
-                this.pot = smallBlindPlayer.doAction(PlayerAction.BET, smallBlind, this.pot);
-            }
-            trackContribution(smallBlindPlayer, smallBlindPlayer.getCurrentBet() - smallBlindBefore);
-
-            @SuppressWarnings("DuplicatedCode")
-            int bigBlindBefore = bigBlindPlayer.getCurrentBet();
-
-            if (bigBlindPlayer.getChips() <= bigBlind) {
-                this.pot = bigBlindPlayer.doAction(PlayerAction.ALL_IN, 0, this.pot);
-            } else {
-                this.pot = bigBlindPlayer.doAction(PlayerAction.BET, bigBlind, this.pot);
-            }
-            trackContribution(bigBlindPlayer, bigBlindPlayer.getCurrentBet() - bigBlindBefore);
+            postBlind(smallBlindPlayer, smallBlind);
+            postBlind(bigBlindPlayer, bigBlind);
 
             currentHighestBet = Math.max(smallBlindPlayer.getCurrentBet(), bigBlindPlayer.getCurrentBet());
 
@@ -1744,5 +1727,22 @@ public class Game {
      */
     public Map<ScheduledGameTask, Long> getScheduledTaskDeadlinesSnapshot() {
         return Map.copyOf(scheduledTaskDeadlines);
+    }
+
+    /**
+     * Forces a player to post a blind amount, pushing them all-in if they don't have enough chips.
+     * Updates the game pot and tracks the player's contribution.
+     *
+     * @param player      the player posting the blind
+     * @param blindAmount the target blind amount
+     */
+    private void postBlind(Player player, int blindAmount) {
+        int betBefore = player.getCurrentBet();
+        if (player.getChips() <= blindAmount) {
+            this.pot = player.doAction(PlayerAction.ALL_IN, 0, this.pot);
+        } else {
+            this.pot = player.doAction(PlayerAction.BET, blindAmount, this.pot);
+        }
+        trackContribution(player, player.getCurrentBet() - betBefore);
     }
 }
