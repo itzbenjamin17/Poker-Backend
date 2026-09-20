@@ -26,14 +26,14 @@ public class AsyncConfiguration {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 
         // Number of permanent threads that always exist
-        executor.setCorePoolSize(5);
+        executor.setCorePoolSize(1);
 
         // Maximum threads that can be created
-        executor.setMaxPoolSize(20);
+        executor.setMaxPoolSize(2);
 
         // How many tasks can wait in queue when all threads busy
         // If queue full + max threads reached → rejection policy
-        executor.setQueueCapacity(100);
+        executor.setQueueCapacity(50);
 
         // Name in debug logs
         executor.setThreadNamePrefix("GameExecutor-");
