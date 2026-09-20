@@ -104,74 +104,185 @@ public class Game {
     }
 
     /**
-     * Rehydrates an exact in-progress game without running normal initialization,
-     * which would reshuffle, repost blinds, and select a new current player.
+     * Creates a builder for restoring a game instance from snapshot state.
      *
-     * @param gameId                       stable game identity
-     * @param players                      fully restored players
-     * @param activePlayerIds              active-player ordering by stable ID
-     * @param remainingDeck                exact future draw order
-     * @param communityCards               board cards already dealt
-     * @param pot                           undistributed pot
-     * @param dealerPosition                dealer index
-     * @param smallBlindPosition            small-blind index
-     * @param bigBlindPosition              big-blind index
-     * @param currentPlayerPosition         current turn index
-     * @param currentHighestBet             amount players must match
-     * @param currentPhase                  current betting phase
-     * @param gameOver                      terminal marker
-     * @param smallBlind                    game small blind
-     * @param bigBlind                      game big blind
-     * @param handContributions             side-pot contribution ledger
-     * @param readyCountdownActive          post-hand gate marker
-     * @param readyCountdownDeadlineEpochMs absolute ready-gate deadline
-     * @param everyoneHasHadInitialTurn     betting-round progress marker
-     * @param actedPlayersInRound           players that acted in the current round
-     * @param scheduledTaskDeadlines        durable delayed-work deadlines
-     * @param handEvaluator                 runtime hand evaluator to reattach
-     * @return game with the exact persisted hand state
-     * @throws BadRequestException if active-player IDs do not exist in the player list
+     * @return a new GameRestoreBuilder
      */
-    public static Game restore(String gameId, List<Player> players, List<String> activePlayerIds,
-            List<Card> remainingDeck, List<Card> communityCards, int pot, int dealerPosition,
-            int smallBlindPosition, int bigBlindPosition, int currentPlayerPosition, int currentHighestBet,
-            GamePhase currentPhase, boolean gameOver, int smallBlind, int bigBlind,
-            Map<String, Integer> handContributions, boolean readyCountdownActive,
-            Long readyCountdownDeadlineEpochMs, boolean everyoneHasHadInitialTurn,
-            Set<String> actedPlayersInRound, Map<ScheduledGameTask, Long> scheduledTaskDeadlines,
-            HandEvaluatorService handEvaluator) {
-        Game game = new Game(gameId, players, smallBlind, bigBlind, handEvaluator, true);
-        Map<String, Player> playersById = new HashMap<>();
-        players.forEach(player -> playersById.put(player.getPlayerId(), player));
-        game.activePlayers.clear();
-        for (String playerId : activePlayerIds) {
-            Player player = playersById.get(playerId);
-            if (player == null) {
-                throw new BadRequestException("Snapshot references an unknown active player");
-            }
-            game.activePlayers.add(player);
+    public static GameRestoreBuilder restoreBuilder() {
+        return new GameRestoreBuilder();
+    }
+
+    /**
+     * Builder for reconstructing a game instance from snapshot state.
+     */
+    public static class GameRestoreBuilder {
+        private String gameId;
+        private List<Player> players;
+        private List<String> activePlayerIds;
+        private List<Card> remainingDeck;
+        private List<Card> communityCards;
+        private int pot;
+        private int dealerPosition;
+        private int smallBlindPosition;
+        private int bigBlindPosition;
+        private int currentPlayerPosition;
+        private int currentHighestBet;
+        private GamePhase currentPhase;
+        private boolean gameOver;
+        private int smallBlind;
+        private int bigBlind;
+        private Map<String, Integer> handContributions;
+        private boolean readyCountdownActive;
+        private Long readyCountdownDeadlineEpochMs;
+        private boolean everyoneHasHadInitialTurn;
+        private Set<String> actedPlayersInRound;
+        private Map<ScheduledGameTask, Long> scheduledTaskDeadlines;
+        private HandEvaluatorService handEvaluator;
+
+        public GameRestoreBuilder gameId(String gameId) {
+            this.gameId = gameId;
+            return this;
         }
-        game.deck = Deck.restore(remainingDeck);
-        game.communityCards.clear();
-        game.communityCards.addAll(communityCards);
-        game.pot = pot;
-        game.dealerPosition = dealerPosition;
-        game.smallBlindPosition = smallBlindPosition;
-        game.bigBlindPosition = bigBlindPosition;
-        game.currentPlayerPosition = currentPlayerPosition;
-        game.currentHighestBet = currentHighestBet;
-        game.currentPhase = currentPhase;
-        game.gameOver = gameOver;
-        game.handContributions.clear();
-        game.handContributions.putAll(handContributions);
-        game.readyCountdownActive = readyCountdownActive;
-        game.readyCountdownDeadlineEpochMs = readyCountdownDeadlineEpochMs;
-        game.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
-        game.actedPlayersInRound.clear();
-        game.actedPlayersInRound.addAll(actedPlayersInRound);
-        game.scheduledTaskDeadlines.clear();
-        game.scheduledTaskDeadlines.putAll(scheduledTaskDeadlines);
-        return game;
+
+        public GameRestoreBuilder players(List<Player> players) {
+            this.players = players;
+            return this;
+        }
+
+        public GameRestoreBuilder activePlayerIds(List<String> activePlayerIds) {
+            this.activePlayerIds = activePlayerIds;
+            return this;
+        }
+
+        public GameRestoreBuilder remainingDeck(List<Card> remainingDeck) {
+            this.remainingDeck = remainingDeck;
+            return this;
+        }
+
+        public GameRestoreBuilder communityCards(List<Card> communityCards) {
+            this.communityCards = communityCards;
+            return this;
+        }
+
+        public GameRestoreBuilder pot(int pot) {
+            this.pot = pot;
+            return this;
+        }
+
+        public GameRestoreBuilder dealerPosition(int dealerPosition) {
+            this.dealerPosition = dealerPosition;
+            return this;
+        }
+
+        public GameRestoreBuilder smallBlindPosition(int smallBlindPosition) {
+            this.smallBlindPosition = smallBlindPosition;
+            return this;
+        }
+
+        public GameRestoreBuilder bigBlindPosition(int bigBlindPosition) {
+            this.bigBlindPosition = bigBlindPosition;
+            return this;
+        }
+
+        public GameRestoreBuilder currentPlayerPosition(int currentPlayerPosition) {
+            this.currentPlayerPosition = currentPlayerPosition;
+            return this;
+        }
+
+        public GameRestoreBuilder currentHighestBet(int currentHighestBet) {
+            this.currentHighestBet = currentHighestBet;
+            return this;
+        }
+
+        public GameRestoreBuilder currentPhase(GamePhase currentPhase) {
+            this.currentPhase = currentPhase;
+            return this;
+        }
+
+        public GameRestoreBuilder gameOver(boolean gameOver) {
+            this.gameOver = gameOver;
+            return this;
+        }
+
+        public GameRestoreBuilder smallBlind(int smallBlind) {
+            this.smallBlind = smallBlind;
+            return this;
+        }
+
+        public GameRestoreBuilder bigBlind(int bigBlind) {
+            this.bigBlind = bigBlind;
+            return this;
+        }
+
+        public GameRestoreBuilder handContributions(Map<String, Integer> handContributions) {
+            this.handContributions = handContributions;
+            return this;
+        }
+
+        public GameRestoreBuilder readyCountdownActive(boolean readyCountdownActive) {
+            this.readyCountdownActive = readyCountdownActive;
+            return this;
+        }
+
+        public GameRestoreBuilder readyCountdownDeadlineEpochMs(Long readyCountdownDeadlineEpochMs) {
+            this.readyCountdownDeadlineEpochMs = readyCountdownDeadlineEpochMs;
+            return this;
+        }
+
+        public GameRestoreBuilder everyoneHasHadInitialTurn(boolean everyoneHasHadInitialTurn) {
+            this.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
+            return this;
+        }
+
+        public GameRestoreBuilder actedPlayersInRound(Set<String> actedPlayersInRound) {
+            this.actedPlayersInRound = actedPlayersInRound;
+            return this;
+        }
+
+        public GameRestoreBuilder scheduledTaskDeadlines(Map<ScheduledGameTask, Long> scheduledTaskDeadlines) {
+            this.scheduledTaskDeadlines = scheduledTaskDeadlines;
+            return this;
+        }
+
+        public GameRestoreBuilder handEvaluator(HandEvaluatorService handEvaluator) {
+            this.handEvaluator = handEvaluator;
+            return this;
+        }
+
+        public Game build() {
+            Game game = new Game(gameId, players, smallBlind, bigBlind, handEvaluator, true);
+            Map<String, Player> playersById = new HashMap<>();
+            players.forEach(player -> playersById.put(player.getPlayerId(), player));
+            game.activePlayers.clear();
+            for (String playerId : activePlayerIds) {
+                Player player = playersById.get(playerId);
+                if (player == null) {
+                    throw new BadRequestException("Snapshot references an unknown active player");
+                }
+                game.activePlayers.add(player);
+            }
+            game.deck = Deck.restore(remainingDeck);
+            game.communityCards.clear();
+            game.communityCards.addAll(communityCards);
+            game.pot = pot;
+            game.dealerPosition = dealerPosition;
+            game.smallBlindPosition = smallBlindPosition;
+            game.bigBlindPosition = bigBlindPosition;
+            game.currentPlayerPosition = currentPlayerPosition;
+            game.currentHighestBet = currentHighestBet;
+            game.currentPhase = currentPhase;
+            game.gameOver = gameOver;
+            game.handContributions.clear();
+            game.handContributions.putAll(handContributions);
+            game.readyCountdownActive = readyCountdownActive;
+            game.readyCountdownDeadlineEpochMs = readyCountdownDeadlineEpochMs;
+            game.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
+            game.actedPlayersInRound.clear();
+            game.actedPlayersInRound.addAll(actedPlayersInRound);
+            game.scheduledTaskDeadlines.clear();
+            game.scheduledTaskDeadlines.putAll(scheduledTaskDeadlines);
+            return game;
+        }
     }
 
     /**

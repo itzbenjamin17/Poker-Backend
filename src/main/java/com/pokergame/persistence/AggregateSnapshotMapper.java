@@ -164,12 +164,30 @@ public final class AggregateSnapshotMapper {
                 cardsFromState(player.bestHand()), player.handRank(), player.chips(), player.currentBet(),
                 player.folded(), player.allIn(), player.out(), player.disconnected(),
                 player.disconnectDeadlineEpochMs(), player.readyForNextHand())).toList();
-        return Game.restore(state.gameId(), players, state.activePlayerIds(), cardsFromState(state.remainingDeck()),
-                cardsFromState(state.communityCards()), state.pot(), state.dealerPosition(), state.smallBlindPosition(),
-                state.bigBlindPosition(), state.currentPlayerPosition(), state.currentHighestBet(), state.currentPhase(),
-                state.gameOver(), state.smallBlind(), state.bigBlind(), state.handContributions(),
-                state.readyCountdownActive(), state.readyCountdownDeadlineEpochMs(),
-                state.everyoneHasHadInitialTurn(), state.actedPlayerIds(), state.scheduledTaskDeadlines(), handEvaluator);
+        return Game.restoreBuilder()
+                .gameId(state.gameId())
+                .players(players)
+                .activePlayerIds(state.activePlayerIds())
+                .remainingDeck(cardsFromState(state.remainingDeck()))
+                .communityCards(cardsFromState(state.communityCards()))
+                .pot(state.pot())
+                .dealerPosition(state.dealerPosition())
+                .smallBlindPosition(state.smallBlindPosition())
+                .bigBlindPosition(state.bigBlindPosition())
+                .currentPlayerPosition(state.currentPlayerPosition())
+                .currentHighestBet(state.currentHighestBet())
+                .currentPhase(state.currentPhase())
+                .gameOver(state.gameOver())
+                .smallBlind(state.smallBlind())
+                .bigBlind(state.bigBlind())
+                .handContributions(state.handContributions())
+                .readyCountdownActive(state.readyCountdownActive())
+                .readyCountdownDeadlineEpochMs(state.readyCountdownDeadlineEpochMs())
+                .everyoneHasHadInitialTurn(state.everyoneHasHadInitialTurn())
+                .actedPlayersInRound(state.actedPlayerIds())
+                .scheduledTaskDeadlines(state.scheduledTaskDeadlines())
+                .handEvaluator(handEvaluator)
+                .build();
     }
 
     /**
