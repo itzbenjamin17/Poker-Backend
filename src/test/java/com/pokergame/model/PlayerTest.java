@@ -404,4 +404,49 @@ class PlayerTest {
 
         assertTrue(players.contains(reconstructed));
     }
+
+    /**
+     * Protects the expected behavior for restoreBuilder restoring exact player state.
+     */
+    @Test
+    void testRestoreBuilder() {
+        List<Card> holeCards = List.of(new Card(Rank.ACE, Suit.HEARTS), new Card(Rank.KING, Suit.HEARTS));
+        List<Card> bestHand = List.of(
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.KING, Suit.HEARTS),
+                new Card(Rank.QUEEN, Suit.HEARTS),
+                new Card(Rank.JACK, Suit.HEARTS),
+                new Card(Rank.TEN, Suit.HEARTS));
+
+        Player restored = Player.restoreBuilder()
+                .name("Alice")
+                .playerId("p1")
+                .holeCards(holeCards)
+                .bestHand(bestHand)
+                .handRank(HandRank.ROYAL_FLUSH)
+                .chips(500)
+                .currentBet(50)
+                .hasFolded(false)
+                .allIn(false)
+                .out(false)
+                .disconnected(true)
+                .disconnectDeadlineEpochMs(123456789L)
+                .readyForNextHand(true)
+                .build();
+
+        assertEquals("Alice", restored.getName());
+        assertEquals("p1", restored.getPlayerId());
+        assertEquals(holeCards, restored.getHoleCards());
+        assertEquals(bestHand, restored.getBestHand());
+        assertEquals(HandRank.ROYAL_FLUSH, restored.getHandRank());
+        assertEquals(500, restored.getChips());
+        assertEquals(50, restored.getCurrentBet());
+        assertFalse(restored.getHasFolded());
+        assertFalse(restored.getIsAllIn());
+        assertFalse(restored.getIsOut());
+        assertTrue(restored.getIsDisconnected());
+        assertEquals(123456789L, restored.getDisconnectDeadlineEpochMs());
+        assertTrue(restored.getIsReadyForNextHand());
+    }
 }
+

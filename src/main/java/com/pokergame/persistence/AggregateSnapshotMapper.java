@@ -159,11 +159,21 @@ public final class AggregateSnapshotMapper {
      * @return rehydrated game ready for runtime collaborators to be attached
      */
     private Game restoreGame(AggregateStateImage.GameState state) {
-        List<Player> players = state.players().stream().map(player -> Player.restore(
-                player.name(), player.playerId(), cardsFromState(player.holeCards()),
-                cardsFromState(player.bestHand()), player.handRank(), player.chips(), player.currentBet(),
-                player.folded(), player.allIn(), player.out(), player.disconnected(),
-                player.disconnectDeadlineEpochMs(), player.readyForNextHand())).toList();
+        List<Player> players = state.players().stream().map(player -> Player.restoreBuilder()
+                .name(player.name())
+                .playerId(player.playerId())
+                .holeCards(cardsFromState(player.holeCards()))
+                .bestHand(cardsFromState(player.bestHand()))
+                .handRank(player.handRank())
+                .chips(player.chips())
+                .currentBet(player.currentBet())
+                .hasFolded(player.folded())
+                .allIn(player.allIn())
+                .out(player.out())
+                .disconnected(player.disconnected())
+                .disconnectDeadlineEpochMs(player.disconnectDeadlineEpochMs())
+                .readyForNextHand(player.readyForNextHand())
+                .build()).toList();
         return Game.restoreBuilder()
                 .gameId(state.gameId())
                 .players(players)

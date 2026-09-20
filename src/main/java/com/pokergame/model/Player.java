@@ -75,39 +75,111 @@ public class Player {
     }
 
     /**
-     * Rehydrates a player without invoking gameplay transitions that would clear
-     * cards, bets, reconnect state, or readiness after a process restart.
+     * Creates a builder for restoring a player instance from snapshot state.
      *
-     * @param name                      player display name
-     * @param playerId                  stable player identity
-     * @param holeCards                 exact private cards
-     * @param bestHand                  evaluated best hand
-     * @param handRank                  evaluated hand rank
-     * @param chips                     remaining stack
-     * @param currentBet                current-round contribution
-     * @param hasFolded                 fold marker
-     * @param allIn                     all-in marker
-     * @param out                       game-elimination marker
-     * @param disconnected              disconnect marker
-     * @param disconnectDeadlineEpochMs absolute reconnect deadline
-     * @param readyForNextHand          post-hand readiness marker
-     * @return player with the exact persisted state
+     * @return a new PlayerRestoreBuilder
      */
-    public static Player restore(String name, String playerId, List<Card> holeCards, List<Card> bestHand,
-            HandRank handRank, int chips, int currentBet, boolean hasFolded, boolean allIn, boolean out,
-            boolean disconnected, Long disconnectDeadlineEpochMs, boolean readyForNextHand) {
-        Player player = new Player(name, playerId, chips);
-        player.holeCards = new ArrayList<>(holeCards);
-        player.bestHand = new ArrayList<>(bestHand);
-        player.handRank = handRank;
-        player.currentBet = currentBet;
-        player.hasFolded = hasFolded;
-        player.isAllIn = allIn;
-        player.isOut = out;
-        player.isDisconnected = disconnected;
-        player.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
-        player.isReadyForNextHand = readyForNextHand;
-        return player;
+    public static PlayerRestoreBuilder restoreBuilder() {
+        return new PlayerRestoreBuilder();
+    }
+
+    /**
+     * Builder for reconstructing a player instance from snapshot state.
+     */
+    public static class PlayerRestoreBuilder {
+        private String name;
+        private String playerId;
+        private List<Card> holeCards;
+        private List<Card> bestHand;
+        private HandRank handRank;
+        private int chips;
+        private int currentBet;
+        private boolean hasFolded;
+        private boolean allIn;
+        private boolean out;
+        private boolean disconnected;
+        private Long disconnectDeadlineEpochMs;
+        private boolean readyForNextHand;
+
+        public PlayerRestoreBuilder name(String name) {
+            this.name = name;
+            return this;
+        }
+
+        public PlayerRestoreBuilder playerId(String playerId) {
+            this.playerId = playerId;
+            return this;
+        }
+
+        public PlayerRestoreBuilder holeCards(List<Card> holeCards) {
+            this.holeCards = holeCards;
+            return this;
+        }
+
+        public PlayerRestoreBuilder bestHand(List<Card> bestHand) {
+            this.bestHand = bestHand;
+            return this;
+        }
+
+        public PlayerRestoreBuilder handRank(HandRank handRank) {
+            this.handRank = handRank;
+            return this;
+        }
+
+        public PlayerRestoreBuilder chips(int chips) {
+            this.chips = chips;
+            return this;
+        }
+
+        public PlayerRestoreBuilder currentBet(int currentBet) {
+            this.currentBet = currentBet;
+            return this;
+        }
+
+        public PlayerRestoreBuilder hasFolded(boolean hasFolded) {
+            this.hasFolded = hasFolded;
+            return this;
+        }
+
+        public PlayerRestoreBuilder allIn(boolean allIn) {
+            this.allIn = allIn;
+            return this;
+        }
+
+        public PlayerRestoreBuilder out(boolean out) {
+            this.out = out;
+            return this;
+        }
+
+        public PlayerRestoreBuilder disconnected(boolean disconnected) {
+            this.disconnected = disconnected;
+            return this;
+        }
+
+        public PlayerRestoreBuilder disconnectDeadlineEpochMs(Long disconnectDeadlineEpochMs) {
+            this.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
+            return this;
+        }
+
+        public PlayerRestoreBuilder readyForNextHand(boolean readyForNextHand) {
+            this.readyForNextHand = readyForNextHand;
+            return this;
+        }
+
+        public Player build() {
+            Player player = new Player(name, playerId, chips);
+            player.holeCards = new ArrayList<>(holeCards);
+            player.bestHand = new ArrayList<>(bestHand);
+            player.handRank = handRank;
+            player.currentBet = currentBet;
+            player.hasFolded = hasFolded;
+            player.isAllIn = allIn;
+            player.isOut = out;
+            player.isDisconnected = disconnected;
+            player.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
+            player.isReadyForNextHand = readyForNextHand;
+            return player;
+        }
     }
 
     /**
