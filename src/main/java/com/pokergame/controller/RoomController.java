@@ -10,6 +10,7 @@ import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
 import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.util.InputSanitizer;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,7 +64,7 @@ public class RoomController {
         logger.info("Creating new room with request: {}", createRequest);
         
         // Sanitize names first to ensure consistency between token and storage
-        String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(createRequest.getPlayerName());
+        String sanitizedPlayerName = InputSanitizer.sanitize(createRequest.getPlayerName());
         
         String roomId = roomService.createRoom(createRequest);
 
@@ -90,7 +91,7 @@ public class RoomController {
         logger.info("Player {} attempting to join room: {}", joinRequest.playerName(), joinRequest.roomName());
         
         // Sanitize names first to ensure consistency between token and storage
-        String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.playerName());
+        String sanitizedPlayerName = InputSanitizer.sanitize(joinRequest.playerName());
         
         String roomId = roomService.joinRoom(joinRequest);
 

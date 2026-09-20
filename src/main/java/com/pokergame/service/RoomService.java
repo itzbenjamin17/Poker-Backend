@@ -11,6 +11,7 @@ import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.DurableMutation;
+import com.pokergame.util.InputSanitizer;
 import com.pokergame.persistence.DurableTransactionContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
@@ -85,8 +86,8 @@ public class RoomService {
      */
     @DurableMutation(roomId = "#roomId")
     public String createRoom(String roomId, CreateRoomRequest request) {
-        String sanitizedRoomName = com.pokergame.util.InputSanitizer.sanitize(request.getRoomName());
-        String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(request.getPlayerName());
+        String sanitizedRoomName = InputSanitizer.sanitize(request.getRoomName());
+        String sanitizedPlayerName = InputSanitizer.sanitize(request.getPlayerName());
 
         synchronized (this) {
             if (isRoomNameTaken(sanitizedRoomName)) {
@@ -135,7 +136,7 @@ public class RoomService {
      * @throws UnauthorisedActionException if the room is full
      */
     public String joinRoom(JoinRoomRequest joinRequest) {
-        String sanitizedRoomName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.roomName());
+        String sanitizedRoomName = InputSanitizer.sanitize(joinRequest.roomName());
 
         Room room = findRoomByName(sanitizedRoomName);
         if (room == null) {
@@ -159,7 +160,7 @@ public class RoomService {
      */
     @DurableMutation(roomId = "#roomId")
     public String joinRoom(String roomId, JoinRoomRequest joinRequest) {
-        String sanitizedPlayerName = com.pokergame.util.InputSanitizer.sanitize(joinRequest.playerName());
+        String sanitizedPlayerName = InputSanitizer.sanitize(joinRequest.playerName());
         Room room = rooms.get(roomId);
         if (room == null) {
             throw new ResourceNotFoundException("Room not found");
