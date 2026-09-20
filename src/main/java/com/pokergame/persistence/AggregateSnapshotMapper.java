@@ -90,9 +90,19 @@ public final class AggregateSnapshotMapper {
                 return new RecoveredAggregate(null, null, null, true);
             }
             AggregateStateImage.RoomState state = image.room();
-            Room room = Room.restore(state.roomId(), state.roomName(), state.originalHost(), state.maxPlayers(),
-                    state.smallBlind(), state.bigBlind(), state.buyIn(), state.password(), state.createdAt(),
-                    state.playersWithJoinTime(), state.gameStarted());
+            Room room = Room.restoreBuilder()
+                    .roomId(state.roomId())
+                    .roomName(state.roomName())
+                    .hostName(state.originalHost())
+                    .maxPlayers(state.maxPlayers())
+                    .smallBlind(state.smallBlind())
+                    .bigBlind(state.bigBlind())
+                    .buyIn(state.buyIn())
+                    .password(state.password())
+                    .createdAt(state.createdAt())
+                    .playersWithJoinTime(state.playersWithJoinTime())
+                    .gameStarted(state.gameStarted())
+                    .build();
             Game game = image.game() == null ? null : restoreGame(image.game());
             return new RecoveredAggregate(room, image.currentHost(), game, false);
         } catch (JacksonException | IllegalArgumentException e) {

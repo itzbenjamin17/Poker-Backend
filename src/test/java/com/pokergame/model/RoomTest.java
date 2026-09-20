@@ -7,6 +7,9 @@ import org.junit.jupiter.api.Tag;
 import com.pokergame.exception.BadRequestException;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -547,5 +550,50 @@ class RoomTest {
     void testRoomWithNegativeBuyIn() {
         Room negativeBuyIn = new Room("negative", "Negative Buy-in", "Host", 6, 10, 20, -100, null);
         assertEquals(-100, negativeBuyIn.getBuyIn());
+    }
+
+    /**
+     * Protects the expected behavior for restoring a room via RoomRestoreBuilder.
+     */
+    @Test
+    void testRestoreBuilder() {
+        LocalDateTime createdAt = LocalDateTime.now().minusHours(2);
+        LocalDateTime player1JoinTime = LocalDateTime.now().minusMinutes(30);
+        LocalDateTime player2JoinTime = LocalDateTime.now().minusMinutes(15);
+        Map<String, LocalDateTime> playersWithJoinTime = new LinkedHashMap<>();
+        playersWithJoinTime.put("Alice", player1JoinTime);
+        playersWithJoinTime.put("Bob", player2JoinTime);
+
+        Room restoredRoom = Room.restoreBuilder()
+                .roomId("room-restore-999")
+                .roomName("Restored High Stakes Room")
+                .hostName("Alice")
+                .maxPlayers(8)
+                .smallBlind(25)
+                .bigBlind(50)
+                .buyIn(2500)
+                .password("secret-pass")
+                .createdAt(createdAt)
+                .playersWithJoinTime(playersWithJoinTime)
+                .gameStarted(true)
+                .build();
+
+        assertNotNull(restoredRoom);
+        assertEquals("room-restore-999", restoredRoom.getRoomId());
+        assertEquals("Restored High Stakes Room", restoredRoom.getRoomName());
+        assertEquals("Alice", restoredRoom.getHostName());
+        assertEquals(8, restoredRoom.getMaxPlayers());
+        assertEquals(25, restoredRoom.getSmallBlind());
+        assertEquals(50, restoredRoom.getBigBlind());
+        assertEquals(2500, restoredRoom.getBuyIn());
+        assertEquals("secret-pass", restoredRoom.getPasswordForPersistence());
+        assertTrue(restoredRoom.hasPassword());
+        assertTrue(restoredRoom.checkPassword("secret-pass"));
+        assertEquals(createdAt, restoredRoom.getCreatedAt());
+        assertEquals(playersWithJoinTime, restoredRoom.getPlayersWithJoinTimeSnapshot());
+        assertEquals(List.of("Alice", "Bob"), restoredRoom.getPlayers());
+        assertEquals(player1JoinTime, restoredRoom.getJoinedAt("Alice"));
+        assertEquals(player2JoinTime, restoredRoom.getJoinedAt("Bob"));
+        assertTrue(restoredRoom.isGameStarted());
     }
 }

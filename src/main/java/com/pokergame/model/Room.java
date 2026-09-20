@@ -93,33 +93,98 @@ public class Room {
     }
 
     /**
-     * Rehydrates a room without regenerating creation time or join order, both of
-     * which affect client-visible lobby behavior and host succession.
+     * Creates a builder for restoring a room instance from snapshot state without
+     * regenerating creation time or join order.
      *
-     * @param roomId              stable room identity
-     * @param roomName            client-visible room name
-     * @param hostName            original room host
-     * @param maxPlayers          room capacity
-     * @param smallBlind          configured small blind
-     * @param bigBlind            configured big blind
-     * @param buyIn               configured starting stack
-     * @param password            private-room password protected by WAL encryption
-     * @param createdAt           original creation time
-     * @param playersWithJoinTime player order and join timestamps
-     * @param gameStarted         whether the lobby entered gameplay
-     * @return room with the exact persisted lobby state
+     * @return a new RoomRestoreBuilder
      */
-    public static Room restore(String roomId, String roomName, String hostName, int maxPlayers,
-            int smallBlind, int bigBlind, int buyIn, String password, LocalDateTime createdAt,
-            Map<String, LocalDateTime> playersWithJoinTime, boolean gameStarted) {
-        Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, password);
-        synchronized (room) {
-            room.playersWithJoinTime.clear();
-            room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
-            room.createdAt = createdAt;
-            room.isGameStarted = gameStarted;
+    public static RoomRestoreBuilder restoreBuilder() {
+        return new RoomRestoreBuilder();
+    }
+
+    /**
+     * Builder for reconstructing a room instance from snapshot state.
+     */
+    public static class RoomRestoreBuilder {
+        private String roomId;
+        private String roomName;
+        private String hostName;
+        private int maxPlayers;
+        private int smallBlind;
+        private int bigBlind;
+        private int buyIn;
+        private String password;
+        private LocalDateTime createdAt;
+        private Map<String, LocalDateTime> playersWithJoinTime;
+        private boolean gameStarted;
+
+        public RoomRestoreBuilder roomId(String roomId) {
+            this.roomId = roomId;
+            return this;
         }
-        return room;
+
+        public RoomRestoreBuilder roomName(String roomName) {
+            this.roomName = roomName;
+            return this;
+        }
+
+        public RoomRestoreBuilder hostName(String hostName) {
+            this.hostName = hostName;
+            return this;
+        }
+
+        public RoomRestoreBuilder maxPlayers(int maxPlayers) {
+            this.maxPlayers = maxPlayers;
+            return this;
+        }
+
+        public RoomRestoreBuilder smallBlind(int smallBlind) {
+            this.smallBlind = smallBlind;
+            return this;
+        }
+
+        public RoomRestoreBuilder bigBlind(int bigBlind) {
+            this.bigBlind = bigBlind;
+            return this;
+        }
+
+        public RoomRestoreBuilder buyIn(int buyIn) {
+            this.buyIn = buyIn;
+            return this;
+        }
+
+        public RoomRestoreBuilder password(String password) {
+            this.password = password;
+            return this;
+        }
+
+        public RoomRestoreBuilder createdAt(LocalDateTime createdAt) {
+            this.createdAt = createdAt;
+            return this;
+        }
+
+        public RoomRestoreBuilder playersWithJoinTime(Map<String, LocalDateTime> playersWithJoinTime) {
+            this.playersWithJoinTime = playersWithJoinTime;
+            return this;
+        }
+
+        public RoomRestoreBuilder gameStarted(boolean gameStarted) {
+            this.gameStarted = gameStarted;
+            return this;
+        }
+
+        public Room build() {
+            Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, password);
+            synchronized (room) {
+                room.playersWithJoinTime.clear();
+                if (playersWithJoinTime != null) {
+                    room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
+                }
+                room.createdAt = createdAt;
+                room.isGameStarted = gameStarted;
+            }
+            return room;
+        }
     }
 
     /**
