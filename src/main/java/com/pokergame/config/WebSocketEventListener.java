@@ -237,9 +237,7 @@ public class WebSocketEventListener {
         long delay = Math.max(0, deadlineEpochMs - System.currentTimeMillis());
         ScheduledFuture<?> future = taskScheduler.schedule(
                 () -> cleanupDisconnectedUser(principal), Instant.now().plusMillis(delay));
-        if (future != null) {
-            pendingDisconnects.put(compositeName, new PendingDisconnect(roomId, future));
-        }
+        pendingDisconnects.put(compositeName, new PendingDisconnect(roomId, future));
     }
 
 
