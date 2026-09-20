@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

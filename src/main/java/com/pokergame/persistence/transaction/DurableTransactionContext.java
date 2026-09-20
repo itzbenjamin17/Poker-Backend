@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.transaction;
 
 import java.util.ArrayList;
 import java.util.List;

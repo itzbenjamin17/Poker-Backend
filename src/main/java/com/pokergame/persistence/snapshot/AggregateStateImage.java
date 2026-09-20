@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.snapshot;
 
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;

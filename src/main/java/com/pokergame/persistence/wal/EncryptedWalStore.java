@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.wal;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -26,6 +26,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
+import com.pokergame.persistence.config.PersistenceException;
 
 /**
  * Stores one authenticated, append-only WAL per room for exact local recovery.

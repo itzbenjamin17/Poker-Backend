@@ -22,6 +22,10 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
+import com.pokergame.persistence.wal.EncryptedWalStore;
+import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.persistence.config.PersistenceException;
 
 /** Tests persistence recovery coordinator behavior. */
 @ExtendWith(MockitoExtension.class)

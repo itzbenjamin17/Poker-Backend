@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.transaction;
 
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;
@@ -21,6 +21,11 @@ import java.lang.reflect.Method;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
+import com.pokergame.persistence.wal.EncryptedWalStore;
+import com.pokergame.persistence.wal.WalTransaction;
+import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.config.PersistenceProperties;
+import com.pokergame.persistence.config.PersistenceException;
 
 /**
  * Enforces the durability boundary around {@link DurableMutation} service seams.

@@ -16,6 +16,10 @@ import org.springframework.core.annotation.Order;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import com.pokergame.persistence.wal.EncryptedWalStore;
+import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.persistence.config.PersistenceException;
 
 /**
  * Rebuilds every durable aggregate and its runtime-only work before the process is

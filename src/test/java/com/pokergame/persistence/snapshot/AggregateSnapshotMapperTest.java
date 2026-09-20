@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.snapshot;
 
 import tools.jackson.databind.json.JsonMapper;
 import com.pokergame.model.Game;

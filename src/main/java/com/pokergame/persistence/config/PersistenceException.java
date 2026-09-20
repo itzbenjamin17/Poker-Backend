@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.config;
 
 /**
  * Signals that the application cannot guarantee durable poker state.

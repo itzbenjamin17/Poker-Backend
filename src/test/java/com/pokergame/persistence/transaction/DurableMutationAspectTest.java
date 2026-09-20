@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.transaction;
 
 import com.pokergame.model.Room;
 import com.pokergame.service.GameLifecycleService;
@@ -23,6 +23,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
+import com.pokergame.persistence.wal.EncryptedWalStore;
+import com.pokergame.persistence.wal.EncryptionKeyring;
+import com.pokergame.persistence.wal.WalFaultPoint;
+import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.config.PersistenceProperties;
+import com.pokergame.persistence.config.PersistenceException;
 
 /** Tests durable mutation aspect transaction boundaries and SpEL resolution. */
 @ExtendWith(MockitoExtension.class)

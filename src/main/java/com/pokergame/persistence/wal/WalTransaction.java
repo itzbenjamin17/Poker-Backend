@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.wal;
 
 import java.util.UUID;
 

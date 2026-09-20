@@ -1,7 +1,8 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.wal;
 
 import javax.crypto.SecretKey;
 import java.util.Map;
+import com.pokergame.persistence.config.PersistenceException;
 
 /**
  * Separates the current write key from historical read keys so operators can

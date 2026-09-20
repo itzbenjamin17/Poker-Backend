@@ -9,7 +9,7 @@ import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
-import com.pokergame.persistence.DurableMutation;
+import com.pokergame.persistence.transaction.DurableMutation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;

@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.snapshot;
 
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;

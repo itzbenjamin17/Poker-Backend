@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.config;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.health.contributor.Health;
@@ -23,6 +23,11 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import com.pokergame.persistence.wal.EncryptedWalStore;
+import com.pokergame.persistence.wal.EncryptionKeyring;
+import com.pokergame.persistence.transaction.DurableMutationAspect;
+import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.PersistenceRecovery;
 
 /**
  * Activates encrypted recovery as one coherent Spring subsystem.

@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.wal;
 
 /**
  * Names storage boundaries where an interrupted process could otherwise leave an

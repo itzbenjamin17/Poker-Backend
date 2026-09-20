@@ -1,4 +1,4 @@
-package com.pokergame.persistence;
+package com.pokergame.persistence.snapshot;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -10,13 +10,15 @@ import com.pokergame.service.HandEvaluatorService;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import com.pokergame.persistence.config.PersistenceException;
 
 /**
- * Defines the explicit compatibility boundary between mutable poker aggregates and
- * versioned persistence state.
+ * Converts live game data (Rooms and Games) into a clean snapshot format for saving to disk,
+ * and vice versa.
  * <p>
- * Domain objects are deliberately mapped field by field so runtime collaborators,
- * locks, and framework objects can never leak into the WAL format.
+ * We map every field manually instead of using automatic serialization. This ensures that internal
+ * code details—like thread locks, timers, or service dependencies—never accidentally get saved
+ * into the database files.
  * </p>
  */
 @Component
