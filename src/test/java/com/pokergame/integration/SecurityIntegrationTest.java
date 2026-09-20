@@ -6,6 +6,7 @@ import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.security.RateLimitService;
 import com.pokergame.service.RoomService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -18,8 +19,12 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.client.HttpClientErrorException;
 
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.util.ReflectionTestUtils;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.*;
 
 /** Tests security integration behavior. */
 @Tag("integration")
@@ -28,8 +33,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @DisplayName("Security integration")
 class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
 
-    @Autowired
+    @MockitoSpyBean
     private JwtService jwtService;
+
+    @MockitoSpyBean
+    private RateLimitService rateLimitService;
 
     @Autowired
     private RoomService roomService;
@@ -262,6 +270,61 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(jwtService.isTokenValid(token)).isTrue();
             assertThat(jwtService.isTokenValid("completely.invalid.token")).isFalse();
             assertThat(jwtService.isTokenValid(tamperedToken)).isFalse();
+        }
+    }
+
+    /** Groups test scenarios for filter chain ordering. */
+    @Nested
+    @DisplayName("filter chain ordering")
+    class FilterChainOrdering {
+
+        /**
+         * Protects the contract that an oversized payload is rejected with 413 before reaching rate limiting or JWT validation.
+         */
+        @Test
+        @DisplayName("oversized payload is rejected with 413 without invoking rate limit or parsing JWT")
+        void givenOversizedPayload_whenRequestSent_thenRejectedWith413BeforeRateLimitOrJwt() {
+            ReflectionTestUtils.setField(rateLimitService, "enabled", true);
+            reset(rateLimitService);
+            reset(jwtService);
+
+            String largeContent = "{\"roomName\":\"" + "A".repeat(11_000) + "\"}";
+
+            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
+                    .uri("/api/room/create")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer malformed.invalid.token")
+                    .body(largeContent)
+                    .retrieve()
+                    .body(String.class));
+
+            assertThat(exception.getStatusCode().value()).isEqualTo(413);
+            verify(rateLimitService, never()).tryConsumeRest(anyString());
+            verify(jwtService, never()).isTokenValid(anyString());
+            verify(jwtService, never()).extractPrincipal(anyString());
+        }
+
+        /**
+         * Protects the contract that a rate limited request is rejected with 429 before reaching JWT validation.
+         */
+        @Test
+        @DisplayName("rate limited request is rejected with 429 without parsing JWT")
+        void givenRateLimitExceeded_whenRequestSentWithInvalidToken_thenRejectedWith429BeforeJwt() {
+            ReflectionTestUtils.setField(rateLimitService, "enabled", true);
+            doReturn(false).when(rateLimitService).tryConsumeRest(anyString());
+            reset(jwtService);
+
+            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
+                    .uri("/api/room/join")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer malformed.invalid.token")
+                    .body(new JoinRoomRequest("SomeRoom", "SomePlayer", null))
+                    .retrieve()
+                    .body(String.class));
+
+            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+            verify(jwtService, never()).isTokenValid(anyString());
+            verify(jwtService, never()).extractPrincipal(anyString());
         }
     }
 }

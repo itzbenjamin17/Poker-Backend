@@ -148,4 +148,67 @@ class PersistenceRecoveryTest {
 
         assertTrue(recovery.isComplete());
     }
+
+    /**
+     * Protects the contract that recovery re-registers scheduled timers for active games and disconnect deadlines for all players.
+     */
+    @Test
+    void happyPathRecoveryReRegistersScheduledTimersAndDisconnectDeadlines() {
+        Room activeRoom = new Room("room-active", "Active Game Room", "Alice", 6, 10, 20, 1000, null);
+        activeRoom.addPlayer("Alice");
+        activeRoom.addPlayer("Bob");
+
+        Player alice = new Player("Alice", "alice-id", 1000);
+        long futureDeadline = System.currentTimeMillis() + 45_000L;
+        alice.setDisconnectDeadlineEpochMs(futureDeadline);
+
+        Player bob = new Player("Bob", "bob-id", 1000);
+        bob.setDisconnectDeadlineEpochMs(null);
+
+        Game activeGame = mock(Game.class);
+        when(activeGame.getGameId()).thenReturn("room-active");
+        when(activeGame.getPlayers()).thenReturn(List.of(alice, bob));
+
+        RecoveredAggregate activeAggregate = new RecoveredAggregate(activeRoom, "Alice", activeGame, false);
+
+        Room lobbyRoom = new Room("room-lobby", "Lobby Room", "Charlie", 6, 10, 20, 1000, null);
+        lobbyRoom.addPlayer("Charlie");
+        RecoveredAggregate lobbyAggregate = new RecoveredAggregate(lobbyRoom, "Charlie", null, false);
+
+        when(store.recoverAll()).thenReturn(Map.of(
+                "room-active", new byte[]{1, 2},
+                "room-lobby", new byte[]{3, 4}));
+        when(mapper.deserialize(new byte[]{1, 2})).thenReturn(activeAggregate);
+        when(mapper.deserialize(new byte[]{3, 4})).thenReturn(lobbyAggregate);
+
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                store, mapper, roomService, gameLifecycleService,
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+
+        long beforeRun = System.currentTimeMillis();
+        recovery.run(new DefaultApplicationArguments());
+        long afterRun = System.currentTimeMillis();
+
+        // Active game: restored and timers resumed
+        verify(gameLifecycleService).restoreGame(activeGame);
+        verify(gameLifecycleService).resumeRecoveredTimers("room-active");
+
+        // Lobby room: no game restored or timers resumed
+        verify(gameLifecycleService, never()).resumeRecoveredTimers("room-lobby");
+
+        // Disconnect deadlines registered for all players
+        verify(webSocketEventListener).scheduleRecoveredDisconnect("room-active", "Alice", futureDeadline);
+
+        ArgumentCaptor<Long> bobDeadlineCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(webSocketEventListener).scheduleRecoveredDisconnect(eq("room-active"), eq("Bob"), bobDeadlineCaptor.capture());
+        assertTrue(bobDeadlineCaptor.getValue() >= beforeRun + DISCONNECT_GRACE_PERIOD_MS);
+        assertTrue(bobDeadlineCaptor.getValue() <= afterRun + DISCONNECT_GRACE_PERIOD_MS);
+
+        ArgumentCaptor<Long> charlieDeadlineCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(webSocketEventListener).scheduleRecoveredDisconnect(eq("room-lobby"), eq("Charlie"), charlieDeadlineCaptor.capture());
+        assertTrue(charlieDeadlineCaptor.getValue() >= beforeRun + DISCONNECT_GRACE_PERIOD_MS);
+        assertTrue(charlieDeadlineCaptor.getValue() <= afterRun + DISCONNECT_GRACE_PERIOD_MS);
+
+        assertTrue(recovery.isComplete());
+    }
 }

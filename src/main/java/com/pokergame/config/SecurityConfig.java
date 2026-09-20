@@ -96,11 +96,11 @@ public class SecurityConfig {
                 .formLogin(form -> form.disable())
                 .httpBasic(basic -> basic.disable())
 
-                // Enforce rate limits early
-                .addFilterBefore(endpointRateLimitFilter, org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter.class)
+                // Reject oversized payloads first (before any other processing or token consumption)
+                .addFilterBefore(payloadSizeFilter, org.springframework.security.web.session.DisableEncodeUrlFilter.class)
 
-                // Reject oversized payloads early (before any processing)
-                .addFilterBefore(payloadSizeFilter, org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter.class)
+                // Enforce rate limits next
+                .addFilterBefore(endpointRateLimitFilter, org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter.class)
 
                 // Add our JWT filter before Spring's pre-auth filter (since we use
                 // PreAuthenticatedAuthenticationToken)
