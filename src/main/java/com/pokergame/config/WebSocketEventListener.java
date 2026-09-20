@@ -4,6 +4,7 @@ import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.model.Room;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
+import com.pokergame.util.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -83,7 +84,8 @@ public class WebSocketEventListener {
         Principal principal = headerAccessor.getUser();
         String sessionId = headerAccessor.getSessionId();
 
-        if (!(principal instanceof PlayerPrincipal playerPrincipal) || sessionId == null) {
+        PlayerPrincipal playerPrincipal = SecurityUtils.getPlayerOrNull(principal);
+        if (playerPrincipal == null || sessionId == null) {
             return;
         }
 
@@ -124,10 +126,8 @@ public class WebSocketEventListener {
         String sessionId = headerAccessor.getSessionId();
         
         // Recover principal from session storage if not present in the event
-        PlayerPrincipal recoveredPrincipal = null;
-        if (headerAccessor.getUser() instanceof PlayerPrincipal pp) {
-            recoveredPrincipal = pp;
-        } else if (sessionId != null) {
+        PlayerPrincipal recoveredPrincipal = SecurityUtils.getPlayerOrNull(headerAccessor.getUser());
+        if (recoveredPrincipal == null && sessionId != null) {
             recoveredPrincipal = sessionToPrincipal.get(sessionId);
         }
 

@@ -18,10 +18,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
-import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
-
-import java.security.Principal;
 
 /**
  * REST controller for active poker game operations.
@@ -60,14 +58,13 @@ public class GameController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param gameId    game identifier
-     * @param authentication authenticated player (from JWT)
+     * @param playerPrincipal authenticated player principal
      * @return latest game-state snapshot
      */
     @GetMapping("/{gameId}/state")
     public ResponseEntity<PublicGameStateResponse> getGameState(
             @PathVariable String gameId,
-            Authentication authentication) {
-        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.debug("Player {} requested game state for {}", playerName, gameId);
 
@@ -86,14 +83,13 @@ public class GameController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param gameId    game identifier
-     * @param authentication authenticated player (from JWT)
+     * @param playerPrincipal authenticated player principal
      * @return private player-state snapshot
      */
     @GetMapping("/{gameId}/private-state")
     public ResponseEntity<PrivatePlayerState> getPrivateState(
             @PathVariable String gameId,
-            Authentication authentication) {
-        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.debug("Player {} requested private state for {}", playerName, gameId);
 
@@ -139,14 +135,13 @@ public class GameController {
      *
      * @param gameId        game identifier
      * @param actionRequest action type and amount
-     * @param principal     authenticated player (from JWT)
+     * @param playerPrincipal authenticated player principal
      */
     @MessageMapping("/{gameId}/action")
     public void performAction(
             @DestinationVariable String gameId,
             @Payload PlayerActionRequest actionRequest,
-            Principal principal) {
-        PlayerPrincipal playerPrincipal = extractPrincipalFromPrincipal(principal);
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.info("Processing player action for game {} by {}: {}", gameId, playerName, actionRequest);
 
@@ -163,13 +158,12 @@ public class GameController {
      * Marks the authenticated player as READY during the post-round countdown.
      *
      * @param gameId    game identifier
-     * @param principal authenticated player (from JWT)
+     * @param playerPrincipal authenticated player principal
      */
     @MessageMapping("/{gameId}/ready")
     public void markReady(
             @DestinationVariable String gameId,
-            Principal principal) {
-        PlayerPrincipal playerPrincipal = extractPrincipalFromPrincipal(principal);
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.info("Processing READY confirmation for game {} by {}", gameId, playerName);
 
@@ -187,14 +181,13 @@ public class GameController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param gameId    game identifier
-     * @param authentication authenticated player (from JWT)
+     * @param playerPrincipal authenticated player principal
      * @return success confirmation
      */
     @PostMapping("/{gameId}/leave")
     public ResponseEntity<ApiResponse<Void>> leaveGame(
             @PathVariable String gameId,
-            Authentication authentication) {
-        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.info("Player {} requesting to leave game {}", playerName, gameId);
 
@@ -214,14 +207,13 @@ public class GameController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param gameId    game identifier
-     * @param authentication authenticated player (from JWT)
+     * @param playerPrincipal authenticated player principal
      * @return success confirmation
      */
     @PostMapping("/{gameId}/claim-win")
     public ResponseEntity<ApiResponse<Void>> claimWin(
             @PathVariable String gameId,
-            Authentication authentication) {
-        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.info("Player {} attempting to claim win in game {}", playerName, gameId);
 
@@ -233,37 +225,5 @@ public class GameController {
         gameLifecycleService.claimWin(gameId, playerName);
         logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
         return ResponseEntity.ok(ApiResponse.success("Win claimed successfully"));
-    }
-
-    /**
-     * Extracts the application principal from an HTTP authentication.
-     *
-     * @param authentication current Spring Security authentication
-     * @return authenticated player principal
-     * @throws UnauthorisedActionException if the authentication has an unexpected principal
-     */
-    private PlayerPrincipal extractPrincipal(Authentication authentication) {
-        if (authentication.getPrincipal() instanceof PlayerPrincipal principal) {
-            return principal;
-        }
-        throw new UnauthorisedActionException("Invalid authentication principal");
-    }
-
-    /**
-     * Extracts the application principal from a STOMP principal or authentication wrapper.
-     *
-     * @param principal current WebSocket principal
-     * @return authenticated player principal
-     * @throws UnauthorisedActionException if no player principal can be resolved
-     */
-    private PlayerPrincipal extractPrincipalFromPrincipal(Principal principal) {
-        if (principal instanceof PlayerPrincipal playerPrincipal) {
-            return playerPrincipal;
-        }
-        // In WebSocket context, principal might be wrapped or be the authentication object itself
-        if (principal instanceof Authentication authentication && authentication.getPrincipal() instanceof PlayerPrincipal playerPrincipal) {
-            return playerPrincipal;
-        }
-        throw new UnauthorisedActionException("Invalid authentication principal in WebSocket");
     }
 }

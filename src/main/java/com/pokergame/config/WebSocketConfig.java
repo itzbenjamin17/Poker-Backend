@@ -80,4 +80,27 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // Register interceptors to authenticate STOMP CONNECT and throttle messages
         registration.interceptors(webSocketAuthInterceptor, webSocketRateLimitInterceptor);
     }
+
+    /**
+     * Registers custom argument resolver to support @AuthenticationPrincipal PlayerPrincipal
+     * in STOMP @MessageMapping handler methods.
+     *
+     * @param argumentResolvers argument resolvers to configure
+     */
+    @Override
+    public void addArgumentResolvers(List<org.springframework.messaging.handler.invocation.HandlerMethodArgumentResolver> argumentResolvers) {
+        argumentResolvers.add(new org.springframework.messaging.handler.invocation.HandlerMethodArgumentResolver() {
+            @Override
+            public boolean supportsParameter(org.springframework.core.MethodParameter parameter) {
+                return parameter.hasParameterAnnotation(org.springframework.security.core.annotation.AuthenticationPrincipal.class)
+                        && com.pokergame.security.PlayerPrincipal.class.isAssignableFrom(parameter.getParameterType());
+            }
+
+            @Override
+            public Object resolveArgument(org.springframework.core.MethodParameter parameter, org.springframework.messaging.Message<?> message) {
+                java.security.Principal user = org.springframework.messaging.simp.SimpMessageHeaderAccessor.getUser(message.getHeaders());
+                return com.pokergame.util.SecurityUtils.getPlayer(user);
+            }
+        });
+    }
 }

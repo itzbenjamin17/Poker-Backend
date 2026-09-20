@@ -158,6 +158,6 @@ class WebSocketExceptionHandlerTest {
 
         assertThatThrownBy(() -> handler.handleMessageException(ex, invalidPrincipal, message))
                 .isInstanceOf(UnauthorisedActionException.class)
-                .hasMessage("Invalid authentication principal in WebSocket");
+                .hasMessage("Invalid authentication principal");
     }
 }

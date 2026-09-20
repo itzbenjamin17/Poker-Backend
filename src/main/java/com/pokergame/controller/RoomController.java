@@ -15,7 +15,7 @@ import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 
@@ -108,14 +108,13 @@ public class RoomController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param roomId    room identifier
-     * @param authentication authenticated player (from JWT)
+     * @param playerPrincipal authenticated player principal
      * @return success confirmation
      */
     @PostMapping("/{roomId}/leave")
     public ResponseEntity<ApiResponse<Void>> leaveRoom(
             @PathVariable String roomId,
-            Authentication authentication) {
-        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.info("Player {} requesting to leave room {}", playerName, roomId);
         boolean gameActive = gameLifecycleService.gameExists(roomId);
@@ -160,15 +159,14 @@ public class RoomController {
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param roomId    room identifier
-     * @param authentication authenticated player (must be host)
+     * @param playerPrincipal authenticated player principal (must be host)
      * @return created game ID
      * @throws UnauthorisedActionException if the player is not the room host
      */
     @PostMapping("/{roomId}/start-game")
     public ResponseEntity<ApiResponse<String>> startGame(
             @PathVariable String roomId,
-            Authentication authentication) {
-        PlayerPrincipal playerPrincipal = extractPrincipal(authentication);
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.info("Player {} attempting to start game for room {}", playerName, roomId);
 
@@ -188,19 +186,5 @@ public class RoomController {
         logger.info("Game {} created successfully from room {}", gameId, roomId);
 
         return ResponseEntity.ok(ApiResponse.success("Game started successfully", gameId));
-    }
-
-    /**
-     * Extracts the application principal from an HTTP authentication.
-     *
-     * @param authentication current Spring Security authentication
-     * @return authenticated player principal
-     * @throws UnauthorisedActionException if the authentication has an unexpected principal
-     */
-    private PlayerPrincipal extractPrincipal(Authentication authentication) {
-        if (authentication.getPrincipal() instanceof PlayerPrincipal principal) {
-            return principal;
-        }
-        throw new UnauthorisedActionException("Invalid authentication principal");
     }
 }

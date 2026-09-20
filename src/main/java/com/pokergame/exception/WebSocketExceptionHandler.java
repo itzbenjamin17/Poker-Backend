@@ -3,6 +3,7 @@ package com.pokergame.exception;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameStateService;
+import com.pokergame.util.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,7 +11,6 @@ import org.springframework.messaging.Message;
 import org.springframework.messaging.converter.MessageConversionException;
 import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
-import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 
 import java.security.Principal;
@@ -45,7 +45,7 @@ public class WebSocketExceptionHandler {
     @MessageExceptionHandler
     public void handleMessageException(Exception exception, Principal principal,
             Message<?> message) {
-        PlayerPrincipal playerPrincipal = extractPrincipalFromPrincipal(principal);
+        PlayerPrincipal playerPrincipal = SecurityUtils.getPlayer(principal);
         String playerName = playerPrincipal.playerName();
 
         // Extract gameId from the destination header manually
@@ -81,23 +81,5 @@ public class WebSocketExceptionHandler {
             gameStateService.sendPrivatePlayerNotification(gameId, playerName, userFriendlyMessage,
                     ResponseMessage.ACTION_ERROR);
         }
-    }
-
-    /**
-     * Extracts the application principal from a STOMP principal or authentication wrapper.
-     *
-     * @param principal current WebSocket principal
-     * @return authenticated player principal
-     * @throws UnauthorisedActionException if no player principal can be resolved
-     */
-    private PlayerPrincipal extractPrincipalFromPrincipal(Principal principal) {
-        if (principal instanceof PlayerPrincipal playerPrincipal) {
-            return playerPrincipal;
-        }
-        // In WebSocket context, principal might be wrapped or be the authentication object itself
-        if (principal instanceof Authentication authentication && authentication.getPrincipal() instanceof PlayerPrincipal playerPrincipal) {
-            return playerPrincipal;
-        }
-        throw new UnauthorisedActionException("Invalid authentication principal in WebSocket");
     }
 }
