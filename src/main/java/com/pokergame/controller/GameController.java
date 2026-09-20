@@ -15,7 +15,6 @@ import com.pokergame.security.PlayerPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
-import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
@@ -180,55 +179,6 @@ public class GameController {
         }
 
         gameLifecycleService.markPlayerReadyForNextHand(gameId, playerName);
-    }
-
-    /**
-     * Handles exceptions occurring during WebSocket message processing.
-     * Propagates errors back to the specific initiating player via their private
-     * channel.
-     *
-     * @param exception message-processing failure to translate
-     * @param principal player that sent the failed message
-     * @param message original message used to recover the game destination
-     */
-    @MessageExceptionHandler
-    public void handleMessageException(Exception exception, Principal principal,
-            org.springframework.messaging.Message<?> message) {
-        PlayerPrincipal playerPrincipal = extractPrincipalFromPrincipal(principal);
-        String playerName = playerPrincipal.playerName();
-
-        // Extract gameId from the destination header manually
-        org.springframework.messaging.simp.SimpMessageHeaderAccessor accessor = org.springframework.messaging.simp.SimpMessageHeaderAccessor
-                .wrap(message);
-        String destination = accessor.getDestination();
-        String gameId = "unknown";
-
-        if (destination != null) {
-            String[] parts = destination.split("/");
-            if (parts.length >= 3) {
-                gameId = parts[2];
-            }
-        }
-
-        String userFriendlyMessage = exception.getMessage();
-
-        // Sanitise technical messages like Jackson deserialization errors
-        if (exception instanceof org.springframework.messaging.converter.MessageConversionException ||
-                (userFriendlyMessage != null && userFriendlyMessage.contains("Cannot deserialize"))) {
-            userFriendlyMessage = "Invalid action request format. Please try again with a valid amount.";
-            logger.warn("Technical WebSocket Action Error (sanitized) for {} in game {}: {}", playerName, gameId,
-                    exception.getMessage());
-        } else {
-            logger.warn("WebSocket Action Error for player {} in game {}: {}", playerName, gameId, userFriendlyMessage);
-        }
-
-        // Ensure error messages are not too long
-        if (userFriendlyMessage != null && userFriendlyMessage.length() > 80) {
-            userFriendlyMessage = userFriendlyMessage.substring(0, 77) + "...";
-        }
-
-        gameStateService.sendPrivatePlayerNotification(gameId, playerName, userFriendlyMessage,
-                ResponseMessage.ACTION_ERROR);
     }
 
     /**

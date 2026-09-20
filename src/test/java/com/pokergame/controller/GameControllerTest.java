@@ -5,7 +5,6 @@ import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
-import com.pokergame.enums.ResponseMessage;
 import com.pokergame.model.Game;
 import com.pokergame.security.JwtAuthenticationFilter;
 import com.pokergame.security.PlayerPrincipal;
@@ -18,8 +17,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
-import org.springframework.messaging.Message;
-import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
 import org.springframework.test.context.ActiveProfiles;
@@ -235,112 +232,5 @@ class GameControllerTest {
 
         verify(gameLifecycleService).markPlayerReadyForNextHand(gameId, playerName);
     }
-
-    // Exception Handler Test
-    /**
-     * Protects clients from receiving technical deserialization details in private
-     * WebSocket error notifications.
-     */
-    @Test
-    @DisplayName("WS handleMessageException - Sanitizes Technical Errors")
-    void handleMessageException_SanitizesJacksonErrors() {
-        Exception technicalException = new org.springframework.messaging.converter.MessageConversionException("Cannot deserialize something technical");
-        Message<String> message = MessageBuilder.withPayload("bad payload")
-                .setHeader("simpDestination", "/app/" + gameId + "/action")
-                .build();
-
-        gameController.handleMessageException(technicalException, principal, message);
-
-        verify(gameStateService).sendPrivatePlayerNotification(
-                eq(gameId),
-                eq(playerName),
-                eq("Invalid action request format. Please try again with a valid amount."),
-                eq(ResponseMessage.ACTION_ERROR)
-        );
-    }
-
-    /**
-     * Protects the private-notification contract from unbounded exception messages.
-     */
-    @Test
-    @DisplayName("WS handleMessageException - Truncates Long Messages")
-    void handleMessageException_TruncatesLongMessages() {
-        String longMessage = "This is a very long error message that should definitely be truncated because it exceeds the eighty character limit that we have established in the controller logic.";
-        Exception ex = new RuntimeException(longMessage);
-        Message<String> message = MessageBuilder.withPayload("info")
-                .setHeader("simpDestination", "/app/" + gameId + "/action")
-                .build();
-
-        gameController.handleMessageException(ex, principal, message);
-
-        // Expectation: "This is a very long error message that should definitely be truncated because..."
-        verify(gameStateService).sendPrivatePlayerNotification(
-                eq(gameId),
-                eq(playerName),
-                argThat(msg -> msg.length() <= 80 && msg.endsWith("...")),
-                eq(ResponseMessage.ACTION_ERROR)
-        );
-    }
-
-    /**
-     * Protects error delivery when a failed WebSocket message has no destination.
-     */
-    @Test
-    @DisplayName("WS handleMessageException - Null Destination")
-    void handleMessageException_NullDestination() {
-        Exception ex = new RuntimeException("Test error");
-        Message<String> message = MessageBuilder.withPayload("payload").build();
-
-        gameController.handleMessageException(ex, principal, message);
-
-        verify(gameStateService).sendPrivatePlayerNotification(
-                eq("unknown"),
-                eq(playerName),
-                eq("Test error"),
-                eq(ResponseMessage.ACTION_ERROR)
-        );
-    }
-
-    /**
-     * Protects error delivery when a destination does not contain a game identifier.
-     */
-    @Test
-    @DisplayName("WS handleMessageException - Short Destination")
-    void handleMessageException_ShortDestination() {
-        Exception ex = new RuntimeException("Test error");
-        Message<String> message = MessageBuilder.withPayload("payload")
-                .setHeader("simpDestination", "/app")
-                .build();
-
-        gameController.handleMessageException(ex, principal, message);
-
-        verify(gameStateService).sendPrivatePlayerNotification(
-                eq("unknown"),
-                eq(playerName),
-                eq("Test error"),
-                eq(ResponseMessage.ACTION_ERROR)
-        );
-    }
-
-    /**
-     * Protects the boundary where an 80-character error must remain untruncated.
-     */
-    @Test
-    @DisplayName("WS handleMessageException - Exact 80 Characters")
-    void handleMessageException_Exact80Characters() {
-        String exact80Message = "12345678901234567890123456789012345678901234567890123456789012345678901234567890";
-        Exception ex = new RuntimeException(exact80Message);
-        Message<String> message = MessageBuilder.withPayload("payload")
-                .setHeader("simpDestination", "/app/" + gameId + "/action")
-                .build();
-
-        gameController.handleMessageException(ex, principal, message);
-
-        verify(gameStateService).sendPrivatePlayerNotification(
-                eq(gameId),
-                eq(playerName),
-                eq(exact80Message), // Should not be truncated
-                eq(ResponseMessage.ACTION_ERROR)
-        );
-    }
 }
+
