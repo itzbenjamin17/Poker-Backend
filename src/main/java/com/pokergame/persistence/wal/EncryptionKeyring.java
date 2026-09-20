@@ -5,20 +5,20 @@ import java.util.Map;
 import com.pokergame.persistence.config.PersistenceException;
 
 /**
- * Separates the current write key from historical read keys so operators can
- * rotate encryption without making existing WALs unreadable.
+ * Holds the encryption keys for the save files. 
+ * We keep old keys around so we can still read older save files, but use a new key for any new saves.
  */
 public final class EncryptionKeyring {
     private final String currentKeyId;
     private final Map<String, SecretKey> keys;
 
     /**
-     * Builds an immutable keyring and rejects non-AES-256 material at startup so a
-     * deployment cannot begin accepting traffic with an unusable recovery set.
+     * Creates a new keyring and checks that all keys are valid AES-256 keys.
+     * We do this at startup so we don't accidentally start the server with broken keys.
      *
-     * @param currentKeyId identifier used for new WAL records
-     * @param keys         current and historical keys indexed by persisted ID
-     * @throws PersistenceException if the current key is absent or any key is not 256-bit
+     * @param currentKeyId the ID of the key to use for new saves
+     * @param keys         all the old and new keys we have, by their IDs
+     * @throws PersistenceException if a key is missing or not the right length
      */
     public EncryptionKeyring(String currentKeyId, Map<String, SecretKey> keys) {
         if (currentKeyId == null || currentKeyId.isBlank()) {
@@ -38,32 +38,29 @@ public final class EncryptionKeyring {
     }
 
     /**
-     * Returns the identifier embedded in new records so readers can select the key
-     * without trial decryption.
+     * Gets the ID of the newest key. We save this ID in the file so we know which key to use to read it later.
      *
-     * @return current write-key identifier
+     * @return the ID of the newest key
      */
     public String currentKeyId() {
         return currentKeyId;
     }
 
     /**
-     * Returns the only key permitted for new records; historical keys remain
-     * read-only to make rotation direction explicit.
+     * Gets the key we should use right now to encrypt any new game saves.
      *
-     * @return current AES-256 write key
+     * @return the current encryption key
      */
     public SecretKey currentKey() {
         return key(currentKeyId);
     }
 
     /**
-     * Resolves the exact key named by authenticated WAL metadata. Missing keys fail
-     * closed because guessing or skipping a record could recover stale state.
+     * Looks up a specific key by its ID. If we don't have the key, we fail safely instead of trying to guess.
      *
-     * @param keyId persisted key identifier
-     * @return matching AES-256 key
-     * @throws PersistenceException if the key is unavailable
+     * @param keyId the ID of the key we need
+     * @return the matching key
+     * @throws PersistenceException if we don't have a key with that ID
      */
     public SecretKey key(String keyId) {
         SecretKey key = keys.get(keyId);

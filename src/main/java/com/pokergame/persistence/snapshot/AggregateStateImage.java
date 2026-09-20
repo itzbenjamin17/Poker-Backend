@@ -12,38 +12,36 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Versioned, framework-free representation of one room aggregate.
+ * A clean, simple snapshot of a poker room and its game.
  * <p>
- * The state image is intentionally composed only of records and value types so
- * persistence compatibility is reviewed explicitly instead of inheriting every
- * future field added to mutable domain classes.
+ * This class exists so that if we change how the live Game or Room works in the future,
+ * older saved games won't automatically break. We only save plain data here.
  * </p>
  *
- * @param schemaVersion schema used to encode the image
- * @param deleted       whether the image is a lifecycle tombstone
- * @param room          persisted room identity and lobby state
- * @param currentHost   current host, which may differ from the original host
- * @param game          persisted game state, or {@code null} for a lobby
+ * @param schemaVersion the version number of this save format
+ * @param deleted       true if this room was deleted
+ * @param room          the saved room details (like its name and rules)
+ * @param currentHost   the current host of the room
+ * @param game          the saved game progress, or {@code null} if the game hasn't started
  */
 public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState room, String currentHost,
         GameState game) {
     public static final int CURRENT_SCHEMA_VERSION = 1;
 
     /**
-     * Stores lobby state that cannot be regenerated safely after restart, including
-     * private-room credentials and join order.
+     * Details about the room itself (the lobby) that we need to restore, like passwords and who joined when.
      *
-     * @param roomId             stable aggregate identity
-     * @param roomName           client-visible room name
-     * @param originalHost       host recorded when the room was created
-     * @param maxPlayers         room capacity
-     * @param smallBlind         configured small blind
-     * @param bigBlind           configured big blind
-     * @param buyIn              configured starting stack
-     * @param password           private-room password, protected by WAL encryption
-     * @param createdAt          original creation time
-     * @param playersWithJoinTime player order and join timestamps
-     * @param gameStarted        whether the lobby has entered game play
+     * @param roomId             the unique ID for the room
+     * @param roomName           the name of the room players see
+     * @param originalHost       the player who created the room
+     * @param maxPlayers         how many people can join
+     * @param smallBlind         the room's small blind amount
+     * @param bigBlind           the room's big blind amount
+     * @param buyIn              how many chips players start with
+     * @param password           the room's password
+     * @param createdAt          when the room was created
+     * @param playersWithJoinTime when each player joined
+     * @param gameStarted        true if they have started playing
      */
     public record RoomState(String roomId, String roomName, String originalHost, int maxPlayers, int smallBlind,
             int bigBlind, int buyIn, String password, LocalDateTime createdAt,
@@ -51,30 +49,29 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
     }
 
     /**
-     * Stores every authoritative field required to continue the exact hand rather
-     * than starting a logically similar replacement hand.
+     * Everything we need to pick up a hand of poker exactly where we left off.
      *
-     * @param gameId                       stable game identity
-     * @param players                      complete public and private player state
-     * @param activePlayerIds               active-player ordering
-     * @param remainingDeck                 exact future draw order
-     * @param communityCards                cards already exposed on the board
-     * @param pot                           undistributed pot
-     * @param dealerPosition                dealer index
-     * @param smallBlindPosition            small-blind index
-     * @param bigBlindPosition              big-blind index
-     * @param currentPlayerPosition         current turn index
-     * @param currentHighestBet             amount players must match
-     * @param currentPhase                  current betting phase
-     * @param gameOver                      terminal-state marker
-     * @param smallBlind                    game small blind
-     * @param bigBlind                      game big blind
-     * @param handContributions             contribution ledger used for side pots
-     * @param readyCountdownActive          whether the post-hand gate is open
-     * @param readyCountdownDeadlineEpochMs absolute ready-gate deadline
-     * @param everyoneHasHadInitialTurn     betting-round progress marker
-     * @param actedPlayerIds                players that acted in the current round
-     * @param scheduledTaskDeadlines        durable runtime-work deadlines
+     * @param gameId                       the unique ID for the game
+     * @param players                      details about all the players
+     * @param activePlayerIds               who is still playing in this hand
+     * @param remainingDeck                 the cards still in the deck, in exact order
+     * @param communityCards                the cards on the table
+     * @param pot                           total chips in the pot right now
+     * @param dealerPosition                who has the dealer button
+     * @param smallBlindPosition            who posted the small blind
+     * @param bigBlindPosition              who posted the big blind
+     * @param currentPlayerPosition         whose turn it is to act
+     * @param currentHighestBet             the amount a player has to match to stay in
+     * @param currentPhase                  what part of the hand we're in (like the flop or river)
+     * @param gameOver                      true if the game is finished
+     * @param smallBlind                    the small blind amount
+     * @param bigBlind                      the big blind amount
+     * @param handContributions             how much each player put in (used to split side pots)
+     * @param readyCountdownActive          true if we're waiting for the next hand to start
+     * @param readyCountdownDeadlineEpochMs when the wait for the next hand ends
+     * @param everyoneHasHadInitialTurn     true if everyone got a chance to bet this round
+     * @param actedPlayerIds                who has already made a move this round
+     * @param scheduledTaskDeadlines        when upcoming automatic actions are supposed to happen
      */
     public record GameState(String gameId, List<PlayerState> players, List<String> activePlayerIds,
             List<CardState> remainingDeck, List<CardState> communityCards, int pot, int dealerPosition,
@@ -86,22 +83,21 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
     }
 
     /**
-     * Stores player state whose loss would change game legality or reveal a
-     * different private hand after recovery.
+     * Everything we need to know about a specific player during a hand.
      *
-     * @param name                      player display name
-     * @param playerId                  stable internal identity
-     * @param holeCards                 private cards
-     * @param bestHand                  evaluated best hand, when available
-     * @param handRank                  evaluated hand rank
-     * @param chips                     remaining stack
-     * @param currentBet                contribution in the current betting round
-     * @param folded                    whether the player folded
-     * @param allIn                     whether the player is all-in
-     * @param out                       whether the player is out of the game
-     * @param disconnected              durable disconnect marker
-     * @param disconnectDeadlineEpochMs absolute reconnect deadline
-     * @param readyForNextHand          post-hand readiness marker
+     * @param name                      the player's name
+     * @param playerId                  their unique ID
+     * @param holeCards                 their hidden cards
+     * @param bestHand                  their best 5-card hand (if evaluated)
+     * @param handRank                  the rank of their best hand
+     * @param chips                     how many chips they have left
+     * @param currentBet                how much they've bet in this round
+     * @param folded                    true if they folded
+     * @param allIn                     true if they pushed all their chips in
+     * @param out                       true if they lost all their chips and are out
+     * @param disconnected              true if they lost their connection
+     * @param disconnectDeadlineEpochMs when their time to reconnect runs out
+     * @param readyForNextHand          true if they are ready to start the next hand
      */
     public record PlayerState(String name, String playerId, List<CardState> holeCards, List<CardState> bestHand,
             HandRank handRank, int chips, int currentBet, boolean folded, boolean allIn, boolean out,
@@ -109,11 +105,10 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
     }
 
     /**
-     * Persists cards as stable enum values so no mutable deck implementation is
-     * serialized into the compatibility boundary.
+     * A simple representation of a playing card for saving.
      *
-     * @param rank card rank
-     * @param suit card suit
+     * @param rank the value of the card (like King or Two)
+     * @param suit the suit of the card (like Hearts or Spades)
      */
     public record CardState(Rank rank, Suit suit) {
     }

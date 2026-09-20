@@ -1,8 +1,9 @@
 package com.pokergame.persistence.wal;
 
 /**
- * Names storage boundaries where an interrupted process could otherwise leave an
- * ambiguous result. Tests use these points to prove recovery and health behavior.
+ * Defines specific points during the save process where a crash might cause problems.
+ * These are used by our tests to simulate crashes at the worst possible moments
+ * and make sure the game can still recover correctly.
  */
 public enum WalFaultPoint {
     BEFORE_PREPARE_WRITE,

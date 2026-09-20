@@ -4,38 +4,36 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Carries transaction ownership and deferred side effects across nested service
- * calls on the current thread.
+ * Keeps track of the active save operation and any actions we want to run right after.
  * <p>
- * This is intentionally thread-local because the supported deployment is
- * single-process and mutation execution is synchronous; runtime scheduled work is
- * persisted as data before it crosses a thread boundary.
+ * We use a ThreadLocal here because all player moves happen one at a time on a single thread.
+ * Any future background work (like a 30-second turn timer) is saved to the database as data
+ * instead of running while we're trying to save.
  * </p>
  */
 public final class DurableTransactionContext {
     private static final ThreadLocal<Context> CURRENT = new ThreadLocal<>();
 
     /**
-     * Prevents construction because transaction state must be scoped through the
-     * static advice lifecycle.
+     * Prevents creation directly, as the save process should only be managed by the interceptor.
      */
     private DurableTransactionContext() {
     }
 
     /**
-     * Starts the outer transaction context used by nested same-room mutations.
+     * Starts tracking a new save operation for a room.
      *
-     * @param roomId room that owns the transaction
+     * @param roomId the ID of the room being saved
      */
     static void begin(String roomId) {
         CURRENT.set(new Context(roomId, new ArrayList<>()));
     }
 
     /**
-     * Exposes transaction ownership so nested advice can join the same room while
-     * rejecting unsupported cross-room nesting.
+     * Checks which room we are currently saving. This helps us catch mistakes if
+     * someone tries to save a different room while this one is still saving.
      *
-     * @return active room ID, or {@code null} outside a durable transaction
+     * @return the active room ID, or null if we aren't saving right now
      */
     static String currentRoomId() {
         Context context = CURRENT.get();
@@ -43,11 +41,10 @@ public final class DurableTransactionContext {
     }
 
     /**
-     * Defers client visibility and runtime scheduling until the state image is
-     * committed. Outside a durable mutation the action runs immediately so query
-     * and legacy nonpersistent paths retain their normal behavior.
+     * Delays an action (like sending a message to players) until the game finishes saving.
+     * If we aren't currently saving a game, it just runs the action immediately.
      *
-     * @param action side effect that requires committed state
+     * @param action the code to run after saving finishes
      */
     public static void afterCommit(Runnable action) {
         Context context = CURRENT.get();
@@ -59,8 +56,9 @@ public final class DurableTransactionContext {
     }
 
     /**
-     * Removes transaction state before running callbacks so callback-triggered work
-     * cannot accidentally join a transaction whose commit has already finished.
+     * Clears out the tracking state, then runs all the delayed actions we collected.
+     * We clear the state first so that these actions don't accidentally think they are
+     * part of the save operation that just finished.
      */
     static void complete() {
         Context context = CURRENT.get();
@@ -71,18 +69,18 @@ public final class DurableTransactionContext {
     }
 
     /**
-     * Drops callbacks after a failed mutation or commit because clients must never
-     * observe state that recovery cannot reproduce.
+     * Throws away all the delayed actions if the save failed. We don't want to notify
+     * players about a game change that never actually got saved.
      */
     static void discard() {
         CURRENT.remove();
     }
 
     /**
-     * Groups the room owner and ordered callbacks as one thread-confined value.
+     * Holds the room ID and a list of actions to run when the save finishes.
      *
-     * @param roomId     room owning the outer transaction
-     * @param afterCommit callbacks released after the durable commit
+     * @param roomId      the room being saved
+     * @param afterCommit actions to run once the game is successfully saved
      */
     private record Context(String roomId, List<Runnable> afterCommit) {
     }

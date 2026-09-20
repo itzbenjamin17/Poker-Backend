@@ -29,17 +29,17 @@ import java.util.concurrent.locks.ReentrantLock;
 import com.pokergame.persistence.config.PersistenceException;
 
 /**
- * Stores one authenticated, append-only WAL per room for exact local recovery.
+ * Saves a poker game's history to disk using an encrypted Write-Ahead Log (WAL), with one file per room.
+ * This lets us exactly restore a game after a server crash.
  * <p>
- * Records are framed and encrypted independently with AES-256-GCM so recovery can
- * distinguish an incomplete final write from corruption in committed history. Room
- * identity, sequencing, transaction identity, record type, and key ID are bound as
- * associated data to prevent valid ciphertext from being copied or reordered.
+ * Each save is encrypted independently. This way, if the server dies right in the middle of writing a file,
+ * we can tell the difference between an interrupted save and a corrupted file. We also tie each save to its specific
+ * room, so nobody can copy a save file from one room to another.
  * </p>
  * <p>
- * Any integrity or write failure makes the store unhealthy. Continuing to mutate
- * memory after durability becomes uncertain would let clients observe state that a
- * restart cannot reproduce.
+ * If anything goes wrong (like a disk error), the store stops working and marks itself unhealthy. If we kept playing 
+ * the game in memory without being able to save, a server crash would make everyone lose their chips, and we wouldn't 
+ * be able to get them back.
  * </p>
  */
 public final class EncryptedWalStore {
@@ -60,24 +60,23 @@ public final class EncryptedWalStore {
     private volatile String lastError;
 
     /**
-     * Creates a production store without test fault injection.
+     * Creates a regular store for saving games in production.
      *
-     * @param directory durable WAL directory
-     * @param keyring   current and historical encryption keys
-     * @throws PersistenceException if the directory cannot be initialized safely
+     * @param directory the folder to save files in
+     * @param keyring   the encryption keys to use
+     * @throws PersistenceException if we can't create or write to the folder
      */
     public EncryptedWalStore(Path directory, EncryptionKeyring keyring) {
         this(directory, keyring, WalFaultInjector.NONE);
     }
 
     /**
-     * Creates a store with explicit fault injection so crash boundaries can be
-     * verified deterministically.
+     * Creates a store that lets us intentionally cause crashes during testing.
      *
-     * @param directory     durable WAL directory
-     * @param keyring       current and historical encryption keys
-     * @param faultInjector test-controlled durability fault source
-     * @throws PersistenceException if the directory cannot be initialized safely
+     * @param directory     the folder to save files in
+     * @param keyring       the encryption keys to use
+     * @param faultInjector a tool to simulate crashes for our tests
+     * @throws PersistenceException if we can't create or write to the folder
      */
     public EncryptedWalStore(Path directory, EncryptionKeyring keyring, WalFaultInjector faultInjector) {
         this.directory = directory.toAbsolutePath().normalize();
@@ -94,13 +93,12 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Flushes a prepare marker before business state changes. An unmatched prepare
-     * is intentionally ignored during recovery, proving that a command was never
-     * acknowledged as committed.
+     * Writes a "prepare" marker to the log before we update the game's state. 
+     * If the server crashes before we can write the final "commit", we'll just ignore this prepare when we restart.
      *
-     * @param roomId room whose mutation is about to begin
-     * @return identity required to commit the matching state image
-     * @throws PersistenceException if the store is unhealthy or prepare cannot be flushed
+     * @param roomId the room we are updating
+     * @return an ID needed to save the final game state
+     * @throws PersistenceException if we can't save to the file or there's an error
      */
     public WalTransaction prepare(String roomId) {
         requireHealthy();
@@ -122,13 +120,12 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Flushes the post-mutation state image only when it immediately follows the
-     * supplied prepare record. This adjacency rule prevents stale transactions from
-     * committing over newer room state.
+     * Writes the final game state to the log. This only works if it exactly matches the "prepare" marker we just made.
+     * This rule stops old, delayed saves from accidentally overwriting newer saves.
      *
-     * @param transaction matching prepare identity
-     * @param payload     immutable aggregate state image
-     * @throws PersistenceException if ordering, encryption, or durable flush fails
+     * @param transaction the ID from the "prepare" step
+     * @param payload     the game state data to save
+     * @throws PersistenceException if we have trouble writing or encrypting the data
      */
     public void commit(WalTransaction transaction, byte[] payload) {
         requireHealthy();
@@ -151,13 +148,12 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Recovers the latest fully committed image while tolerating only an incomplete
-     * final frame with a valid header. Every other structural or authentication
-     * anomaly fails closed.
+     * Reads the file to find the latest valid game state.
+     * It's okay if the very last save got cut off during a crash, but any other file issues will cause this to fail safely.
      *
-     * @param roomId room to recover
-     * @return latest committed image, or empty when no committed state exists
-     * @throws PersistenceException if the WAL cannot be trusted
+     * @param roomId the room to restore
+     * @return the latest saved game data, or empty if there's no saved data
+     * @throws PersistenceException if the save file looks corrupted or tampered with
      */
     public Optional<byte[]> recoverLatest(String roomId) {
         validateRoomId(roomId);
@@ -176,11 +172,11 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Recovers every room in deterministic filename order so startup either builds a
-     * complete registry or fails before traffic is accepted.
+     * Restores all rooms by reading their save files in alphabetical order.
+     * This ensures the server starts up fully before players can join.
      *
-     * @return committed images indexed by room ID
-     * @throws PersistenceException if enumeration or any room recovery fails
+     * @return a map of room IDs to their saved game data
+     * @throws PersistenceException if we can't read the files or restore a room
      */
     public Map<String, byte[]> recoverAll() {
         requireHealthy();
@@ -207,13 +203,12 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Replaces historical records with one prepare/commit pair encrypted by the
-     * current key. Atomic replacement plus directory sync makes old-key retirement
-     * safe after all WALs are compacted successfully.
+     * Cleans up a room's save file by deleting all the old history and just keeping the newest game state.
+     * This is done safely so a crash won't lose data. It also encrypts the file with the newest key.
      *
-     * @param roomId       room whose WAL should be compacted
-     * @param latestPayload latest committed aggregate image
-     * @throws PersistenceException if replacement cannot be made crash-safe
+     * @param roomId        the room to clean up
+     * @param latestPayload the latest game data to keep
+     * @throws PersistenceException if we can't safely swap out the old file
      */
     public void compact(String roomId, byte[] latestPayload) {
         requireHealthy();
@@ -240,12 +235,11 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Removes WAL artifacts only after a deletion tombstone has already committed.
-     * This ordering prevents a crash during cleanup from resurrecting a finished
-     * room.
+     * Deletes a room's save file. We only do this after the game is fully over.
+     * Doing it in this order ensures a crash won't bring a dead room back to life.
      *
-     * @param roomId room whose durable lifecycle has ended
-     * @throws PersistenceException if deletion or directory synchronization fails
+     * @param roomId the room to delete
+     * @throws PersistenceException if we fail to delete the file
      */
     public void delete(String roomId) {
         requireHealthy();
@@ -270,29 +264,27 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Indicates whether storage can still uphold the acknowledged-state guarantee.
+     * Checks if the storage system is working properly.
      *
-     * @return {@code true} until the first integrity or write failure
+     * @return true if there are no errors, false if something broke
      */
     public boolean isHealthy() {
         return healthy.get();
     }
 
     /**
-     * Provides a sanitized diagnostic for health reporting without exposing keys or
-     * decrypted poker state.
+     * Gets a safe error message without showing any sensitive game data or keys.
      *
-     * @return last storage error, or {@code null} when none has occurred
+     * @return the last error message, or null if everything is fine
      */
     public String lastError() {
         return lastError;
     }
 
     /**
-     * Counts active WAL files for operational health details. A sentinel is returned
-     * instead of changing health from a diagnostic-only read.
+     * Counts how many save files we have.
      *
-     * @return WAL count, or {@code -1} when the directory cannot be listed
+     * @return the number of save files, or -1 if we can't read the folder
      */
     public long walCount() {
         try (var paths = Files.list(directory)) {
@@ -303,11 +295,10 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Returns WAL size for compaction policy. An unreadable size is treated as
-     * maximally large so the next maintenance attempt surfaces the real failure.
+     * Gets the size of a save file so we know when to clean it up.
      *
-     * @param roomId room whose WAL size is needed
-     * @return WAL bytes, zero if absent, or {@link Long#MAX_VALUE} on read failure
+     * @param roomId the room to check
+     * @return the file size in bytes, or a huge number if we can't read it
      */
     public long walSize(String roomId) {
         try {
@@ -319,11 +310,11 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Derives sequence state from disk on first access so restart never relies on an
-     * in-memory counter that disappeared with the process.
+     * Finds out the next available number in the save sequence for this room.
+     * We read this from the file instead of just relying on memory, in case of a crash.
      *
-     * @param roomId room whose next sequence is required
-     * @return next contiguous WAL sequence
+     * @param roomId the room to check
+     * @return the next number in the sequence
      */
     private long nextSequence(String roomId) {
         Long cached = nextSequences.get(roomId);
@@ -337,16 +328,14 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Appends and forces exactly one framed record. The directory is also forced when
-     * the WAL is first created because file data durability alone does not guarantee
-     * that the new directory entry survives power loss.
+     * Encrypts one piece of data and safely writes it to the file.
      *
-     * @param roomId       owning room
-     * @param sequence     contiguous record sequence
-     * @param transactionId prepare/commit transaction identity
-     * @param type         prepare or commit marker
-     * @param payload      plaintext payload encrypted into the record
-     * @throws PersistenceException if encoding or durable write fails
+     * @param roomId       the room this save belongs to
+     * @param sequence     the number in the sequence
+     * @param transactionId an ID linking a prepare and commit
+     * @param type         whether this is a prepare or a commit
+     * @param payload      the game data to save
+     * @throws PersistenceException if we can't save it to disk
      */
     private void append(String roomId, long sequence, UUID transactionId, RecordType type, byte[] payload) {
         faultInjector.check(type == RecordType.PREPARE ? WalFaultPoint.BEFORE_PREPARE_WRITE
@@ -370,17 +359,16 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Encrypts one self-describing frame with a fresh GCM nonce. Metadata needed to
-     * select a key remains readable but is authenticated as associated data, so it
-     * cannot be altered without detection.
+     * Encrypts the data and packages it with some plain-text info (like the key ID).
+     * The plain-text info is protected so we know if it was tampered with.
      *
-     * @param roomId       owning room
-     * @param sequence     contiguous record sequence
-     * @param transactionId prepare/commit transaction identity
-     * @param type         record type
-     * @param payload      plaintext state bytes
-     * @return complete framed record ready for append
-     * @throws PersistenceException if cryptography or frame encoding fails
+     * @param roomId       the room this save belongs to
+     * @param sequence     the number in the sequence
+     * @param transactionId an ID linking a prepare and commit
+     * @param type         whether this is a prepare or a commit
+     * @param payload      the unencrypted game data
+     * @return the fully encrypted and packaged data ready to save
+     * @throws PersistenceException if something goes wrong with encryption
      */
     private byte[] encodeFrame(String roomId, long sequence, UUID transactionId, RecordType type, byte[] payload) {
         try {
@@ -417,14 +405,12 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Validates framing, contiguous ordering, authentication, and prepare/commit
-     * pairing before selecting a state image. An incomplete final body is safe to
-     * ignore only after its magic and declared frame length have been validated.
+     * Reads through the entire save file, checking for tampering and pulling out the latest valid game state.
      *
-     * @param path           WAL path
-     * @param expectedRoomId room identity derived from the filename
-     * @return latest committed payload and next contiguous sequence
-     * @throws PersistenceException if committed history is missing, reordered, or corrupt
+     * @param path           the path to the file
+     * @param expectedRoomId the room we expect this file to be for
+     * @return the latest valid game state and the next number in the sequence
+     * @throws PersistenceException if the file is out of order or tampered with
      */
     private Recovery readWal(Path path, String expectedRoomId) {
         try {
@@ -442,7 +428,7 @@ public final class EncryptedWalStore {
                     throw new PersistenceException("Corrupt WAL frame header for room " + expectedRoomId);
                 }
                 if (bytes.remaining() < frameLength) {
-                    break; // provably torn final frame body
+                    break; // The save file was cut off right at the end (like from a power outage), which is okay. We just ignore this last partial save.
                 }
                 ByteBuffer frame = bytes.slice(bytes.position(), frameLength);
                 bytes.position(bytes.position() + frameLength);
@@ -475,14 +461,13 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Authenticates one frame against its filename-derived room identity. Binding the
-     * expected room prevents a valid encrypted record from being copied into another
-     * room's WAL.
+     * Decrypts a piece of data from the file and makes sure it wasn't tampered with.
+     * We also check that it belongs to the right room.
      *
-     * @param frame          encoded frame body
-     * @param expectedRoomId room identity derived from the containing WAL
-     * @return authenticated decrypted record
-     * @throws PersistenceException if schema, structure, key lookup, or authentication fails
+     * @param frame          the encrypted data
+     * @param expectedRoomId the room this data should belong to
+     * @return the decrypted data
+     * @throws PersistenceException if the data is tampered with or we can't find the key
      */
     private WalRecord decodeFrame(ByteBuffer frame, String expectedRoomId) {
         try {
@@ -520,15 +505,14 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Canonically encodes nonsecret metadata that must be tamper-evident even though
-     * recovery needs to read it before decrypting the payload.
+     * Bundles together the plain-text information that we want to protect from tampering.
      *
-     * @param roomId       owning room
-     * @param sequence     record sequence
-     * @param transactionId transaction identity
-     * @param type         record type
-     * @param keyId        key selector
-     * @return canonical AES-GCM associated data
+     * @param roomId       the room ID
+     * @param sequence     the number in the sequence
+     * @param transactionId the ID linking a prepare and commit
+     * @param type         whether this is a prepare or a commit
+     * @param keyId        the ID of the encryption key used
+     * @return the bundled data
      */
     private byte[] associatedData(String roomId, long sequence, UUID transactionId, RecordType type, String keyId) {
         byte[] room = roomId.getBytes(StandardCharsets.UTF_8);
@@ -541,13 +525,13 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Writes compaction output to a new file before replacement so the original WAL
-     * remains recoverable until the replacement is complete.
+     * Writes a brand new save file to a temporary location. We do this before swapping it
+     * in, so we don't accidentally delete the old one before the new one is completely ready.
      *
-     * @param path    temporary replacement path
-     * @param roomId owning room
-     * @param payload latest committed image
-     * @throws IOException if the temporary file cannot be written and forced
+     * @param path    where to put the temporary file
+     * @param roomId  the room this save belongs to
+     * @param payload the latest game data
+     * @throws IOException if we can't write the file
      */
     private void writeFreshWal(Path path, String roomId, byte[] payload) throws IOException {
         UUID transactionId = UUID.randomUUID();
@@ -565,13 +549,12 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Requires true atomic replacement because a copy-and-delete fallback creates a
-     * power-loss window with neither a trustworthy old nor new WAL.
+     * Safely swaps out the old save file for a new one in one single move.
      *
-     * @param source fully forced replacement file
-     * @param target active WAL path
-     * @throws IOException if the filesystem cannot replace the WAL
-     * @throws PersistenceException if atomic moves are unsupported
+     * @param source the new file
+     * @param target the old file to replace
+     * @throws IOException if we can't move the file
+     * @throws PersistenceException if the computer doesn't support swapping files safely
      */
     private static void replaceAtomically(Path source, Path target) throws IOException {
         try {
@@ -582,20 +565,15 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Forces directory metadata after create, replace, and delete operations. Windows
-     * does not expose directory handles through {@link FileChannel}, so local Windows
-     * development retains atomic filesystem semantics while the production Linux
-     * deployment receives the stronger power-loss guarantee.
+     * Makes sure changes to the folder itself (like adding or removing files) are saved to the disk immediately.
      *
-     * @throws IOException if directory metadata cannot be forced on a supported platform
+     * @throws IOException if we can't update the folder on the disk
      */
     private void forceDirectory() throws IOException {
         try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
             channel.force(true);
         } catch (java.nio.file.AccessDeniedException e) {
-            // Windows does not expose directory handles through FileChannel. The
-            // production Linux filesystem is fsynced; Windows still retains the
-            // atomic replace guarantee used by local development and tests.
+            // Windows doesn't let us sync directories the same way Linux does. That's fine for local testing.
             if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")) {
                 throw e;
             }
@@ -603,13 +581,12 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Uses bounded length-prefixed UTF-8 so corrupt metadata cannot force unbounded
-     * allocation during recovery.
+     * Writes text to the file, making sure it isn't too long.
      *
-     * @param output frame output
-     * @param value  metadata value
-     * @throws IOException if the frame cannot be written
-     * @throws PersistenceException if the value exceeds the format limit
+     * @param output where to write the text
+     * @param value  the text to write
+     * @throws IOException if we can't write to the file
+     * @throws PersistenceException if the text is too long
      */
     private static void writeUtf8(DataOutputStream output, String value) throws IOException {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
@@ -621,12 +598,11 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Rejects lengths larger than the remaining frame instead of allowing buffer
-     * exceptions to obscure structural corruption.
+     * Reads text from the file safely, making sure it doesn't try to read past the end.
      *
-     * @param input authenticated frame metadata buffer
-     * @return decoded UTF-8 value
-     * @throws PersistenceException if the declared value is truncated
+     * @param input the data to read from
+     * @return the text
+     * @throws PersistenceException if the text is cut off
      */
     private static String readUtf8(ByteBuffer input) {
         int length = Short.toUnsignedInt(input.getShort());
@@ -639,22 +615,21 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Keeps all room WALs under the configured directory after room IDs have passed
-     * the path-safe validation boundary.
+     * Figures out the exact file path for a room's save file.
      *
-     * @param roomId validated room ID
-     * @return room WAL path
+     * @param roomId the room's ID
+     * @return the full file path
      */
     private Path walPath(String roomId) {
         return directory.resolve(roomId + ".wal");
     }
 
     /**
-     * Restricts room IDs to a filename-safe alphabet so an authenticated user value
-     * cannot escape the configured persistence directory.
+     * Makes sure the room ID doesn't contain any weird characters that might trick the computer
+     * into saving the file somewhere else.
      *
-     * @param roomId room ID used in a WAL filename
-     * @throws PersistenceException if the ID is null or path-unsafe
+     * @param roomId the room's ID
+     * @throws PersistenceException if the ID has bad characters
      */
     private static void validateRoomId(String roomId) {
         if (roomId == null || !roomId.matches("[A-Za-z0-9._-]+")) {
@@ -663,10 +638,10 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Rejects every later mutation after integrity becomes uncertain. A restart and
-     * full recovery is required to re-establish the memory-to-disk guarantee.
+     * Checks if the storage system is healthy. If there's an error, it refuses to do any more saving
+     * until the server is restarted.
      *
-     * @throws PersistenceException if an earlier storage operation failed
+     * @throws PersistenceException if the storage broke earlier
      */
     private void requireHealthy() {
         if (!healthy.get()) {
@@ -675,10 +650,9 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Latches the first-class unhealthy state while retaining only an operator-safe
-     * diagnostic rather than sensitive payload or key data.
+     * Remembers that the storage system broke, so we stop trying to save games until we restart.
      *
-     * @param failure storage failure that invalidated continued operation
+     * @param failure what went wrong
      */
     private void markUnhealthy(RuntimeException failure) {
         healthy.set(false);
@@ -686,29 +660,27 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Distinguishes intent from acknowledgement so recovery applies only state images
-     * whose commit immediately follows the matching prepare.
+     * The two types of data pieces we save to the file. We always save a PREPARE first, and then a COMMIT.
      */
     private enum RecordType {
         PREPARE((byte) 1), COMMIT((byte) 2);
         private final byte code;
 
         /**
-         * Associates the stable on-disk byte with the logical record role.
+         * Gives the piece a number to save in the file.
          *
-         * @param code persisted format code
+         * @param code the number for the file
          */
         RecordType(byte code) {
             this.code = code;
         }
 
         /**
-         * Rejects unknown codes so newer or corrupt formats cannot be interpreted as
-         * a different durability operation.
+         * Reads the number from the file and turns it back into the type of piece.
          *
-         * @param code persisted record code
-         * @return matching record type
-         * @throws PersistenceException if the code is unknown
+         * @param code the number from the file
+         * @return the matching piece type
+         * @throws PersistenceException if the number is unknown
          */
         private static RecordType from(byte code) {
             for (RecordType value : values()) {
@@ -719,22 +691,21 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Carries one authenticated record through transaction-pair validation.
+     * A temporary box to hold one piece of data that we read from the file.
      *
-     * @param sequence      contiguous WAL sequence
-     * @param transactionId prepare/commit identity
-     * @param type          record role
-     * @param payload       decrypted payload
+     * @param sequence      the number in the sequence
+     * @param transactionId an ID linking a prepare and commit
+     * @param type          whether this is a prepare or a commit
+     * @param payload       the unencrypted game data
      */
     private record WalRecord(long sequence, UUID transactionId, RecordType type, byte[] payload) {
     }
 
     /**
-     * Returns both recovered state and sequence continuity so the next append cannot
-     * reuse an on-disk sequence after restart.
+     * The final result after reading through the whole save file.
      *
-     * @param latestPayload latest committed image, or {@code null}
-     * @param nextSequence  next contiguous sequence
+     * @param latestPayload the final valid game data, or null
+     * @param nextSequence  the next number to use when saving new data
      */
     private record Recovery(byte[] latestPayload, long nextSequence) {
     }

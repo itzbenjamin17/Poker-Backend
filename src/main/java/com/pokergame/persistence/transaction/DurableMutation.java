@@ -6,8 +6,8 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a method that changes a room's state. It ensures that any changes made by the method 
- * are safely saved to disk before they become visible to the rest of the application.
+ * Marks a method that changes a poker game's progress. It ensures that any updates made 
+ * are safely saved to disk before they become visible to players.
  * <p>
  * The room ID must be explicitly provided in the annotation. If we tried to automatically 
  * extract the room ID by inspecting the room's data, it could lead to bugs and race conditions 

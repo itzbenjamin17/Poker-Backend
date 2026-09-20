@@ -1,28 +1,28 @@
 package com.pokergame.persistence.config;
 
 /**
- * Signals that the application cannot guarantee durable poker state.
+ * An error thrown when something goes wrong with saving or loading poker games.
  * <p>
- * A dedicated unchecked type lets the persistence boundary fail commands closed
- * without leaking serializer, cryptography, or filesystem-specific exceptions into
- * service contracts.
+ * Think of this as the "Check Engine" light for the autosave system. It tells the 
+ * rest of the application that game data couldn't be safely saved or read, 
+ * without exposing the messy details of exactly how the storage or encryption failed.
  * </p>
  */
 public class PersistenceException extends RuntimeException {
     /**
-     * Creates a persistence failure with an operator-safe explanation.
+     * Creates a new error with a simple message describing what went wrong.
      *
-     * @param message failure description that must not contain decrypted state or key material
+     * @param message a simple explanation of the error
      */
     public PersistenceException(String message) {
         super(message);
     }
 
     /**
-     * Wraps the technical cause while preserving a storage-domain failure contract.
+     * Creates a new error that wraps the original, low-level technical problem.
      *
-     * @param message operator-safe failure description
-     * @param cause   underlying serialization, cryptography, or filesystem failure
+     * @param message a simple explanation of the error
+     * @param cause   the actual technical error that happened behind the scenes
      */
     public PersistenceException(String message, Throwable cause) {
         super(message, cause);

@@ -27,11 +27,10 @@ public final class AggregateSnapshotMapper {
     private final HandEvaluatorService handEvaluator;
 
     /**
-     * Creates the mapper with the same JSON and hand-evaluation collaborators used
-     * by the running application.
+     * Creates the mapper with the JSON and hand-evaluation services used by the application.
      *
-     * @param objectMapper  mapper configured for the application's record types
-     * @param handEvaluator runtime collaborator that restored games must use
+     * @param objectMapper  mapper configured for the application's records
+     * @param handEvaluator hand evaluator that restored games will use
      */
     public AggregateSnapshotMapper(ObjectMapper objectMapper, HandEvaluatorService handEvaluator) {
         this.objectMapper = objectMapper;
@@ -39,32 +38,34 @@ public final class AggregateSnapshotMapper {
     }
 
     /**
-     * Captures one authoritative room/game aggregate as a detached state image.
-     * A room without a game is valid because lobby mutations must be recoverable too.
+     * Takes a room and its game and turns it into a snapshot that can be saved.
+     * A room without a game is also supported, so we can save a room even if it's just a lobby.
      *
-     * @param room        authoritative room state
-     * @param currentHost current host after any lobby host transfer
-     * @param game        active game, or {@code null} while the room is a lobby
-     * @return encoded schema-versioned state image
-     * @throws PersistenceException if the image cannot be encoded
+     * @param room        the room being saved
+     * @param currentHost the current host, which could be different from the original creator
+     * @param game        the active game, or {@code null} if the room is still a lobby
+     * @return the bytes of the saved snapshot
+     * @throws PersistenceException if the snapshot cannot be created
      */
     public byte[] serialize(Room room, String currentHost, Game game) {
+        // Create a snapshot of the room's current state
         AggregateStateImage.RoomState roomState = new AggregateStateImage.RoomState(
                 room.getRoomId(), room.getRoomName(), room.getHostName(), room.getMaxPlayers(), room.getSmallBlind(),
                 room.getBigBlind(), room.getBuyIn(), room.getPasswordForPersistence(), room.getCreatedAt(),
                 room.getPlayersWithJoinTimeSnapshot(), room.isGameStarted());
+        // If there is an active game, capture its state as well
         AggregateStateImage.GameState gameState = game == null ? null : toState(game);
         return write(new AggregateStateImage(AggregateStateImage.CURRENT_SCHEMA_VERSION, false, roomState,
                 currentHost, gameState));
     }
 
     /**
-     * Creates a durable tombstone before physical WAL deletion so a crash cannot
-     * resurrect a room whose in-memory lifecycle already finished.
+     * Creates a special "deleted" snapshot so that if the app crashes while deleting a room,
+     * the room isn't accidentally restored on restart.
      *
-     * @param roomId identity of the deleted aggregate
-     * @return encoded deletion state image
-     * @throws PersistenceException if the tombstone cannot be encoded
+     * @param roomId the ID of the room being deleted
+     * @return the bytes of the deleted snapshot
+     * @throws PersistenceException if the deletion snapshot cannot be created
      */
     public byte[] serializeDeletion(String roomId) {
         AggregateStateImage.RoomState tombstone = new AggregateStateImage.RoomState(
@@ -74,24 +75,27 @@ public final class AggregateSnapshotMapper {
     }
 
     /**
-     * Rehydrates a state image only after validating its schema version. Explicit
-     * reconstruction preserves domain invariants without replaying nondeterministic
-     * commands such as shuffles and timestamp generation.
+     * Reads a snapshot from bytes and turns it back into a usable Room and Game.
+     * It checks the schema version first, then carefully reconstructs the objects 
+     * to keep the exact same state without accidentally triggering side effects like card shuffling.
      *
-     * @param bytes decrypted state-image bytes
-     * @return reconstructed aggregate or deletion marker
-     * @throws PersistenceException if the image is malformed or unsupported
+     * @param bytes the saved snapshot bytes
+     * @return the reconstructed Room and Game (or a marker saying it was deleted)
+     * @throws PersistenceException if the snapshot is corrupted or from an older unsupported version
      */
     public RecoveredAggregate deserialize(byte[] bytes) {
         try {
             AggregateStateImage image = objectMapper.readValue(bytes, AggregateStateImage.class);
+            // Verify that we can actually read this snapshot version
             if (image.schemaVersion() != AggregateStateImage.CURRENT_SCHEMA_VERSION) {
                 throw new PersistenceException("Unsupported aggregate snapshot schema: " + image.schemaVersion());
             }
+            // If this snapshot marks a deleted room, just return a deleted result
             if (image.deleted()) {
                 return new RecoveredAggregate(null, null, null, true);
             }
             AggregateStateImage.RoomState state = image.room();
+            // Rebuild the room exactly as it was
             Room room = Room.restoreBuilder()
                     .roomId(state.roomId())
                     .roomName(state.roomName())
@@ -105,6 +109,7 @@ public final class AggregateSnapshotMapper {
                     .playersWithJoinTime(state.playersWithJoinTime())
                     .gameStarted(state.gameStarted())
                     .build();
+            // If there was an active game, rebuild it too
             Game game = image.game() == null ? null : restoreGame(image.game());
             return new RecoveredAggregate(room, image.currentHost(), game, false);
         } catch (JacksonException | IllegalArgumentException e) {
@@ -113,12 +118,11 @@ public final class AggregateSnapshotMapper {
     }
 
     /**
-     * Centralizes JSON failures so callers see storage-domain failures rather than
-     * serializer-specific exceptions.
+     * Wraps the standard JSON writing so that errors are easy to catch and log.
      *
-     * @param image detached state image to encode
-     * @return encoded image bytes
-     * @throws PersistenceException if serialization fails
+     * @param image the snapshot data to convert to bytes
+     * @return the saved bytes
+     * @throws PersistenceException if the conversion fails
      */
     private byte[] write(AggregateStateImage image) {
         try {
@@ -129,11 +133,11 @@ public final class AggregateSnapshotMapper {
     }
 
     /**
-     * Selects only authoritative game fields needed for exact continuation; runtime
-     * scheduling objects and service references are rebuilt separately.
+     * Copies only the important game data we need to pause and resume the exact same hand.
+     * Background tasks and runtime services are ignored here and reattached later.
      *
-     * @param game live game to capture
-     * @return detached persisted game state
+     * @param game the running game
+     * @return a simple snapshot of the game
      */
     private AggregateStateImage.GameState toState(Game game) {
         return new AggregateStateImage.GameState(
@@ -149,11 +153,11 @@ public final class AggregateSnapshotMapper {
     }
 
     /**
-     * Captures private player state because chip accounting, hole cards, and
-     * reconnect status must remain exact across a restart.
+     * Captures player data like chip counts, their cards, and if they disconnected,
+     * so that everything is exactly the same when they come back.
      *
-     * @param player player to capture
-     * @return detached persisted player state
+     * @param player the player to save
+     * @return a simple snapshot of the player
      */
     private AggregateStateImage.PlayerState toState(Player player) {
         return new AggregateStateImage.PlayerState(
@@ -164,13 +168,14 @@ public final class AggregateSnapshotMapper {
     }
 
     /**
-     * Reconstructs a game from state rather than invoking normal game creation,
-     * which would reshuffle cards, repost blinds, and change turn order.
+     * Restores a Game from a snapshot. We do this carefully instead of using normal game creation,
+     * so we don't accidentally reshuffle cards, take new blinds, or mess up whose turn it is.
      *
-     * @param state persisted game state
-     * @return rehydrated game ready for runtime collaborators to be attached
+     * @param state the saved game snapshot
+     * @return a recreated game, ready to continue playing
      */
     private Game restoreGame(AggregateStateImage.GameState state) {
+        // Rebuild all the players first
         List<Player> players = state.players().stream().map(player -> Player.restoreBuilder()
                 .name(player.name())
                 .playerId(player.playerId())
@@ -186,6 +191,7 @@ public final class AggregateSnapshotMapper {
                 .disconnectDeadlineEpochMs(player.disconnectDeadlineEpochMs())
                 .readyForNextHand(player.readyForNextHand())
                 .build()).toList();
+        // Put the game back together with the exact same deck, pot, and turn order
         return Game.restoreBuilder()
                 .gameId(state.gameId())
                 .players(players)
@@ -208,27 +214,27 @@ public final class AggregateSnapshotMapper {
                 .everyoneHasHadInitialTurn(state.everyoneHasHadInitialTurn())
                 .actedPlayersInRound(state.actedPlayerIds())
                 .scheduledTaskDeadlines(state.scheduledTaskDeadlines())
-                .handEvaluator(handEvaluator)
+                .handEvaluator(handEvaluator) // Reattach the service needed for evaluating hands
                 .build();
     }
 
     /**
-     * Converts cards to storage records so the persistence schema is independent of
-     * mutable domain implementation details.
+     * Converts a list of cards into a simple format that's safe to save,
+     * keeping it completely separate from how the game actually manages cards in memory.
      *
-     * @param cards domain cards
-     * @return detached card-state list
+     * @param cards the cards from the game
+     * @return a safe-to-save list of card records
      */
     private static List<AggregateStateImage.CardState> cards(List<Card> cards) {
         return cards.stream().map(card -> new AggregateStateImage.CardState(card.rank(), card.suit())).toList();
     }
 
     /**
-     * Reconstructs domain cards without drawing from a deck, preserving the exact
-     * card order recorded before the crash.
+     * Puts the cards back exactly in the order they were saved,
+     * skipping any random shuffling so the deck stays identical.
      *
-     * @param cards persisted card records
-     * @return reconstructed domain cards
+     * @param cards the saved card records
+     * @return the restored game cards
      */
     private static List<Card> cardsFromState(List<AggregateStateImage.CardState> cards) {
         return cards.stream().map(card -> new Card(card.rank(), card.suit())).toList();

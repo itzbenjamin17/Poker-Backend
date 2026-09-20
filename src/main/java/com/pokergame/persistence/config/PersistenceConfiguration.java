@@ -30,10 +30,13 @@ import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.PersistenceRecovery;
 
 /**
- * Activates encrypted recovery as one coherent Spring subsystem.
+ * Sets up the save/restore system for the poker game.
  * <p>
- * Every bean is conditional on the same property so the legacy in-memory profile
- * cannot accidentally receive only part of the durability boundary.
+ * Think of this class as the "master switchboard" for autosaving. When enabled,
+ * it wires up all the necessary parts—like encryption keys, data storage, and 
+ * recovery tools—so that active poker games can be safely saved to disk and
+ * restored if the server crashes. All parts turn on or off together based on
+ * a single setting.
  * </p>
  */
 @Configuration
@@ -41,12 +44,12 @@ import com.pokergame.persistence.PersistenceRecovery;
 @EnableConfigurationProperties(PersistenceProperties.class)
 public class PersistenceConfiguration {
     /**
-     * Decodes all configured keys during startup so malformed or incomplete key
-     * rotation fails before the application accepts poker traffic.
+     * Loads and checks the encryption keys when the server starts.
+     * We want to find out immediately if a key is broken, before any poker games begin.
      *
-     * @param properties persistence key configuration
-     * @return validated current-and-historical keyring
-     * @throws PersistenceException if any key is malformed or unusable
+     * @param properties configuration for the encryption keys
+     * @return the set of keys ready to encrypt and decrypt data
+     * @throws PersistenceException if any key cannot be read
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
@@ -54,8 +57,10 @@ public class PersistenceConfiguration {
         Map<String, SecretKey> keys = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : properties.getKeys().entrySet()) {
             try {
+                // Decode each base64 key into a usable AES secret key
                 keys.put(entry.getKey(), new SecretKeySpec(Base64.getDecoder().decode(entry.getValue()), "AES"));
             } catch (IllegalArgumentException e) {
+                // Fail loud and early so the app doesn't start with bad keys
                 throw new PersistenceException("Persistence key " + entry.getKey() + " is not valid Base64", e);
             }
         }
@@ -63,12 +68,11 @@ public class PersistenceConfiguration {
     }
 
     /**
-     * Creates the single store instance whose health state gates every subsequent
-     * room mutation.
+     * Creates the main storage vault where all saved poker games will be kept securely.
      *
-     * @param properties persistence directory configuration
-     * @param keyring    validated encryption keyring
-     * @return encrypted per-room WAL store
+     * @param properties settings like where to save the files on disk
+     * @param keyring    the keys used to lock and unlock the saved data
+     * @return the secure storage system
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
@@ -77,15 +81,15 @@ public class PersistenceConfiguration {
     }
 
     /**
-     * Installs durability at service mutation seams rather than inside domain
-     * objects, keeping models independent of storage and Spring proxies.
+     * Sets up the "Autosave trigger" that automatically saves the game whenever players take actions.
+     * It works silently in the background, so the core poker logic doesn't even know it's being saved.
      *
-     * @param store                encrypted WAL store
-     * @param snapshotMapper       explicit aggregate mapper
-     * @param roomService          lazy room service provider
-     * @param gameLifecycleService lazy game service provider
-     * @param properties           compaction policy
-     * @return mutation advice
+     * @param store                the secure vault where data is written
+     * @param snapshotMapper       the tool used to convert active game data into a saveable format
+     * @param roomService          helps look up game rooms
+     * @param gameLifecycleService helps manage the state of active games
+     * @param properties           settings for when to clean up old save files
+     * @return the background autosaving mechanism
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
@@ -97,17 +101,16 @@ public class PersistenceConfiguration {
     }
 
     /**
-     * Coordinates startup recovery before readiness is exposed and rebuilds runtime
-     * timers that are intentionally absent from state images.
+     * Manages the process of reloading saved games back into memory when the server starts up.
      *
-     * @param store                   encrypted WAL store
-     * @param mapper                  aggregate compatibility mapper
-     * @param roomService             room registry
-     * @param gameLifecycleService    game registry and scheduler owner
-     * @param webSocketEventListener  reconnect cleanup scheduler
-     * @param applicationContext      readiness event source
-     * @param disconnectGracePeriodMs fresh grace granted after restart
-     * @return startup recovery runner
+     * @param store                   the secure vault holding the saved games
+     * @param mapper                  the tool to convert saved data back into live games
+     * @param roomService             where reloaded rooms will be registered
+     * @param gameLifecycleService    where reloaded games will be registered
+     * @param webSocketEventListener  handles player connections after a reload
+     * @param applicationContext      tells the system when the server is fully ready
+     * @param disconnectGracePeriodMs extra time given to players to reconnect after a server restart
+     * @return the process that recovers games
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
@@ -122,17 +125,18 @@ public class PersistenceConfiguration {
     }
 
     /**
-     * Exposes one fail-closed health signal for both storage integrity and recovery
-     * completion so orchestration never routes traffic to partially restored state.
+     * Reports on the health of the save system. If something is wrong, or if games
+     * are still loading, it tells the load balancer not to send players here.
      *
-     * @param store    encrypted WAL store
-     * @param recovery startup recovery coordinator
-     * @return persistence health contributor
+     * @param store    the secure vault
+     * @param recovery the process recovering games on startup
+     * @return a health check indicating if it's safe to play
      */
     @Bean("pokerPersistenceHealth")
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
     HealthIndicator pokerPersistenceHealth(EncryptedWalStore store, PersistenceRecovery recovery) {
         return () -> {
+            // Only report "up" if storage is working fine and all games have finished reloading
             Health.Builder builder = store.isHealthy() && recovery.isComplete() ? Health.up() : Health.down();
             return builder.withDetail("recoveryComplete", recovery.isComplete())
                     .withDetail("activeWalCount", store.walCount())
@@ -142,34 +146,35 @@ public class PersistenceConfiguration {
     }
 
     /**
-     * Rejects application traffic until recovery finishes because the embedded web
-     * server may start before {@link org.springframework.boot.ApplicationRunner}
-     * execution completes. Health remains reachable for startup diagnostics.
+     * Acts like a bouncer at the door, blocking regular internet traffic until all
+     * games are fully reloaded. Health checks are allowed through.
      *
-     * @param recovery startup recovery coordinator
-     * @return highest-precedence servlet filter registration
+     * @param recovery the process recovering games on startup
+     * @return a filter that controls early web traffic
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
     FilterRegistrationBean<OncePerRequestFilter> persistenceRecoveryTrafficGate(PersistenceRecovery recovery) {
         OncePerRequestFilter filter = new OncePerRequestFilter() {
             /**
-             * Keeps health probes available while preventing clients from observing
-             * a partially populated room registry.
+             * Blocks players from accessing the game if old games are still being restored.
+             * Health checks pass through so we know the server is alive.
              *
-             * @param request     current HTTP request
-             * @param response    current HTTP response
-             * @param filterChain remaining servlet filter chain
-             * @throws ServletException if downstream filtering fails
-             * @throws IOException      if the response cannot be written
+             * @param request     the incoming request
+             * @param response    what we send back to the user
+             * @param filterChain the rest of the web filters
+             * @throws ServletException if a web error occurs
+             * @throws IOException      if we can't write the response
              */
             @Override
             protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                     FilterChain filterChain) throws ServletException, IOException {
+                // If recovery is still running, block everything except health checks
                 if (!recovery.isComplete() && !request.getRequestURI().startsWith("/actuator/health")) {
                     response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Recovery is not complete");
                     return;
                 }
+                // Allow the request to proceed normally
                 filterChain.doFilter(request, response);
             }
         };

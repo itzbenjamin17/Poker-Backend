@@ -28,12 +28,10 @@ import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.config.PersistenceException;
 
 /**
- * Enforces the durability boundary around {@link DurableMutation} service seams.
+ * Automatically saves the poker game to disk after certain methods finish running.
  * <p>
- * One outer transaction owns a room lock and WAL pair while nested same-room
- * service calls join it. This keeps business services composable without allowing
- * partial snapshots or cross-room transactions that the per-room WAL cannot make
- * atomic.
+ * If one saved method calls another, it groups them into a single save operation at
+ * the end. It also makes sure we only modify one room at a time, preventing corrupted saves.
  * </p>
  */
 @Aspect
@@ -50,14 +48,13 @@ public final class DurableMutationAspect {
     private final DefaultParameterNameDiscoverer parameterNames = new DefaultParameterNameDiscoverer();
 
     /**
-     * Creates the advice with lazy service providers to avoid a circular dependency
-     * between proxied mutation services and the snapshot capture boundary.
+     * Creates this aspect using lazy services to avoid circular dependency issues when setting up the app.
      *
-     * @param store                encrypted WAL store
-     * @param snapshotMapper       aggregate compatibility mapper
-     * @param roomService          lazy room service provider
-     * @param gameLifecycleService lazy game service provider
-     * @param properties           compaction policy
+     * @param store                storage for saving game data
+     * @param snapshotMapper       helper to convert the game into a format we can save
+     * @param roomService          lazy provider for the room service
+     * @param gameLifecycleService lazy provider for the game service
+     * @param properties           settings for when to clean up old save files
      */
     public DurableMutationAspect(EncryptedWalStore store, AggregateSnapshotMapper snapshotMapper,
             ObjectProvider<RoomService> roomService, ObjectProvider<GameLifecycleService> gameLifecycleService,
@@ -70,22 +67,22 @@ public final class DurableMutationAspect {
     }
 
     /**
-     * Flushes prepare state before mutation, commits the resulting state image, and
-     * releases client-visible callbacks only after that commit succeeds.
+     * Runs the method, saves the final game result, and only lets players see the changes
+     * if the save was completely successful.
      * <p>
-     * Post-commit compaction and deletion failures degrade health rather than
-     * retroactively failing an already durable and possibly visible command.
+     * If cleaning up old save files fails later, we just log it instead of undoing the successful save.
      * </p>
      *
-     * @param joinPoint intercepted mutation invocation
-     * @param mutation durable-mutation metadata
-     * @return intercepted method result
-     * @throws Throwable if preparation, mutation, snapshot capture, or commit fails
+     * @param joinPoint the intercepted method
+     * @param mutation details about the method
+     * @return the result of the method
+     * @throws Throwable if preparing, running, or saving fails
      */
     @Around("@annotation(mutation)")
     public Object persist(ProceedingJoinPoint joinPoint, DurableMutation mutation) throws Throwable {
         String roomId = resolveRoomId(joinPoint, mutation.roomId());
         String activeRoom = DurableTransactionContext.currentRoomId();
+        // Prevent operations from bleeding across different poker rooms
         if (activeRoom != null) {
             if (!activeRoom.equals(roomId)) {
                 throw new PersistenceException("Nested durable mutations cannot cross room boundaries");
@@ -102,6 +99,7 @@ public final class DurableMutationAspect {
             try {
                 result = joinPoint.proceed();
             } catch (Throwable failure) {
+                // Discard pending post-save actions since the method failed
                 DurableTransactionContext.discard();
                 throw failure;
             }
@@ -126,15 +124,15 @@ public final class DurableMutationAspect {
                     recordsSinceCompaction.get(roomId).set(0);
                 }
             } catch (PersistenceException maintenanceFailure) {
-                // The COMMIT is already durable and client callbacks have run. Keep
-                // this mutation successful while the store's unhealthy state rejects
-                // every subsequent mutation until an operator intervenes.
+                // The save was successful and players may have been notified.
+                // Log the file cleanup error, but let the game continue.
                 logger.error("Post-commit WAL maintenance failed for room {}", roomId, maintenanceFailure);
             }
             return result;
         } catch (Throwable failure) {
             DurableTransactionContext.discard();
             try {
+                // Remove the room save files entirely if it was completely empty
                 if (store.recoverLatest(roomId).isEmpty()) {
                     store.delete(roomId);
                 }
@@ -148,11 +146,11 @@ public final class DurableMutationAspect {
     }
 
     /**
-     * Applies both record-count and byte-size thresholds because many small updates
-     * and a few unusually large snapshots create different operational pressure.
+     * Checks if we need to clean up old save files to save disk space and improve load times.
+     * We look at both the number of updates and the total file size.
      *
-     * @param roomId room whose WAL was just extended
-     * @return whether the WAL should be replaced with its latest committed image
+     * @param roomId the ID of the room
+     * @return true if we should compact the save files
      */
     private boolean shouldCompact(String roomId) {
         int records = recordsSinceCompaction.computeIfAbsent(roomId, ignored -> new AtomicInteger())
@@ -162,13 +160,13 @@ public final class DurableMutationAspect {
     }
 
     /**
-     * Resolves room identity from the service contract so transaction ownership is
-     * stable before any mutable aggregate is inspected.
+     * Extracts the room ID directly from the method arguments using the provided expression.
+     * We do this early so we can lock the room before looking at any game data.
      *
-     * @param joinPoint intercepted invocation and arguments
-     * @param expression configured room-ID expression
-     * @return resolved nonblank room ID
-     * @throws PersistenceException if the expression does not resolve a room ID
+     * @param joinPoint the intercepted method
+     * @param expression the rule for finding the room ID
+     * @return the resolved room ID
+     * @throws PersistenceException if a valid room ID cannot be found
      */
     private String resolveRoomId(ProceedingJoinPoint joinPoint, String expression) {
         Method method = ((MethodSignature) joinPoint.getSignature()).getMethod();

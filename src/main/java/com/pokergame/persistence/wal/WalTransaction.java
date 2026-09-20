@@ -3,13 +3,14 @@ package com.pokergame.persistence.wal;
 import java.util.UUID;
 
 /**
- * Identifies the prepare record that a commit must immediately follow. Carrying the
- * sequence and transaction ID prevents a stale or interleaved mutation from being
- * paired with the wrong state image.
+ * Links a "commit" action to the "prepare" action that came just before it. 
+ * By keeping track of these IDs and sequences, we make sure we don't accidentally
+ * mix up older changes or changes from different save operations, ensuring
+ * the poker game state is always saved perfectly in order.
  *
- * @param roomId         room owning the WAL transaction
- * @param transactionId identity shared by prepare and commit records
- * @param prepareSequence sequence assigned to the prepare record
+ * @param roomId         the poker room being saved
+ * @param transactionId  the unique ID that connects a prepare and its commit
+ * @param prepareSequence the order number given to the prepare action
  */
 public record WalTransaction(String roomId, UUID transactionId, long prepareSequence) {
 }
