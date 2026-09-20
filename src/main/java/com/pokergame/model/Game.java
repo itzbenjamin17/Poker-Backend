@@ -387,6 +387,40 @@ public class Game {
     }
 
     /**
+     * Normalizes the blind positions to be within the bounds of the active players
+     * list.
+     */
+    private void normalizeBlindPositions() {
+        if (activePlayers.isEmpty()) {
+            smallBlindPosition = 0;
+            bigBlindPosition = 0;
+            return;
+        }
+        // floorMod handles negative indices correctly but this isn't necessary for my
+        // code as I never subtract from the blind positions
+        int tableSize = activePlayers.size();
+        smallBlindPosition = Math.floorMod(smallBlindPosition, tableSize);
+        bigBlindPosition = Math.floorMod(bigBlindPosition, tableSize);
+    }
+
+    /**
+     * Forces a player to post a blind amount, pushing them all-in if they don't have enough chips.
+     * Updates the game pot and tracks the player's contribution.
+     *
+     * @param player      the player posting the blind
+     * @param blindAmount the target blind amount
+     */
+    private void postBlind(Player player, int blindAmount) {
+        int betBefore = player.getCurrentBet();
+        if (player.getChips() <= blindAmount) {
+            this.pot = player.doAction(PlayerAction.ALL_IN, 0, this.pot);
+        } else {
+            this.pot = player.doAction(PlayerAction.BET, blindAmount, this.pot);
+        }
+        trackContribution(player, player.getCurrentBet() - betBefore);
+    }
+
+    /**
      * Processes a player's betting decision, updates the game state, and handles turn progression.
      *
      * @param player   the player making the decision
@@ -559,18 +593,6 @@ public class Game {
     }
 
     /**
-     * Advances the game to the next logical phase by dealing the appropriate community cards.
-     */
-    public void advancePhase() {
-        switch (currentPhase) {
-            case PRE_FLOP -> dealFlop();
-            case FLOP -> dealTurn();
-            case TURN -> dealRiver();
-            case RIVER -> {}
-        }
-    }
-
-    /**
      * Calculates the actual chip amount required for a player's action.
      *
      * @param player   the player making the action
@@ -583,6 +605,41 @@ public class Game {
             case BET, RAISE -> decision.amount();
             default -> 0;
         };
+    }
+
+    /**
+     * Tracks how many chips each player has committed during the current hand.
+     * This contribution map is later used to build main/side pots and detect
+     * uncalled chips.
+     *
+     * @param player the player whose contribution changed
+     * @param amount number of chips newly committed to the pot
+     */
+    private void trackContribution(Player player, int amount) {
+        if (player == null || amount <= 0) {
+            return;
+        }
+
+        handContributions.merge(player.getPlayerId(), amount, Integer::sum);
+
+        logger.debug("Tracked contribution in game {} | player={} | added={} | totalContribution={} | contributions={}",
+                gameId,
+                player.getName(),
+                amount,
+                handContributions.getOrDefault(player.getPlayerId(), 0),
+                handContributions);
+    }
+
+    /**
+     * Advances the game to the next logical phase by dealing the appropriate community cards.
+     */
+    public void advancePhase() {
+        switch (currentPhase) {
+            case PRE_FLOP -> dealFlop();
+            case FLOP -> dealTurn();
+            case TURN -> dealRiver();
+            case RIVER -> {}
+        }
     }
 
     /**
@@ -725,54 +782,107 @@ public class Game {
     }
 
     /**
-     * Clears per-hand contribution ledger and round action bookkeeping
-     * after showdown distribution completes.
+     * Evaluates the poker hands for all given players using community cards
+     * and their hole cards. Updates each player's best hand and hand rank.
+     *
+     * @param players list of players whose hands should be evaluated
      */
-    private void resetHandAccountingAfterShowdown() {
-        handContributions.clear();
-        actedPlayersInRound.clear();
-        logger.debug("Reset hand accounting after showdown for game {} | potRemainder={}", gameId, pot);
+    private void evaluateHands(List<Player> players) {
+        for (Player player : players) {
+            HandEvaluationResult result = handEvaluator.getBestHand(communityCards, player.getHoleCards());
+            player.setBestHand(result.bestHand());
+            player.setHandRank(result.handRank());
+        }
     }
 
     /**
-     * Tracks how many chips each player has committed during the current hand.
-     * This contribution map is later used to build main/side pots and detect
-     * uncalled chips.
+     * Resolves and distributes all side pots at showdown.
      *
-     * @param player the player whose contribution changed
-     * @param amount number of chips newly committed to the pot
+     * @return ordered set of unique players who won at least one allocation
      */
-    private void trackContribution(Player player, int amount) {
-        if (player == null || amount <= 0) {
-            return;
+    private List<Player> distributeSidePotsAtShowdown() {
+        logger.info("Distributing side pots for game {}", gameId);
+
+        // Build contested allocations and identify uncalled refunds.
+        PotComputationResult computation = computePotAllocationsAndUncalled();
+        List<PotAllocation> allocations = computation.allocations();
+        if (logger.isDebugEnabled()) {
+            logger.debug("Side-pot allocations for game {}: {}", gameId, allocationSummary(allocations));
         }
 
-        handContributions.merge(player.getPlayerId(), amount, Integer::sum);
+        int refundedUncalled = 0;
+        // Refund single-owner (uncalled) layers before contested awards.
+        for (Map.Entry<String, Integer> entry : computation.uncalledByPlayer().entrySet()) {
+            Player player = players.stream()
+                    .filter(p -> p.getPlayerId().equals(entry.getKey()))
+                    .findFirst()
+                    .orElse(null);
 
-        logger.debug("Tracked contribution in game {} | player={} | added={} | totalContribution={} | contributions={}",
+            if (player == null || entry.getValue() <= 0) {
+                continue;
+            }
+
+            player.addChips(entry.getValue());
+            refundedUncalled += entry.getValue();
+            logger.info("Refunded uncalled chips for game {} | player={} | amount={}",
+                    gameId,
+                    player.getName(),
+                    entry.getValue());
+        }
+
+        if (allocations.isEmpty()) {
+            logger.warn("No side-pot allocations found. Falling back to standard distribution.");
+            List<Player> winners = determineWinners(activePlayers.stream().filter(p -> !p.getHasFolded()).toList());
+            distributePot(winners);
+            return winners;
+        }
+
+        Set<Player> uniqueWinners = new LinkedHashSet<>();
+        int remainder = 0;
+
+        // Resolve each contested allocation, determine winners, and split chips.
+        for (int i = 0; i < allocations.size(); i++) {
+            PotAllocation allocation = allocations.get(i);
+            List<Player> potWinners = determineWinners(allocation.eligiblePlayers());
+
+            if (potWinners.isEmpty()) {
+                logger.warn("Pot {} has no winners. Keeping {} chips in pot.", i, allocation.amount());
+                remainder += allocation.amount();
+                continue;
+            }
+
+            int share = allocation.amount() / potWinners.size();
+            // Keep modulo chips as table remainder.
+            int potRemainder = allocation.amount() % potWinners.size();
+            remainder += potRemainder;
+
+            logger.info(
+                    "Resolved side pot {} for game {} | amount={} | eligible={} | winners={} | share={} | remainder={}",
+                    i,
+                    gameId,
+                    allocation.amount(),
+                    playerNames(allocation.eligiblePlayers()),
+                    playerNames(potWinners),
+                    share,
+                    potRemainder);
+
+            for (Player winner : potWinners) {
+                winner.addChips(share);
+            }
+
+            uniqueWinners.addAll(potWinners);
+        }
+
+        // Keep integer remainders in the table pot for the next hand.
+        pot = remainder;
+        logger.info(
+                "Side-pot distribution complete for game {} | uniqueWinners={} | refundedUncalled={} | potRemainder={}",
                 gameId,
-                player.getName(),
-                amount,
-                handContributions.getOrDefault(player.getPlayerId(), 0),
-                handContributions);
-    }
+                playerNames(new ArrayList<>(uniqueWinners)),
+                refundedUncalled,
+                pot);
 
-    /**
-     * Represents a single pot layer (main pot or a side pot) and the players
-     * who are eligible to win that layer.
-     */
-    private record PotAllocation(int amount, List<Player> eligiblePlayers) {
-    }
-
-    /**
-     * Result container for pot decomposition:
-     * - allocations: contested pots to award at showdown
-     * - uncalledByPlayer: chips that must be refunded (single-participant layers)
-     * - uncalledTotal: sum of all uncalled chips
-     */
-    private record PotComputationResult(List<PotAllocation> allocations,
-            Map<String, Integer> uncalledByPlayer,
-            int uncalledTotal) {
+        return new ArrayList<>(uniqueWinners);
     }
 
     /**
@@ -915,93 +1025,31 @@ public class Game {
     }
 
     /**
-     * Resolves and distributes all side pots at showdown.
-     *
-     * @return ordered set of unique players who won at least one allocation
+     * Clears per-hand contribution ledger and round action bookkeeping
+     * after showdown distribution completes.
      */
-    private List<Player> distributeSidePotsAtShowdown() {
-        logger.info("Distributing side pots for game {}", gameId);
+    private void resetHandAccountingAfterShowdown() {
+        handContributions.clear();
+        actedPlayersInRound.clear();
+        logger.debug("Reset hand accounting after showdown for game {} | potRemainder={}", gameId, pot);
+    }
 
-        // Build contested allocations and identify uncalled refunds.
-        PotComputationResult computation = computePotAllocationsAndUncalled();
-        List<PotAllocation> allocations = computation.allocations();
-        if (logger.isDebugEnabled()) {
-            logger.debug("Side-pot allocations for game {}: {}", gameId, allocationSummary(allocations));
-        }
+    /**
+     * Represents a single pot layer (main pot or a side pot) and the players
+     * who are eligible to win that layer.
+     */
+    private record PotAllocation(int amount, List<Player> eligiblePlayers) {
+    }
 
-        int refundedUncalled = 0;
-        // Refund single-owner (uncalled) layers before contested awards.
-        for (Map.Entry<String, Integer> entry : computation.uncalledByPlayer().entrySet()) {
-            Player player = players.stream()
-                    .filter(p -> p.getPlayerId().equals(entry.getKey()))
-                    .findFirst()
-                    .orElse(null);
-
-            if (player == null || entry.getValue() <= 0) {
-                continue;
-            }
-
-            player.addChips(entry.getValue());
-            refundedUncalled += entry.getValue();
-            logger.info("Refunded uncalled chips for game {} | player={} | amount={}",
-                    gameId,
-                    player.getName(),
-                    entry.getValue());
-        }
-
-        if (allocations.isEmpty()) {
-            logger.warn("No side-pot allocations found. Falling back to standard distribution.");
-            List<Player> winners = determineWinners(activePlayers.stream().filter(p -> !p.getHasFolded()).toList());
-            distributePot(winners);
-            return winners;
-        }
-
-        Set<Player> uniqueWinners = new LinkedHashSet<>();
-        int remainder = 0;
-
-        // Resolve each contested allocation, determine winners, and split chips.
-        for (int i = 0; i < allocations.size(); i++) {
-            PotAllocation allocation = allocations.get(i);
-            List<Player> potWinners = determineWinners(allocation.eligiblePlayers());
-
-            if (potWinners.isEmpty()) {
-                logger.warn("Pot {} has no winners. Keeping {} chips in pot.", i, allocation.amount());
-                remainder += allocation.amount();
-                continue;
-            }
-
-            int share = allocation.amount() / potWinners.size();
-            // Keep modulo chips as table remainder.
-            int potRemainder = allocation.amount() % potWinners.size();
-            remainder += potRemainder;
-
-            logger.info(
-                    "Resolved side pot {} for game {} | amount={} | eligible={} | winners={} | share={} | remainder={}",
-                    i,
-                    gameId,
-                    allocation.amount(),
-                    playerNames(allocation.eligiblePlayers()),
-                    playerNames(potWinners),
-                    share,
-                    potRemainder);
-
-            for (Player winner : potWinners) {
-                winner.addChips(share);
-            }
-
-            uniqueWinners.addAll(potWinners);
-        }
-
-        // Keep integer remainders in the table pot for the next hand.
-        pot = remainder;
-        logger.info(
-                "Side-pot distribution complete for game {} | uniqueWinners={} | refundedUncalled={} | potRemainder={}",
-                gameId,
-                playerNames(new ArrayList<>(uniqueWinners)),
-                refundedUncalled,
-                pot);
-
-        return new ArrayList<>(uniqueWinners);
+    /**
+     * Result container for pot decomposition:
+     * - allocations: contested pots to award at showdown
+     * - uncalledByPlayer: chips that must be refunded (single-participant layers)
+     * - uncalledTotal: sum of all uncalled chips
+     */
+    private record PotComputationResult(List<PotAllocation> allocations,
+            Map<String, Integer> uncalledByPlayer,
+            int uncalledTotal) {
     }
 
     /**
@@ -1078,20 +1126,6 @@ public class Game {
                     + playerNames(allocation.eligiblePlayers()));
         }
         return summary;
-    }
-
-    /**
-     * Evaluates the poker hands for all given players using community cards
-     * and their hole cards. Updates each player's best hand and hand rank.
-     *
-     * @param players list of players whose hands should be evaluated
-     */
-    private void evaluateHands(List<Player> players) {
-        for (Player player : players) {
-            HandEvaluationResult result = handEvaluator.getBestHand(communityCards, player.getHoleCards());
-            player.setBestHand(result.bestHand());
-            player.setHandRank(result.handRank());
-        }
     }
 
     /**
@@ -1428,6 +1462,20 @@ public class Game {
     }
 
     /**
+     * Normalizes the current player position to be within the bounds of the active
+     * players list.
+     */
+    private void normalizeCurrentPlayerPosition() {
+        if (activePlayers.isEmpty()) {
+            currentPlayerPosition = 0;
+            return;
+        }
+        // floorMod handles negative indices correctly but this isn't necessary for my
+        // code as I never subtract from currentPlayerPosition
+        currentPlayerPosition = Math.floorMod(currentPlayerPosition, activePlayers.size());
+    }
+
+    /**
      * Returns the player whose turn it currently is.
      *
      * @return the current player
@@ -1458,37 +1506,6 @@ public class Game {
         } while ((activePlayers.get(currentPlayerPosition).getHasFolded() ||
                 activePlayers.get(currentPlayerPosition).getIsAllIn()) &&
                 currentPlayerPosition != originalPosition);
-    }
-
-    /**
-     * Normalizes the current player position to be within the bounds of the active
-     * players list.
-     */
-    private void normalizeCurrentPlayerPosition() {
-        if (activePlayers.isEmpty()) {
-            currentPlayerPosition = 0;
-            return;
-        }
-        // floorMod handles negative indices correctly but this isn't necessary for my
-        // code as I never subtract from currentPlayerPosition
-        currentPlayerPosition = Math.floorMod(currentPlayerPosition, activePlayers.size());
-    }
-
-    /**
-     * Normalizes the blind positions to be within the bounds of the active players
-     * list.
-     */
-    private void normalizeBlindPositions() {
-        if (activePlayers.isEmpty()) {
-            smallBlindPosition = 0;
-            bigBlindPosition = 0;
-            return;
-        }
-        // floorMod handles negative indices correctly but this isn't necessary for my
-        // code as I never subtract from the blind positions
-        int tableSize = activePlayers.size();
-        smallBlindPosition = Math.floorMod(smallBlindPosition, tableSize);
-        bigBlindPosition = Math.floorMod(bigBlindPosition, tableSize);
     }
 
     /**
@@ -1727,22 +1744,5 @@ public class Game {
      */
     public Map<ScheduledGameTask, Long> getScheduledTaskDeadlinesSnapshot() {
         return Map.copyOf(scheduledTaskDeadlines);
-    }
-
-    /**
-     * Forces a player to post a blind amount, pushing them all-in if they don't have enough chips.
-     * Updates the game pot and tracks the player's contribution.
-     *
-     * @param player      the player posting the blind
-     * @param blindAmount the target blind amount
-     */
-    private void postBlind(Player player, int blindAmount) {
-        int betBefore = player.getCurrentBet();
-        if (player.getChips() <= blindAmount) {
-            this.pot = player.doAction(PlayerAction.ALL_IN, 0, this.pot);
-        } else {
-            this.pot = player.doAction(PlayerAction.BET, blindAmount, this.pot);
-        }
-        trackContribution(player, player.getCurrentBet() - betBefore);
     }
 }
