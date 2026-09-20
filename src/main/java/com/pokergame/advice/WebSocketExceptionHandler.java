@@ -1,4 +1,10 @@
-package com.pokergame.exception;
+package com.pokergame.advice;
+
+import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.exception.TooManyRequestsException;
+import com.pokergame.exception.UnauthorisedActionException;
+import com.pokergame.exception.PokerException;
 
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.security.PlayerPrincipal;
