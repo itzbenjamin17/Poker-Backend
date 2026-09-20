@@ -67,6 +67,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 // Set in the security context
                 SecurityContextHolder.getContext().setAuthentication(authentication);
                 logger.debug("Authenticated player: {} for room: {}", principal.playerName(), principal.roomId());
+            } else {
+                logger.warn("Rejecting request with invalid or expired JWT");
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.setContentType("application/json");
+                response.getWriter().write("{\"message\": \"Session expired or invalid token\"}");
+                return;
             }
         }
 

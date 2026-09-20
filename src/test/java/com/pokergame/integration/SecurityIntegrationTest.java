@@ -132,7 +132,7 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
          */
         @Test
         @DisplayName("should reject invalid JWTs on secured endpoints")
-        void givenInvalidToken_whenLeaveRoom_thenReturnForbidden() {
+        void givenInvalidToken_whenLeaveRoom_thenReturnUnauthorized() {
             String roomId = roomService.createRoom(new CreateRoomRequest(
                     uniqueName("SecureLeaveRoomInvalid"),
                     "TestHost",
@@ -148,7 +148,7 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
                     .retrieve()
                     .body(String.class));
 
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         }
 
         /**
