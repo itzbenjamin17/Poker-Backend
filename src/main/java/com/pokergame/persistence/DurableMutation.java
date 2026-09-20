@@ -6,22 +6,25 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks an authoritative room mutation that must not become observable before
- * its resulting aggregate state is durably committed.
+ * Marks a method that changes a room's state. It ensures that any changes made by the method 
+ * are safely saved to disk before they become visible to the rest of the application.
  * <p>
- * The room identity is explicit because it is also the serialization and WAL
- * boundary; allowing advice to infer it from mutable state would make locking and
- * recovery ambiguous.
+ * The room ID must be explicitly provided in the annotation. If we tried to automatically 
+ * extract the room ID by inspecting the room's data, it could lead to bugs and race conditions 
+ * when locking the room or recovering it after a crash.
  * </p>
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface DurableMutation {
     /**
-     * Supplies the Spring Expression Language expression that resolves the stable
-     * room identifier from method arguments.
+     * A Spring Expression (SpEL) string that tells the application how to find the room ID 
+     * from the method's parameters. 
+     * <p>
+     * For example, if your method takes a parameter named {@code roomId}, you would use:
+     * {@code @DurableMutation(roomId = "#roomId")}
      *
-     * @return expression resolving to a nonblank room ID
+     * @return a SpEL expression that evaluates to the room ID
      */
     String roomId();
 }
