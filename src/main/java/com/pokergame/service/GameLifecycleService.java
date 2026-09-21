@@ -84,10 +84,14 @@ public class GameLifecycleService {
     }
 
     /**
-     * Retains the Spring proxy because scheduler callbacks run outside the original
-     * call stack and must re-enter through {@link DurableMutation} advice.
+     * We inject a proxy of this exact same service into itself to solve Spring's "self-invocation" problem.
+     * <p>
+     * When background timers (like the turn timer) expire, they need to call methods in this class
+     * and trigger a save. If we used `this.method()`, it would bypass the {@link DurableMutation}
+     * autosave trigger. By using `self.method()`, we ensure the game is properly saved.
+     * </p>
      *
-     * @param self proxied lifecycle service
+     * @param self the Spring proxy of this service
      */
     @Autowired
     void setSelf(@Lazy GameLifecycleService self) {
