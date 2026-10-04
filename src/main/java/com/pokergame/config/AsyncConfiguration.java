@@ -47,6 +47,9 @@ public class AsyncConfiguration {
         // Maximum seconds to wait for tasks during shutdown
         executor.setAwaitTerminationSeconds(120);
 
+        // Propagate the logging context from the submitting thread to async task threads
+        executor.setTaskDecorator(new MdcTaskDecorator());
+
         executor.initialize();
 
         return executor;
@@ -63,6 +66,7 @@ public class AsyncConfiguration {
         // Number of threads for scheduled tasks (e.g. game timers)
         scheduler.setPoolSize(5);
         scheduler.setThreadNamePrefix("TaskScheduler-");
+        scheduler.setTaskDecorator(new MdcTaskDecorator());
         scheduler.initialize();
         return scheduler;
     }

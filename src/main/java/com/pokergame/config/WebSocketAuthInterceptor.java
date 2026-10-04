@@ -2,8 +2,10 @@ package com.pokergame.config;
 
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.util.MdcKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.messaging.MessagingException;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
@@ -48,6 +50,15 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
         if (accessor == null) return message;
 
+        if (accessor.getSessionId() != null) {
+            MDC.put(MdcKeys.SESSION_ID, accessor.getSessionId());
+        }
+
+        if (accessor.getUser() instanceof PlayerPrincipal principal) {
+            MDC.put(MdcKeys.ROOM_ID, principal.roomId());
+            MDC.put(MdcKeys.PLAYER_NAME, principal.playerName());
+        }
+
         StompCommand command = accessor.getCommand();
 
         if (StompCommand.CONNECT.equals(command)) {
@@ -57,6 +68,13 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         }
 
         return message;
+    }
+
+    @Override
+    public void afterSendCompletion(Message<?> message, MessageChannel channel, boolean sent, Exception ex) {
+        MDC.remove(MdcKeys.ROOM_ID);
+        MDC.remove(MdcKeys.PLAYER_NAME);
+        MDC.remove(MdcKeys.SESSION_ID);
     }
 
     /**
@@ -74,6 +92,8 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
             if (jwtService.isTokenValid(token)) {
                 PlayerPrincipal principal = jwtService.extractPrincipal(token);
                 accessor.setUser(principal);
+                MDC.put(MdcKeys.ROOM_ID, principal.roomId());
+                MDC.put(MdcKeys.PLAYER_NAME, principal.playerName());
                 logger.debug("WebSocket authenticated for player: {}", principal.playerName());
             } else {
                 logger.warn("Invalid JWT token in WebSocket CONNECT");

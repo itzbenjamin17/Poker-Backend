@@ -6,6 +6,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+import com.pokergame.util.MdcKeys;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
@@ -66,6 +68,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
                 // Set in the security context
                 SecurityContextHolder.getContext().setAuthentication(authentication);
+                MDC.put(MdcKeys.ROOM_ID, principal.roomId());
+                MDC.put(MdcKeys.PLAYER_NAME, principal.playerName());
                 logger.debug("Authenticated player: {} for room: {}", principal.playerName(), principal.roomId());
             } else {
                 logger.warn("Rejecting request with invalid or expired JWT");
@@ -76,6 +80,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         }
 
-        filterChain.doFilter(request, response);
+        try {
+            filterChain.doFilter(request, response);
+        } finally {
+            MDC.remove(MdcKeys.ROOM_ID);
+            MDC.remove(MdcKeys.PLAYER_NAME);
+        }
     }
 }

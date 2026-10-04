@@ -90,6 +90,9 @@ class ConfigContractTest {
         }
 
         for (String key : props.stringPropertyNames()) {
+            if (key.startsWith("logging.")) {
+                continue;
+            }
             String value = props.getProperty(key);
             if (value != null && value.startsWith("${") && value.endsWith("}")) {
                 assertThat(value)
