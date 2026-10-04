@@ -762,10 +762,11 @@ public class GameLifecycleService {
             }
 
             player.setReadyForNextHand(true);
-            gameStateService.broadcastGameState(gameId, game);
 
             if (game.areAllReadyEligiblePlayersReady()) {
                 completeReadyCountdownAndStartNextHand(gameId, game);
+            } else {
+                gameStateService.broadcastGameState(gameId, game);
             }
         }
     }
@@ -792,7 +793,6 @@ public class GameLifecycleService {
             }
 
             game.forceReadyForEligiblePlayers();
-            gameStateService.broadcastGameState(gameId, game);
             completeReadyCountdownAndStartNextHand(gameId, game);
         }
     }
