@@ -1,9 +1,13 @@
 package com.pokergame.security;
 
+import com.pokergame.util.LogThrottler;
+import com.pokergame.util.SecurityUtils;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -15,8 +19,13 @@ import java.io.IOException;
  */
 @Component
 public class EndpointRateLimitFilter extends OncePerRequestFilter {
+    private static final Logger logger = LoggerFactory.getLogger(EndpointRateLimitFilter.class);
 
     private final RateLimitService rateLimitService;
+    private final LogThrottler logThrottler = new LogThrottler(5000L);
+
+    @Value("${poker.security.trust-proxy:false}")
+    private boolean trustProxy;
 
     /**
      * Creates the endpoint filter with its shared bucket service.
@@ -49,6 +58,9 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
             String key = clientIp + ":" + path;
 
             if (!rateLimitService.tryConsumeRest(key)) {
+                logThrottler.throttle(key, () -> logger.warn(
+                        "Rate limit exceeded (429): method={}, path={}, clientIp={}, limit={}",
+                        request.getMethod(), path, clientIp, "5 req/15min"));
                 sendRateLimitError(response);
                 return;
             }
@@ -56,9 +68,6 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
 
         filterChain.doFilter(request, response);
     }
-
-    @Value("${poker.security.trust-proxy:false}")
-    private boolean trustProxy;
 
     /**
      * Resolves the client address, honoring the first forwarded address only when
@@ -68,13 +77,7 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
      * @return address used as the rate-limit identity
      */
     private String getClientIp(HttpServletRequest request) {
-        if (trustProxy) {
-            String xfHeader = request.getHeader("X-Forwarded-For");
-            if (xfHeader != null) {
-                return xfHeader.split(",")[0].trim();
-            }
-        }
-        return request.getRemoteAddr();
+        return SecurityUtils.getClientIp(request, trustProxy);
     }
 
     /**

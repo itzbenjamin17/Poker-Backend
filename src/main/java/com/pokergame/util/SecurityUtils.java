@@ -3,6 +3,7 @@ package com.pokergame.util;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.security.PlayerPrincipal;
 import org.springframework.security.core.Authentication;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.security.Principal;
 
@@ -47,5 +48,23 @@ public final class SecurityUtils {
             return playerPrincipal;
         }
         return null;
+    }
+
+    /**
+     * Resolves the client IP address from the request, respecting proxy headers
+     * when trust-proxy is enabled.
+     *
+     * @param request current HTTP request
+     * @param trustProxy whether to trust X-Forwarded-For headers
+     * @return resolved client IP address
+     */
+    public static String getClientIp(HttpServletRequest request, boolean trustProxy) {
+        if (trustProxy) {
+            String xfHeader = request.getHeader("X-Forwarded-For");
+            if (xfHeader != null && !xfHeader.isBlank()) {
+                return xfHeader.split(",")[0].trim();
+            }
+        }
+        return request.getRemoteAddr();
     }
 }
