@@ -62,6 +62,7 @@ The engine follows a strict **Layered Architecture** with unidirectional depende
 - **Resilient Connections:** 2-minute reconnect grace window allowing players to resume their seats after a drop.
 - **Ready System:** Shared countdown for starting new hands after a showdown.
 - **Encrypted Restart Recovery:** Per-room AES-256-GCM WALs preserve exact lobbies, hands, cards, chips, and deadlines across a single-server restart. See [Persistence operations](docs/persistence-operations.md).
+- **Production Observability & Correlation:** SLF4J + Logback with MDC correlation (`roomId`, `playerName`, `sessionId`), rolling file persistence (14-day retention, 500MB cap), and diagnostic search workflows. See [Backend Logging Guide](docs/ai/LOGGING.md).
 
 ## 🛡️ Security & Hardening
 
