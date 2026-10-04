@@ -10,6 +10,8 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+import com.pokergame.util.MdcKeys;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.expression.EvaluationContext;
@@ -81,67 +83,87 @@ public final class DurableMutationAspect {
     @Around("@annotation(mutation)")
     public Object persist(ProceedingJoinPoint joinPoint, DurableMutation mutation) throws Throwable {
         String roomId = resolveRoomId(joinPoint, mutation.roomId());
-        String activeRoom = DurableTransactionContext.currentRoomId();
-        // Prevent operations from bleeding across different poker rooms
-        if (activeRoom != null) {
-            if (!activeRoom.equals(roomId)) {
-                throw new PersistenceException("Nested durable mutations cannot cross room boundaries");
-            }
-            return joinPoint.proceed();
-        }
-
-        ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
-        lock.lock();
+        MDC.put(MdcKeys.ROOM_ID, roomId);
         try {
-            WalTransaction transaction = store.prepare(roomId);
-            DurableTransactionContext.begin(roomId);
-            Object result;
-            try {
-                result = joinPoint.proceed();
-            } catch (Throwable failure) {
-                // Discard pending post-save actions since the method failed
-                DurableTransactionContext.discard();
-                throw failure;
+            logger.debug("Durable mutation enter: method={} roomId={}", joinPoint.getSignature().toShortString(), roomId);
+            String activeRoom = DurableTransactionContext.currentRoomId();
+            // Prevent operations from bleeding across different poker rooms
+            if (activeRoom != null) {
+                if (!activeRoom.equals(roomId)) {
+                    throw new PersistenceException("Nested durable mutations cannot cross room boundaries");
+                }
+                logger.debug("Nested durable mutation joined existing transaction for roomId={}", roomId);
+                return joinPoint.proceed();
             }
 
-            Room room = roomService.getObject().getRoom(roomId);
-            byte[] image;
-            boolean deleted = room == null;
-            if (deleted) {
-                image = snapshotMapper.serializeDeletion(roomId);
-            } else {
-                Game game = gameLifecycleService.getObject().getGame(roomId);
-                image = snapshotMapper.serialize(room, roomService.getObject().getCurrentHost(roomId), game);
-            }
-            store.commit(transaction, image);
-
-            DurableTransactionContext.complete();
+            ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
+            lock.lock();
+            long lockStartNano = System.nanoTime();
             try {
+                WalTransaction transaction = store.prepare(roomId);
+                DurableTransactionContext.begin(roomId);
+                Object result;
+                try {
+                    result = joinPoint.proceed();
+                } catch (Throwable failure) {
+                    // Discard pending post-save actions since the method failed
+                    DurableTransactionContext.discard();
+                    logger.debug("Durable mutation discarded due to failure: class={} roomId={}", failure.getClass().getSimpleName(), roomId);
+                    throw failure;
+                }
+
+                Room room = roomService.getObject().getRoom(roomId);
+                byte[] image;
+                boolean deleted = room == null;
                 if (deleted) {
-                    store.delete(roomId);
-                } else if (shouldCompact(roomId)) {
-                    store.compact(roomId, image);
-                    recordsSinceCompaction.get(roomId).set(0);
+                    image = snapshotMapper.serializeDeletion(roomId);
+                } else {
+                    Game game = gameLifecycleService.getObject().getGame(roomId);
+                    image = snapshotMapper.serialize(room, roomService.getObject().getCurrentHost(roomId), game);
                 }
-            } catch (PersistenceException maintenanceFailure) {
-                // The save was successful and players may have been notified.
-                // Log the file cleanup error, but let the game continue.
-                logger.error("Post-commit WAL maintenance failed for room {}", roomId, maintenanceFailure);
-            }
-            return result;
-        } catch (Throwable failure) {
-            DurableTransactionContext.discard();
-            try {
-                // Remove the room save files entirely if it was completely empty
-                if (store.recoverLatest(roomId).isEmpty()) {
-                    store.delete(roomId);
+                store.commit(transaction, image);
+                long nanoTimeHeld = System.nanoTime() - lockStartNano;
+                logger.debug("Durable mutation committed: roomId={}, imageLength={}, lockHeldDurationNanos={}",
+                        roomId, image.length, nanoTimeHeld);
+
+                DurableTransactionContext.complete();
+                try {
+                    if (deleted) {
+                        logger.info("Durable mutation deletion commit for room {}", roomId);
+                        store.delete(roomId);
+                    } else if (shouldCompact(roomId)) {
+                        long beforeWalSize = store.walSize(roomId);
+                        long compactStartMs = System.currentTimeMillis();
+                        store.compact(roomId, image);
+                        long compactDurationMs = System.currentTimeMillis() - compactStartMs;
+                        long afterWalSize = store.walSize(roomId);
+                        recordsSinceCompaction.get(roomId).set(0);
+                        logger.info("WAL compacted for room {}: bytesBefore={}, bytesAfter={}, durationMs={}",
+                                roomId, beforeWalSize, afterWalSize, compactDurationMs);
+                    }
+                } catch (PersistenceException maintenanceFailure) {
+                    // The save was successful and players may have been notified.
+                    // Log the file cleanup error, but let the game continue.
+                    logger.error("Post-commit WAL maintenance failed for room {}", roomId, maintenanceFailure);
                 }
-            } catch (Exception cleanupError) {
-                logger.error("Failed to clean up aborted WAL for room {}", roomId, cleanupError);
+                return result;
+            } catch (Throwable failure) {
+                DurableTransactionContext.discard();
+                logger.debug("Durable mutation discarded due to failure: class={} roomId={}", failure.getClass().getSimpleName(), roomId);
+                try {
+                    // Remove the room save files entirely if it was completely empty
+                    if (store.recoverLatest(roomId).isEmpty()) {
+                        store.delete(roomId);
+                    }
+                } catch (Exception cleanupError) {
+                    logger.error("Failed to clean up aborted WAL for room {}", roomId, cleanupError);
+                }
+                throw failure;
+            } finally {
+                lock.unlock();
             }
-            throw failure;
         } finally {
-            lock.unlock();
+            MDC.remove(MdcKeys.ROOM_ID);
         }
     }
 

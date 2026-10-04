@@ -214,6 +214,8 @@ public final class EncryptedWalStore {
         requireHealthy();
         ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
         lock.lock();
+        long startMs = System.currentTimeMillis();
+        long bytesBefore = walSize(roomId);
         try {
             Path replacement = directory.resolve(roomId + ".wal.compacting");
             Files.deleteIfExists(replacement);
@@ -222,6 +224,9 @@ public final class EncryptedWalStore {
             replaceAtomically(replacement, walPath(roomId));
             forceDirectory();
             nextSequences.put(roomId, 3L);
+            long bytesAfter = walSize(roomId);
+            long durationMs = System.currentTimeMillis() - startMs;
+            logger.info("WAL compacted room={} bytesBefore={} bytesAfter={} ms={}", roomId, bytesBefore, bytesAfter, durationMs);
         } catch (IOException e) {
             PersistenceException failure = new PersistenceException("Cannot compact WAL for room " + roomId, e);
             markUnhealthy(failure);
@@ -251,6 +256,7 @@ public final class EncryptedWalStore {
             Files.deleteIfExists(directory.resolve(roomId + ".wal.compacting"));
             forceDirectory();
             nextSequences.remove(roomId);
+            logger.debug("WAL deleted room={}", roomId);
         } catch (IOException e) {
             PersistenceException failure = new PersistenceException("Cannot delete WAL for room " + roomId, e);
             markUnhealthy(failure);

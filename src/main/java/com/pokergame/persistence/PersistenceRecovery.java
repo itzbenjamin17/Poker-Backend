@@ -16,6 +16,8 @@ import org.springframework.core.annotation.Order;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
@@ -31,6 +33,8 @@ import com.pokergame.persistence.config.PersistenceException;
  */
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public final class PersistenceRecovery implements ApplicationRunner {
+    private static final Logger logger = LoggerFactory.getLogger(PersistenceRecovery.class);
+
     private final EncryptedWalStore store;
     private final AggregateSnapshotMapper mapper;
     private final RoomService roomService;
@@ -78,33 +82,53 @@ public final class PersistenceRecovery implements ApplicationRunner {
      */
     @Override
     public void run(ApplicationArguments args) {
+        long startMs = System.currentTimeMillis();
+        logger.info("Starting persistence recovery");
+
         // Stop the server from accepting incoming requests while we load data
         AvailabilityChangeEvent.publish(applicationContext, ReadinessState.REFUSING_TRAFFIC);
         
         // Fetch all the saved raw data from disk
         Map<String, byte[]> images = store.recoverAll();
         List<RecoveredAggregate> recoveredAggregates = new ArrayList<>();
+        int roomsRestored = 0;
+        int gamesRestored = 0;
+        int roomsDeleted = 0;
 
         for (Map.Entry<String, byte[]> entry : images.entrySet()) {
+            String roomId = entry.getKey();
             // Convert the raw bytes back into readable game and room data
-            RecoveredAggregate aggregate = mapper.deserialize(entry.getValue());
+            RecoveredAggregate aggregate;
+            try {
+                aggregate = mapper.deserialize(entry.getValue());
+            } catch (Exception e) {
+                logger.error("Failed to deserialize snapshot for room {}", roomId, e);
+                throw e;
+            }
             
             // If the room was marked for deletion before the crash, permanently delete it now
             if (aggregate.deleted()) {
-                store.delete(entry.getKey());
+                logger.info("Deleted tombstone room {}", roomId);
+                store.delete(roomId);
+                roomsDeleted++;
                 continue;
             }
             
             // Make sure the file name matches the actual room ID inside the file to prevent loading corrupt data
-            if (!entry.getKey().equals(aggregate.room().getRoomId())) {
+            if (!roomId.equals(aggregate.room().getRoomId())) {
+                logger.error("Snapshot room identity does not match WAL file identity for room {}", roomId);
                 throw new PersistenceException("Snapshot room identity does not match WAL file identity");
             }
             
             // Bring the room and game back to life in the server's memory
             roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
-            if (aggregate.game() != null) {
+            roomsRestored++;
+            boolean hasGame = aggregate.game() != null;
+            if (hasGame) {
                 gameLifecycleService.restoreGame(aggregate.game());
+                gamesRestored++;
             }
+            logger.debug("Recovered room: roomId={}, hasGame={}", roomId, hasGame);
             recoveredAggregates.add(aggregate);
         }
 
@@ -142,9 +166,14 @@ public final class PersistenceRecovery implements ApplicationRunner {
             }
         }
         
+        long elapsedMs = System.currentTimeMillis() - startMs;
+        logger.info("Persistence recovery summary: rooms restored={}, games restored={}, rooms deleted={}, elapsed ms={}",
+                roomsRestored, gamesRestored, roomsDeleted, elapsedMs);
+
         // Mark recovery as finished and let the server accept player connections again
         complete = true;
         AvailabilityChangeEvent.publish(applicationContext, ReadinessState.ACCEPTING_TRAFFIC);
+        logger.info("Recovery complete, accepting traffic");
     }
 
     /**

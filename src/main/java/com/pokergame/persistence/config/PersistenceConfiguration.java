@@ -1,5 +1,8 @@
 package com.pokergame.persistence.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
@@ -43,6 +46,24 @@ import com.pokergame.persistence.PersistenceRecovery;
 @EnableAspectJAutoProxy
 @EnableConfigurationProperties(PersistenceProperties.class)
 public class PersistenceConfiguration {
+    private static final Logger logger = LoggerFactory.getLogger(PersistenceConfiguration.class);
+
+    private final PersistenceProperties properties;
+
+    public PersistenceConfiguration(PersistenceProperties properties) {
+        this.properties = properties;
+    }
+
+    @PostConstruct
+    public void logStartupConfig() {
+        logger.info("Persistence config: enabled={}, directory={}, compactAfterRecords={}, compactAfterBytes={}, keyCount={}, currentKeyId={}",
+                properties.isEnabled(),
+                properties.getDirectory(),
+                properties.getCompactAfterRecords(),
+                properties.getCompactAfterBytes(),
+                properties.getKeys() != null ? properties.getKeys().size() : 0,
+                properties.getCurrentKeyId());
+    }
     /**
      * Loads and checks the encryption keys when the server starts.
      * We want to find out immediately if a key is broken, before any poker games begin.
