@@ -13,6 +13,7 @@ import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.persistence.transaction.DurableTransactionContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.pokergame.util.MdcUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -429,19 +430,25 @@ public class GameLifecycleService {
         if (game == null) {
             return;
         }
-        for (Map.Entry<ScheduledGameTask, Long> task : game.getScheduledTaskDeadlinesSnapshot().entrySet()) {
-            scheduleRuntimeTask(gameId, task.getKey(), task.getValue());
-        }
-        if (game.isReadyCountdownActive()) {
-            Long deadline = game.getReadyCountdownDeadlineEpochMs();
-            long remaining = deadline == null ? 0 : Math.max(0, deadline - System.currentTimeMillis());
-            ScheduledFuture<?> future = taskScheduler.schedule(
-                    () -> mutationProxy().handleReadyCountdownTimeout(gameId, deadline == null ? 0 : deadline),
-                    Instant.now().plusMillis(remaining));
-            if (future != null) {
-                readyCountdownTimeouts.put(gameId, future);
+        MdcUtils.runWithRoomId(gameId, () -> {
+            int rebuiltCount = 0;
+            for (Map.Entry<ScheduledGameTask, Long> task : game.getScheduledTaskDeadlinesSnapshot().entrySet()) {
+                scheduleRuntimeTask(gameId, task.getKey(), task.getValue());
+                rebuiltCount++;
             }
-        }
+            if (game.isReadyCountdownActive()) {
+                Long deadline = game.getReadyCountdownDeadlineEpochMs();
+                long remaining = deadline == null ? 0 : Math.max(0, deadline - System.currentTimeMillis());
+                ScheduledFuture<?> future = taskScheduler.schedule(
+                        () -> mutationProxy().handleReadyCountdownTimeout(gameId, deadline == null ? 0 : deadline),
+                        Instant.now().plusMillis(remaining));
+                if (future != null) {
+                    readyCountdownTimeouts.put(gameId, future);
+                    rebuiltCount++;
+                }
+            }
+            logger.info("Resumed {} recovered timers for game {}", rebuiltCount, gameId);
+        });
     }
 
     /**
@@ -521,14 +528,17 @@ public class GameLifecycleService {
     public void executeScheduledTask(String gameId, ScheduledGameTask task, long expectedDeadline) {
         Game game = getGame(gameId);
         if (game == null) {
+            logger.debug("Cannot execute task {}: game not found for gameId={}", task, gameId);
             return;
         }
         synchronized (game) {
             Long currentDeadline = game.getScheduledTaskDeadline(task);
             if (currentDeadline == null || currentDeadline != expectedDeadline) {
+                logger.debug("Ignoring stale task {} for game {} expected={} current={}", task, gameId, expectedDeadline, currentDeadline);
                 return;
             }
             game.clearScheduledTask(task);
+            logger.debug("Executing task {} for game {}", task, gameId);
             switch (task) {
                 case NEW_HAND -> startNewHand(gameId);
                 case READY_OPEN -> startReadyCountdown(gameId, configuredReadyCountdownMs);
@@ -583,6 +593,7 @@ public class GameLifecycleService {
      */
     private void scheduleRuntimeTask(String gameId, ScheduledGameTask task, long deadline) {
         long delay = Math.max(0, deadline - System.currentTimeMillis());
+        logger.debug("Scheduling runtime task {} for game {} with delayMs={} deadline={}", task, gameId, delay, deadline);
         taskScheduler.schedule(() -> mutationProxy().executeScheduledTask(gameId, task, deadline),
                 Instant.now().plusMillis(delay));
     }
@@ -627,6 +638,7 @@ public class GameLifecycleService {
     public void markPlayerDisconnected(String gameId, String playerName, long disconnectDeadlineEpochMs) {
         Game game = getGame(gameId);
         if (game == null) {
+            logger.debug("Cannot mark player disconnected: game not found for gameId={}", gameId);
             return;
         }
 
@@ -636,12 +648,18 @@ public class GameLifecycleService {
                     .findFirst()
                     .orElse(null);
 
-            if (player == null || player.getIsDisconnected()) {
+            if (player == null) {
+                logger.debug("Cannot mark player disconnected: player {} not found in game {}", playerName, gameId);
+                return;
+            }
+            if (player.getIsDisconnected()) {
+                logger.debug("Player {} already disconnected in game {}", playerName, gameId);
                 return;
             }
 
             player.setDisconnected(true);
             player.setDisconnectDeadlineEpochMs(disconnectDeadlineEpochMs);
+            logger.info("Player {} marked disconnected in game {} with deadlineEpochMs={}", playerName, gameId, disconnectDeadlineEpochMs);
 
             if (roomService.getRoom(gameId) != null) {
                 gameStateService.broadcastGameState(gameId, game);
@@ -663,6 +681,7 @@ public class GameLifecycleService {
     public void markPlayerReconnected(String gameId, String playerName) {
         Game game = getGame(gameId);
         if (game == null) {
+            logger.debug("Cannot mark player reconnected: game not found for gameId={}", gameId);
             return;
         }
 
@@ -672,12 +691,18 @@ public class GameLifecycleService {
                     .findFirst()
                     .orElse(null);
 
-            if (player == null || !player.getIsDisconnected()) {
+            if (player == null) {
+                logger.debug("Cannot mark player reconnected: player {} not found in game {}", playerName, gameId);
+                return;
+            }
+            if (!player.getIsDisconnected()) {
+                logger.debug("Player {} already connected in game {}", playerName, gameId);
                 return;
             }
 
             player.setDisconnected(false);
             player.setDisconnectDeadlineEpochMs(null);
+            logger.info("Player {} marked reconnected in game {}", playerName, gameId);
 
             if (roomService.getRoom(gameId) != null) {
                 gameStateService.broadcastGameState(gameId, game);
@@ -702,11 +727,13 @@ public class GameLifecycleService {
         long deadlineEpochMs;
         synchronized (game) {
             if (game.getCurrentPhase() != com.pokergame.enums.GamePhase.SHOWDOWN) {
+                logger.debug("Skipping ready countdown for game {}: phase is {} (not SHOWDOWN)", gameId, game.getCurrentPhase());
                 return;
             }
 
             deadlineEpochMs = System.currentTimeMillis() + countdownMs;
             game.openReadyCountdown(deadlineEpochMs);
+            logger.info("Opened ready countdown for game {} with deadlineEpochMs={}", gameId, deadlineEpochMs);
             gameStateService.broadcastGameState(gameId, game);
 
             if (game.areAllReadyEligiblePlayersReady()) {
@@ -762,6 +789,7 @@ public class GameLifecycleService {
             }
 
             player.setReadyForNextHand(true);
+            logger.debug("Player {} marked ready for next hand in game {}", playerName, gameId);
 
             if (game.areAllReadyEligiblePlayersReady()) {
                 completeReadyCountdownAndStartNextHand(gameId, game);
@@ -789,9 +817,12 @@ public class GameLifecycleService {
         synchronized (game) {
             if (!game.isReadyCountdownActive()
                     || !Objects.equals(game.getReadyCountdownDeadlineEpochMs(), expectedDeadlineEpochMs)) {
+                logger.debug("Ignoring stale ready countdown timeout for game {} expected={} current={}",
+                        gameId, expectedDeadlineEpochMs, game.getReadyCountdownDeadlineEpochMs());
                 return;
             }
 
+            logger.info("Ready countdown timed out for game {}: forcing ready for eligible players", gameId);
             game.forceReadyForEligiblePlayers();
             completeReadyCountdownAndStartNextHand(gameId, game);
         }
