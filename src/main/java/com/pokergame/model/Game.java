@@ -762,12 +762,26 @@ public class Game {
         boolean hasAllInShowdownPlayer = showdownPlayers.stream().anyMatch(Player::getIsAllIn);
         if (!hasAllInShowdownPlayer) {
             winners = determineWinners(showdownPlayers);
-            logger.info("Winners: {}", winners.stream().map(Player::getName).toList());
+            if (winners.size() == 1) {
+                Player w = winners.getFirst();
+                logger.info("Showdown single winner: {} with rank={}", w.getName(), w.getHandRank());
+            } else {
+                logger.info("Showdown split pot between {} winners: {}",
+                        winners.size(),
+                        winners.stream().map(w -> w.getName() + " (" + w.getHandRank() + ")").toList());
+            }
             logger.info("Distributing pot of {} to {} winner(s)", pot, winners.size());
             distributePot(winners);
         } else {
             winners = distributeSidePotsAtShowdown();
-            logger.info("Side-pot winners: {}", winners.stream().map(Player::getName).toList());
+            if (winners.size() == 1) {
+                Player w = winners.getFirst();
+                logger.info("Showdown side-pot single winner: {} with rank={}", w.getName(), w.getHandRank());
+            } else {
+                logger.info("Showdown side-pot split between {} winners: {}",
+                        winners.size(),
+                        winners.stream().map(w -> w.getName() + " (" + w.getHandRank() + ")").toList());
+            }
         }
 
         resetHandAccountingAfterShowdown();
