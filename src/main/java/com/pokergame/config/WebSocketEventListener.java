@@ -4,6 +4,7 @@ import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.model.Room;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
+import com.pokergame.util.MdcUtils;
 import com.pokergame.util.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +15,8 @@ import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.messaging.SessionConnectEvent;
 import org.springframework.web.socket.messaging.SessionDisconnectEvent;
+import org.springframework.web.socket.messaging.SessionSubscribeEvent;
+import org.springframework.web.socket.messaging.SessionUnsubscribeEvent;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.TaskScheduler;
@@ -85,34 +88,39 @@ public class WebSocketEventListener {
         String sessionId = headerAccessor.getSessionId();
 
         PlayerPrincipal playerPrincipal = SecurityUtils.getPlayerOrNull(principal);
-        if (playerPrincipal == null || sessionId == null) {
-            return;
-        }
+        String roomId = playerPrincipal != null ? playerPrincipal.roomId() : null;
+        String playerName = playerPrincipal != null ? playerPrincipal.playerName() : null;
 
-        String compositeName = playerPrincipal.getName();
-        String playerName = playerPrincipal.playerName();
-        String roomId = playerPrincipal.roomId();
-
-        ReentrantLock sessionLock = sessionLocks.computeIfAbsent(compositeName, ignored -> new ReentrantLock());
-        sessionLock.lock();
-        try {
-            // Registration and cleanup are linearized per player: a reconnect that wins
-            // this lock cannot be evicted by an already-running grace timer.
-            registerActiveSession(playerPrincipal, sessionId);
-            logger.debug("Registered active WebSocket session {} for user {}", sessionId, compositeName);
-
-            PendingDisconnect pendingDisconnect = pendingDisconnects.remove(compositeName);
-            if (pendingDisconnect != null) {
-                pendingDisconnect.future().cancel(false);
-
-                if (gameLifecycleService.gameExists(roomId)
-                        && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
-                    gameLifecycleService.markPlayerReconnected(roomId, playerName);
-                }
+        MdcUtils.runWithMdc(roomId, playerName, sessionId, () -> {
+            if (playerPrincipal == null || sessionId == null) {
+                logger.warn("WebSocket connect rejected: null playerPrincipal or sessionId (sessionId={})", sessionId);
+                return;
             }
-        } finally {
-            sessionLock.unlock();
-        }
+
+            String compositeName = playerPrincipal.getName();
+
+            ReentrantLock sessionLock = sessionLocks.computeIfAbsent(compositeName, ignored -> new ReentrantLock());
+            sessionLock.lock();
+            try {
+                // Registration and cleanup are linearized per player: a reconnect that wins
+                // this lock cannot be evicted by an already-running grace timer.
+                registerActiveSession(playerPrincipal, sessionId);
+                logger.debug("Registered active WebSocket session {} for user {}", sessionId, compositeName);
+
+                PendingDisconnect pendingDisconnect = pendingDisconnects.remove(compositeName);
+                if (pendingDisconnect != null) {
+                    pendingDisconnect.future().cancel(false);
+                    logger.info("Player {} reconnected to room {} before grace expiry", playerName, roomId);
+
+                    if (gameLifecycleService.gameExists(roomId)
+                            && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
+                        gameLifecycleService.markPlayerReconnected(roomId, playerName);
+                    }
+                }
+            } finally {
+                sessionLock.unlock();
+            }
+        });
     }
 
     /**
@@ -126,55 +134,58 @@ public class WebSocketEventListener {
         String sessionId = headerAccessor.getSessionId();
         
         // Recover principal from session storage if not present in the event
-        PlayerPrincipal recoveredPrincipal = SecurityUtils.getPlayerOrNull(headerAccessor.getUser());
-        if (recoveredPrincipal == null && sessionId != null) {
-            recoveredPrincipal = sessionToPrincipal.get(sessionId);
+        PlayerPrincipal principal = SecurityUtils.getPlayerOrNull(headerAccessor.getUser());
+        if (principal == null && sessionId != null) {
+            principal = sessionToPrincipal.get(sessionId);
         }
+        final PlayerPrincipal recoveredPrincipal = principal;
 
-        if (recoveredPrincipal == null) {
-            logger.debug("WebSocket disconnected without resolvable principal. sessionId={}", sessionId);
-            return;
-        }
+        String roomId = recoveredPrincipal != null ? recoveredPrincipal.roomId() : null;
+        String playerName = recoveredPrincipal != null ? recoveredPrincipal.playerName() : null;
 
-        final PlayerPrincipal playerPrincipal = recoveredPrincipal;
-        String compositeName = playerPrincipal.getName();
-        
-        ReentrantLock sessionLock = sessionLocks.computeIfAbsent(compositeName, ignored -> new ReentrantLock());
-        sessionLock.lock();
-        try {
-            // Users may have multiple sessions (e.g. multiple browser tabs),
-            // So we only schedule a clean-up if there are no active sessions left
-            unregisterActiveSession(compositeName, sessionId);
-            if (hasActiveSession(compositeName)) {
-                logger.debug("User {} still has another active session; skipping disconnect timer", compositeName);
+        MdcUtils.runWithMdc(roomId, playerName, sessionId, () -> {
+            if (recoveredPrincipal == null) {
+                logger.debug("WebSocket disconnected without resolvable principal. sessionId={}", sessionId);
                 return;
             }
 
-            String playerName = playerPrincipal.playerName();
-            String roomId = playerPrincipal.roomId();
+            final PlayerPrincipal playerPrincipal = recoveredPrincipal;
+            String compositeName = playerPrincipal.getName();
+            
+            ReentrantLock sessionLock = sessionLocks.computeIfAbsent(compositeName, ignored -> new ReentrantLock());
+            sessionLock.lock();
+            try {
+                // Users may have multiple sessions (e.g. multiple browser tabs),
+                // So we only schedule a clean-up if there are no active sessions left
+                unregisterActiveSession(compositeName, sessionId);
+                if (hasActiveSession(compositeName)) {
+                    logger.debug("User {} still has another active session; skipping disconnect timer", compositeName);
+                    return;
+                }
 
-            boolean gameActive = gameLifecycleService.gameExists(roomId);
-            long disconnectDeadlineEpochMs = System.currentTimeMillis() + disconnectGracePeriodMs;
-            if (gameActive && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
-                gameLifecycleService.markPlayerDisconnected(roomId, playerName, disconnectDeadlineEpochMs);
+                boolean gameActive = gameLifecycleService.gameExists(roomId);
+                long disconnectDeadlineEpochMs = System.currentTimeMillis() + disconnectGracePeriodMs;
+                if (gameActive && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
+                    gameLifecycleService.markPlayerDisconnected(roomId, playerName, disconnectDeadlineEpochMs);
+                }
+
+                PendingDisconnect existing = pendingDisconnects.remove(compositeName);
+                if (existing != null) {
+                    existing.future().cancel(false);
+                }
+
+                logger.info("WebSocket disconnected for user {}. Scheduling delayed cleanup ({} ms)",
+                        compositeName, disconnectGracePeriodMs);
+
+                ScheduledFuture<?> future = taskScheduler.schedule(
+                        () -> cleanupDisconnectedUser(playerPrincipal),
+                        Instant.now().plusMillis(disconnectGracePeriodMs));
+
+                pendingDisconnects.put(compositeName, new PendingDisconnect(roomId, future));
+            } finally {
+                sessionLock.unlock();
             }
-
-            PendingDisconnect existing = pendingDisconnects.remove(compositeName);
-            if (existing != null) {
-                existing.future().cancel(false);
-            }
-
-            logger.info("WebSocket disconnected for user {}. Scheduling delayed cleanup ({} ms)",
-                    compositeName, disconnectGracePeriodMs);
-
-            ScheduledFuture<?> future = taskScheduler.schedule(
-                    () -> cleanupDisconnectedUser(playerPrincipal),
-                    Instant.now().plusMillis(disconnectGracePeriodMs));
-
-            pendingDisconnects.put(compositeName, new PendingDisconnect(roomId, future));
-        } finally {
-            sessionLock.unlock();
-        }
+        });
     }
 
     /**
@@ -233,11 +244,50 @@ public class WebSocketEventListener {
         PendingDisconnect existing = pendingDisconnects.remove(compositeName);
         if (existing != null) {
             existing.future().cancel(false);
+            logger.debug("Replacing existing pending disconnect for player {} in room {}", playerName, roomId);
         }
         long delay = Math.max(0, deadlineEpochMs - System.currentTimeMillis());
-        ScheduledFuture<?> future = taskScheduler.schedule(
-                () -> cleanupDisconnectedUser(principal), Instant.now().plusMillis(delay));
-        pendingDisconnects.put(compositeName, new PendingDisconnect(roomId, future));
+        logger.info("Scheduling recovered disconnect for player {} in room {} with delayMs={}", playerName, roomId, delay);
+        MdcUtils.runWithMdc(roomId, playerName, () -> {
+            ScheduledFuture<?> future = taskScheduler.schedule(
+                    () -> cleanupDisconnectedUser(principal),
+                    Instant.now().plusMillis(delay));
+            pendingDisconnects.put(compositeName, new PendingDisconnect(roomId, future));
+        });
+    }
+
+    /**
+     * Logs STOMP topic subscriptions at debug level with MDC correlation.
+     *
+     * @param event the subscribe event
+     */
+    @EventListener
+    public void handleSubscribe(SessionSubscribeEvent event) {
+        StompHeaderAccessor h = StompHeaderAccessor.wrap(event.getMessage());
+        PlayerPrincipal p = SecurityUtils.getPlayerOrNull(h.getUser());
+        String roomId = p != null ? p.roomId() : null;
+        String playerName = p != null ? p.playerName() : null;
+        MdcUtils.runWithMdc(roomId, playerName, h.getSessionId(), () -> {
+            logger.debug("STOMP subscribe: user={} destination={} session={}",
+                    p == null ? "anonymous" : p.getName(), h.getDestination(), h.getSessionId());
+        });
+    }
+
+    /**
+     * Logs STOMP topic unsubscribes at debug level with MDC correlation.
+     *
+     * @param event the unsubscribe event
+     */
+    @EventListener
+    public void handleUnsubscribe(SessionUnsubscribeEvent event) {
+        StompHeaderAccessor h = StompHeaderAccessor.wrap(event.getMessage());
+        PlayerPrincipal p = SecurityUtils.getPlayerOrNull(h.getUser());
+        String roomId = p != null ? p.roomId() : null;
+        String playerName = p != null ? p.playerName() : null;
+        MdcUtils.runWithMdc(roomId, playerName, h.getSessionId(), () -> {
+            logger.debug("STOMP unsubscribe: user={} subscriptionId={} session={}",
+                    p == null ? "anonymous" : p.getName(), h.getSubscriptionId(), h.getSessionId());
+        });
     }
 
 

@@ -1,6 +1,9 @@
 package com.pokergame.config;
 
 import com.pokergame.security.RateLimitService;
+import com.pokergame.util.LogThrottler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.MessageDeliveryException;
@@ -16,8 +19,10 @@ import java.security.Principal;
  */
 @Component
 public class WebSocketRateLimitInterceptor implements ChannelInterceptor {
+    private static final Logger logger = LoggerFactory.getLogger(WebSocketRateLimitInterceptor.class);
 
     private final RateLimitService rateLimitService;
+    private final LogThrottler logThrottler = new LogThrottler(5000L);
 
     /**
      * Creates an interceptor backed by the shared rate-limit service.
@@ -46,6 +51,9 @@ public class WebSocketRateLimitInterceptor implements ChannelInterceptor {
             if (user != null) {
                 String username = user.getName();
                 if (!rateLimitService.tryConsumeWs(username)) {
+                    logThrottler.throttle(username, () -> logger.warn(
+                            "WebSocket rate limit exceeded for player: {}, destination: {}",
+                            username, accessor.getDestination()));
                     throw new MessageDeliveryException("Message rate limit exceeded. Maximum 5 messages per second allowed.");
                 }
             }
