@@ -176,6 +176,27 @@ public class GameController {
     }
 
     /**
+     * Unmarks the authenticated player as READY during the post-round countdown.
+     *
+     * @param gameId    game identifier
+     * @param playerPrincipal authenticated player principal
+     */
+    @MessageMapping("/{gameId}/unready")
+    public void unmarkReady(
+            @DestinationVariable String gameId,
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
+        String playerName = playerPrincipal.playerName();
+        logger.info("Processing UNREADY for game {} by {}", gameId, playerName);
+
+        // Security check: ensure the token is actually for THIS game/room
+        if (!playerPrincipal.roomId().equals(gameId)) {
+            throw new UnauthorisedActionException("Token is not valid for this game.");
+        }
+
+        gameLifecycleService.unmarkPlayerReadyForNextHand(gameId, playerName);
+    }
+
+    /**
      * Removes a player from an active game. Hand is automatically folded if in a
      * round.
      * SECURED ENDPOINT - Requires JWT token.

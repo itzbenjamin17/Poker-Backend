@@ -800,6 +800,40 @@ public class GameLifecycleService {
     }
 
     /**
+     * Unmarks a player as ready during an active ready countdown gate.
+     *
+     * @param gameId     game identifier
+     * @param playerName player name from principal
+     */
+    @DurableMutation(roomId = "#gameId")
+    public void unmarkPlayerReadyForNextHand(String gameId, String playerName) {
+        Game game = getGame(gameId);
+        if (game == null) {
+            throw new ResourceNotFoundException("Game not found");
+        }
+
+        synchronized (game) {
+            if (!game.isReadyCountdownActive()) {
+                throw new UnauthorisedActionException("Ready countdown is not active.");
+            }
+
+            Player player = game.getPlayers().stream()
+                    .filter(p -> p.getName().equals(playerName))
+                    .findFirst()
+                    .orElseThrow(() -> new UnauthorisedActionException("You are no longer part of this game."));
+
+            if (player.getIsOut()) {
+                throw new UnauthorisedActionException("You are out of this game.");
+            }
+
+            player.setReadyForNextHand(false);
+            logger.debug("Player {} unmarked ready for next hand in game {}", playerName, gameId);
+
+            gameStateService.broadcastGameState(gameId, game);
+        }
+    }
+
+    /**
      * Closes a ready gate only for the deadline that created this callback. Without
      * the comparison, a cancelled old timer could close a newly opened countdown.
      *
