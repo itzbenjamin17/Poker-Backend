@@ -638,7 +638,7 @@ public class Game {
             case PRE_FLOP -> dealFlop();
             case FLOP -> dealTurn();
             case TURN -> dealRiver();
-            case RIVER -> {}
+            case RIVER, SHOWDOWN -> {}
         }
     }
 
