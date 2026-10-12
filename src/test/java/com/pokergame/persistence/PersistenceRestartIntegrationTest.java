@@ -276,6 +276,7 @@ class PersistenceRestartIntegrationTest {
 
         // Start the application, which should run PersistenceRecovery and clean up the file
         try (ConfigurableApplicationContext context = startApplication()) {
+            assertTrue(context.isActive());
             // File should be deleted during startup recovery
             assertFalse(Files.exists(walFile));
         }
