@@ -303,9 +303,11 @@ public class GameLifecycleService {
             logger.info("Player {} left game {} | Remaining players: {}",
                     playerName, gameId, game.getPlayers().size());
 
-            // Check if no players left in the game
-            if (game.getPlayers().isEmpty()) {
-                logger.info("All players left game {}, destroying game and room", gameId);
+            // Check if no players left in the game or no connected active players remain
+            boolean anyConnectedNonOutPlayer = game.getPlayers().stream()
+                    .anyMatch(p -> !p.getIsOut() && !p.getIsDisconnected());
+            if (game.getPlayers().isEmpty() || !anyConnectedNonOutPlayer) {
+                logger.info("No connected active players remaining in game {}, destroying game and room", gameId);
 
                 // Clean up game and room data
                 activeGames.remove(gameId);
@@ -686,6 +688,10 @@ public class GameLifecycleService {
         }
 
         synchronized (game) {
+            if (game.isGameOver()) {
+                logger.debug("Skipping reconnect for player {} because game {} is already over", playerName, gameId);
+                return;
+            }
             Player player = game.getPlayers().stream()
                     .filter(p -> p.getName().equals(playerName))
                     .findFirst()

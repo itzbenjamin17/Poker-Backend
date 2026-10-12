@@ -121,7 +121,7 @@ public class GameController {
         }
 
         Game game = gameLifecycleService.getGame(gameId);
-        if (game == null) {
+        if (game == null || game.isGameOver()) {
             throw new ResourceNotFoundException("Game not found");
         }
 

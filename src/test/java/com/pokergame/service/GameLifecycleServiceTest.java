@@ -342,6 +342,42 @@ class GameLifecycleServiceTest {
     }
 
     /**
+     * Protects the contract that when all remaining players are disconnected, leaving destroys the game and room immediately.
+     */
+    @Test
+    void leaveGame_WhenOnlyDisconnectedPlayerRemains_ShouldDestroyGameAndRoomImmediately() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Host", System.currentTimeMillis() + 120_000);
+        reset(gameStateService);
+
+        gameLifecycleService.leaveGame(ROOM_ID, "Player2");
+
+        assertNull(gameLifecycleService.getGame(ROOM_ID));
+        verify(roomService).destroyRoom(ROOM_ID);
+        verify(gameStateService, never()).broadcastGameEnd(anyString(), any(Game.class), any(Player.class), anyBoolean());
+    }
+
+    /**
+     * Protects the contract that markPlayerReconnected does not broadcast live state if the game is already over.
+     */
+    @Test
+    void markPlayerReconnected_WhenGameIsOver_ShouldNotBroadcastGameState() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Host", System.currentTimeMillis() + 120_000);
+        game.markGameOver();
+        reset(gameStateService);
+
+        gameLifecycleService.markPlayerReconnected(ROOM_ID, "Host");
+
+        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
+    }
+
+    /**
      * Protects the contract that leave game with multiple players should continue game.
      */
     @Test
