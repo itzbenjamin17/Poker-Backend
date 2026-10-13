@@ -1,12 +1,14 @@
 package com.pokergame.service;
 
 import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.ActionErrorResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.dto.response.PlayerNotificationResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.PlayerStatus;
 import com.pokergame.enums.ResponseMessage;
+import com.pokergame.enums.PlayerAction;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Game;
@@ -381,6 +383,12 @@ public class GameStateService {
                 compositeName,
                 "/queue/private",
                 notification);
+    }
+
+    /** Publishes a rejected action to its player's private WebSocket queue. */
+    public void sendActionError(String gameId, String playerName, String code, PlayerAction action, String message) {
+        sendToUserAfterCommit(playerName + ":" + gameId, "/queue/private",
+                new ActionErrorResponse(code, action, message));
     }
 
     /**

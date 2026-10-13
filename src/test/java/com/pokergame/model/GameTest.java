@@ -452,6 +452,8 @@ class GameTest {
                                 () -> game.processPlayerDecision(raiser, decision));
 
                 assertTrue(exception.getMessage().contains("Raise amount must be at least the big blind"));
+                assertEquals("MIN_RAISE", exception.actionErrorCode());
+                assertEquals("Min raise: 40; yours: 30", exception.actionErrorMessage());
         }
 
         @Test

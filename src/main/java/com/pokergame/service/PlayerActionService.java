@@ -73,18 +73,18 @@ public class PlayerActionService {
         synchronized (game) {
             if (game.isGameOver()) {
                 logger.warn("Player {} attempted to act in game {} after it has finished", playerName, gameId);
-                throw new BadRequestException("This game has finished.");
+                throw new BadRequestException("This game has finished.", "GAME_FINISHED", "Game has finished");
             }
 
             if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
                 logger.warn("Player {} attempted to act in game {} after the hand was resolved (phase=SHOWDOWN)",
                         playerName, gameId);
-                throw new BadRequestException("This hand is already complete.");
+                throw new BadRequestException("This hand is already complete.", "HAND_COMPLETE", "Hand is complete");
             }
 
             if (game.getScheduledTaskDeadline(com.pokergame.enums.ScheduledGameTask.AUTO_ADVANCE) != null) {
                 logger.warn("Player {} attempted to act in game {} while it is auto-advancing", playerName, gameId);
-                throw new BadRequestException("Actions are not allowed while the game is auto-advancing.");
+                throw new BadRequestException("Actions are not allowed while the game is auto-advancing.", "HAND_ADVANCING", "Wait for the next turn");
             }
 
             Player currentPlayer = getCurrentPlayer(actionRequest, game);
@@ -99,12 +99,14 @@ public class PlayerActionService {
                 logger.warn("Player name mismatch: expected {}, got {}",
                         currentPlayer.getName(), playerName);
                 throw new UnauthorisedActionException(
-                        "It's not your turn. Current player is: " + currentPlayer.getName());
+                        "It's not your turn. Current player is: " + currentPlayer.getName(),
+                        "NOT_YOUR_TURN", "Wait for your turn");
             }
 
             if (currentPlayer.getIsDisconnected()) {
                 logger.warn("Disconnected player {} attempted to act in game {}", playerName, gameId);
-                throw new UnauthorisedActionException("You are disconnected. Reconnect to continue your turn.");
+                throw new UnauthorisedActionException("You are disconnected. Reconnect to continue your turn.",
+                        "DISCONNECTED", "Reconnect to act");
             }
 
             PlayerDecision decision = new PlayerDecision(
@@ -176,18 +178,19 @@ public class PlayerActionService {
 
         int requestAmount = actionRequest.amount() != null ? actionRequest.amount() : 0;
         if (requestAmount < 0) {
-            throw new BadRequestException("Action amount cannot be negative");
+            throw new BadRequestException("Action amount cannot be negative", "NEGATIVE_AMOUNT", "Amount must be positive; yours: " + requestAmount);
         }
 
         PlayerAction action = actionRequest.action();
 
         if ((action == PlayerAction.BET || action == PlayerAction.RAISE) && requestAmount == 0) {
-            throw new BadRequestException("Bet/raise amount must be greater than 0");
+            throw new BadRequestException("Bet/raise amount must be greater than 0", "AMOUNT_REQUIRED", "Enter a positive amount");
         }
 
         if ((action == PlayerAction.BET || action == PlayerAction.RAISE)
                 && requestAmount > currentPlayer.getChips()) {
-            throw new BadRequestException("Action amount cannot exceed your available chips");
+            throw new BadRequestException("Action amount cannot exceed your available chips", "INSUFFICIENT_CHIPS",
+                    "Available: " + currentPlayer.getChips() + "; yours: " + requestAmount);
         }
         return currentPlayer;
     }
