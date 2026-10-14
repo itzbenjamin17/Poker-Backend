@@ -37,3 +37,6 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Agent task artifacts ###
+.agents/tasks
