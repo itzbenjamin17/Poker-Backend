@@ -3,11 +3,22 @@ target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+# Local environment values; keep shareable examples
 .env
+.env.*
+!.env.example
+!.env.*.example
+*.local
 data/
 logs/
 *.log
 *.log.*.gz
+*.log.gz
+
+# JVM diagnostic output
+*.hprof
+hs_err_pid*
+replay_pid*
 
 ### STS ###
 .apt_generated
@@ -38,5 +49,17 @@ build/
 ### VS Code ###
 .vscode/
 
+# OS/editor metadata and temporary diagnostics
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.sw?
+*~
+/.scratch/
+
 ### Agent task artifacts ###
 .agents/tasks
+.codex/config.toml
+.codex/config.local.toml
+.codex/sessions/
+.codex/logs/
