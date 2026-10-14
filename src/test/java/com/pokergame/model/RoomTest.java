@@ -535,21 +535,27 @@ class RoomTest {
     }
 
     /**
-     * Protects the expected behavior for room with zero buy in.
+     * Rejects a zero buy-in because it cannot cover the big blind.
      */
     @Test
-    void testRoomWithZeroBuyIn() {
-        Room freeBuyIn = new Room("free", "Free Game", "Host", 6, 10, 20, 0, null);
-        assertEquals(0, freeBuyIn.getBuyIn());
+    void testRoomRejectsZeroBuyIn() {
+        BadRequestException exception = assertThrows(
+                BadRequestException.class,
+                () -> new Room("free", "Free Game", "Host", 6, 10, 20, 0, null));
+
+        assertEquals("Buy-in must be at least the big blind amount.", exception.getMessage());
     }
 
     /**
-     * Protects the expected behavior for room with negative buy in.
+     * Rejects a negative buy-in because it cannot cover the big blind.
      */
     @Test
-    void testRoomWithNegativeBuyIn() {
-        Room negativeBuyIn = new Room("negative", "Negative Buy-in", "Host", 6, 10, 20, -100, null);
-        assertEquals(-100, negativeBuyIn.getBuyIn());
+    void testRoomRejectsNegativeBuyIn() {
+        BadRequestException exception = assertThrows(
+                BadRequestException.class,
+                () -> new Room("negative", "Negative Buy-in", "Host", 6, 10, 20, -100, null));
+
+        assertEquals("Buy-in must be at least the big blind amount.", exception.getMessage());
     }
 
     /**

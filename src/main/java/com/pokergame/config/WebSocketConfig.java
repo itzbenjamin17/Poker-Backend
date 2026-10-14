@@ -1,9 +1,13 @@
 package com.pokergame.config;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
@@ -18,6 +22,13 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final WebSocketAuthInterceptor webSocketAuthInterceptor;
     private final WebSocketRateLimitInterceptor webSocketRateLimitInterceptor;
     private final List<String> allowedOrigins;
+    private TaskScheduler messageBrokerTaskScheduler;
+
+    @Autowired
+    public void setMessageBrokerTaskScheduler(
+            @Lazy @Qualifier("messageBrokerTaskScheduler") TaskScheduler taskScheduler) {
+        this.messageBrokerTaskScheduler = taskScheduler;
+    }
 
     /**
      * Creates the WebSocket configuration with its inbound security interceptors.
@@ -45,7 +56,9 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // - /room/{roomId} - room lobby updates
         // - /game/{gameId} - public game state for all players
         // - /queue - standard destination for private user messages
-        config.enableSimpleBroker("/room", "/game", "/queue");
+        config.enableSimpleBroker("/room", "/game", "/queue")
+                .setHeartbeatValue(new long[] {10000, 10000})
+                .setTaskScheduler(this.messageBrokerTaskScheduler);
 
         // Prefix for destinations clients send messages to (handled by @MessageMapping)
         config.setApplicationDestinationPrefixes("/app");
