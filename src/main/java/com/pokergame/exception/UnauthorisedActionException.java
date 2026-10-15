@@ -4,7 +4,7 @@ package com.pokergame.exception;
  * Exception thrown when an unauthorized action is attempted.
  */
 
-public class UnauthorisedActionException extends PokerException {
+public class UnauthorisedActionException extends ActionFeedbackException {
     /**
      * Creates an exception for an action the current player may not perform.
      *
@@ -12,5 +12,10 @@ public class UnauthorisedActionException extends PokerException {
      */
     public UnauthorisedActionException(String message) {
         super(message);
+    }
+
+    /** Creates a forbidden action with stable action feedback. */
+    public UnauthorisedActionException(String message, String actionErrorCode, String actionErrorMessage) {
+        super(message, actionErrorCode, actionErrorMessage);
     }
 }

@@ -4,7 +4,6 @@ import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.TooManyRequestsException;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.exception.PokerException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

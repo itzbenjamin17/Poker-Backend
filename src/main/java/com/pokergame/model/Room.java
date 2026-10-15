@@ -78,6 +78,11 @@ public class Room {
             logger.error("Invalid bigBlind: {}, smallBlind: {}", bigBlind, smallBlind);
             throw new BadRequestException("Big blind must be at least twice the small blind.");
         }
+        if (buyIn < bigBlind) {
+            logger.error("Invalid buyIn: {}, bigBlind: {}", buyIn, bigBlind);
+            throw new BadRequestException(
+                    "Buy-in must be at least the big blind amount.");
+        }
 
 
         this.roomId = roomId;

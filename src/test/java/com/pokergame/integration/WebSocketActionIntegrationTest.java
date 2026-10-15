@@ -3,7 +3,7 @@ package com.pokergame.integration;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.dto.response.PlayerNotificationResponse;
+import com.pokergame.dto.response.ActionErrorResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
@@ -19,6 +19,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
@@ -71,6 +73,44 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
     @DisplayName("player actions")
     class PlayerActions {
 
+        /** Each poker action keeps its rejected action identity on the private wire. */
+        @ParameterizedTest
+        @EnumSource(PlayerAction.class)
+        void everyIllegalActionCategoryPublishesStructuredFeedback(PlayerAction action) throws Exception {
+            TestGameSession gameSession = createStartedGame();
+            gameLifecycleService.createGameFromRoom(gameSession.roomId());
+            String currentPlayer = gameLifecycleService.getGame(gameSession.roomId()).getCurrentPlayer().getName();
+            String otherToken = HOST_NAME.equals(currentPlayer) ? gameSession.otherToken() : gameSession.hostToken();
+
+            WebSocketStompClient stompClient = createStompClient();
+            StompSession session = connectSession(stompClient, otherToken);
+            CompletableFuture<ActionErrorResponse> errorFuture = new CompletableFuture<>();
+            session.subscribe("/user/queue/private", new StompFrameHandler() {
+                /** {@inheritDoc} */
+                @Override public Type getPayloadType(@NonNull StompHeaders headers) {
+                    return ActionErrorResponse.class;
+                }
+
+                /** {@inheritDoc} */
+                @Override public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                    if (payload instanceof ActionErrorResponse response && !errorFuture.isDone()) {
+                        errorFuture.complete(response);
+                    }
+                }
+            });
+
+            Integer amount = action == PlayerAction.BET || action == PlayerAction.RAISE ? 100 : null;
+            session.send("/app/" + gameSession.roomId() + "/action", new PlayerActionRequest(action, amount));
+            ActionErrorResponse error = errorFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+
+            assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
+            assertThat(error.code()).isEqualTo("NOT_YOUR_TURN");
+            assertThat(error.action()).isEqualTo(action);
+            assertThat(error.message()).isEqualTo("Wait for your turn");
+            session.disconnect();
+            stompClient.stop();
+        }
+
         /**
          * Protects the contract that the system should publish ACTION_ERROR to the player's private topic for invalid actions.
          */
@@ -86,7 +126,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
 
             WebSocketStompClient stompClient = createStompClient();
             StompSession session = connectSession(stompClient, actingToken);
-            CompletableFuture<PlayerNotificationResponse> errorFuture = new CompletableFuture<>();
+            CompletableFuture<ActionErrorResponse> errorFuture = new CompletableFuture<>();
 
             session.subscribe(
                     "/user/queue/private",
@@ -94,13 +134,13 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
                         /** {@inheritDoc} */
                         @Override
                         public Type getPayloadType(@NonNull StompHeaders headers) {
-                            return PlayerNotificationResponse.class;
+                            return ActionErrorResponse.class;
                         }
 
                         /** {@inheritDoc} */
                         @Override
                         public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                            if (payload instanceof PlayerNotificationResponse notification
+                            if (payload instanceof ActionErrorResponse notification
                                     && notification.type() == ResponseMessage.ACTION_ERROR
                                     && !errorFuture.isDone()) {
                                 errorFuture.complete(notification);
@@ -111,11 +151,12 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             session.send("/app/" + gameSession.roomId() + "/action",
                     new PlayerActionRequest(PlayerAction.RAISE, 2000));
 
-            PlayerNotificationResponse error = errorFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            ActionErrorResponse error = errorFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
             assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
-            assertThat(error.playerName()).isEqualTo(currentPlayerName);
-            assertThat(error.message()).contains("available chips");
+            assertThat(error.code()).isEqualTo("INSUFFICIENT_CHIPS");
+            assertThat(error.action()).isEqualTo(PlayerAction.RAISE);
+            assertThat(error.message()).contains("Available:").contains("yours: 2000");
             session.disconnect();
             stompClient.stop();
         }

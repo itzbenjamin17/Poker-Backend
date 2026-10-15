@@ -130,6 +130,24 @@ class GameControllerTest {
     }
 
     /**
+     * Verifies that GET /api/game/{gameId}/state returns 404 when the game has already finished.
+     */
+    @Test
+    @DisplayName("GET /api/game/{gameId}/state - Game Over (404)")
+    void getGameState_GameOver_ShouldReturn404() throws Exception {
+        Game game = mock(Game.class);
+        when(game.isGameOver()).thenReturn(true);
+        when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
+        when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(true);
+        when(gameLifecycleService.getGame(gameId)).thenReturn(game);
+
+        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
+                .principal(auth))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message").value("Game not found"));
+    }
+
+    /**
      * Verifies the expected response for GET /api/game/{gameId}/state - Not In Game (403).
      */
     @Test

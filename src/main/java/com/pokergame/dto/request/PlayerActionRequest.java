@@ -32,7 +32,9 @@ public record PlayerActionRequest(
         // Validate amount is provided for betting actions
         if ((action == PlayerAction.BET || action == PlayerAction.RAISE)) {
             if (amount == null || amount <= 0) {
-                throw new BadRequestException("Please enter a positive amount for BET or RAISE actions");
+                throw new BadRequestException("Please enter a positive amount for BET or RAISE actions",
+                        amount != null && amount < 0 ? "NEGATIVE_AMOUNT" : "AMOUNT_REQUIRED",
+                        amount == null ? "Enter a positive amount" : "Amount must be positive; yours: " + amount);
             }
         }
 
@@ -41,7 +43,8 @@ public record PlayerActionRequest(
                 action == PlayerAction.CALL || action == PlayerAction.ALL_IN)) {
             if (amount != null && amount != 0) {
                 throw new BadRequestException(
-                        String.format("No amount is needed for %s actions", action));
+                        String.format("No amount is needed for %s actions", action),
+                        "UNEXPECTED_AMOUNT", "No amount needed; yours: " + amount);
             }
         }
     }

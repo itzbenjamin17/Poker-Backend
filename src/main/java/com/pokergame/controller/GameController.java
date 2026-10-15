@@ -10,7 +10,6 @@ import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
 import com.pokergame.model.Game;
-import com.pokergame.enums.ResponseMessage;
 import com.pokergame.security.PlayerPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -122,7 +121,7 @@ public class GameController {
         }
 
         Game game = gameLifecycleService.getGame(gameId);
-        if (game == null) {
+        if (game == null || game.isGameOver()) {
             throw new ResourceNotFoundException("Game not found");
         }
 
@@ -173,6 +172,27 @@ public class GameController {
         }
 
         gameLifecycleService.markPlayerReadyForNextHand(gameId, playerName);
+    }
+
+    /**
+     * Unmarks the authenticated player as READY during the post-round countdown.
+     *
+     * @param gameId    game identifier
+     * @param playerPrincipal authenticated player principal
+     */
+    @MessageMapping("/{gameId}/unready")
+    public void unmarkReady(
+            @DestinationVariable String gameId,
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
+        String playerName = playerPrincipal.playerName();
+        logger.info("Processing UNREADY for game {} by {}", gameId, playerName);
+
+        // Security check: ensure the token is actually for THIS game/room
+        if (!playerPrincipal.roomId().equals(gameId)) {
+            throw new UnauthorisedActionException("Token is not valid for this game.");
+        }
+
+        gameLifecycleService.unmarkPlayerReadyForNextHand(gameId, playerName);
     }
 
     /**

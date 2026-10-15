@@ -434,7 +434,7 @@ public class Game {
         }
 
         if (decision.amount() < 0) {
-            throw new BadRequestException("Action amount cannot be negative");
+            throw new BadRequestException("Action amount cannot be negative", "NEGATIVE_AMOUNT", "Amount must be positive; yours: " + decision.amount());
         }
 
         logger.debug(
@@ -452,11 +452,11 @@ public class Game {
         // Validate raise amounts (only if still a raise after conversion)
         if (actualDecision.action() == PlayerAction.RAISE) {
             if (actualDecision.amount() == 0) {
-                throw new BadRequestException("Raise amount must be greater than 0");
+                throw new BadRequestException("Raise amount must be greater than 0", "RAISE_AMOUNT_REQUIRED", "Raise must be positive; yours: 0");
             }
 
             if (actualDecision.amount() > player.getChips()) {
-                throw new BadRequestException("Raise amount cannot exceed available chips");
+                throw new BadRequestException("Raise amount cannot exceed available chips", "INSUFFICIENT_CHIPS", "Available: " + player.getChips() + "; yours: " + actualDecision.amount());
             }
 
             int totalBetAfterRaise = player.getCurrentBet() + actualDecision.amount();
@@ -467,40 +467,46 @@ public class Game {
                         "Raise amount must result in a bet higher than current highest bet of " + currentHighestBet +
                                 ". Your current bet is " + player.getCurrentBet() +
                                 ", so you need to raise by at least "
-                                + (currentHighestBet - player.getCurrentBet() + 1));
+                                + (currentHighestBet - player.getCurrentBet() + 1),
+                        "MIN_RAISE", "Min raise: " + (currentHighestBet - player.getCurrentBet() + 1) + "; yours: " + actualDecision.amount());
             }
 
             int raiseIncrement = totalBetAfterRaise - currentHighestBet;
             if (raiseIncrement < bigBlind && actualDecision.amount() < player.getChips()) {
                 throw new BadRequestException(
                         "Raise amount must be at least the big blind of " + bigBlind +
-                        ". You tried to raise by " + raiseIncrement);
+                        ". You tried to raise by " + raiseIncrement,
+                        "MIN_RAISE", "Min raise: " + (currentHighestBet - player.getCurrentBet() + bigBlind)
+                                + "; yours: " + actualDecision.amount());
             }
         }
 
         if (actualDecision.action() == PlayerAction.BET) {
             if (currentHighestBet > 0) {
                 throw new UnauthorisedActionException(
-                        "Cannot bet when there is an active bet. You must call, raise, or fold.");
+                        "Cannot bet when there is an active bet. You must call, raise, or fold.",
+                        "BET_NOT_AVAILABLE", "Active bet: " + currentHighestBet + "; call or raise");
             }
 
             if (actualDecision.amount() == 0) {
-                throw new BadRequestException("Bet amount must be greater than 0");
+                throw new BadRequestException("Bet amount must be greater than 0", "BET_AMOUNT_REQUIRED", "Bet must be positive; yours: 0");
             }
 
             if (actualDecision.amount() > player.getChips()) {
-                throw new BadRequestException("Bet amount cannot exceed available chips");
+                throw new BadRequestException("Bet amount cannot exceed available chips", "INSUFFICIENT_CHIPS", "Available: " + player.getChips() + "; yours: " + actualDecision.amount());
             }
 
             if (actualDecision.amount() < bigBlind && actualDecision.amount() < player.getChips()) {
-                throw new BadRequestException("Bet amount must be at least the big blind of " + bigBlind);
+                throw new BadRequestException("Bet amount must be at least the big blind of " + bigBlind,
+                        "MIN_BET", "Min bet: " + bigBlind + "; yours: " + actualDecision.amount());
             }
         }
 
         if (actualDecision.action() == PlayerAction.CHECK) {
             if (currentHighestBet > player.getCurrentBet()) {
                 throw new UnauthorisedActionException(
-                        "Cannot check when there is an active bet. You must call, raise, or fold.");
+                        "Cannot check when there is an active bet. You must call, raise, or fold.",
+                        "CHECK_NOT_AVAILABLE", "To call: " + (currentHighestBet - player.getCurrentBet()));
             }
         }
 
@@ -638,7 +644,7 @@ public class Game {
             case PRE_FLOP -> dealFlop();
             case FLOP -> dealTurn();
             case TURN -> dealRiver();
-            case RIVER -> {}
+            case RIVER, SHOWDOWN -> {}
         }
     }
 
