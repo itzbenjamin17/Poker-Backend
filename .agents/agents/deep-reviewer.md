@@ -3,7 +3,7 @@ name: deep-reviewer
 description: Deep architectural backend reviewer for poker rules, concurrent room/game mutations, async scheduling, encrypted WAL recovery, JWT authorization, and REST/STOMP state integrity.
 subagent: true
 mainAgent: false
-model: pro
+model: inherit
 commandExecutionPolicy: sandbox
 inheritMcp: false
 tools:
