@@ -57,9 +57,13 @@ Removing an old key too early fails startup. The server never guesses, skips, or
 
 Startup authenticates every complete frame before restoring traffic readiness. A final incomplete frame or uncommitted `PREPARE` is treated as a crash-torn tail and ignored. Missing keys, wrong keys, authentication failures, reordered/copied records, corruption in the committed prefix, an unreadable directory, or an unsupported schema fail startup.
 
-A prepare write/flush failure rejects the mutation before domain state changes. A commit write/flush failure suppresses queued broadcasts and success, marks persistence unhealthy, and rejects later mutations until restart and recovery. The application does not attempt to roll back mutated memory after a failed commit because the safe response is to remove the unhealthy process from service.
+A runtime prepare, serialization or commit failure lets a valid mutation continue in memory, including its broadcasts and scheduled work. Later valid commands continue under the same per-room lock. A domain mutation that throws still rejects the command and discards its success effects.
 
-Actuator health includes `pokerPersistenceHealth` with `recoveryComplete`, `activeWalCount`, and a sanitized `lastStorageError`. It never includes keys or decrypted state. Alert on DOWN status, repeated restarts, compaction errors, or unexpected WAL growth.
+The server retains the latest accepted state per affected room and retries every five seconds and on subsequent accepted mutations. Retry replaces the room's WAL with a fresh flushed encrypted checkpoint rather than appending past a possibly interrupted write. Deleted rooms retain pending tombstones until storage catches up. No player action or broadcast is replayed during save retry.
+
+Actuator health includes `pokerPersistenceHealth` with `recoveryComplete`, `mode` (`RECOVERING`, `DURABLE`, or `MEMORY_ONLY`), `persistenceHealthy`, `unsavedRoomCount`, `activeWalCount`, and a sanitized `lastStorageError`. Gameplay health remains UP after successful startup recovery while saves are degraded. Alert on `persistenceHealthy=false`, unsaved rooms, prolonged `MEMORY_ONLY`, startup DOWN status, or unexpected WAL growth. Health never includes keys or decrypted state.
+
+Keep the running process alive during an outage where possible. A crash or restart before a successful catch-up can lose accepted moves, completed hands or room deletions; restoration uses the last confirmed state, and some interrupted writes can require recovery repair. Restore disk access and confirm `DURABLE` with zero unsaved rooms before a planned restart. Startup corruption, missing keys and unsupported schemas still fail closed.
 
 ## Retention and deletion
 

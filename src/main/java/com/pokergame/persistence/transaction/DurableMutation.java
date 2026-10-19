@@ -6,8 +6,9 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a method that changes a poker game's progress. It ensures that any updates made 
- * are safely saved to disk before they become visible to players.
+ * Marks a room mutation that attempts persistence before publishing its effects.
+ * Valid mutations continue in memory when saving is unavailable; recovery protection
+ * resumes after a full checkpoint catches up with the accepted state.
  * <p>
  * The room ID must be explicitly provided in the annotation. If we tried to automatically 
  * extract the room ID by inspecting the room's data, it could lead to bugs and race conditions 

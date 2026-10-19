@@ -14,12 +14,14 @@ import org.slf4j.MDC;
 import com.pokergame.util.MdcKeys;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.DefaultParameterNameDiscoverer;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.expression.EvaluationContext;
 import org.springframework.expression.ExpressionParser;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.expression.spel.support.StandardEvaluationContext;
 
 import java.lang.reflect.Method;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
@@ -46,6 +48,8 @@ public final class DurableMutationAspect {
     private final PersistenceProperties properties;
     private final ConcurrentHashMap<String, ReentrantLock> roomLocks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AtomicInteger> recordsSinceCompaction = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, PendingSave> pendingSaves = new ConcurrentHashMap<>();
+    private final Set<String> blockedSnapshotRooms = ConcurrentHashMap.newKeySet();
     private final ExpressionParser expressionParser = new SpelExpressionParser();
     private final DefaultParameterNameDiscoverer parameterNames = new DefaultParameterNameDiscoverer();
 
@@ -69,101 +73,155 @@ public final class DurableMutationAspect {
     }
 
     /**
-     * Runs the method, saves the final game result, and only lets players see the changes
-     * if the save was completely successful.
-     * <p>
-     * If cleaning up old save files fails later, we just log it instead of undoing the successful save.
-     * </p>
+     * Serializes a room mutation and attempts to save it before publishing effects.
+     * Storage failures retain the accepted in-memory state and its queued effects;
+     * failures from the mutation itself still propagate without success effects.
      *
-     * @param joinPoint the intercepted method
-     * @param mutation details about the method
-     * @return the result of the method
-     * @throws Throwable if preparing, running, or saving fails
+     * @param joinPoint intercepted domain mutation
+     * @param mutation room identity expression
+     * @return the domain result, including when persistence is temporarily unavailable
+     * @throws Throwable if identity resolution or the domain mutation fails
      */
     @Around("@annotation(mutation)")
     public Object persist(ProceedingJoinPoint joinPoint, DurableMutation mutation) throws Throwable {
         String roomId = resolveRoomId(joinPoint, mutation.roomId());
+        String previousRoom = MDC.get(MdcKeys.ROOM_ID);
         MDC.put(MdcKeys.ROOM_ID, roomId);
         try {
-            logger.debug("Durable mutation enter: method={} roomId={}", joinPoint.getSignature().toShortString(), roomId);
             String activeRoom = DurableTransactionContext.currentRoomId();
-            // Prevent operations from bleeding across different poker rooms
             if (activeRoom != null) {
                 if (!activeRoom.equals(roomId)) {
                     throw new PersistenceException("Nested durable mutations cannot cross room boundaries");
                 }
-                logger.debug("Nested durable mutation joined existing transaction for roomId={}", roomId);
                 return joinPoint.proceed();
             }
 
             ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
             lock.lock();
-            long lockStartNano = System.nanoTime();
             try {
-                WalTransaction transaction = store.prepare(roomId);
                 DurableTransactionContext.begin(roomId);
+                WalTransaction transaction = null;
+                if (store.isHealthy() && !store.requiresCheckpoint(roomId)) {
+                    try {
+                        transaction = store.prepare(roomId);
+                    } catch (RuntimeException failure) {
+                        recordStorageFailure(roomId, failure);
+                    }
+                }
+
                 Object result;
                 try {
                     result = joinPoint.proceed();
                 } catch (Throwable failure) {
-                    // Discard pending post-save actions since the method failed
                     DurableTransactionContext.discard();
-                    logger.debug("Durable mutation discarded due to failure: class={} roomId={}", failure.getClass().getSimpleName(), roomId);
+                    PendingSave pending = pendingSaves.get(roomId);
+                    if (pending != null && pending.image() == null) blockedSnapshotRooms.add(roomId);
+                    cleanupAbortedCreation(roomId);
                     throw failure;
                 }
 
-                Room room = roomService.getObject().getRoom(roomId);
-                byte[] image;
-                boolean deleted = room == null;
-                if (deleted) {
-                    image = snapshotMapper.serializeDeletion(roomId);
-                } else {
-                    Game game = gameLifecycleService.getObject().getGame(roomId);
-                    image = snapshotMapper.serialize(room, roomService.getObject().getCurrentHost(roomId), game);
+                // Invalidate an older accepted image before serialization can fail.
+                blockedSnapshotRooms.remove(roomId);
+                pendingSaves.put(roomId, new PendingSave(null, false));
+                try {
+                    PendingSave pending = captureState(roomId);
+                    pendingSaves.put(roomId, pending);
+                    saveState(roomId, pending, transaction);
+                } catch (RuntimeException failure) {
+                    recordStorageFailure(roomId, failure);
                 }
-                store.commit(transaction, image);
-                long nanoTimeHeld = System.nanoTime() - lockStartNano;
-                logger.debug("Durable mutation committed: roomId={}, imageLength={}, lockHeldDurationNanos={}",
-                        roomId, image.length, nanoTimeHeld);
-
                 DurableTransactionContext.complete();
-                try {
-                    if (deleted) {
-                        logger.info("Durable mutation deletion commit for room {}", roomId);
-                        store.delete(roomId);
-                    } else if (shouldCompact(roomId)) {
-                        long beforeWalSize = store.walSize(roomId);
-                        long compactStartMs = System.currentTimeMillis();
-                        store.compact(roomId, image);
-                        long compactDurationMs = System.currentTimeMillis() - compactStartMs;
-                        long afterWalSize = store.walSize(roomId);
-                        recordsSinceCompaction.get(roomId).set(0);
-                        logger.info("WAL compacted for room {}: bytesBefore={}, bytesAfter={}, durationMs={}",
-                                roomId, beforeWalSize, afterWalSize, compactDurationMs);
-                    }
-                } catch (PersistenceException maintenanceFailure) {
-                    // The save was successful and players may have been notified.
-                    // Log the file cleanup error, but let the game continue.
-                    logger.error("Post-commit WAL maintenance failed for room {}", roomId, maintenanceFailure);
-                }
                 return result;
-            } catch (Throwable failure) {
-                DurableTransactionContext.discard();
-                logger.debug("Durable mutation discarded due to failure: class={} roomId={}", failure.getClass().getSimpleName(), roomId);
-                try {
-                    // Remove the room save files entirely if it was completely empty
-                    if (store.recoverLatest(roomId).isEmpty()) {
-                        store.delete(roomId);
-                    }
-                } catch (Exception cleanupError) {
-                    logger.error("Failed to clean up aborted WAL for room {}", roomId, cleanupError);
-                }
-                throw failure;
             } finally {
+                DurableTransactionContext.discard();
                 lock.unlock();
             }
         } finally {
-            MDC.remove(MdcKeys.ROOM_ID);
+            if (previousRoom == null) MDC.remove(MdcKeys.ROOM_ID);
+            else MDC.put(MdcKeys.ROOM_ID, previousRoom);
+        }
+    }
+
+    /**
+     * Retries accepted state images without replaying player actions. Non-blocking
+     * room locks avoid delaying active mutations or introducing cross-room lock order.
+     */
+    @Scheduled(fixedDelay = 5000, initialDelay = 5000)
+    public void retryPendingSaves() {
+        for (String roomId : pendingSaves.keySet()) {
+            ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
+            if (!lock.tryLock()) continue;
+            try {
+                PendingSave pending = pendingSaves.get(roomId);
+                if (pending == null) continue;
+                if (pending.image() == null) {
+                    // A rejected mutation may have partially changed live objects.
+                    // Only a later accepted mutation can supply a replacement image.
+                    if (blockedSnapshotRooms.contains(roomId)) continue;
+                    pending = captureState(roomId);
+                    pendingSaves.put(roomId, pending);
+                }
+                saveState(roomId, pending, null);
+            } catch (RuntimeException failure) {
+                recordStorageFailure(roomId, failure);
+            } finally {
+                lock.unlock();
+            }
+        }
+    }
+
+    /** Captures a complete image or tombstone while the room mutation lock is held. */
+    private PendingSave captureState(String roomId) {
+        Room room = roomService.getObject().getRoom(roomId);
+        if (room == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
+        Game game = gameLifecycleService.getObject().getGame(roomId);
+        return new PendingSave(snapshotMapper.serialize(room,
+                roomService.getObject().getCurrentHost(roomId), game), false);
+    }
+
+    /** Saves a current image, replacing uncertain WAL tails rather than appending to them. */
+    private void saveState(String roomId, PendingSave pending, WalTransaction transaction) {
+        boolean checkpoint = transaction == null || !store.isHealthy() || store.requiresCheckpoint(roomId);
+        if (checkpoint) {
+            store.checkpoint(roomId, pending.image());
+            recordsSinceCompaction.remove(roomId);
+        } else {
+            store.commit(transaction, pending.image());
+        }
+        if (pending.deleted()) {
+            // A saved tombstone is sufficient while another room still needs repair.
+            if (!store.isHealthy()) return;
+            store.delete(roomId);
+            recordsSinceCompaction.remove(roomId);
+        } else if (!checkpoint && shouldCompact(roomId)) {
+            store.compact(roomId, pending.image());
+            recordsSinceCompaction.remove(roomId);
+        }
+        pendingSaves.remove(roomId, pending);
+    }
+
+    /** Marks recovery protection degraded without rejecting an accepted game mutation. */
+    private void recordStorageFailure(String roomId, RuntimeException failure) {
+        store.recordWriteFailure(roomId, failure);
+        logger.warn("Persistence unavailable for room {}; continuing in memory ({})",
+                roomId, failure.getClass().getSimpleName());
+    }
+
+    /** Removes a PREPARE-only WAL for a rejected room creation, retaining existing games. */
+    private void cleanupAbortedCreation(String roomId) {
+        try {
+            if (!store.isHealthy() || roomService.getObject().getRoom(roomId) != null) return;
+            if (store.recoverLatest(roomId).isEmpty()) store.delete(roomId);
+        } catch (RuntimeException failure) {
+            logger.warn("Could not clean up rejected room creation {} ({})",
+                    roomId, failure.getClass().getSimpleName());
+        }
+    }
+
+    /** Owns immutable serialized state until a full save or deletion succeeds. */
+    private record PendingSave(byte[] image, boolean deleted) {
+        private PendingSave {
+            image = image == null ? null : image.clone();
         }
     }
 

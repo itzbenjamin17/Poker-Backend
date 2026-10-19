@@ -192,6 +192,44 @@ class EncryptedWalStoreTest {
         assertFalse(deletingStore.isHealthy());
     }
 
+    /** A repair replaces an interrupted tail so the next restart sees all subsequent saves. */
+    @Test
+    void recoveredTornTailRequiresCheckpointBeforeFurtherAppends() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 11);
+        EncryptedWalStore first = new EncryptedWalStore(directory, keys);
+        first.commit(first.prepare("room-torn"), new byte[]{1});
+        first.prepare("room-torn");
+        Path wal = directory.resolve("room-torn.wal");
+        byte[] bytes = Files.readAllBytes(wal);
+        Files.write(wal, java.util.Arrays.copyOf(bytes, bytes.length - 5));
+        EncryptedWalStore second = new EncryptedWalStore(directory, keys);
+        assertArrayEquals(new byte[]{1}, second.recoverLatest("room-torn").orElseThrow());
+        assertTrue(second.requiresCheckpoint("room-torn"));
+        assertThrows(PersistenceException.class, () -> second.prepare("room-torn"));
+
+        second.checkpoint("room-torn", new byte[]{2});
+        second.commit(second.prepare("room-torn"), new byte[]{3});
+        EncryptedWalStore third = new EncryptedWalStore(directory, keys);
+        assertArrayEquals(new byte[]{3}, third.recoverLatest("room-torn").orElseThrow());
+        assertFalse(third.requiresCheckpoint("room-torn"));
+    }
+
+    /** One room's repair cannot declare other unsaved rooms healthy. */
+    @Test
+    void checkpointOnlyClearsItsOwnRoomFailure() {
+        EncryptedWalStore store = new EncryptedWalStore(directory, keyring("current", (byte) 12));
+        store.recordWriteFailure("room-A", new PersistenceException("unavailable"));
+        store.recordWriteFailure("room-B", new PersistenceException("unavailable"));
+        store.checkpoint("room-A", new byte[]{1});
+        assertFalse(store.isHealthy());
+        assertEquals(1, store.unsavedRoomCount());
+        assertFalse(store.requiresCheckpoint("room-A"));
+        assertTrue(store.requiresCheckpoint("room-B"));
+        store.checkpoint("room-B", new byte[]{2});
+        assertTrue(store.isHealthy());
+        assertNull(store.lastError());
+    }
+
     /**
      * Supports the test scenario for keyring.
      * @param id id supplied to the fixture

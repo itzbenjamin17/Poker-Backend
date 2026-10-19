@@ -4,14 +4,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Keeps track of the active save operation and any actions we want to run right after.
+ * Groups a room mutation with effects released after it is accepted.
  * <p>
- * We use a ThreadLocal here because all player moves happen one at a time on a single thread.
- * Any future background work (like a 30-second turn timer) is saved to the database as data
- * instead of running while we're trying to save.
+ * Nested mutations share a thread-local context. Effects are queued until the
+ * persistence attempt finishes, including when a valid mutation continues in memory.
  * </p>
  */
 public final class DurableTransactionContext {
+    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(DurableTransactionContext.class);
     private static final ThreadLocal<Context> CURRENT = new ThreadLocal<>();
 
     /**
@@ -41,10 +41,10 @@ public final class DurableTransactionContext {
     }
 
     /**
-     * Delays an action (like sending a message to players) until the game finishes saving.
-     * If we aren't currently saving a game, it just runs the action immediately.
+     * Queues an effect until the current mutation is accepted and its save has been
+     * attempted. Without a current mutation the effect runs immediately.
      *
-     * @param action the code to run after saving finishes
+     * @param action effect to run after acceptance
      */
     public static void afterCommit(Runnable action) {
         Context context = CURRENT.get();
@@ -56,21 +56,26 @@ public final class DurableTransactionContext {
     }
 
     /**
-     * Clears out the tracking state, then runs all the delayed actions we collected.
-     * We clear the state first so that these actions don't accidentally think they are
-     * part of the save operation that just finished.
+     * Releases every accepted effect independently. A failed message publication must
+     * not suppress later timers or report an already accepted action as rejected.
      */
     static void complete() {
         Context context = CURRENT.get();
         CURRENT.remove();
         if (context != null) {
-            context.afterCommit().forEach(Runnable::run);
+            for (Runnable action : context.afterCommit()) {
+                try {
+                    action.run();
+                } catch (RuntimeException failure) {
+                    logger.error("Accepted mutation callback failed for room {} ({})",
+                            context.roomId(), failure.getClass().getSimpleName());
+                }
+            }
         }
     }
 
     /**
-     * Throws away all the delayed actions if the save failed. We don't want to notify
-     * players about a game change that never actually got saved.
+     * Discards effects when the domain mutation fails, without publishing success.
      */
     static void discard() {
         CURRENT.remove();
@@ -80,7 +85,7 @@ public final class DurableTransactionContext {
      * Holds the room ID and a list of actions to run when the save finishes.
      *
      * @param roomId      the room being saved
-     * @param afterCommit actions to run once the game is successfully saved
+     * @param afterCommit effects to run once the mutation is accepted
      */
     private record Context(String roomId, List<Runnable> afterCommit) {
     }

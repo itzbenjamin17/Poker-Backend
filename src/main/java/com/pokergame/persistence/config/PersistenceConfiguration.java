@@ -146,8 +146,8 @@ public class PersistenceConfiguration {
     }
 
     /**
-     * Reports on the health of the save system. If something is wrong, or if games
-     * are still loading, it tells the load balancer not to send players here.
+     * Reports gameplay availability separately from save health, so a runtime
+     * storage outage does not evict a server that is still hosting valid games.
      *
      * @param store    the secure vault
      * @param recovery the process recovering games on startup
@@ -157,9 +157,12 @@ public class PersistenceConfiguration {
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
     HealthIndicator pokerPersistenceHealth(EncryptedWalStore store, PersistenceRecovery recovery) {
         return () -> {
-            // Only report "up" if storage is working fine and all games have finished reloading
-            Health.Builder builder = store.isHealthy() && recovery.isComplete() ? Health.up() : Health.down();
+            boolean persistenceHealthy = store.isHealthy();
+            Health.Builder builder = recovery.isComplete() ? Health.up() : Health.down();
             return builder.withDetail("recoveryComplete", recovery.isComplete())
+                    .withDetail("mode", !recovery.isComplete() ? "RECOVERING" : persistenceHealthy ? "DURABLE" : "MEMORY_ONLY")
+                    .withDetail("persistenceHealthy", persistenceHealthy)
+                    .withDetail("unsavedRoomCount", store.unsavedRoomCount())
                     .withDetail("activeWalCount", store.walCount())
                     .withDetail("lastStorageError", store.lastError() == null ? "none" : store.lastError())
                     .build();
