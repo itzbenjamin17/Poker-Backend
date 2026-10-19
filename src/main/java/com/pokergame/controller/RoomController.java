@@ -72,6 +72,7 @@ public class RoomController {
         logger.info("Creating new room with request: {}", createRequest);
         
         // Sanitize names first to ensure consistency between token and storage
+        InputSanitizer.sanitize(createRequest.getRoomName());
         String sanitizedPlayerName = InputSanitizer.sanitize(createRequest.getPlayerName());
         
         String roomId = roomService.createRoom(createRequest);
@@ -99,6 +100,7 @@ public class RoomController {
         logger.info("Player {} attempting to join room: {}", joinRequest.playerName(), joinRequest.roomName());
         
         // Sanitize names first to ensure consistency between token and storage
+        InputSanitizer.sanitize(joinRequest.roomName());
         String sanitizedPlayerName = InputSanitizer.sanitize(joinRequest.playerName());
         
         String roomId = roomService.joinRoom(joinRequest);
