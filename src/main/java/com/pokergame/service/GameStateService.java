@@ -12,6 +12,7 @@ import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.RejectedAction;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.model.Card;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
@@ -80,7 +81,7 @@ public class GameStateService {
                     .findFirst()
                     .orElseThrow(() -> new ResourceNotFoundException("Player not found in game"));
 
-            return buildPrivatePlayerState(player);
+            return buildPrivatePlayerState(game, player);
         }
     }
 
@@ -107,7 +108,7 @@ public class GameStateService {
             game.incrementStateRevision();
             publicResponse = buildPublicGameStateResponse(gameId, game);
             for (Player player : game.getPlayers()) {
-                playerPrivateStates.put(player.getName(), buildPrivatePlayerState(player));
+                playerPrivateStates.put(player.getName(), buildPrivatePlayerState(game, player));
             }
         }
 
@@ -643,15 +644,15 @@ public class GameStateService {
      * @param player player whose status is projected
      * @return client-visible status value
      */
-    private String resolvePlayerStatus(Player player) {
+    String resolvePlayerStatus(Player player) {
         if (player.getIsOut()) {
             return PlayerStatus.OUT.getStatus();
         }
-        if (player.getIsDisconnected()) {
-            return PlayerStatus.DISCONNECTED.getStatus();
-        }
         if (player.getHasFolded()) {
             return PlayerStatus.FOLDED.getStatus();
+        }
+        if (player.getIsDisconnected()) {
+            return PlayerStatus.DISCONNECTED.getStatus();
         }
         if (player.getIsAllIn()) {
             return PlayerStatus.ALL_IN.getStatus();
@@ -675,14 +676,18 @@ public class GameStateService {
     /**
      * Builds a PrivatePlayerState object to show to specific players.
      *
-     * @param player object
+     * @param game   active game instance
+     * @param player player object
      * @return a {@link PrivatePlayerState}
      */
-    private PrivatePlayerState buildPrivatePlayerState(Player player) {
+    private PrivatePlayerState buildPrivatePlayerState(Game game, Player player) {
+        List<Card> holeCards = player.getHoleCards() == null
+                ? List.of()
+                : new ArrayList<>(player.getHoleCards());
         return new PrivatePlayerState(
                 player.getPlayerId(),
-                player.getHoleCards());
-
+                game.getHandNumber(),
+                holeCards);
     }
 
     /**

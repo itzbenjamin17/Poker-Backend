@@ -170,7 +170,7 @@ class GameControllerTest {
     @DisplayName("GET /api/game/{gameId}/private-state - Success")
     void getPrivateState_Success() throws Exception {
         Game game = mock(Game.class);
-        PrivatePlayerState response = new PrivatePlayerState("p1-id", Collections.emptyList());
+        PrivatePlayerState response = new PrivatePlayerState("p1-id", 1L, Collections.emptyList());
 
         when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
         when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(true);
@@ -180,7 +180,8 @@ class GameControllerTest {
         mockMvc.perform(get("/api/game/{gameId}/private-state", gameId)
                 .principal(auth))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.playerId").value("p1-id"));
+                .andExpect(jsonPath("$.playerId").value("p1-id"))
+                .andExpect(jsonPath("$.handNumber").value(1));
     }
 
     /**

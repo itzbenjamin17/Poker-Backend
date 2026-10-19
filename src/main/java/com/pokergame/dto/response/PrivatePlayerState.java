@@ -7,12 +7,14 @@ import java.util.List;
 /**
  * Represents the private state of a player in the game.
  * 
- * @param playerId  The ID of the player.
- * @param holeCards The hole cards of the player.
+ * @param playerId   The ID of the player.
+ * @param handNumber The hand number this private state belongs to.
+ * @param holeCards  The hole cards of the player.
  */
 
 public record PrivatePlayerState(
         String playerId,
+        long handNumber,
         List<Card> holeCards
 ) {
 }
