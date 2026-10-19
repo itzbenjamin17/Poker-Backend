@@ -5,6 +5,7 @@ import com.pokergame.enums.HandRank;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
 import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.enums.ReadyGateState;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -26,7 +27,7 @@ import java.util.Set;
  */
 public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState room, String currentHost,
         GameState game) {
-    public static final int CURRENT_SCHEMA_VERSION = 2;
+    public static final int CURRENT_SCHEMA_VERSION = 3;
 
     /**
      * Details about the room itself (the lobby) that we need to restore, like passwords and who joined when.
@@ -91,7 +92,9 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
             Map<ScheduledGameTask, Long> scheduledTaskDeadlines, int preHandCarryOver,
             Map<String, Integer> lastFullRaiseByStreet, Map<String, Integer> lastActedWagerByPlayer,
             List<String> handSeatOrder, String dealerAnchorPlayerId, String smallBlindPlayerId,
-            String bigBlindPlayerId, SettlementState lastSettlementResult, boolean terminalCarryOverSettled) {
+            String bigBlindPlayerId, SettlementState lastSettlementResult, boolean terminalCarryOverSettled,
+            ReadyGateState readyGateState, long handNumber, Map<ScheduledGameTask, Long> scheduledTaskGenerations,
+            boolean forfeitPending, long stateRevision) {
     }
 
     /** Plain persisted form of the immutable hand settlement result. */

@@ -9,11 +9,13 @@ import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.PlayerStatus;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.RejectedAction;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
+import com.pokergame.model.TournamentEligibility;
 import com.pokergame.persistence.transaction.DurableTransactionContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -102,6 +104,7 @@ public class GameStateService {
         Map<String, PrivatePlayerState> playerPrivateStates = new HashMap<>();
 
         synchronized (game) {
+            game.incrementStateRevision();
             publicResponse = buildPublicGameStateResponse(gameId, game);
             for (Player player : game.getPlayers()) {
                 playerPrivateStates.put(player.getName(), buildPrivatePlayerState(player));
@@ -140,6 +143,7 @@ public class GameStateService {
         List<String> winnerNames;
 
         synchronized (game) {
+            game.incrementStateRevision();
             // Get room information
             Room room = roomService.getRoom(gameId);
             int maxPlayers = room != null ? room.getMaxPlayers() : 0;
@@ -221,7 +225,9 @@ public class GameStateService {
                     null,
                     null,
                     retainedSettlement,
-                    retainedSettlement ? settlement.remainder() : null);
+                    retainedSettlement ? settlement.remainder() : null,
+                    null, null, null, game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
+                    game.getStateRevision());
         }
 
         // Broadcast showdown results to all players
@@ -253,6 +259,7 @@ public class GameStateService {
         PublicGameStateResponse autoAdvanceResponse;
 
         synchronized (game) {
+            game.incrementStateRevision();
             // Get room information
             Room room = roomService.getRoom(gameId);
             int maxPlayers = room != null ? room.getMaxPlayers() : 0;
@@ -312,7 +319,9 @@ public class GameStateService {
                     null,
                     List.of(),
                     null,
-                    null);
+                    null,
+                    game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
+                    game.getStateRevision());
         }
 
         logger.info("Broadcasting auto-advance state for game {}: {}", gameId, message);
@@ -400,6 +409,10 @@ public class GameStateService {
 
     /** Publishes a rejected action to its player's private WebSocket queue. */
     public void sendActionError(String gameId, String playerName, String code, PlayerAction action, String message) {
+        sendActionError(gameId, playerName, code, RejectedAction.from(action), message);
+    }
+
+    public void sendActionError(String gameId, String playerName, String code, RejectedAction action, String message) {
         sendToUserAfterCommit(playerName + ":" + gameId, "/queue/private",
                 new ActionErrorResponse(code, action, message));
     }
@@ -421,28 +434,33 @@ public class GameStateService {
             return;
         }
 
-        String message = "🏆 " + winner.getName() + " wins the game with " + winner.getChips() + " chips!";
-        PublicGameStateResponse finalState = null;
-
-        if (game != null) {
-            synchronized (game) {
-                finalState = buildFinalStateResponse(gameId, game, winner, !isForfeit);
-            }
+        Room room = roomService.getRoom(gameId);
+        int maxPlayers = room == null ? 0 : room.getMaxPlayers();
+        GameEndResponse event;
+        synchronized (game) {
+            event = captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
         }
-
-        GameEndResponse gameEndResponse = new GameEndResponse(
-                ResponseMessage.GAME_END.getMessage(),
-                gameId,
-                winner.getName(),
-                winner.getChips(),
-                isForfeit,
-                message,
-                finalState);
-
-        sendAfterCommit("/game/" + gameId, gameEndResponse);
+        sendGameEnd(event);
 
         logger.info("Game {} completed - Winner: {} with {} chips",
                 gameId, winner.getName(), winner.getChips());
+    }
+
+    /** Captures the immutable terminal event while the caller holds the game lock. */
+    public GameEndResponse captureGameEnd(String gameId, Game game, Player winner, boolean isForfeit, int maxPlayers) {
+        if (winner == null) return null;
+        if (game != null) {
+            game.incrementStateRevision();
+        }
+        String message = "🏆 " + winner.getName() + " wins the game with " + winner.getChips() + " chips!";
+        PublicGameStateResponse finalState = game == null ? null
+                : buildFinalStateResponse(gameId, game, winner, isForfeit, maxPlayers);
+        return new GameEndResponse(ResponseMessage.GAME_END.getMessage(), gameId, winner.getName(),
+                winner.getChips(), isForfeit, message, finalState);
+    }
+
+    public void sendGameEnd(GameEndResponse response) {
+        if (response != null) sendAfterCommit("/game/" + response.gameId(), response);
     }
 
     /**
@@ -459,9 +477,11 @@ public class GameStateService {
      * @return a {@link PublicGameStateResponse} representing the frozen final state
      */
     private PublicGameStateResponse buildFinalStateResponse(String gameId, Game game, Player winner,
-            boolean revealHoleCards) {
-        Room room = roomService.getRoom(gameId);
-        int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+            boolean isForfeit, int maxPlayers) {
+        boolean contestedShowdown = game.getCurrentPhase() == com.pokergame.enums.GamePhase.SHOWDOWN
+                && game.getLastSettlementResult() != null && game.getLastSettlementResult().settled()
+                && game.getActivePlayers().stream().filter(player -> !player.getHasFolded() && !player.getIsOut()).count() > 1;
+        boolean revealHoleCards = !isForfeit && contestedShowdown;
 
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
@@ -510,7 +530,10 @@ public class GameStateService {
                 game.isReadyCountdownActive(),
                 game.getReadyCountdownDeadlineEpochMs(),
                 null,
-                null);
+                null,
+                null, null, null, null, null,
+                game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
+                game.getStateRevision());
     }
 
     /**
@@ -607,7 +630,9 @@ public class GameStateService {
                 handSettled ? settlement.remainder() : null,
                 currentPlayer == null ? List.of() : game.getLegalActionsFor(currentPlayer),
                 currentPlayer == null ? null : game.getBigBlind(),
-                currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer));
+                currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer),
+                game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
+                game.getStateRevision());
 
     }
 
@@ -642,25 +667,9 @@ public class GameStateService {
      * @return eligible claimant name, or {@code null} when no claim is legal
      */
     private String computeClaimWinPlayerName(Game game) {
-        List<Player> eligiblePlayers = game.getPlayers().stream()
-                .filter(player -> !player.getIsOut())
-                .toList();
-
-        if (eligiblePlayers.size() < 2) {
-            return null;
-        }
-
-        List<Player> connectedPlayers = eligiblePlayers.stream()
-                .filter(player -> !player.getIsDisconnected())
-                .toList();
-
-        boolean anyDisconnected = eligiblePlayers.stream().anyMatch(Player::getIsDisconnected);
-
-        if (!anyDisconnected || connectedPlayers.size() != 1) {
-            return null;
-        }
-
-        return connectedPlayers.getFirst().getName();
+        if (!TournamentEligibility.canClaim(game)) return null;
+        return game.getPlayers().stream().filter(player -> TournamentEligibility.isContender(game, player))
+                .filter(player -> !player.getIsDisconnected()).map(Player::getName).findFirst().orElse(null);
     }
 
     /**

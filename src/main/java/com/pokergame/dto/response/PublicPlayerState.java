@@ -48,6 +48,11 @@ public record PublicPlayerState(
                 Boolean isReadyForNextHand
 
 ) {
+        public PublicPlayerState {
+                bestHand = bestHand == null ? null : List.copyOf(bestHand);
+                holeCards = holeCards == null ? null : List.copyOf(holeCards);
+        }
+
         /**
          * Creates the public player projection used outside showdown, leaving all
          * showdown and reconnect metadata absent.

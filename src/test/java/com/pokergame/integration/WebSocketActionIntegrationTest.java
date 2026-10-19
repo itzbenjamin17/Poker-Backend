@@ -8,6 +8,7 @@ import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.RejectedAction;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
 import com.pokergame.security.JwtService;
@@ -105,7 +106,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
 
             assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
             assertThat(error.code()).isEqualTo("NOT_YOUR_TURN");
-            assertThat(error.action()).isEqualTo(action);
+            assertThat(error.action()).isEqualTo(RejectedAction.from(action));
             assertThat(error.message()).isEqualTo("Wait for your turn");
             session.disconnect();
             stompClient.stop();
@@ -155,7 +156,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
 
             assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
             assertThat(error.code()).isEqualTo("INSUFFICIENT_CHIPS");
-            assertThat(error.action()).isEqualTo(PlayerAction.RAISE);
+            assertThat(error.action()).isEqualTo(RejectedAction.RAISE);
             assertThat(error.message()).contains("Available:").contains("yours: 2000");
             session.disconnect();
             stompClient.stop();

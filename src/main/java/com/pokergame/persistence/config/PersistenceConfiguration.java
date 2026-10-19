@@ -146,12 +146,11 @@ public class PersistenceConfiguration {
     }
 
     /**
-     * Reports gameplay availability separately from save health, so a runtime
-     * storage outage does not evict a server that is still hosting valid games.
+     * Reports degraded persistence separately from gameplay availability.
      *
-     * @param store    the secure vault
-     * @param recovery the process recovering games on startup
-     * @return a health check indicating if it's safe to play
+     * @param store          the secure vault
+     * @param recovery       the process recovering games on startup
+     * @return a health check indicating if persistence is healthy
      */
     @Bean("pokerPersistenceHealth")
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
@@ -160,8 +159,8 @@ public class PersistenceConfiguration {
             boolean persistenceHealthy = store.isHealthy();
             Health.Builder builder = recovery.isComplete() ? Health.up() : Health.down();
             return builder.withDetail("recoveryComplete", recovery.isComplete())
-                    .withDetail("mode", !recovery.isComplete() ? "RECOVERING" : persistenceHealthy ? "DURABLE" : "MEMORY_ONLY")
                     .withDetail("persistenceHealthy", persistenceHealthy)
+                    .withDetail("mode", !recovery.isComplete() ? "RECOVERING" : persistenceHealthy ? "DURABLE" : "MEMORY_ONLY")
                     .withDetail("unsavedRoomCount", store.unsavedRoomCount())
                     .withDetail("activeWalCount", store.walCount())
                     .withDetail("lastStorageError", store.lastError() == null ? "none" : store.lastError())
@@ -173,7 +172,7 @@ public class PersistenceConfiguration {
      * Acts like a bouncer at the door, blocking regular internet traffic until all
      * games are fully reloaded. Health checks are allowed through.
      *
-     * @param recovery the process recovering games on startup
+     * @param recovery       the process recovering games on startup
      * @return a filter that controls early web traffic
      */
     @Bean
@@ -181,8 +180,7 @@ public class PersistenceConfiguration {
     FilterRegistrationBean<OncePerRequestFilter> persistenceRecoveryTrafficGate(PersistenceRecovery recovery) {
         OncePerRequestFilter filter = new OncePerRequestFilter() {
             /**
-             * Blocks players from accessing the game if old games are still being restored.
-             * Health checks pass through so we know the server is alive.
+             * Blocks players from accessing the game while old games are still being restored.
              *
              * @param request     the incoming request
              * @param response    what we send back to the user
@@ -193,12 +191,10 @@ public class PersistenceConfiguration {
             @Override
             protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                     FilterChain filterChain) throws ServletException, IOException {
-                // If recovery is still running, block everything except health checks
                 if (!recovery.isComplete() && !request.getRequestURI().startsWith("/actuator/health")) {
                     response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Recovery is not complete");
                     return;
                 }
-                // Allow the request to proceed normally
                 filterChain.doFilter(request, response);
             }
         };

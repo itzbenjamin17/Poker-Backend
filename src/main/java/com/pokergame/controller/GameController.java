@@ -6,6 +6,7 @@ import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
+import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
@@ -13,12 +14,16 @@ import com.pokergame.model.Game;
 import com.pokergame.security.PlayerPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * REST controller for active poker game operations.
@@ -35,6 +40,9 @@ public class GameController {
     private final GameStateService gameStateService;
 
     private final PlayerActionService playerActionService;
+
+    @Autowired(required = false)
+    private DurableMutationAspect durableMutationAspect;
 
     /**
      * Creates the game controller with its action, lifecycle, and projection services.
@@ -72,9 +80,18 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        Game game = getAuthorisedGame(gameId, playerName);
-
-        return ResponseEntity.ok(gameStateService.getPublicGameStateSnapshot(gameId, game));
+        ReentrantLock lock = durableMutationAspect != null ? durableMutationAspect.getRoomLock(gameId) : null;
+        if (lock != null) {
+            lock.lock();
+        }
+        try {
+            Game game = getAuthorisedGame(gameId, playerName);
+            return ResponseEntity.ok(gameStateService.getPublicGameStateSnapshot(gameId, game));
+        } finally {
+            if (lock != null) {
+                lock.unlock();
+            }
+        }
     }
 
     /**
@@ -97,9 +114,18 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        Game game = getAuthorisedGame(gameId, playerName);
-
-        return ResponseEntity.ok(gameStateService.getPrivatePlayerStateSnapshot(game, playerName));
+        ReentrantLock lock = durableMutationAspect != null ? durableMutationAspect.getRoomLock(gameId) : null;
+        if (lock != null) {
+            lock.lock();
+        }
+        try {
+            Game game = getAuthorisedGame(gameId, playerName);
+            return ResponseEntity.ok(gameStateService.getPrivatePlayerStateSnapshot(game, playerName));
+        } finally {
+            if (lock != null) {
+                lock.unlock();
+            }
+        }
     }
 
     /**
@@ -216,7 +242,7 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        gameLifecycleService.leaveGame(gameId, playerName);
+        gameLifecycleService.departParticipants(gameId, List.of(playerName));
         logger.info("Player {} successfully left game {}", playerName, gameId);
         return ResponseEntity.ok(ApiResponse.success("Successfully left game"));
     }

@@ -6,6 +6,7 @@ import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.TokenResponse;
 import com.pokergame.exception.UnauthorisedActionException;
+import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
@@ -14,9 +15,13 @@ import com.pokergame.util.InputSanitizer;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 
 
 /**
@@ -33,6 +38,9 @@ public class RoomController {
     private final GameLifecycleService gameLifecycleService;
 
     private final JwtService jwtService;
+
+    @Autowired(required = false)
+    private DurableMutationAspect durableMutationAspect;
 
     /**
      * Creates the room controller with its room, game, and token services.
@@ -117,20 +125,12 @@ public class RoomController {
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.info("Player {} requesting to leave room {}", playerName, roomId);
-        boolean gameActive = gameLifecycleService.gameExists(roomId);
-
         // Security check: ensure the token is actually for THIS room
         if (!playerPrincipal.roomId().equals(roomId)) {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
 
-        // Host only closes room while in lobby phase. During active games, host is
-        // transferred.
-        roomService.leaveRoom(roomId, playerName, !gameActive);
-
-        if (gameActive && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
-            gameLifecycleService.leaveGame(roomId, playerName);
-        }
+        gameLifecycleService.departParticipants(roomId, List.of(playerName));
 
         logger.info("Player {} successfully left room {}", playerName, roomId);
         return ResponseEntity.ok(ApiResponse.success("Successfully left room"));
@@ -144,14 +144,24 @@ public class RoomController {
      */
     @GetMapping("/{roomId}")
     public ResponseEntity<RoomDataResponse> getRoomInfo(@PathVariable String roomId) {
-        logger.debug("Fetching room info for room: {}", roomId);
-        RoomDataResponse roomData = roomService.getRoomData(roomId);
-        if (roomData == null) {
-            logger.warn("Room not found: {}", roomId);
-            return ResponseEntity.notFound().build();
+        ReentrantLock lock = durableMutationAspect != null ? durableMutationAspect.getRoomLock(roomId) : null;
+        if (lock != null) {
+            lock.lock();
         }
-        logger.debug("Room info retrieved successfully for room: {}", roomId);
-        return ResponseEntity.ok(roomData);
+        try {
+            logger.debug("Fetching room info for room: {}", roomId);
+            RoomDataResponse roomData = roomService.getRoomData(roomId);
+            if (roomData == null) {
+                logger.warn("Room not found: {}", roomId);
+                return ResponseEntity.notFound().build();
+            }
+            logger.debug("Room info retrieved successfully for room: {}", roomId);
+            return ResponseEntity.ok(roomData);
+        } finally {
+            if (lock != null) {
+                lock.unlock();
+            }
+        }
     }
 
     /**

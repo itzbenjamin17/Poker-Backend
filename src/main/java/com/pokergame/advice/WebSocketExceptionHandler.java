@@ -2,6 +2,7 @@ package com.pokergame.advice;
 
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.RejectedAction;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.exception.ActionFeedbackException;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -70,6 +71,12 @@ public class WebSocketExceptionHandler {
 
         logger.warn("WebSocket failure for player {} in game {}: {}", playerName, gameId, exception.getMessage());
         if (gameStateService == null) return;
+
+        if (destination != null && (destination.endsWith("/ready") || destination.endsWith("/unready"))) {
+            RejectedAction readinessAction = destination.endsWith("/ready") ? RejectedAction.READY : RejectedAction.UNREADY;
+            gameStateService.sendActionError(gameId, playerName, "ACTION_REJECTED", readinessAction, technicalMessage(exception));
+            return;
+        }
 
         if (destination == null || !destination.endsWith("/action")) {
             gameStateService.sendPrivatePlayerNotification(gameId, playerName,

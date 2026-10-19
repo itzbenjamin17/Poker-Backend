@@ -150,15 +150,13 @@ class RoomControllerTest {
         String playerName = "Player1";
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
         Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(gameLifecycleService.gameExists(roomId)).thenReturn(false);
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
                 .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully left room"));
 
-        verify(roomService).leaveRoom(eq(roomId), eq(playerName), eq(true));
-        verify(gameLifecycleService, never()).leaveGame(anyString(), anyString());
+        verify(gameLifecycleService).departParticipants(roomId, List.of(playerName));
     }
 
     /**
@@ -171,16 +169,13 @@ class RoomControllerTest {
         String playerName = "Player1";
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
         Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(gameLifecycleService.gameExists(roomId)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(roomId, playerName)).thenReturn(true);
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
                 .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully left room"));
 
-        verify(roomService).leaveRoom(eq(roomId), eq(playerName), eq(false));
-        verify(gameLifecycleService).leaveGame(roomId, playerName);
+        verify(gameLifecycleService).departParticipants(roomId, List.of(playerName));
     }
 
     /**
@@ -193,16 +188,13 @@ class RoomControllerTest {
         String playerName = "Player1";
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
         Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(gameLifecycleService.gameExists(roomId)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(roomId, playerName)).thenReturn(false);
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
                 .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Successfully left room"));
 
-        verify(roomService).leaveRoom(eq(roomId), eq(playerName), eq(false));
-        verify(gameLifecycleService, never()).leaveGame(anyString(), anyString());
+        verify(gameLifecycleService).departParticipants(roomId, List.of(playerName));
     }
 
     /**

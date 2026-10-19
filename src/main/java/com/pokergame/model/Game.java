@@ -6,6 +6,7 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.enums.ReadyGateState;
 import com.pokergame.service.HandEvaluatorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,13 +49,18 @@ public class Game {
     private String smallBlindPlayerId;
     private String bigBlindPlayerId;
     private boolean terminalCarryOverSettled;
+    private boolean forfeitPending;
     private boolean readyCountdownActive;
     private Long readyCountdownDeadlineEpochMs;
+    private ReadyGateState readyGateState;
+    private long handNumber;
+    private long stateRevision;
 
     // Track if everyone has had their initial turn in the current betting round
     private boolean everyoneHasHadInitialTurn;
     private final Set<String> actedPlayersInRound;
     private final Map<ScheduledGameTask, Long> scheduledTaskDeadlines;
+    private final Map<ScheduledGameTask, Long> scheduledTaskGenerations;
 
     /**
      * Internal constructor that allows bypassing initial player count validation,
@@ -98,9 +104,14 @@ public class Game {
         this.handSeatOrder = new ArrayList<>(players.stream().map(Player::getPlayerId).toList());
         this.dealerAnchorPlayerId = activePlayers.isEmpty() ? null : activePlayers.get(dealerPosition).getPlayerId();
         this.terminalCarryOverSettled = false;
+        this.forfeitPending = false;
         this.readyCountdownActive = false;
         this.readyCountdownDeadlineEpochMs = null;
+        this.readyGateState = ReadyGateState.CLOSED;
+        this.handNumber = 0;
+        this.stateRevision = 0;
         this.scheduledTaskDeadlines = new EnumMap<>(ScheduledGameTask.class);
+        this.scheduledTaskGenerations = new EnumMap<>(ScheduledGameTask.class);
     }
 
     /**
@@ -157,11 +168,16 @@ public class Game {
         private String smallBlindPlayerId;
         private String bigBlindPlayerId;
         private boolean terminalCarryOverSettled;
+        private boolean forfeitPending;
         private boolean readyCountdownActive;
         private Long readyCountdownDeadlineEpochMs;
+        private ReadyGateState readyGateState = ReadyGateState.CLOSED;
+        private long handNumber;
+        private long stateRevision;
         private boolean everyoneHasHadInitialTurn;
         private Set<String> actedPlayersInRound;
         private Map<ScheduledGameTask, Long> scheduledTaskDeadlines;
+        private Map<ScheduledGameTask, Long> scheduledTaskGenerations;
         private HandEvaluatorService handEvaluator;
 
         public GameRestoreBuilder gameId(String gameId) {
@@ -261,6 +277,7 @@ public class Game {
         public GameRestoreBuilder smallBlindPlayerId(String value) { this.smallBlindPlayerId = value; return this; }
         public GameRestoreBuilder bigBlindPlayerId(String value) { this.bigBlindPlayerId = value; return this; }
         public GameRestoreBuilder terminalCarryOverSettled(boolean value) { this.terminalCarryOverSettled = value; return this; }
+        public GameRestoreBuilder forfeitPending(boolean value) { this.forfeitPending = value; return this; }
 
         public GameRestoreBuilder readyCountdownActive(boolean readyCountdownActive) {
             this.readyCountdownActive = readyCountdownActive;
@@ -271,6 +288,10 @@ public class Game {
             this.readyCountdownDeadlineEpochMs = readyCountdownDeadlineEpochMs;
             return this;
         }
+
+        public GameRestoreBuilder readyGateState(ReadyGateState value) { this.readyGateState = value; return this; }
+        public GameRestoreBuilder handNumber(long value) { this.handNumber = value; return this; }
+        public GameRestoreBuilder stateRevision(long value) { this.stateRevision = value; return this; }
 
         public GameRestoreBuilder everyoneHasHadInitialTurn(boolean everyoneHasHadInitialTurn) {
             this.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
@@ -286,6 +307,7 @@ public class Game {
             this.scheduledTaskDeadlines = scheduledTaskDeadlines;
             return this;
         }
+        public GameRestoreBuilder scheduledTaskGenerations(Map<ScheduledGameTask, Long> value) { this.scheduledTaskGenerations = value; return this; }
 
         public GameRestoreBuilder handEvaluator(HandEvaluatorService handEvaluator) {
             this.handEvaluator = handEvaluator;
@@ -329,13 +351,21 @@ public class Game {
             game.smallBlindPlayerId = smallBlindPlayerId;
             game.bigBlindPlayerId = bigBlindPlayerId;
             game.terminalCarryOverSettled = terminalCarryOverSettled;
+            game.forfeitPending = forfeitPending;
             game.readyCountdownActive = readyCountdownActive;
             game.readyCountdownDeadlineEpochMs = readyCountdownDeadlineEpochMs;
+            game.readyGateState = readyGateState == null
+                    ? (readyCountdownActive ? ReadyGateState.COUNTING_DOWN : ReadyGateState.CLOSED)
+                    : readyGateState;
+            game.handNumber = handNumber;
+            game.stateRevision = stateRevision;
             game.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
             game.actedPlayersInRound.clear();
             game.actedPlayersInRound.addAll(actedPlayersInRound);
             game.scheduledTaskDeadlines.clear();
             game.scheduledTaskDeadlines.putAll(scheduledTaskDeadlines);
+            game.scheduledTaskGenerations.clear();
+            if (scheduledTaskGenerations != null) game.scheduledTaskGenerations.putAll(scheduledTaskGenerations);
             return game;
         }
     }
@@ -380,6 +410,7 @@ public class Game {
         terminalCarryOverSettled = false;
         readyCountdownActive = false;
         readyCountdownDeadlineEpochMs = null;
+        readyGateState = ReadyGateState.CLOSED;
 
         logger.debug("Hand reset complete for game {} | contributions cleared", gameId);
 
@@ -393,7 +424,9 @@ public class Game {
         }
 
         if (activePlayers.size() <= 1) {
-            gameOver = true;
+            // The lifecycle coordinator freezes the winner and emits GAME_END
+            // after this outcome is known; do not mark terminal before that event
+            // can be captured exactly once.
             return true;
         } else {
             gameOver = false;
@@ -1566,6 +1599,7 @@ public class Game {
     public void openReadyCountdown(long deadlineEpochMs) {
         readyCountdownActive = true;
         readyCountdownDeadlineEpochMs = deadlineEpochMs;
+        readyGateState = ReadyGateState.COUNTING_DOWN;
         for (Player player : players) {
             player.setReadyForNextHand(false);
         }
@@ -1577,7 +1611,30 @@ public class Game {
     public void closeReadyCountdown() {
         readyCountdownActive = false;
         readyCountdownDeadlineEpochMs = null;
+        readyGateState = ReadyGateState.CLOSED;
     }
+
+    /** Closes ticking readiness while keeping the completed hand available for review. */
+    public void waitForReadyPlayers() {
+        readyCountdownActive = false;
+        readyCountdownDeadlineEpochMs = null;
+        readyGateState = ReadyGateState.WAITING_FOR_PLAYERS;
+        for (Player player : players) player.setReadyForNextHand(false);
+    }
+
+    /** Begins a new numbered hand after the previous hand has settled. */
+    public long beginHand() {
+        if (handNumber == 0) handNumber = 1;
+        else handNumber++;
+        this.stateRevision = 1;
+        return handNumber;
+    }
+
+    public long getHandNumber() { return handNumber; }
+
+    public ReadyGateState getReadyGateState() { return readyGateState; }
+
+    public int getReadyEligibleCount() { return getReadyEligiblePlayers().size(); }
 
     /**
      * Returns whether the ready countdown gate is currently active.
@@ -1608,7 +1665,7 @@ public class Game {
      */
     public boolean areAllReadyEligiblePlayersReady() {
         List<Player> eligiblePlayers = getReadyEligiblePlayers();
-        if (eligiblePlayers.isEmpty()) {
+        if (eligiblePlayers.size() < 2) {
             return false;
         }
         return eligiblePlayers.stream().allMatch(Player::getIsReadyForNextHand);
@@ -1995,6 +2052,8 @@ public class Game {
 
     public HandSettlementResult getLastSettlementResult() { return lastSettlementResult; }
     public boolean isTerminalCarryOverSettled() { return terminalCarryOverSettled; }
+    public boolean isForfeitPending() { return forfeitPending; }
+    public void setForfeitPending(boolean value) { forfeitPending = value; }
 
     /** Completes a terminal game by awarding retained remainder exactly once to its resolved winner. */
     public void completeGameSettlement(Player winner) {
@@ -2042,6 +2101,7 @@ public class Game {
      */
     public void scheduleTask(ScheduledGameTask task, long deadlineEpochMs) {
         scheduledTaskDeadlines.put(task, deadlineEpochMs);
+        scheduledTaskGenerations.merge(task, 1L, Long::sum);
     }
 
     /**
@@ -2054,6 +2114,8 @@ public class Game {
     public Long getScheduledTaskDeadline(ScheduledGameTask task) {
         return scheduledTaskDeadlines.get(task);
     }
+    public long getScheduledTaskGeneration(ScheduledGameTask task) { return scheduledTaskGenerations.getOrDefault(task, 0L); }
+    public Map<ScheduledGameTask, Long> getScheduledTaskGenerationsSnapshot() { return Map.copyOf(scheduledTaskGenerations); }
 
     /**
      * Clears durable intent in the same mutation that performs the work, making
@@ -2063,6 +2125,14 @@ public class Game {
      */
     public void clearScheduledTask(ScheduledGameTask task) {
         scheduledTaskDeadlines.remove(task);
+        scheduledTaskGenerations.merge(task, 1L, Long::sum);
+    }
+
+    /** Invalidates all durable work except terminal cleanup. */
+    public void invalidateProgressionTasks() {
+        for (ScheduledGameTask task : List.copyOf(scheduledTaskDeadlines.keySet())) {
+            if (task != ScheduledGameTask.CLEANUP) clearScheduledTask(task);
+        }
     }
 
     /**
@@ -2073,5 +2143,13 @@ public class Game {
      */
     public Map<ScheduledGameTask, Long> getScheduledTaskDeadlinesSnapshot() {
         return Map.copyOf(scheduledTaskDeadlines);
+    }
+
+    public long getStateRevision() {
+        return stateRevision;
+    }
+
+    public void incrementStateRevision() {
+        this.stateRevision++;
     }
 }

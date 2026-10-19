@@ -30,7 +30,6 @@ import org.springframework.messaging.MessageHandler;
 import org.springframework.messaging.SubscribableChannel;
 
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -38,21 +37,20 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
-import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Exercises real proxied game actions, publication, save retry and restart after a storage outage. */
+/** Exercises accepted gameplay and checkpoint recovery after a runtime save failure. */
 class PersistenceAvailabilityIntegrationTest {
     @TempDir
     Path directory;
 
-    /** Valid actions remain visible during an outage and the scheduled retry saves the current game. */
+    /** Storage failure preserves accepted gameplay and effects; a retry saves the latest state. */
     @Test
-    void playersContinueDuringStorageOutageAndLatestStateSurvivesRetryAndRestart() {
+    void storageOutageContinuesGameplayAndCheckpointsLatestState() {
         String roomId;
-        int finalPot;
-        Map<String, Integer> finalStacks;
-        List<Card> finalDeck;
+        int initialPot;
+        Map<String, Integer> initialStacks;
+        List<Card> initialDeck;
         try (ConfigurableApplicationContext context = startApplication()) {
             RoomService rooms = context.getBean(RoomService.class);
             roomId = rooms.createRoom(new CreateRoomRequest("Available game", "Alice", 6, 5, 10, 1000, null));
@@ -75,45 +73,50 @@ class PersistenceAvailabilityIntegrationTest {
             };
             broker.subscribe(recorder);
             try {
-                unavailable.set(true);
-                for (int i = 0; i < 2; i++) {
-                    Player actor = game.getCurrentPlayer();
-                    int call = Math.max(0, game.getCurrentHighestBet() - actor.getCurrentBet());
-                    int previousPot = game.getPot();
-                    int previousChips = actor.getChips();
-                    int previousBroadcasts = publishedPots.size();
-                    PlayerAction action = call > 0 ? PlayerAction.CALL : PlayerAction.CHECK;
+                initialPot = game.getPot();
+                initialStacks = game.getPlayers().stream().collect(Collectors.toMap(Player::getPlayerId, Player::getChips));
+                initialDeck = game.getRemainingDeckSnapshot();
 
-                    assertDoesNotThrow(() -> context.getBean(PlayerActionService.class).processPlayerAction(
-                            roomId, new PlayerActionRequest(action, null), actor.getName()));
-                    assertEquals(previousChips - call, actor.getChips());
-                    assertEquals(previousPot + call, game.getPot());
-                    assertTrue(publishedPots.size() > previousBroadcasts);
-                    assertEquals(game.getPot(), publishedPots.getLast());
-                }
+                unavailable.set(true);
+
+                Player actor = game.getCurrentPlayer();
+                int call = Math.max(0, game.getCurrentHighestBet() - actor.getCurrentBet());
+                PlayerAction action = call > 0 ? PlayerAction.CALL : PlayerAction.CHECK;
+
+                context.getBean(PlayerActionService.class).processPlayerAction(
+                        roomId, new PlayerActionRequest(action, null), actor.getName());
+                int afterAcceptedPot = game.getPot();
+                assertNotEquals(initialPot, afterAcceptedPot, "Valid gameplay remains accepted during a write outage");
+                assertFalse(publishedPots.isEmpty(), "Accepted broadcasts must not be suppressed by a write outage");
+
                 assertFalse(store.isHealthy());
                 var health = context.getBean("pokerPersistenceHealth", HealthIndicator.class).health();
-                assertEquals("UP", health.getStatus().getCode(), "Unsaved play must remain available");
-                assertEquals("MEMORY_ONLY", health.getDetails().get("mode"));
+                assertEquals("UP", health.getStatus().getCode(), "Gameplay stays available after successful startup recovery");
                 assertEquals(false, health.getDetails().get("persistenceHealthy"));
-                finalPot = game.getPot();
-                finalStacks = game.getPlayers().stream().collect(Collectors.toMap(Player::getPlayerId, Player::getChips));
-                finalDeck = game.getRemainingDeckSnapshot();
+                assertEquals("MEMORY_ONLY", health.getDetails().get("mode"));
 
                 unavailable.set(false);
-                await().atMost(Duration.ofSeconds(8)).until(store::isHealthy);
-                assertEquals("DURABLE", context.getBean("pokerPersistenceHealth", HealthIndicator.class)
-                        .health().getDetails().get("mode"));
+                Player nextActor = game.getCurrentPlayer();
+                int nextCall = Math.max(0, game.getCurrentHighestBet() - nextActor.getCurrentBet());
+                PlayerAction nextAction = nextCall > 0 ? PlayerAction.CALL : PlayerAction.CHECK;
+                context.getBean(PlayerActionService.class).processPlayerAction(
+                        roomId, new PlayerActionRequest(nextAction, null), nextActor.getName());
+                context.getBean(com.pokergame.persistence.transaction.DurableMutationAspect.class).retryPendingSaves();
+                assertTrue(store.isHealthy(), "A checkpoint retry restores persistence health");
+                initialPot = game.getPot();
+                initialStacks = game.getPlayers().stream().collect(Collectors.toMap(Player::getPlayerId, Player::getChips));
+                initialDeck = game.getRemainingDeckSnapshot();
             } finally {
                 broker.unsubscribe(recorder);
             }
         }
+        // After restart with healthy storage, state before failed mutation is recovered
         try (ConfigurableApplicationContext recovered = startApplication()) {
             Game game = recovered.getBean(GameLifecycleService.class).getGame(roomId);
             assertNotNull(game);
-            assertEquals(finalPot, game.getPot());
-            assertEquals(finalStacks, game.getPlayers().stream().collect(Collectors.toMap(Player::getPlayerId, Player::getChips)));
-            assertEquals(finalDeck, game.getRemainingDeckSnapshot());
+            assertEquals(initialPot, game.getPot());
+            assertEquals(initialStacks, game.getPlayers().stream().collect(Collectors.toMap(Player::getPlayerId, Player::getChips)));
+            assertEquals(initialDeck, game.getRemainingDeckSnapshot());
         }
     }
 

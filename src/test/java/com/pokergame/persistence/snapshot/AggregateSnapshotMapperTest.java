@@ -8,6 +8,8 @@ import com.pokergame.model.HandSettlementResult;
 import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.ReadyGateState;
+import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.service.HandEvaluatorService;
 import org.junit.jupiter.api.Test;
 
@@ -58,7 +60,7 @@ class AggregateSnapshotMapperTest {
     }
 
     @Test
-    void settlementAndSchemaTwoRoundTripAndRejectsVersionOne() {
+    void settlementAndSchemaThreeRoundTripAndRejectsVersionTwo() {
         HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room("room-2", "Recovery", "Alice", 4, 5, 10, 1000, "secret");
         room.addPlayer("Alice");
@@ -74,7 +76,10 @@ class AggregateSnapshotMapperTest {
                 .bigBlindPlayerId("b").lastSettlementResult(new HandSettlementResult(Map.of("a", 50), Map.of("b", 2),
                         Set.of("a"), 3, true))
                 .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of()).handEvaluator(evaluator).build();
+                .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 123L))
+                .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 9L))
+                .handNumber(7).readyGateState(ReadyGateState.WAITING_FOR_PLAYERS).forfeitPending(true).stateRevision(19)
+                .handEvaluator(evaluator).build();
         game.markGameOver();
         game.completeGameSettlement(players.getFirst());
         assertEquals(1033, players.getFirst().getChips());
@@ -90,6 +95,12 @@ class AggregateSnapshotMapperTest {
         assertEquals(Map.of("PRE_FLOP", 10), restored.getLastFullRaiseByStreetSnapshot());
         assertEquals(List.of("a", "b"), restored.getHandSeatOrderSnapshot());
         assertTrue(restored.isTerminalCarryOverSettled());
+        assertEquals(7, restored.getHandNumber());
+        assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, restored.getReadyGateState());
+        assertEquals(9L, restored.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
+        assertTrue(restored.isForfeitPending());
+        assertEquals(19, restored.getStateRevision(), "Persisted same-hand public revision must survive restart");
+        assertTrue(new String(snapshot, StandardCharsets.UTF_8).contains("\"stateRevision\":19"));
         restored.completeGameSettlement(restored.getPlayers().getFirst());
         assertEquals(1033, restored.getPlayers().getFirst().getChips(),
                 "A recovered terminal marker prevents a second carry-over payout");
@@ -100,10 +111,13 @@ class AggregateSnapshotMapperTest {
         assertEquals(aliceBeforeRetry, restored.getPlayers().getFirst().getChips());
         assertEquals(bobBeforeRetry, restored.getPlayers().get(1).getChips());
 
-        String versionOne = new String(snapshot, StandardCharsets.UTF_8).replace("\"schemaVersion\":2", "\"schemaVersion\":1");
-        assertNotEquals(new String(snapshot, StandardCharsets.UTF_8), versionOne);
+        String versionTwo = new String(snapshot, StandardCharsets.UTF_8).replace("\"schemaVersion\":3", "\"schemaVersion\":2");
+        assertNotEquals(new String(snapshot, StandardCharsets.UTF_8), versionTwo);
         assertThrows(com.pokergame.persistence.config.PersistenceException.class,
-                () -> mapper.deserialize(versionOne.getBytes(StandardCharsets.UTF_8)));
+                () -> mapper.deserialize(versionTwo.getBytes(StandardCharsets.UTF_8)));
+        String invalidRevision = new String(snapshot, StandardCharsets.UTF_8).replace("\"stateRevision\":19", "\"stateRevision\":-1");
+        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+                () -> mapper.deserialize(invalidRevision.getBytes(StandardCharsets.UTF_8)));
 
         Map<String, Integer> mutableAwards = new java.util.HashMap<>(Map.of("a", 1));
         HandSettlementResult immutable = new HandSettlementResult(mutableAwards, Map.of(), Set.of("a"), 0, true);
@@ -148,6 +162,41 @@ class AggregateSnapshotMapperTest {
         assertTrue(reopened.isRaiseOpenTo(reopenedA));
         reopened.processPlayerDecision(reopenedA, new PlayerDecision(PlayerAction.RAISE, 200, "a"));
         assertEquals(300, reopened.getCurrentHighestBet());
+    }
+
+    @Test
+    void activeGameSnapshotPreservesRoomMembershipSeparatelyFromRetainedGameRows() {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        Room room = new Room("room-divergent", "Divergent", "DepartedHost", 6, 5, 10, 1000, null);
+        room.addPlayer("Alice");
+        room.addPlayer("BustedSpectator");
+        room.setGameStarted(true);
+
+        List<Player> gamePlayers = List.of(
+                new Player("Alice", "alice-id", 1000),
+                Player.restoreBuilder().name("Bob").playerId("bob-id").chips(1000).out(true)
+                        .holeCards(List.of()).bestHand(List.of()).build(),
+                Player.restoreBuilder().name("DepartedHost").playerId("departed-host-id").chips(0).out(true)
+                        .holeCards(List.of()).bestHand(List.of()).build(),
+                new Player("BustedSpectator", "spectator-id", 0));
+        Game game = new Game("room-divergent", gamePlayers, 5, 10, evaluator);
+
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+        byte[] snapshot = mapper.serialize(room, null, game);
+
+        RecoveredAggregate recovered = mapper.deserialize(snapshot);
+        assertNotNull(recovered.room());
+        assertNotNull(recovered.game());
+        assertTrue(recovered.room().isGameStarted());
+        assertTrue(recovered.room().hasPlayer("Alice"), "Alice from game must be in room");
+        assertFalse(recovered.room().hasPlayer("Bob"), "A retained OUT roster row must not recreate Room membership");
+        assertFalse(recovered.room().hasPlayer("DepartedHost"), "A departed original host must not recreate Room membership");
+        assertTrue(recovered.room().hasPlayer("BustedSpectator"), "Busted spectators who stayed remain Room members");
+        assertNotNull(recovered.room().getJoinedAt("Alice"), "Alice must have join record");
+        assertNull(recovered.room().getJoinedAt("Bob"));
+        assertNotNull(recovered.room().getJoinedAt("BustedSpectator"));
+        assertEquals("Alice", recovered.currentHost(), "Current host remains an actual Room member");
     }
 
     private Player bettingPlayer(String name, String id, int chips, int currentBet, boolean allIn) {

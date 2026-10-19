@@ -10,6 +10,8 @@ import com.pokergame.service.HandEvaluatorService;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Map;
+import java.time.LocalDateTime;
 import com.pokergame.persistence.config.PersistenceException;
 
 /**
@@ -95,7 +97,34 @@ public final class AggregateSnapshotMapper {
                 return new RecoveredAggregate(null, null, null, true);
             }
             AggregateStateImage.RoomState state = image.room();
-            // Rebuild the room exactly as it was
+            if (state == null || state.roomId() == null || state.roomId().trim().isEmpty()) {
+                throw new PersistenceException("Missing required room state in aggregate snapshot");
+            }
+            if (state.maxPlayers() < 2 || state.maxPlayers() > 10 || state.smallBlind() < 1
+                    || state.bigBlind() < 2 * state.smallBlind() || state.buyIn() < state.bigBlind()) {
+                throw new PersistenceException("Invalid room parameters in snapshot");
+            }
+
+            // If there was an active game, rebuild and strictly validate it
+            Game game = null;
+            if (image.game() != null) {
+                if (image.game().gameId() == null || !image.game().gameId().equals(state.roomId())) {
+                    throw new PersistenceException("Game identity does not match room identity in snapshot");
+                }
+                if (image.game().pot() < 0) {
+                    throw new PersistenceException("Invalid negative pot in snapshot");
+                }
+                game = restoreGame(image.game());
+            }
+
+            // Room membership is authoritative independently of retained final Game rows.
+            Map<String, LocalDateTime> joinTimes = state.playersWithJoinTime() == null
+                    ? java.util.Map.of() : state.playersWithJoinTime();
+            List<String> roomMembers = List.copyOf(joinTimes.keySet());
+            String host = image.currentHost();
+            String reconciledHost = host != null && roomMembers.contains(host) ? host
+                    : state.originalHost() != null && roomMembers.contains(state.originalHost()) ? state.originalHost()
+                    : roomMembers.stream().findFirst().orElse(null);
             Room room = Room.restoreBuilder()
                     .roomId(state.roomId())
                     .roomName(state.roomName())
@@ -106,12 +135,11 @@ public final class AggregateSnapshotMapper {
                     .buyIn(state.buyIn())
                     .password(state.password())
                     .createdAt(state.createdAt())
-                    .playersWithJoinTime(state.playersWithJoinTime())
+                    .playersWithJoinTime(joinTimes)
                     .gameStarted(state.gameStarted())
                     .build();
-            // If there was an active game, rebuild it too
-            Game game = image.game() == null ? null : restoreGame(image.game());
-            return new RecoveredAggregate(room, image.currentHost(), game, false);
+
+            return new RecoveredAggregate(room, reconciledHost, game, false);
         } catch (JacksonException | IllegalArgumentException e) {
             throw new PersistenceException("Cannot decode aggregate snapshot", e);
         }
@@ -153,7 +181,8 @@ public final class AggregateSnapshotMapper {
                 game.getLastFullRaiseByStreetSnapshot(), game.getLastActedWagerByPlayerSnapshot(),
                 game.getHandSeatOrderSnapshot(), game.getDealerAnchorPlayerId(), game.getSmallBlindPlayerId(),
                 game.getBigBlindPlayerId(), settlementState(game.getLastSettlementResult()),
-                game.isTerminalCarryOverSettled());
+                game.isTerminalCarryOverSettled(), game.getReadyGateState(), game.getHandNumber(),
+                game.getScheduledTaskGenerationsSnapshot(), game.isForfeitPending(), game.getStateRevision());
     }
 
     /**
@@ -179,6 +208,9 @@ public final class AggregateSnapshotMapper {
      * @return a recreated game, ready to continue playing
      */
     private Game restoreGame(AggregateStateImage.GameState state) {
+        if (state.stateRevision() < 0) {
+            throw new PersistenceException("Invalid negative public state revision in snapshot");
+        }
         // Rebuild all the players first
         List<Player> players = state.players().stream().map(player -> Player.restoreBuilder()
                 .name(player.name())
@@ -218,6 +250,7 @@ public final class AggregateSnapshotMapper {
                 .everyoneHasHadInitialTurn(state.everyoneHasHadInitialTurn())
                 .actedPlayersInRound(state.actedPlayerIds())
                 .scheduledTaskDeadlines(state.scheduledTaskDeadlines())
+                .scheduledTaskGenerations(state.scheduledTaskGenerations())
                 .preHandCarryOver(state.preHandCarryOver())
                 .lastFullRaiseByStreet(state.lastFullRaiseByStreet())
                 .lastActedWagerByPlayer(state.lastActedWagerByPlayer())
@@ -227,6 +260,10 @@ public final class AggregateSnapshotMapper {
                 .bigBlindPlayerId(state.bigBlindPlayerId())
                 .lastSettlementResult(settlementResult(state.lastSettlementResult()))
                 .terminalCarryOverSettled(state.terminalCarryOverSettled())
+                .readyGateState(state.readyGateState())
+                .handNumber(state.handNumber())
+                .forfeitPending(state.forfeitPending())
+                .stateRevision(state.stateRevision())
                 .handEvaluator(handEvaluator) // Reattach the service needed for evaluating hands
                 .build();
     }

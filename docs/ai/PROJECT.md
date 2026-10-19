@@ -104,15 +104,15 @@ Preserve payload-size rejection, endpoint and STOMP throttling, validation, name
 
 [ADR-0001](../adr/0001-encrypted-state-image-wal-with-spring-aop.md) defines encrypted state-image WAL persistence. [Persistence operations](../persistence-operations.md) covers keys, backup/rotation, health, retention, and restore drills.
 
-When enabled, `@DurableMutation` advice serializes a room, attempts PREPARE, runs the authoritative mutation, captures an immutable versioned state image, and attempts authenticated COMMIT before releasing queued effects. Valid mutations continue in memory if saving fails. Nested durable calls join the same room transaction; cross-room nesting is rejected.
+When enabled, `@DurableMutation` advice attempts PREPARE, runs the authoritative mutation, captures an immutable versioned state image, and attempts authenticated COMMIT. When writes succeed, queued client messages and post-commit work are released after commit. Runtime storage failures keep accepted gameplay and effects in memory and retry saving without replaying the command. Nested durable calls join the same room transaction; cross-room nesting is rejected.
 
 AES-256-GCM protects state images containing passwords, private cards, deck order, chips, and deadlines. Associated data binds the record and aggregate identity. Keep keys separate from WAL files.
 
 Recovery restores all aggregates, recreates process-local collaborators, treats old sockets as disconnected, grants reconnect grace, and resumes overdue/future work with guards. It restores exact state without replaying randomness or player commands.
 
-A torn tail can be recovered; committed-prefix corruption, missing/wrong keys, and unsupported schemas fail startup. Runtime save failures allow valid mutations and their effects to continue in memory while full checkpoints retry. See ADR-0001 and persistence operations for the recovery-loss tradeoff and degraded health reporting. Permanent aggregate deletion uses a tombstone/WAL cleanup; compaction retains current recoverable state.
+A torn tail can be recovered; committed-prefix corruption, missing keys, and unsupported schemas fail startup. Runtime prepare, serialization, commit, or maintenance failures let accepted gameplay continue in memory and release its effects once. The latest accepted image or deletion tombstone is retried every five seconds and on subsequent accepted mutations, using the room lock and checkpointing uncertain tails. Persistence health reports `MEMORY_ONLY` and unsaved rooms while gameplay remains UP; stopping before a retry saves the latest state can lose those unsaved changes. Permanent aggregate deletion uses a tombstone/WAL cleanup; compaction retains current recoverable state. Schema 3 persists public state revision; schema-2 saves remain unsupported and require a coordinated drain/migration decision before rollout.
 
-One room has one writer on one server. A shared WAL volume must not be written by multiple instances. Actuator persistence health reports recovery completion and sanitized storage failure status when enabled.
+One room has one writer on one server. A shared WAL volume must not be written by multiple instances. Actuator persistence health reports recovery completion, persistence mode, unsaved-room count, active WAL count, and sanitized storage failure status when enabled. Runtime save failures leave gameplay health UP; operators should alert on `MEMORY_ONLY` and increasing unsaved-room count.
 
 ## Development Conventions And Tests
 

@@ -2,8 +2,14 @@ package com.pokergame.persistence.transaction;
 
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;
+import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.persistence.config.PersistenceProperties;
+import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.wal.EncryptedWalStore;
+import com.pokergame.persistence.wal.WalTransaction;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
+import com.pokergame.util.MdcKeys;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -11,10 +17,8 @@ import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import com.pokergame.util.MdcKeys;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.DefaultParameterNameDiscoverer;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.expression.EvaluationContext;
 import org.springframework.expression.ExpressionParser;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
@@ -25,17 +29,14 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
-import com.pokergame.persistence.wal.EncryptedWalStore;
-import com.pokergame.persistence.wal.WalTransaction;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
-import com.pokergame.persistence.config.PersistenceProperties;
-import com.pokergame.persistence.config.PersistenceException;
+import org.springframework.scheduling.annotation.Scheduled;
 
 /**
  * Automatically saves the poker game to disk after certain methods finish running.
  * <p>
  * If one saved method calls another, it groups them into a single save operation at
  * the end. It also makes sure we only modify one room at a time, preventing corrupted saves.
+ * Storage failures retain the accepted in-memory state and its queued effects for a later save retry.
  * </p>
  */
 @Aspect
@@ -73,14 +74,23 @@ public final class DurableMutationAspect {
     }
 
     /**
-     * Serializes a room mutation and attempts to save it before publishing effects.
-     * Storage failures retain the accepted in-memory state and its queued effects;
-     * failures from the mutation itself still propagate without success effects.
+     * Obtains the dedicated reentrant lock for a room.
      *
-     * @param joinPoint intercepted domain mutation
-     * @param mutation room identity expression
-     * @return the domain result, including when persistence is temporarily unavailable
-     * @throws Throwable if identity resolution or the domain mutation fails
+     * @param roomId the room identifier
+     * @return the room lock
+     */
+    public ReentrantLock getRoomLock(String roomId) {
+        return roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
+    }
+
+    /**
+     * Runs the method, saves the final game result, and only lets players see the changes
+     * once accepted, even if persistence is temporarily unavailable.
+     *
+     * @param joinPoint the intercepted method
+     * @param mutation details about the method
+     * @return the result of the method
+     * @throws Throwable if the domain mutation itself fails
      */
     @Around("@annotation(mutation)")
     public Object persist(ProceedingJoinPoint joinPoint, DurableMutation mutation) throws Throwable {
@@ -88,16 +98,19 @@ public final class DurableMutationAspect {
         String previousRoom = MDC.get(MdcKeys.ROOM_ID);
         MDC.put(MdcKeys.ROOM_ID, roomId);
         try {
+            logger.debug("Durable mutation enter: method={} roomId={}", joinPoint.getSignature().toShortString(), roomId);
             String activeRoom = DurableTransactionContext.currentRoomId();
             if (activeRoom != null) {
                 if (!activeRoom.equals(roomId)) {
                     throw new PersistenceException("Nested durable mutations cannot cross room boundaries");
                 }
+                logger.debug("Nested durable mutation joined existing transaction for roomId={}", roomId);
                 return joinPoint.proceed();
             }
 
-            ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
+            ReentrantLock lock = getRoomLock(roomId);
             lock.lock();
+            long lockStartNano = System.nanoTime();
             try {
                 DurableTransactionContext.begin(roomId);
                 WalTransaction transaction = null;
@@ -108,7 +121,6 @@ public final class DurableMutationAspect {
                         recordStorageFailure(roomId, failure);
                     }
                 }
-
                 Object result;
                 try {
                     result = joinPoint.proceed();
@@ -116,19 +128,20 @@ public final class DurableMutationAspect {
                     DurableTransactionContext.discard();
                     PendingSave pending = pendingSaves.get(roomId);
                     if (pending != null && pending.image() == null) blockedSnapshotRooms.add(roomId);
+                    logger.debug("Durable mutation discarded due to failure: class={} roomId={}", failure.getClass().getSimpleName(), roomId);
                     cleanupAbortedCreation(roomId);
                     throw failure;
                 }
 
-                // Invalidate an older accepted image before serialization can fail.
+                // An accepted newer mutation supersedes any old retry image before serialization starts.
                 blockedSnapshotRooms.remove(roomId);
                 pendingSaves.put(roomId, new PendingSave(null, false));
                 try {
                     PendingSave pending = captureState(roomId);
                     pendingSaves.put(roomId, pending);
                     saveState(roomId, pending, transaction);
-                } catch (RuntimeException failure) {
-                    recordStorageFailure(roomId, failure);
+                } catch (RuntimeException saveFailure) {
+                    recordStorageFailure(roomId, saveFailure);
                 }
                 DurableTransactionContext.complete();
                 return result;
@@ -137,26 +150,23 @@ public final class DurableMutationAspect {
                 lock.unlock();
             }
         } finally {
-            if (previousRoom == null) MDC.remove(MdcKeys.ROOM_ID);
-            else MDC.put(MdcKeys.ROOM_ID, previousRoom);
+            if (previousRoom == null) {
+                MDC.remove(MdcKeys.ROOM_ID);
+            } else {
+                MDC.put(MdcKeys.ROOM_ID, previousRoom);
+            }
         }
     }
 
-    /**
-     * Retries accepted state images without replaying player actions. Non-blocking
-     * room locks avoid delaying active mutations or introducing cross-room lock order.
-     */
     @Scheduled(fixedDelay = 5000, initialDelay = 5000)
     public void retryPendingSaves() {
         for (String roomId : pendingSaves.keySet()) {
-            ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
+            ReentrantLock lock = getRoomLock(roomId);
             if (!lock.tryLock()) continue;
             try {
                 PendingSave pending = pendingSaves.get(roomId);
                 if (pending == null) continue;
                 if (pending.image() == null) {
-                    // A rejected mutation may have partially changed live objects.
-                    // Only a later accepted mutation can supply a replacement image.
                     if (blockedSnapshotRooms.contains(roomId)) continue;
                     pending = captureState(roomId);
                     pendingSaves.put(roomId, pending);
@@ -170,7 +180,6 @@ public final class DurableMutationAspect {
         }
     }
 
-    /** Captures a complete image or tombstone while the room mutation lock is held. */
     private PendingSave captureState(String roomId) {
         Room room = roomService.getObject().getRoom(roomId);
         if (room == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
@@ -179,7 +188,6 @@ public final class DurableMutationAspect {
                 roomService.getObject().getCurrentHost(roomId), game), false);
     }
 
-    /** Saves a current image, replacing uncertain WAL tails rather than appending to them. */
     private void saveState(String roomId, PendingSave pending, WalTransaction transaction) {
         boolean checkpoint = transaction == null || !store.isHealthy() || store.requiresCheckpoint(roomId);
         if (checkpoint) {
@@ -189,7 +197,6 @@ public final class DurableMutationAspect {
             store.commit(transaction, pending.image());
         }
         if (pending.deleted()) {
-            // A saved tombstone is sufficient while another room still needs repair.
             if (!store.isHealthy()) return;
             store.delete(roomId);
             recordsSinceCompaction.remove(roomId);
@@ -200,38 +207,26 @@ public final class DurableMutationAspect {
         pendingSaves.remove(roomId, pending);
     }
 
-    /** Marks recovery protection degraded without rejecting an accepted game mutation. */
     private void recordStorageFailure(String roomId, RuntimeException failure) {
         store.recordWriteFailure(roomId, failure);
         logger.warn("Persistence unavailable for room {}; continuing in memory ({})",
                 roomId, failure.getClass().getSimpleName());
     }
 
-    /** Removes a PREPARE-only WAL for a rejected room creation, retaining existing games. */
+    private record PendingSave(byte[] image, boolean deleted) {
+        private PendingSave { image = image == null ? null : image.clone(); }
+    }
+
     private void cleanupAbortedCreation(String roomId) {
         try {
-            if (!store.isHealthy() || roomService.getObject().getRoom(roomId) != null) return;
-            if (store.recoverLatest(roomId).isEmpty()) store.delete(roomId);
-        } catch (RuntimeException failure) {
-            logger.warn("Could not clean up rejected room creation {} ({})",
-                    roomId, failure.getClass().getSimpleName());
+            if (roomService.getObject().getRoom(roomId) == null && store.recoverLatest(roomId).isEmpty()) {
+                store.delete(roomId);
+            }
+        } catch (Exception cleanupError) {
+            logger.error("Failed to clean up aborted WAL for room {}", roomId, cleanupError);
         }
     }
 
-    /** Owns immutable serialized state until a full save or deletion succeeds. */
-    private record PendingSave(byte[] image, boolean deleted) {
-        private PendingSave {
-            image = image == null ? null : image.clone();
-        }
-    }
-
-    /**
-     * Checks if we need to clean up old save files to save disk space and improve load times.
-     * We look at both the number of updates and the total file size.
-     *
-     * @param roomId the ID of the room
-     * @return true if we should compact the save files
-     */
     private boolean shouldCompact(String roomId) {
         int records = recordsSinceCompaction.computeIfAbsent(roomId, ignored -> new AtomicInteger())
                 .addAndGet(2);
@@ -239,15 +234,6 @@ public final class DurableMutationAspect {
                 || store.walSize(roomId) >= properties.getCompactAfterBytes();
     }
 
-    /**
-     * Extracts the room ID directly from the method arguments using the provided expression.
-     * We do this early so we can lock the room before looking at any game data.
-     *
-     * @param joinPoint the intercepted method
-     * @param expression the rule for finding the room ID
-     * @return the resolved room ID
-     * @throws PersistenceException if a valid room ID cannot be found
-     */
     private String resolveRoomId(ProceedingJoinPoint joinPoint, String expression) {
         Method method = ((MethodSignature) joinPoint.getSignature()).getMethod();
         String[] names = parameterNames.getParameterNames(method);

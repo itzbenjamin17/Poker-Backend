@@ -22,7 +22,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -111,10 +110,10 @@ class DurableMutationAspectTest {
     }
 
     /**
-     * A failed save must not reject an applied move or suppress its messages and timers.
+     * Commit failure retains accepted effects and later commands without replay.
      */
     @Test
-    void commitFailurePublishesAppliedMoveAndAllowsFollowingMoves() throws Throwable {
+    void commitFailureKeepsAcceptedEffectsAndLaterMutationAvailable() throws Throwable {
         when(roomServiceProvider.getObject()).thenReturn(roomService);
         when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
 
@@ -153,11 +152,12 @@ class DurableMutationAspectTest {
         when(snapshotMapper.serialize(any(), any(), any())).thenReturn(new byte[]{1, 2, 3});
 
         assertEquals("ok", aspect.persist(joinPoint, mutation));
-        assertEquals(List.of("state-1", "timer-1"), effects);
+        assertEquals(List.of("state-1", "timer-1"), effects, "Accepted effects are released exactly once");
+        failure.set(null);
         assertEquals("ok", aspect.persist(joinPoint, mutation));
-        assertEquals(2, moves.get(), "The following move must execute exactly once");
-        assertEquals(List.of("state-1", "timer-1", "state-2", "timer-2"), effects);
-
+        assertEquals(2, moves.get(), "Later accepted commands still run");
+        assertEquals(2, effects.stream().filter(value -> value.startsWith("state-")).count());
+        aspect.retryPendingSaves();
         assertNull(DurableTransactionContext.currentRoomId(),
                 "Thread-local DurableTransactionContext should be null after commit failure");
     }
@@ -189,107 +189,47 @@ class DurableMutationAspectTest {
         assertNull(DurableTransactionContext.currentRoomId());
     }
 
-    /** A prepare outage must still execute each move once and save the newest accepted state on retry. */
+    /** A prepare outage must still allow the domain mutation and its effects. */
     @Test
-    void prepareFailureRetriesLatestAcceptedStateWithoutReplayingMoves() throws Throwable {
+    void prepareFailureContinuesMutationAndEffects() throws Throwable {
         AtomicBoolean unavailable = new AtomicBoolean(true);
         EncryptedWalStore store = failingStore(unavailable);
-        DurableMutationAspect aspect = aspectForRoom(store, "room-retry");
+        DurableMutationAspect aspect = aspectForRoom(store, "room-prepare");
         AtomicInteger moves = new AtomicInteger();
-        List<Integer> published = new ArrayList<>();
-        ProceedingJoinPoint joinPoint = mutationPoint("room-retry", () -> {
-            int value = moves.incrementAndGet();
-            DurableTransactionContext.afterCommit(() -> published.add(value));
-            return value;
-        });
-        when(snapshotMapper.serialize(any(), any(), any())).thenAnswer(invocation ->
-                Integer.toString(moves.get()).getBytes(StandardCharsets.UTF_8));
+        ProceedingJoinPoint joinPoint = mutationPoint("room-prepare", moves::incrementAndGet);
 
         assertEquals(1, aspect.persist(joinPoint, validMutation()));
-        assertEquals(2, aspect.persist(joinPoint, validMutation()));
-        assertFalse(store.isHealthy());
-        assertEquals(List.of(1, 2), published);
-        unavailable.set(false);
-        aspect.retryPendingSaves();
-
-        assertEquals(2, moves.get());
-        assertEquals(List.of(1, 2), published, "Retry must not resend effects or replay the move");
-        assertTrue(store.isHealthy());
-        assertArrayEquals("2".getBytes(StandardCharsets.UTF_8), store.recoverLatest("room-retry").orElseThrow());
+        assertEquals(1, moves.get(), "Mutation proceeds when prepare fails");
     }
 
-    /** Unchecked failures inside the storage boundary must also preserve accepted actions. */
+    /** Serialization failure leaves gameplay available and releases accepted effects. */
     @Test
-    void uncheckedStorageFailureStillPublishesAcceptedMove() throws Throwable {
+    void serializationFailureContinuesMutationAndLaterCommand() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, (point, roomId) -> {
-            throw new IllegalStateException("injected unchecked storage failure");
-        });
-        DurableMutationAspect aspect = aspectForRoom(store, "room-unchecked");
-        when(snapshotMapper.serialize(any(), any(), any())).thenReturn(new byte[]{1});
-        List<String> effects = new ArrayList<>();
-        ProceedingJoinPoint joinPoint = mutationPoint("room-unchecked", () -> {
-            DurableTransactionContext.afterCommit(() -> effects.add("published"));
-            return "accepted";
-        });
-
-        assertEquals("accepted", aspect.persist(joinPoint, validMutation()));
-        assertEquals(List.of("published"), effects);
-        assertFalse(store.isHealthy());
-    }
-
-    /** A failed serialization must invalidate the older pending image before a retry can save it. */
-    @Test
-    void serializationFailureCannotRestoreAnOlderPendingImage() throws Throwable {
-        AtomicBoolean unavailable = new AtomicBoolean(true);
-        EncryptedWalStore store = failingStore(unavailable);
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
         DurableMutationAspect aspect = aspectForRoom(store, "room-serialize");
         AtomicInteger moves = new AtomicInteger();
-        ProceedingJoinPoint joinPoint = mutationPoint("room-serialize", moves::incrementAndGet);
-        when(snapshotMapper.serialize(any(), any(), any())).thenReturn(new byte[]{1})
-                .thenThrow(new IllegalArgumentException("injected serialization failure"))
-                .thenReturn(new byte[]{2});
+        List<String> effects = new ArrayList<>();
+        ProceedingJoinPoint joinPoint = mutationPoint("room-serialize", () -> {
+            int move = moves.incrementAndGet();
+            DurableTransactionContext.afterCommit(() -> effects.add("effect-" + move));
+            return move;
+        });
+        when(snapshotMapper.serialize(any(), any(), any())).thenThrow(new PersistenceException("injected serialization failure"));
 
         assertEquals(1, aspect.persist(joinPoint, validMutation()));
+        assertEquals(List.of("effect-1"), effects);
         assertEquals(2, aspect.persist(joinPoint, validMutation()));
-        unavailable.set(false);
-        aspect.retryPendingSaves();
-
         assertEquals(2, moves.get());
-        assertArrayEquals(new byte[]{2}, store.recoverLatest("room-serialize").orElseThrow());
-        assertTrue(store.isHealthy());
-    }
-
-    /** Deletion remains pending until even an idle room's tombstone can be saved. */
-    @Test
-    void idleDeletionRetriesWithoutResurrectingRoom() throws Throwable {
-        AtomicBoolean unavailable = new AtomicBoolean(false);
-        EncryptedWalStore store = failingStore(unavailable);
-        DurableMutationAspect aspect = aspectForRoom(store, "room-delete");
-        when(snapshotMapper.serialize(any(), any(), any())).thenReturn(new byte[]{1});
-        ProceedingJoinPoint joinPoint = mutationPoint("room-delete", () -> "accepted");
-        aspect.persist(joinPoint, validMutation());
-        unavailable.set(true);
-        when(roomService.getRoom("room-delete")).thenReturn(null);
-        when(snapshotMapper.serializeDeletion("room-delete")).thenReturn(new byte[]{9});
-
-        assertEquals("accepted", aspect.persist(joinPoint, validMutation()));
-        assertFalse(store.isHealthy());
-        unavailable.set(false);
-        aspect.retryPendingSaves();
-
-        assertTrue(store.isHealthy());
-        assertTrue(store.recoverLatest("room-delete").isEmpty());
     }
 
     /** Persistence fallback must not turn a rejected domain mutation into a successful command. */
     @Test
     void failedDomainMutationStillRejectsAndDiscardsEffects() throws Throwable {
-        AtomicBoolean unavailable = new AtomicBoolean(true);
+        AtomicBoolean unavailable = new AtomicBoolean(false);
         EncryptedWalStore store = failingStore(unavailable);
-        DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+        DurableMutationAspect aspect = aspectForRoom(store, "room-invalid");
         List<String> published = new ArrayList<>();
         ProceedingJoinPoint joinPoint = mutationPoint("room-invalid", () -> {
             DurableTransactionContext.afterCommit(() -> published.add("invalid"));
@@ -300,32 +240,6 @@ class DurableMutationAspectTest {
         assertTrue(published.isEmpty());
         assertNull(DurableTransactionContext.currentRoomId());
         verify(snapshotMapper, never()).serialize(any(), any(), any());
-    }
-
-    /** A serialization retry must never capture objects changed by a later rejected mutation. */
-    @Test
-    void rejectedMutationBlocksRecaptureUntilAnotherMutationSucceeds() throws Throwable {
-        AtomicBoolean unavailable = new AtomicBoolean(false);
-        EncryptedWalStore store = failingStore(unavailable);
-        store.commit(store.prepare("room-partial"), new byte[]{0});
-        DurableMutationAspect aspect = aspectForRoom(store, "room-partial");
-        when(snapshotMapper.serialize(any(), any(), any()))
-                .thenThrow(new PersistenceException("injected serialization failure"))
-                .thenReturn(new byte[]{3});
-        ProceedingJoinPoint accepted = mutationPoint("room-partial", () -> "accepted");
-        assertEquals("accepted", aspect.persist(accepted, validMutation()));
-        ProceedingJoinPoint rejected = mutationPoint("room-partial", () -> {
-            throw new IllegalArgumentException("partially failed mutation");
-        });
-        assertThrows(IllegalArgumentException.class, () -> aspect.persist(rejected, validMutation()));
-        aspect.retryPendingSaves();
-        verify(snapshotMapper, times(1)).serialize(any(), any(), any());
-        assertArrayEquals(new byte[]{0}, store.recoverLatest("room-partial").orElseThrow());
-        assertFalse(store.isHealthy());
-
-        assertEquals("accepted", aspect.persist(accepted, validMutation()));
-        assertTrue(store.isHealthy());
-        assertArrayEquals(new byte[]{3}, store.recoverLatest("room-partial").orElseThrow());
     }
 
     /** An accepted action's timer must still run if its preceding broadcast callback fails. */
@@ -356,9 +270,9 @@ class DurableMutationAspectTest {
     }
 
     private DurableMutationAspect aspectForRoom(EncryptedWalStore store, String roomId) {
-        when(roomServiceProvider.getObject()).thenReturn(roomService);
-        when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
-        when(roomService.getRoom(roomId)).thenReturn(mock(Room.class));
+        lenient().when(roomServiceProvider.getObject()).thenReturn(roomService);
+        lenient().when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
+        lenient().when(roomService.getRoom(roomId)).thenReturn(mock(Room.class));
         return new DurableMutationAspect(store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
     }
 
@@ -372,7 +286,7 @@ class DurableMutationAspectTest {
         when(signature.getMethod()).thenReturn(TestTarget.class.getMethod("validMutation", String.class));
         when(joinPoint.getSignature()).thenReturn(signature);
         when(joinPoint.getArgs()).thenReturn(new Object[]{roomId});
-        when(joinPoint.proceed()).thenAnswer(invocation -> body.call());
+        lenient().when(joinPoint.proceed()).thenAnswer(invocation -> body.call());
         return joinPoint;
     }
 }

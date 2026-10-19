@@ -2,6 +2,7 @@ package com.pokergame.dto.response;
 
 import com.pokergame.model.Card;
 import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.ReadyGateState;
 
 import java.util.List;
 import com.pokergame.enums.PlayerAction;
@@ -70,7 +71,54 @@ public record PublicGameStateResponse(
                 Integer carryOverAmount,
                 List<PlayerAction> legalActions,
                 Integer minimumBetAmount,
-                Integer minimumRaiseAmount) {
+                Integer minimumRaiseAmount,
+                long handNumber,
+                ReadyGateState readyGateState,
+                long serverTimeEpochMs,
+                long stateRevision) {
+
+        public PublicGameStateResponse {
+                pots = pots == null ? null : List.copyOf(pots);
+                communityCards = communityCards == null ? null : List.copyOf(communityCards);
+                players = players == null ? null : List.copyOf(players);
+                winners = winners == null ? null : List.copyOf(winners);
+                legalActions = legalActions == null ? null : List.copyOf(legalActions);
+        }
+
+        /** Backward-compatible constructor for callers predating stateRevision. */
+        public PublicGameStateResponse(int maxPlayers, int pot, List<Integer> pots, Integer uncalledAmount,
+                        GamePhase phase, int currentBet, List<Card> communityCards, List<PublicPlayerState> players,
+                        String currentPlayerName, String currentPlayerId, List<String> winners,
+                        Integer winningsPerPlayer, Boolean isAutoAdvancing, String autoAdvanceMessage,
+                        Boolean isReadyCountdownActive, Long readyCountdownDeadlineEpochMs,
+                        Boolean claimWinAvailable, String claimWinPlayerName, Boolean handSettled,
+                        Integer carryOverAmount, List<PlayerAction> legalActions, Integer minimumBetAmount,
+                        Integer minimumRaiseAmount, long handNumber, ReadyGateState readyGateState,
+                        long serverTimeEpochMs) {
+                this(maxPlayers, pot, pots, uncalledAmount, phase, currentBet, communityCards, players,
+                        currentPlayerName, currentPlayerId, winners, winningsPerPlayer, isAutoAdvancing,
+                        autoAdvanceMessage, isReadyCountdownActive, readyCountdownDeadlineEpochMs,
+                        claimWinAvailable, claimWinPlayerName, handSettled, carryOverAmount,
+                        legalActions, minimumBetAmount, minimumRaiseAmount, handNumber, readyGateState,
+                        serverTimeEpochMs, 0L);
+        }
+
+        /** Backward-compatible constructor for callers predating lifecycle metadata. */
+        public PublicGameStateResponse(int maxPlayers, int pot, List<Integer> pots, Integer uncalledAmount,
+                        GamePhase phase, int currentBet, List<Card> communityCards, List<PublicPlayerState> players,
+                        String currentPlayerName, String currentPlayerId, List<String> winners,
+                        Integer winningsPerPlayer, Boolean isAutoAdvancing, String autoAdvanceMessage,
+                        Boolean isReadyCountdownActive, Long readyCountdownDeadlineEpochMs,
+                        Boolean claimWinAvailable, String claimWinPlayerName, Boolean handSettled,
+                        Integer carryOverAmount, List<PlayerAction> legalActions, Integer minimumBetAmount,
+                        Integer minimumRaiseAmount) {
+                this(maxPlayers, pot, pots, uncalledAmount, phase, currentBet, communityCards, players,
+                        currentPlayerName, currentPlayerId, winners, winningsPerPlayer, isAutoAdvancing,
+                        autoAdvanceMessage, isReadyCountdownActive, readyCountdownDeadlineEpochMs,
+                        claimWinAvailable, claimWinPlayerName, handSettled, carryOverAmount,
+                        legalActions, minimumBetAmount, minimumRaiseAmount, 0, ReadyGateState.CLOSED,
+                        System.currentTimeMillis(), 0L);
+        }
 
         /** Backward-compatible constructor for snapshots before legal-action metadata. */
         public PublicGameStateResponse(int maxPlayers, int pot, List<Integer> pots, Integer uncalledAmount,

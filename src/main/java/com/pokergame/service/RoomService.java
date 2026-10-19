@@ -289,6 +289,29 @@ public class RoomService {
         }
     }
 
+    /** Detaches a set of active-game members with one host reconciliation and projection. */
+    @DurableMutation(roomId = "#roomId")
+    public void leavePlayersBatch(String roomId, List<String> playerNames) {
+        Room room = rooms.get(roomId);
+        if (room == null || playerNames == null || playerNames.isEmpty()) return;
+        synchronized (room) {
+            if (rooms.get(roomId) != room) return;
+            List<String> present = playerNames.stream().filter(room.getPlayers()::contains).distinct().toList();
+            if (present.isEmpty()) return;
+            boolean hostLeaving = present.contains(roomHosts.getOrDefault(roomId, room.getHostName()));
+            present.forEach(room::removePlayer);
+            if (hostLeaving && !room.getPlayers().isEmpty()) roomHosts.put(roomId, room.getPlayers().getFirst());
+            if (room.getPlayers().isEmpty()) {
+                sendAfterCommit("/room/" + roomId,
+                        new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                destroyRoom(roomId);
+            } else {
+                sendAfterCommit("/room/" + roomId,
+                        new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
+            }
+        }
+    }
+
     /**
      * Retrieves all currently available rooms.
      *
@@ -406,7 +429,8 @@ public class RoomService {
      */
     public void restoreRoom(Room room, String currentHost) {
         rooms.put(room.getRoomId(), room);
-        roomHosts.put(room.getRoomId(), currentHost);
+        String host = (currentHost != null && !currentHost.trim().isEmpty()) ? currentHost : room.getHostName();
+        roomHosts.put(room.getRoomId(), host);
     }
 
     /**

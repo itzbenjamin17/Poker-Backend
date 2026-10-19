@@ -4,6 +4,7 @@ import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.GamePhase;
 import com.pokergame.model.*;
 import com.pokergame.exception.BadRequestException;
 import org.junit.jupiter.api.BeforeEach;
@@ -461,7 +462,7 @@ class GameStateServiceTest {
      * and the full five-card community board in the final-state snapshot.
      */
     @Test
-    void broadcastGameEnd_ShowdownPath_ShouldRevealHoleCardsAndFullBoard() {
+    void broadcastGameEnd_FoldWinKeepsHoleCardsPrivate() {
         Player winner = testPlayers.getFirst();
         Player loser = testPlayers.get(1);
         loser.setIsOut();
@@ -480,8 +481,41 @@ class GameStateServiceTest {
                 .filter(p -> p.name().equals(winner.getName()))
                 .findFirst()
                 .orElseThrow();
-        assertNotNull(winnerState.holeCards());
+        assertNull(winnerState.holeCards());
         assertTrue(winnerState.isWinner());
+    }
+
+    @Test
+    void broadcastGameEnd_ContestedShowdownRevealsWinnerCards() {
+        Player winner = testPlayers.getFirst();
+        Player other = testPlayers.get(1);
+        List<Card> board = List.of(new Card(com.pokergame.enums.Rank.ACE, com.pokergame.enums.Suit.SPADES),
+                new Card(com.pokergame.enums.Rank.KING, com.pokergame.enums.Suit.SPADES),
+                new Card(com.pokergame.enums.Rank.QUEEN, com.pokergame.enums.Suit.SPADES),
+                new Card(com.pokergame.enums.Rank.JACK, com.pokergame.enums.Suit.SPADES),
+                new Card(com.pokergame.enums.Rank.TEN, com.pokergame.enums.Suit.SPADES));
+        winner.getHoleCards().addAll(List.of(new Card(com.pokergame.enums.Rank.TWO, com.pokergame.enums.Suit.CLUBS),
+                new Card(com.pokergame.enums.Rank.THREE, com.pokergame.enums.Suit.CLUBS)));
+        other.getHoleCards().addAll(List.of(new Card(com.pokergame.enums.Rank.FOUR, com.pokergame.enums.Suit.CLUBS),
+                new Card(com.pokergame.enums.Rank.FIVE, com.pokergame.enums.Suit.CLUBS)));
+        Game contested = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
+                .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
+                .communityCards(board).pot(0).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
+                .currentPlayerPosition(0).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
+                .smallBlind(5).bigBlind(10).handContributions(Map.of()).readyCountdownActive(false)
+                .lastSettlementResult(new HandSettlementResult(Map.of(winner.getPlayerId(), 100), Map.of(),
+                        Set.of(winner.getPlayerId()), 0, true)).scheduledTaskDeadlines(Map.of())
+                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .handEvaluator(handEvaluator).build();
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+
+        gameStateService.broadcastGameEnd(GAME_ID, contested, winner, false);
+
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        GameEndResponse event = (GameEndResponse) captor.getValue();
+        assertNotNull(event.finalState().players().stream().filter(player -> player.name().equals(winner.getName()))
+                .findFirst().orElseThrow().holeCards());
     }
 
     @Test
@@ -834,6 +868,24 @@ class GameStateServiceTest {
         // 3 public broadcasts via convertAndSend + 3*(2 name-private) via convertAndSendToUser
         verify(messagingTemplate, times(3)).convertAndSend(anyString(), any(Object.class));
         verify(messagingTemplate, times(6)).convertAndSendToUser(anyString(), anyString(), any(Object.class));
+    }
+
+    /**
+     * Protects the contract that broadcast game state increments stateRevision monotonically.
+     */
+    @Test
+    void broadcastGameState_IncrementsStateRevisionMonotonically() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+
+        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(GAME_ID, testGame);
+
+        verify(messagingTemplate, times(2)).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        List<PublicGameStateResponse> responses = captor.getAllValues();
+        assertEquals(1, responses.get(0).stateRevision());
+        assertEquals(2, responses.get(1).stateRevision());
+        assertEquals(2, testGame.getStateRevision());
     }
 
     /**

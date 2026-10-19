@@ -120,44 +120,47 @@ public final class PersistenceRecovery implements ApplicationRunner {
                 throw new PersistenceException("Snapshot room identity does not match WAL file identity");
             }
             
-            // Bring the room and game back to life in the server's memory
-            roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
-            roomsRestored++;
-            boolean hasGame = aggregate.game() != null;
-            if (hasGame) {
-                gameLifecycleService.restoreGame(aggregate.game());
-                gamesRestored++;
-            }
-            logger.debug("Recovered room: roomId={}, hasGame={}", roomId, hasGame);
+            // Apply restart disconnect state before either aggregate becomes visible
+            // through the live room/game registries.
             recoveredAggregates.add(aggregate);
         }
 
         // Calculate a new grace period deadline from the current time
         long freshDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
-        
+        Map<RecoveredPlayerKey, Long> recoveredDeadlines = new java.util.HashMap<>();
+
         for (RecoveredAggregate aggregate : recoveredAggregates) {
             Game game = aggregate.game();
             for (String playerName : aggregate.room().getPlayers()) {
                 Player gamePlayer = game == null ? null : game.getPlayers().stream()
                         .filter(player -> player.getName().equals(playerName))
-                        .findFirst()
-                        .orElse(null);
-                        
-                // Find out if the player already had a disconnection deadline before the server restarted
+                        .findFirst().orElse(null);
                 long storedDeadline = gamePlayer == null || gamePlayer.getDisconnectDeadlineEpochMs() == null
-                        ? 0
-                        : gamePlayer.getDisconnectDeadlineEpochMs();
-                        
-                // Give the player whichever deadline is further in the future: their old one or the new grace period
+                        ? 0 : gamePlayer.getDisconnectDeadlineEpochMs();
                 long deadline = Math.max(freshDeadline, storedDeadline);
                 if (gamePlayer != null) {
                     gamePlayer.setDisconnected(true);
+                    gamePlayer.setReadyForNextHand(false);
                     gamePlayer.setDisconnectDeadlineEpochMs(deadline);
                 }
-                
+                recoveredDeadlines.put(new RecoveredPlayerKey(aggregate.room().getRoomId(), playerName), deadline);
+            }
+        }
+
+        for (RecoveredAggregate aggregate : recoveredAggregates) {
+            Game game = aggregate.game();
+            roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
+            roomsRestored++;
+            if (game != null) {
+                gameLifecycleService.restoreGame(game);
+                gamesRestored++;
+            }
+            logger.debug("Recovered room: roomId={}, hasGame={}", aggregate.room().getRoomId(), game != null);
+            for (String playerName : aggregate.room().getPlayers()) {
                 // Tell the system to kick the player if they don't reconnect by the deadline
                 webSocketEventListener.scheduleRecoveredDisconnect(
-                        aggregate.room().getRoomId(), playerName, deadline);
+                        aggregate.room().getRoomId(), playerName,
+                        recoveredDeadlines.get(new RecoveredPlayerKey(aggregate.room().getRoomId(), playerName)));
             }
             
             // Restart the game timers (like the countdown for player turns) so the game can continue
@@ -185,4 +188,6 @@ public final class PersistenceRecovery implements ApplicationRunner {
     public boolean isComplete() {
         return complete;
     }
+
+    private record RecoveredPlayerKey(String roomId, String playerName) { }
 }

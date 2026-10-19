@@ -2,6 +2,7 @@ package com.pokergame.advice;
 
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ResponseMessage;
+import com.pokergame.enums.RejectedAction;
 import com.pokergame.dto.response.ActionErrorResponse;
 import com.pokergame.dto.response.PlayerNotificationResponse;
 import com.pokergame.exception.BadRequestException;
@@ -76,15 +77,15 @@ class WebSocketExceptionHandlerTest {
                 new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "malformed", playerName, gameId));
     }
 
-    /** Non-action failures retain their useful technical feedback. */
+    /** Ordinary transient readiness errors remain structured and retryable. */
     @Test
-    void readyFailureKeepsItsMessage() {
+    void readinessRejectionKeepsTheRequestedActionAndMessage() {
         Message<String> frame = MessageBuilder.withPayload("{}")
                 .setHeader("simpDestination", "/app/" + gameId + "/ready").build();
-        handler.handleMessageException(new BadRequestException("Ready countdown is not active."), principal, frame);
+        handler.handleMessageException(new UnauthorisedActionException("Ready countdown is not active."),
+                principal, frame);
         verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
-                        "Ready countdown is not active.", playerName, gameId));
+                new ActionErrorResponse("ACTION_REJECTED", RejectedAction.READY, "Ready countdown is not active."));
     }
 
     /** Authentication still guards access to the private response path. */
