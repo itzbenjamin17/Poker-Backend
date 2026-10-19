@@ -60,6 +60,39 @@ class RoomTest {
     }
 
     /**
+     * Protects the expected behavior that whitespace-only passwords are treated as absent (null).
+     */
+    @Test
+    @DisplayName("should treat whitespace-only password as absent (null)")
+    void testRoomCreationWithWhitespaceOnlyPassword() {
+        Room roomEmptyPass = new Room("room-empty", "Empty Pass Room", "Host", 4, 5, 10, 500, "");
+        assertFalse(roomEmptyPass.hasPassword());
+        assertNull(roomEmptyPass.getPasswordForPersistence());
+        assertTrue(roomEmptyPass.checkPassword(null));
+        assertTrue(roomEmptyPass.checkPassword("any"));
+
+        Room roomSpacesPass = new Room("room-spaces", "Spaces Pass Room", "Host", 4, 5, 10, 500, "   ");
+        assertFalse(roomSpacesPass.hasPassword());
+        assertNull(roomSpacesPass.getPasswordForPersistence());
+        assertTrue(roomSpacesPass.checkPassword(null));
+        assertTrue(roomSpacesPass.checkPassword("any"));
+    }
+
+    /**
+     * Protects the expected behavior that non-whitespace passwords preserve leading and trailing spaces.
+     */
+    @Test
+    @DisplayName("should preserve leading and trailing spaces in password")
+    void testRoomCreationWithPasswordPreservingSpaces() {
+        Room roomPreservedPass = new Room("room-spaces-kept", "Kept Pass Room", "Host", 4, 5, 10, 500, "  secret123  ");
+        assertTrue(roomPreservedPass.hasPassword());
+        assertEquals("  secret123  ", roomPreservedPass.getPasswordForPersistence());
+        assertTrue(roomPreservedPass.checkPassword("  secret123  "));
+        assertFalse(roomPreservedPass.checkPassword("secret123"));
+        assertFalse(roomPreservedPass.checkPassword(null));
+    }
+
+    /**
      * Protects the expected behavior for room creation with null room ID.
      */
     @Test

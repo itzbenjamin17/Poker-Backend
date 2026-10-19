@@ -137,6 +137,7 @@ public class RoomService {
      */
     public String joinRoom(JoinRoomRequest joinRequest) {
         String sanitizedRoomName = InputSanitizer.sanitize(joinRequest.roomName());
+        InputSanitizer.sanitize(joinRequest.playerName());
 
         Room room = findRoomByName(sanitizedRoomName);
         if (room == null) {

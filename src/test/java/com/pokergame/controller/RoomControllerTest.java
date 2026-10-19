@@ -30,6 +30,7 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -259,6 +260,102 @@ class RoomControllerTest {
     }
 
     /**
+     * Verifies the expected response for POST /api/room/create - Validation Error (Format Characters in Room Name).
+     */
+    @Test
+    @DisplayName("POST /api/room/create - Validation Error (Format Characters in Room Name)")
+    void createRoom_ValidationError_FormatCharsRoomName() throws Exception {
+        CreateRoomRequest request = new CreateRoomRequest("Room\u200B1", "Player1", 6, 10, 20, 1000, null);
+
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * Verifies the expected response for POST /api/room/create - Validation Error (Format Characters in Player Name).
+     */
+    @Test
+    @DisplayName("POST /api/room/create - Validation Error (Format Characters in Player Name)")
+    void createRoom_ValidationError_FormatCharsPlayerName() throws Exception {
+        CreateRoomRequest request = new CreateRoomRequest("Room1", "Player\u200D1", 6, 10, 20, 1000, null);
+
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * Verifies the expected response for POST /api/room/create - Validation Error (HTML Tags in Room Name).
+     */
+    @Test
+    @DisplayName("POST /api/room/create - Validation Error (HTML Tags in Room Name)")
+    void createRoom_ValidationError_HtmlTagsRoomName() throws Exception {
+        CreateRoomRequest request = new CreateRoomRequest("<b>Room</b>", "Player1", 6, 10, 20, 1000, null);
+
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * Verifies the expected response for POST /api/room/create - Validation Error (HTML Tags in Player Name).
+     */
+    @Test
+    @DisplayName("POST /api/room/create - Validation Error (HTML Tags in Player Name)")
+    void createRoom_ValidationError_HtmlTagsPlayerName() throws Exception {
+        CreateRoomRequest request = new CreateRoomRequest("Room1", "<script>alert(1)</script>", 6, 10, 20, 1000, null);
+
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * Verifies the expected response for POST /api/room/create - Whitespace-only password treated as absent.
+     */
+    @Test
+    @DisplayName("POST /api/room/create - Whitespace-only password treated as absent")
+    void createRoom_WhitespaceOnlyPassword_TreatedAsAbsent() throws Exception {
+        org.mockito.ArgumentCaptor<CreateRoomRequest> captor = org.mockito.ArgumentCaptor.forClass(CreateRoomRequest.class);
+        when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn("room-123");
+        when(jwtService.generateToken("Player1", "room-123")).thenReturn("mock-token");
+
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"roomName\":\"Room1\",\"playerName\":\"Player1\",\"maxPlayers\":6,\"smallBlind\":10,\"bigBlind\":20,\"buyIn\":1000,\"password\":\"   \"}"))
+                .andExpect(status().isOk());
+
+        verify(roomService).createRoom(captor.capture());
+        assertThat(captor.getValue().getPassword()).isNull();
+        assertThat(captor.getValue().hasPassword()).isFalse();
+    }
+
+    /**
+     * Verifies the expected response for POST /api/room/create - Password preserves spaces.
+     */
+    @Test
+    @DisplayName("POST /api/room/create - Password preserves spaces")
+    void createRoom_PasswordPreservesSpaces() throws Exception {
+        org.mockito.ArgumentCaptor<CreateRoomRequest> captor = org.mockito.ArgumentCaptor.forClass(CreateRoomRequest.class);
+        when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn("room-123");
+        when(jwtService.generateToken("Player1", "room-123")).thenReturn("mock-token");
+
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"roomName\":\"Room1\",\"playerName\":\"Player1\",\"maxPlayers\":6,\"smallBlind\":10,\"bigBlind\":20,\"buyIn\":1000,\"password\":\"  secret123  \"}"))
+                .andExpect(status().isOk());
+
+        verify(roomService).createRoom(captor.capture());
+        assertThat(captor.getValue().getPassword()).isEqualTo("  secret123  ");
+        assertThat(captor.getValue().hasPassword()).isTrue();
+    }
+
+    /**
      * Verifies the expected response for POST /api/room/create - Validation Error (Invalid Numeric Range).
      */
     @Test
@@ -286,6 +383,100 @@ class RoomControllerTest {
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Player name must be 30 characters or less"));
+    }
+
+    /**
+     * Verifies the expected response for POST /api/room/join - Validation Error (Format Characters in Room Name).
+     */
+    @Test
+    @DisplayName("POST /api/room/join - Validation Error (Format Characters in Room Name)")
+    void joinRoom_ValidationError_FormatCharsRoomName() throws Exception {
+        JoinRoomRequest request = new JoinRoomRequest("Room\u200B1", "Player1", null);
+
+        mockMvc.perform(post("/api/room/join")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * Verifies the expected response for POST /api/room/join - Validation Error (Format Characters in Player Name).
+     */
+    @Test
+    @DisplayName("POST /api/room/join - Validation Error (Format Characters in Player Name)")
+    void joinRoom_ValidationError_FormatCharsPlayerName() throws Exception {
+        JoinRoomRequest request = new JoinRoomRequest("Room1", "Player\u200D1", null);
+
+        mockMvc.perform(post("/api/room/join")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * Verifies the expected response for POST /api/room/join - Validation Error (HTML Tags in Room Name).
+     */
+    @Test
+    @DisplayName("POST /api/room/join - Validation Error (HTML Tags in Room Name)")
+    void joinRoom_ValidationError_HtmlTagsRoomName() throws Exception {
+        JoinRoomRequest request = new JoinRoomRequest("<b>Room</b>", "Player1", null);
+
+        mockMvc.perform(post("/api/room/join")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * Verifies the expected response for POST /api/room/join - Validation Error (HTML Tags in Player Name).
+     */
+    @Test
+    @DisplayName("POST /api/room/join - Validation Error (HTML Tags in Player Name)")
+    void joinRoom_ValidationError_HtmlTagsPlayerName() throws Exception {
+        JoinRoomRequest request = new JoinRoomRequest("Room1", "<i>Player</i>", null);
+
+        mockMvc.perform(post("/api/room/join")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * Verifies the expected response for POST /api/room/join - Whitespace-only password treated as null.
+     */
+    @Test
+    @DisplayName("POST /api/room/join - Whitespace-only password treated as null")
+    void joinRoom_WhitespaceOnlyPassword_TreatedAsNull() throws Exception {
+        org.mockito.ArgumentCaptor<JoinRoomRequest> captor = org.mockito.ArgumentCaptor.forClass(JoinRoomRequest.class);
+        when(roomService.joinRoom(any(JoinRoomRequest.class))).thenReturn("room-123");
+        when(jwtService.generateToken("Player2", "room-123")).thenReturn("mock-token");
+
+        mockMvc.perform(post("/api/room/join")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"roomName\":\"Room1\",\"playerName\":\"Player2\",\"password\":\"   \"}"))
+                .andExpect(status().isOk());
+
+        verify(roomService).joinRoom(captor.capture());
+        assertThat(captor.getValue().password()).isNull();
+    }
+
+    /**
+     * Verifies the expected response for POST /api/room/join - Password preserves spaces.
+     */
+    @Test
+    @DisplayName("POST /api/room/join - Password preserves spaces")
+    void joinRoom_PasswordPreservesSpaces() throws Exception {
+        org.mockito.ArgumentCaptor<JoinRoomRequest> captor = org.mockito.ArgumentCaptor.forClass(JoinRoomRequest.class);
+        when(roomService.joinRoom(any(JoinRoomRequest.class))).thenReturn("room-123");
+        when(jwtService.generateToken("Player2", "room-123")).thenReturn("mock-token");
+
+        mockMvc.perform(post("/api/room/join")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"roomName\":\"Room1\",\"playerName\":\"Player2\",\"password\":\"  secret123  \"}"))
+                .andExpect(status().isOk());
+
+        verify(roomService).joinRoom(captor.capture());
+        assertThat(captor.getValue().password()).isEqualTo("  secret123  ");
     }
 
     /**

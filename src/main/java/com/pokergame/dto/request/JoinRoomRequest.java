@@ -16,11 +16,15 @@ public record JoinRoomRequest(
         @NotBlank(message = "Room name is required")
         @Size(max = 50, message = "Room name must be 50 characters or less")
         @Pattern(regexp = "^[^\\p{Cntrl}]*$", message = "Room name cannot contain control characters")
+        @Pattern(regexp = "^[^\\p{Cf}]*$", message = "Input contains illegal format characters.")
+        @Pattern(regexp = "^((?!<[^>]*>).)*$", message = "Input contains illegal HTML tags.")
         String roomName,
 
         @NotBlank(message = "Player name is required")
         @Size(max = 30, message = "Player name must be 30 characters or less")
         @Pattern(regexp = "^[^\\p{Cntrl}]*$", message = "Player name cannot contain control characters")
+        @Pattern(regexp = "^[^\\p{Cf}]*$", message = "Input contains illegal format characters.")
+        @Pattern(regexp = "^((?!<[^>]*>).)*$", message = "Input contains illegal HTML tags.")
         String playerName,
 
         @Size(max = 50, message = "Password must be 50 characters or less")
@@ -28,4 +32,7 @@ public record JoinRoomRequest(
         String password // Optional - null means no password required
 
 ) {
+    public JoinRoomRequest {
+        password = (password != null && password.trim().isEmpty()) ? null : password;
+    }
 }

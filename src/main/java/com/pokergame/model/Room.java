@@ -92,7 +92,7 @@ public class Room {
         this.smallBlind = smallBlind;
         this.bigBlind = bigBlind;
         this.buyIn = buyIn;
-        this.password = password;
+        this.password = (password != null && password.trim().isEmpty()) ? null : password;
         this.playersWithJoinTime = java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>());
         this.createdAt = LocalDateTime.now();
     }

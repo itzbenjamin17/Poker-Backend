@@ -138,6 +138,69 @@ class RoomServiceTest {
             assertThat(room.getRoomName()).isEqualTo("Untrimmed Room");
             assertThat(room.getPlayers()).containsExactly("Untrimmed Player");
         }
+
+        /**
+         * Protects the contract that format characters are rejected in room name during creation.
+         */
+        @Test
+        @DisplayName("should reject format characters in room name during creation")
+        void createRoom_RejectsFormatCharactersInRoomName() {
+            assertThatThrownBy(() -> roomService.createRoom(new CreateRoomRequest(
+                    "Room\u200BName", "HostPlayer", 6, 5, 10, 100, null)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("format characters");
+        }
+
+        /**
+         * Protects the contract that format characters are rejected in player name during creation.
+         */
+        @Test
+        @DisplayName("should reject format characters in player name during creation")
+        void createRoom_RejectsFormatCharactersInPlayerName() {
+            assertThatThrownBy(() -> roomService.createRoom(new CreateRoomRequest(
+                    "ValidRoom", "Host\u200DPlayer", 6, 5, 10, 100, null)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("format characters");
+        }
+
+        /**
+         * Protects the contract that whitespace-only password is treated as absent on creation.
+         */
+        @Test
+        @DisplayName("should treat whitespace-only password as absent on creation")
+        void createRoom_WhitespaceOnlyPasswordTreatedAsAbsent() {
+            String roomId = roomService.createRoom(new CreateRoomRequest(
+                    "Public Room", "Host", 4, 10, 20, 200, "   "));
+            Room room = roomService.getRoom(roomId);
+            assertThat(room.hasPassword()).isFalse();
+            assertThat(room.getPasswordForPersistence()).isNull();
+
+            // Any player can join without password
+            roomService.joinRoom(new JoinRoomRequest("Public Room", "NewPlayer", null));
+            assertThat(room.getPlayers()).contains("NewPlayer");
+        }
+
+        /**
+         * Protects the contract that leading and trailing spaces in password are preserved.
+         */
+        @Test
+        @DisplayName("should preserve leading and trailing spaces in password")
+        void createRoom_PreservesLeadingAndTrailingSpacesInPassword() {
+            String roomId = roomService.createRoom(new CreateRoomRequest(
+                    "Spaced Pass Room", "Host", 4, 10, 20, 200, "  secret123  "));
+            Room room = roomService.getRoom(roomId);
+            assertThat(room.hasPassword()).isTrue();
+            assertThat(room.getPasswordForPersistence()).isEqualTo("  secret123  ");
+
+            // Joining with exact password succeeds
+            roomService.joinRoom(new JoinRoomRequest("Spaced Pass Room", "NewPlayer", "  secret123  "));
+            assertThat(room.getPlayers()).contains("NewPlayer");
+
+            // Joining without spaces fails
+            assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest("Spaced Pass Room", "AnotherPlayer", "secret123")))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Invalid password");
+        }
     }
 
     /** Groups test scenarios for join room. */
@@ -226,6 +289,47 @@ class RoomServiceTest {
                     "Private Room",
                     "NewPlayer",
                     "wrongpassword")))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Invalid password");
+        }
+
+        /**
+         * Protects the contract that format characters are rejected in room name during join.
+         */
+        @Test
+        @DisplayName("should reject format characters in room name during join")
+        void joinRoom_RejectsFormatCharactersInRoomName() {
+            roomService.createRoom(validCreateRequest);
+            assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest(
+                    "Test\u200BRoom", "Player2", null)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("format characters");
+        }
+
+        /**
+         * Protects the contract that format characters are rejected in player name during join.
+         */
+        @Test
+        @DisplayName("should reject format characters in player name during join")
+        void joinRoom_RejectsFormatCharactersInPlayerName() {
+            roomService.createRoom(validCreateRequest);
+            assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest(
+                    "Test Room", "Player\u200E2", null)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("format characters");
+        }
+
+        /**
+         * Protects the contract that joining with a whitespace-only password fails when room has a password.
+         */
+        @Test
+        @DisplayName("should fail join with whitespace-only password when room has password")
+        void joinRoom_WhitespaceOnlyPasswordFailsWhenRoomHasPassword() {
+            roomService.createRoom(new CreateRoomRequest(
+                    "Protected Room", "Host", 4, 10, 20, 200, "swordfish"));
+
+            assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest(
+                    "Protected Room", "NewPlayer", "   ")))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessage("Invalid password");
         }
