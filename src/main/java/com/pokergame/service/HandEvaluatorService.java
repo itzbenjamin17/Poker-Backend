@@ -406,14 +406,21 @@ public class HandEvaluatorService {
     /**
      * Compares otherwise unranked hands from their highest card downward.
      *
-     * @param sortedCombination candidate hand in ascending rank order
-     * @param bestHand incumbent hand in ascending rank order
+     * @param sortedCombination candidate hand in ascending or descending rank order
+     * @param bestHand incumbent hand in ascending or descending rank order
      * @return {@code true} when the candidate wins at the first unequal card
      */
     private boolean compareHighCard(List<Card> sortedCombination, List<Card> bestHand) {
+        // The evaluator returns high-card hands in descending order, while several
+        // category comparators receive ascending combinations. Normalize copies so
+        // both public call paths compare the same rank order without mutating input.
+        List<Card> first = new ArrayList<>(sortedCombination);
+        List<Card> second = new ArrayList<>(bestHand);
+        first.sort(Comparator.comparing(Card::getValue));
+        second.sort(Comparator.comparing(Card::getValue));
         for (int i = 4; i >= 0; i--) {
-            int currentValue = sortedCombination.get(i).getValue();
-            int bestValue = bestHand.get(i).getValue();
+            int currentValue = first.get(i).getValue();
+            int bestValue = second.get(i).getValue();
 
             if (currentValue != bestValue) {
                 boolean better = currentValue > bestValue;

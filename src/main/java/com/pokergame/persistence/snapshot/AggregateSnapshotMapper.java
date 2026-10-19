@@ -149,7 +149,11 @@ public final class AggregateSnapshotMapper {
                 game.isGameOver(), game.getSmallBlind(), game.getBigBlind(), game.getHandContributionsSnapshot(),
                 game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs(),
                 game.hasEveryoneHadInitialTurn(), game.getActedPlayerIdsSnapshot(),
-                game.getScheduledTaskDeadlinesSnapshot());
+                game.getScheduledTaskDeadlinesSnapshot(), game.getPreHandCarryOver(),
+                game.getLastFullRaiseByStreetSnapshot(), game.getLastActedWagerByPlayerSnapshot(),
+                game.getHandSeatOrderSnapshot(), game.getDealerAnchorPlayerId(), game.getSmallBlindPlayerId(),
+                game.getBigBlindPlayerId(), settlementState(game.getLastSettlementResult()),
+                game.isTerminalCarryOverSettled());
     }
 
     /**
@@ -214,8 +218,29 @@ public final class AggregateSnapshotMapper {
                 .everyoneHasHadInitialTurn(state.everyoneHasHadInitialTurn())
                 .actedPlayersInRound(state.actedPlayerIds())
                 .scheduledTaskDeadlines(state.scheduledTaskDeadlines())
+                .preHandCarryOver(state.preHandCarryOver())
+                .lastFullRaiseByStreet(state.lastFullRaiseByStreet())
+                .lastActedWagerByPlayer(state.lastActedWagerByPlayer())
+                .handSeatOrder(state.handSeatOrder())
+                .dealerAnchorPlayerId(state.dealerAnchorPlayerId())
+                .smallBlindPlayerId(state.smallBlindPlayerId())
+                .bigBlindPlayerId(state.bigBlindPlayerId())
+                .lastSettlementResult(settlementResult(state.lastSettlementResult()))
+                .terminalCarryOverSettled(state.terminalCarryOverSettled())
                 .handEvaluator(handEvaluator) // Reattach the service needed for evaluating hands
                 .build();
+    }
+
+    private static AggregateStateImage.SettlementState settlementState(com.pokergame.model.HandSettlementResult result) {
+        if (result == null) return null;
+        return new AggregateStateImage.SettlementState(result.contestedAwards(), result.refunds(),
+                result.winnerIds(), result.remainder(), result.settled());
+    }
+
+    private static com.pokergame.model.HandSettlementResult settlementResult(AggregateStateImage.SettlementState state) {
+        if (state == null) return null;
+        return new com.pokergame.model.HandSettlementResult(state.contestedAwards(), state.refunds(),
+                state.winnerIds(), state.remainder(), state.settled());
     }
 
     /**

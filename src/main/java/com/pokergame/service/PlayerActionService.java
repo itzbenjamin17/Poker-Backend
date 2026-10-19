@@ -134,8 +134,8 @@ public class PlayerActionService {
                         gameStateService.broadcastGameState(gameId, game);
                     }
                     case AUTO_ADVANCING -> {
-                        gameStateService.broadcastAutoAdvanceNotification(gameId, game);
                         gameLifecycleService.scheduleAutoAdvance(gameId);
+                        gameStateService.broadcastAutoAdvanceNotification(gameId, game);
                     }
                     case SHOWDOWN -> {
                         if (game.isTournamentOver()) {

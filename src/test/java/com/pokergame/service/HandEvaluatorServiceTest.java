@@ -31,6 +31,44 @@ class HandEvaluatorServiceTest {
                 service = new HandEvaluatorService();
         }
 
+        @Test
+        void highCardComparisonUsesDescendingBestHandsWithoutMutatingInputs() {
+                List<Card> board = List.of(card(Rank.TWO, Suit.SPADES), card(Rank.FOUR, Suit.HEARTS),
+                                card(Rank.SEVEN, Suit.DIAMONDS), card(Rank.NINE, Suit.CLUBS),
+                                card(Rank.JACK, Suit.SPADES));
+                List<Card> aceHole = List.of(card(Rank.ACE, Suit.HEARTS), card(Rank.THREE, Suit.DIAMONDS));
+                List<Card> kingHole = List.of(card(Rank.KING, Suit.HEARTS), card(Rank.EIGHT, Suit.DIAMONDS));
+                List<Card> aceBefore = List.copyOf(aceHole);
+                List<Card> kingBefore = List.copyOf(kingHole);
+                HandEvaluationResult ace = service.getBestHand(board, aceHole);
+                HandEvaluationResult king = service.getBestHand(board, kingHole);
+
+                assertTrue(service.isBetterHandOfSameRank(ace.bestHand(), king.bestHand(), HandRank.HIGH_CARD));
+                assertFalse(service.isBetterHandOfSameRank(king.bestHand(), ace.bestHand(), HandRank.HIGH_CARD));
+                assertEquals(aceBefore, aceHole);
+                assertEquals(kingBefore, kingHole);
+        }
+
+        @Test
+        void highCardComparisonHandlesTiesAndKickersInEitherInputOrder() {
+                List<Card> aceHigh = List.of(card(Rank.ACE, Suit.SPADES), card(Rank.JACK, Suit.SPADES),
+                                card(Rank.NINE, Suit.SPADES), card(Rank.SEVEN, Suit.SPADES), card(Rank.FOUR, Suit.SPADES));
+                List<Card> sameRanksOtherSuits = List.of(card(Rank.ACE, Suit.HEARTS), card(Rank.JACK, Suit.HEARTS),
+                                card(Rank.NINE, Suit.HEARTS), card(Rank.SEVEN, Suit.HEARTS), card(Rank.FOUR, Suit.HEARTS));
+                List<Card> lowerKicker = List.of(card(Rank.ACE, Suit.CLUBS), card(Rank.JACK, Suit.CLUBS),
+                                card(Rank.NINE, Suit.CLUBS), card(Rank.SEVEN, Suit.CLUBS), card(Rank.THREE, Suit.CLUBS));
+                List<Card> mutableDescending = new java.util.ArrayList<>(aceHigh);
+                List<Card> before = List.copyOf(mutableDescending);
+
+                assertFalse(service.isBetterHandOfSameRank(mutableDescending, sameRanksOtherSuits, HandRank.HIGH_CARD));
+                assertFalse(service.isBetterHandOfSameRank(sameRanksOtherSuits, mutableDescending, HandRank.HIGH_CARD));
+                assertTrue(service.isBetterHandOfSameRank(mutableDescending, lowerKicker, HandRank.HIGH_CARD));
+                assertFalse(service.isBetterHandOfSameRank(lowerKicker, mutableDescending, HandRank.HIGH_CARD));
+                assertEquals(before, mutableDescending);
+        }
+
+        private static Card card(Rank rank, Suit suit) { return new Card(rank, suit); }
+
         // Indirectly validates internal combination/high-card helpers through public
         // getBestHand API.
         /**

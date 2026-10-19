@@ -1,6 +1,8 @@
 package com.pokergame.service;
 
 import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
@@ -10,6 +12,7 @@ import com.pokergame.enums.Suit;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
 import com.pokergame.model.HandEvaluationResult;
+import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +31,8 @@ import com.pokergame.exception.UnauthorisedActionException;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -68,6 +73,8 @@ class GameLifecycleServiceTest {
     void setUp() {
         gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
                 taskScheduler);
+        lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
+                .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
 
         testRoom = new Room(
                 ROOM_ID,
@@ -247,9 +254,8 @@ class GameLifecycleServiceTest {
 
         Game game = gameLifecycleService.getGame(ROOM_ID);
         // Simulate game over by removing all but one player
-        game.getPlayers().subList(1, game.getPlayers().size()).clear();
-        game.getActivePlayers().clear();
-        game.getActivePlayers().add(game.getPlayers().getFirst());
+        game.conductShowdown();
+        game.getPlayers().get(1).setIsOut();
 
         reset(gameStateService);
         gameLifecycleService.startNewHand(ROOM_ID);
@@ -285,6 +291,146 @@ class GameLifecycleServiceTest {
         Game game = gameLifecycleService.getGame(ROOM_ID);
         assertTrue(game.getPot() > 0);
         assertEquals(10, game.getCurrentHighestBet()); // Big blind is 10
+    }
+
+    @Test
+    void startNewHand_ReconcilesForcedBlindsAsRunoutOrGenuineOwedCall() {
+        Room headsUp = new Room("forced-runout", "Forced runout", "Host", 2, 5, 10, 100, null);
+        headsUp.addPlayer("Host");
+        headsUp.addPlayer("Player2");
+        when(roomService.getRoom(headsUp.getRoomId())).thenReturn(headsUp);
+        GameLifecycleService lifecycle = new GameLifecycleService(roomService, handEvaluator, gameStateService,
+                messagingTemplate, taskScheduler);
+        lifecycle.createGameFromRoom(headsUp.getRoomId());
+        Game runout = lifecycle.getGame(headsUp.getRoomId());
+        runout.conductShowdown();
+        runout.getPlayers().forEach(player -> player.setChips(5));
+        reset(gameStateService);
+
+        lifecycle.startNewHand(headsUp.getRoomId());
+
+        assertTrue(runout.getActivePlayers().stream().allMatch(Player::getIsAllIn));
+        assertEquals(5, runout.getCurrentHighestBet());
+        assertNotNull(runout.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+        verify(gameStateService).broadcastGameStateWithAutoAdvance(eq(headsUp.getRoomId()), eq(runout), anyString());
+
+        Room threeHanded = new Room("forced-call", "Forced call", "Host", 3, 5, 10, 100, null);
+        threeHanded.addPlayer("Host");
+        threeHanded.addPlayer("Player2");
+        threeHanded.addPlayer("Player3");
+        when(roomService.getRoom(threeHanded.getRoomId())).thenReturn(threeHanded);
+        GameLifecycleService callLifecycle = new GameLifecycleService(roomService, handEvaluator, gameStateService,
+                messagingTemplate, taskScheduler);
+        callLifecycle.createGameFromRoom(threeHanded.getRoomId());
+        Game callHand = callLifecycle.getGame(threeHanded.getRoomId());
+        callHand.conductShowdown();
+        int playerCount = callHand.getActivePlayers().size();
+        int nextSmallBlindIndex = (callHand.getDealerPosition() + 2) % playerCount;
+        int nextBigBlindIndex = (nextSmallBlindIndex + 1) % playerCount;
+        int nextActorIndex = (nextBigBlindIndex + 1) % playerCount;
+        for (int index = 0; index < callHand.getPlayers().size(); index++) {
+            callHand.getPlayers().get(index).setChips(index == nextSmallBlindIndex ? 5
+                    : index == nextBigBlindIndex ? 10 : 500);
+        }
+        reset(gameStateService);
+
+        callLifecycle.startNewHand(threeHanded.getRoomId());
+
+        Player actor = callHand.getCurrentPlayer();
+        assertNotNull(actor);
+        assertEquals(callHand.getActivePlayers().get(nextActorIndex), actor);
+        assertTrue(callHand.getCurrentHighestBet() > actor.getCurrentBet(), "The actor owes the posted blind");
+        assertNull(callHand.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+        assertTrue(callHand.getLegalActionsFor(actor).contains(PlayerAction.CALL));
+        verify(gameStateService).broadcastGameState(threeHanded.getRoomId(), callHand);
+        verify(gameStateService, never()).broadcastGameStateWithAutoAdvance(eq(threeHanded.getRoomId()), any(), anyString());
+    }
+
+    @Test
+    void departedAllInDuringAutoAdvanceMakesCapturedCallbackStale() {
+        Room room = new Room("stale-auto", "Stale auto", "A", 4, 5, 10, 100, null);
+        for (String name : List.of("A", "B", "C", "D")) room.addPlayer(name);
+        when(roomService.getRoom(room.getRoomId())).thenReturn(room);
+        GameLifecycleService lifecycle = new GameLifecycleService(roomService, handEvaluator, gameStateService,
+                messagingTemplate, taskScheduler);
+        List<Card> board = List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES),
+                new Card(Rank.QUEEN, Suit.SPADES));
+        List<Card> deck = List.of(new Card(Rank.JACK, Suit.SPADES), new Card(Rank.TEN, Suit.SPADES));
+        Player a = restoredPlayer("A", "a", 0, 50, false, true);
+        Player b = restoredPlayer("B", "b", 100, 0, true, false);
+        Player c = restoredPlayer("C", "c", 0, 50, false, true);
+        Player d = restoredPlayer("D", "d", 100, 0, true, false);
+        Game game = Game.restoreBuilder().gameId(room.getRoomId()).players(List.of(a, b, c, d))
+                .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(deck).communityCards(board)
+                .pot(100).dealerPosition(0).smallBlindPosition(1).bigBlindPosition(2).currentPlayerPosition(0)
+                .currentHighestBet(50).currentPhase(GamePhase.FLOP).gameOver(false).smallBlind(5).bigBlind(10)
+                .handContributions(Map.of("a", 50, "c", 50)).preHandCarryOver(0).handSeatOrder(List.of("a", "b", "c", "d"))
+                .dealerAnchorPlayerId("a").smallBlindPlayerId("b").bigBlindPlayerId("c")
+                .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
+        lifecycle.restoreGame(game);
+
+        lifecycle.scheduleAutoAdvance(room.getRoomId());
+        org.mockito.ArgumentCaptor<Runnable> callbacks = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+        verify(taskScheduler).schedule(callbacks.capture(), any(java.time.Instant.class));
+        Runnable staleAutoAdvance = callbacks.getValue();
+        int winnerChipsBefore = a.getChips();
+
+        lifecycle.leaveGame(room.getRoomId(), "C");
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+        assertEquals(3, game.getCommunityCards().size());
+        assertEquals(100, a.getChips() - winnerChipsBefore);
+        HandSettlementResult settled = game.getLastSettlementResult();
+
+        staleAutoAdvance.run();
+
+        assertEquals(3, game.getCommunityCards().size());
+        assertEquals(0, game.getPot());
+        assertSame(settled, game.getLastSettlementResult());
+        assertEquals(100, a.getChips() - winnerChipsBefore);
+    }
+
+    @Test
+    void departureDuringReadyWindowPreservesSettlementUntilRemainingPlayersReadyOnce() {
+        Room room = new Room("ready-departure", "Ready departure", "A", 4, 5, 10, 100, null);
+        for (String name : List.of("A", "B", "C", "D")) room.addPlayer(name);
+        when(roomService.getRoom(room.getRoomId())).thenReturn(room);
+        GameLifecycleService lifecycle = new GameLifecycleService(roomService, handEvaluator, gameStateService,
+                messagingTemplate, taskScheduler);
+        lifecycle.createGameFromRoom(room.getRoomId());
+        Game game = lifecycle.getGame(room.getRoomId());
+        game.conductShowdown();
+        game.getPlayers().forEach(player -> player.setChips(100));
+        HandSettlementResult settled = game.getLastSettlementResult();
+        long readyDeadline = System.currentTimeMillis() + 60_000;
+        game.openReadyCountdown(readyDeadline);
+        game.getPlayers().stream().filter(player -> List.of("A", "B").contains(player.getName()))
+                .forEach(player -> player.setReadyForNextHand(true));
+
+        lifecycle.leaveGame(room.getRoomId(), "D");
+
+        assertTrue(game.isReadyCountdownActive());
+        assertEquals(readyDeadline, game.getReadyCountdownDeadlineEpochMs());
+        assertSame(settled, game.getLastSettlementResult());
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+
+        lifecycle.markPlayerReadyForNextHand(room.getRoomId(), "C");
+
+        assertFalse(game.isReadyCountdownActive());
+        assertNull(game.getLastSettlementResult());
+        assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
+        assertEquals(15, game.getPot(), "One hand start posts exactly one set of blinds");
+        assertEquals(285, game.getActivePlayers().stream().mapToInt(Player::getChips).sum(),
+                "One hand start consumes exactly fifteen chips in blinds");
+        assertThrows(UnauthorisedActionException.class,
+                () -> lifecycle.markPlayerReadyForNextHand(room.getRoomId(), "A"));
+    }
+
+    private static Player restoredPlayer(String name, String id, int chips, int bet, boolean folded, boolean allIn) {
+        return Player.restoreBuilder().name(name).playerId(id).chips(chips).holeCards(List.of())
+                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(bet).hasFolded(folded).allIn(allIn)
+                .out(false).disconnected(false).readyForNextHand(false).build();
     }
 
     /**
@@ -645,6 +791,102 @@ class GameLifecycleServiceTest {
         gameLifecycleService.handleGameEnd(ROOM_ID, false);
 
         verify(gameStateService).broadcastGameEnd(eq(ROOM_ID), any(Game.class), any(Player.class), anyBoolean());
+    }
+
+    @Test
+    void terminalCarryOverFlowsThroughLifecycleIntoFrozenGameEndDtoOnce() {
+        Room room = testRoom;
+        when(roomService.getRoom(ROOM_ID)).thenReturn(room);
+        SimpMessagingTemplate publisher = messagingTemplate;
+        GameStateService realStateService = new GameStateService(roomService, publisher);
+        GameLifecycleService lifecycle = new GameLifecycleService(roomService, handEvaluator, realStateService,
+                publisher, taskScheduler);
+        Player winner = Player.restoreBuilder().name("Host").playerId("host").chips(1000).holeCards(List.of())
+                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false).allIn(false)
+                .out(false).disconnected(false).readyForNextHand(false).build();
+        Player eliminated = Player.restoreBuilder().name("Player2").playerId("p2").chips(0).holeCards(List.of())
+                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(true).allIn(false)
+                .out(true).disconnected(false).readyForNextHand(false).build();
+        Game terminal = Game.restoreBuilder().gameId(ROOM_ID).players(List.of(winner, eliminated))
+                .activePlayerIds(List.of("host")).remainingDeck(List.of()).communityCards(List.of()).pot(10)
+                .dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(0)
+                .currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false).smallBlind(5).bigBlind(10)
+                .handContributions(Map.of()).preHandCarryOver(10)
+                .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, true))
+                .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(java.util.Map.of()).handEvaluator(handEvaluator).build();
+        lifecycle.restoreGame(terminal);
+
+        lifecycle.handleGameEnd(ROOM_ID, false);
+        org.mockito.ArgumentCaptor<Object> captor = org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(publisher).convertAndSend(eq("/game/" + ROOM_ID), captor.capture());
+        GameEndResponse result = (GameEndResponse) captor.getValue();
+        assertEquals(1010, result.winnerChips());
+        assertEquals(0, result.finalState().pot());
+        assertEquals(1010, result.finalState().players().stream().filter(PublicPlayerState::isWinner)
+                .findFirst().orElseThrow().chips());
+        assertTrue(terminal.isTerminalCarryOverSettled());
+
+        lifecycle.handleGameEnd(ROOM_ID, false);
+        verify(publisher, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(Object.class));
+        assertEquals(1010, winner.getChips());
+    }
+
+    @Test
+    void leaveClaimAndGraceExpiryAwardCommittedLargePotThroughFinalDto() {
+        for (String ending : List.of("leave", "claim", "grace")) {
+            String gameId = ROOM_ID + "-" + ending;
+            Room room = new Room(gameId, "Terminal " + ending, "Host", 2, 10, 20, 1000, null);
+            room.addPlayer("Host");
+            room.addPlayer("Player2");
+            when(roomService.getRoom(gameId)).thenReturn(room);
+            reset(messagingTemplate);
+            GameStateService realState = new GameStateService(roomService, messagingTemplate);
+            GameLifecycleService lifecycle = new GameLifecycleService(roomService, handEvaluator, realState,
+                    messagingTemplate, taskScheduler);
+            lifecycle.createGameFromRoom(gameId);
+            Game game = lifecycle.getGame(gameId);
+            Player smallBlind = game.getPlayers().stream()
+                    .filter(player -> player.getPlayerId().equals(game.getSmallBlindPlayerId())).findFirst().orElseThrow();
+            Player bigBlind = game.getPlayers().stream()
+                    .filter(player -> player.getPlayerId().equals(game.getBigBlindPlayerId())).findFirst().orElseThrow();
+
+            Player actor = game.getCurrentPlayer();
+            if (!actor.equals(smallBlind)) {
+                game.processPlayerDecision(actor, new com.pokergame.dto.internal.PlayerDecision(
+                        actor.getCurrentBet() < game.getCurrentHighestBet() ? PlayerAction.CALL : PlayerAction.CHECK,
+                        0, actor.getPlayerId()));
+            }
+            PlayerAction aggressiveAction = game.getCurrentPhase() == GamePhase.PRE_FLOP
+                    ? PlayerAction.RAISE : PlayerAction.BET;
+            game.processPlayerDecision(smallBlind, new com.pokergame.dto.internal.PlayerDecision(
+                    aggressiveAction, 500, smallBlind.getPlayerId()));
+            game.processPlayerDecision(bigBlind, new com.pokergame.dto.internal.PlayerDecision(
+                    PlayerAction.CALL, 0, bigBlind.getPlayerId()));
+            assertEquals(1020, game.getPot(), "The actual calls and raise build the contested pot");
+
+            if (!ending.equals("leave")) {
+                lifecycle.markPlayerDisconnected(gameId, smallBlind.getName(), System.currentTimeMillis() + 60_000);
+            }
+            if (ending.equals("leave")) {
+                lifecycle.leaveGame(gameId, smallBlind.getName());
+            } else if (ending.equals("claim")) {
+                lifecycle.claimWin(gameId, bigBlind.getName());
+            } else {
+                lifecycle.removeDisconnectedPlayer(gameId, smallBlind.getName());
+            }
+
+            org.mockito.ArgumentCaptor<Object> captor = org.mockito.ArgumentCaptor.forClass(Object.class);
+            verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + gameId), captor.capture());
+            GameEndResponse result = captor.getAllValues().stream().filter(GameEndResponse.class::isInstance)
+                    .map(GameEndResponse.class::cast).findFirst().orElseThrow();
+            assertEquals(1510, result.winnerChips(), "The surviving BB receives the full matched pot: " + ending);
+            assertEquals(0, result.finalState().pot());
+            assertEquals(1510, result.finalState().players().stream().filter(PublicPlayerState::isWinner)
+                    .findFirst().orElseThrow().chips());
+            lifecycle.handleGameEnd(gameId, false);
+            assertEquals(1510, bigBlind.getChips(), "Delayed terminal handling cannot pay again: " + ending);
+        }
     }
 
     @Test

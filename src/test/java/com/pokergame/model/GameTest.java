@@ -427,6 +427,376 @@ class GameTest {
         }
 
         @Test
+        void nonIncreasingRaiseReportsFullIncrementalMinimum() {
+                game.postBlinds();
+                Player player = game.getActivePlayers().getFirst();
+                UnauthorisedActionException exception = assertThrows(UnauthorisedActionException.class,
+                                () -> game.processPlayerDecision(player, new PlayerDecision(PlayerAction.RAISE, 1, player.getPlayerId())));
+                assertEquals("MIN_RAISE", exception.actionErrorCode());
+                assertEquals("Min raise: 40; yours: 1", exception.actionErrorMessage());
+        }
+
+        @Test
+        void fullRaiseIncrementSetsNextMinimumAtTenToFiftyToNinety() {
+                Player a = restoredPlayer("A", "a", 900, 10, false);
+                Player b = restoredPlayer("B", "b", 900, 10, false);
+                Player c = restoredPlayer("C", "c", 900, 10, false);
+                Game hand = restoredBettingGame("raise-increment", List.of(a, b, c), 30, 10, 0,
+                                Map.of("a", 10, "b", 10, "c", 10), Map.of(), Map.of());
+
+                hand.processPlayerDecision(a, new PlayerDecision(PlayerAction.RAISE, 40, "a"));
+                assertEquals(50, a.getCurrentBet(), "A raises the existing 10 wager to 50");
+                assertEquals(40, hand.getLastFullRaise());
+                assertEquals(80, hand.getMinimumRaiseAmount(b));
+
+                int bChipsBefore = b.getChips();
+                UnauthorisedActionException tooSmall = assertThrows(UnauthorisedActionException.class,
+                                () -> hand.processPlayerDecision(b, new PlayerDecision(PlayerAction.RAISE, 10, "b")));
+                assertEquals("MIN_RAISE", tooSmall.actionErrorCode());
+                assertEquals(bChipsBefore, b.getChips());
+                assertEquals(50, hand.getCurrentHighestBet());
+
+                hand.processPlayerDecision(b, new PlayerDecision(PlayerAction.RAISE, 80, "b"));
+                assertEquals(90, b.getCurrentBet(), "The next full raise reaches 90");
+                assertEquals(90, hand.getCurrentHighestBet());
+        }
+
+        @Test
+        void shortAllInDoesNotReopenAlreadyActedPlayerButCumulativeShortRaisesDo() {
+                Player a = restoredPlayer("A", "a", 900, 100, false);
+                Player b = restoredPlayer("B", "b", 900, 100, false);
+                Player shortOne = restoredPlayer("Short1", "s1", 0, 150, true);
+                Player shortTwo = restoredPlayer("Short2", "s2", 0, 200, true);
+                Game hand = restoredBettingGame("short-raise-reopening", List.of(a, b, shortOne, shortTwo), 550, 200, 0,
+                                Map.of("a", 100, "b", 100, "s1", 150, "s2", 200), Map.of("PRE_FLOP", 100), Map.of("a", 100));
+
+                assertTrue(hand.isRaiseOpenTo(a), "Two short all-ins cumulatively move the wager by the full raise size");
+                assertTrue(hand.getLegalActionsFor(a).contains(PlayerAction.RAISE));
+                assertTrue(hand.getLegalActionsFor(a).contains(PlayerAction.ALL_IN));
+        }
+
+        @Test
+        void oneShortAllInLeavesRaiseClosedButAllowsCallOrCallingAllIn() {
+                Player a = restoredPlayer("A", "a", 900, 100, false);
+                Player shortOne = restoredPlayer("Short", "s", 0, 150, true);
+                Player b = restoredPlayer("B", "b", 900, 100, false);
+                Game hand = restoredBettingGame("short-raise-closed", List.of(a, shortOne, b), 350, 150, 0,
+                                Map.of("a", 100, "s", 150, "b", 100), Map.of("PRE_FLOP", 100), Map.of("a", 100));
+
+                assertFalse(hand.isRaiseOpenTo(a));
+                assertFalse(hand.getLegalActionsFor(a).contains(PlayerAction.RAISE));
+                assertFalse(hand.getLegalActionsFor(a).contains(PlayerAction.ALL_IN));
+                assertTrue(hand.getLegalActionsFor(a).contains(PlayerAction.CALL));
+
+                UnauthorisedActionException closed = assertThrows(UnauthorisedActionException.class,
+                                () -> hand.processPlayerDecision(a, new PlayerDecision(PlayerAction.ALL_IN, 0, "a")));
+                assertEquals("RAISE_NOT_REOPENED", closed.actionErrorCode());
+                assertEquals(100, a.getCurrentBet(), "A rejected aggressive all-in does not consume chips");
+                assertEquals(900, a.getChips());
+
+                a.setChips(50);
+                assertTrue(hand.getLegalActionsFor(a).contains(PlayerAction.ALL_IN), "A stack-limited call remains legal");
+                hand.processPlayerDecision(a, new PlayerDecision(PlayerAction.ALL_IN, 0, "a"));
+                assertEquals(150, a.getCurrentBet(), "Short all-in matches the wager without aggression");
+                assertTrue(a.getIsAllIn());
+        }
+
+        @Test
+        void legalActionsOmitRaiseWhenOnlyCallFitsButAllowShortWholeStackRaise() {
+                Player exactCaller = restoredPlayer("Exact", "exact", 80, 20, false);
+                Player wagerLeader = restoredPlayer("Leader", "leader", 900, 100, false);
+                Player other = restoredPlayer("Other", "other", 900, 100, false);
+                Game exactCall = restoredBettingGame("exact-call-actions", List.of(exactCaller, wagerLeader, other), 220, 100, 0,
+                                Map.of("exact", 20, "leader", 100, "other", 100), Map.of("PRE_FLOP", 100), Map.of());
+
+                List<PlayerAction> exactActions = exactCall.getLegalActionsFor(exactCaller);
+                assertTrue(exactActions.contains(PlayerAction.CALL));
+                assertTrue(exactActions.contains(PlayerAction.ALL_IN));
+                assertFalse(exactActions.contains(PlayerAction.RAISE), "An exact-call stack has no aggressive wager available");
+                exactCall.processPlayerDecision(exactCaller, new PlayerDecision(PlayerAction.ALL_IN, 0, "exact"));
+                assertEquals(100, exactCaller.getCurrentBet());
+
+                Player shortRaiser = restoredPlayer("ShortRaise", "shortRaise", 90, 20, false);
+                Player leader2 = restoredPlayer("Leader2", "leader2", 900, 100, false);
+                Player other2 = restoredPlayer("Other2", "other2", 900, 100, false);
+                Game shortRaise = restoredBettingGame("short-all-in-raise-actions", List.of(shortRaiser, leader2, other2), 220, 100, 0,
+                                Map.of("shortRaise", 20, "leader2", 100, "other2", 100), Map.of("PRE_FLOP", 100), Map.of());
+
+                assertTrue(shortRaise.getLegalActionsFor(shortRaiser).contains(PlayerAction.RAISE));
+                assertTrue(shortRaise.getLegalActionsFor(shortRaiser).contains(PlayerAction.ALL_IN));
+                shortRaise.processPlayerDecision(shortRaiser, new PlayerDecision(PlayerAction.ALL_IN, 0, "shortRaise"));
+                assertEquals(110, shortRaiser.getCurrentBet(), "A whole-stack raise may be below the full increment");
+                assertTrue(shortRaiser.getIsAllIn());
+        }
+
+        @Test
+        void callWithoutOwedChipsAndRaiseWithoutWagerRejectBeforeMutation() {
+                Player actor = game.getCurrentPlayer();
+                int startingChips = actor.getChips();
+                assertThrows(UnauthorisedActionException.class, () -> game.processPlayerDecision(actor,
+                                new PlayerDecision(PlayerAction.CALL, 0, actor.getPlayerId())));
+                assertThrows(UnauthorisedActionException.class, () -> game.processPlayerDecision(actor,
+                                new PlayerDecision(PlayerAction.RAISE, 10, actor.getPlayerId())));
+                assertEquals(startingChips, actor.getChips());
+                assertEquals(0, game.getPot());
+                assertEquals(0, game.getCurrentHighestBet());
+        }
+
+        @Test
+        void forcedAllInRunoutDistinguishesMatchedStateFromGenuineOwedCall() {
+                Player allIn = Player.restoreBuilder().name("AllIn").playerId("ai").chips(0).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(10).hasFolded(false)
+                                .allIn(true).out(false).disconnected(false).readyForNextHand(false).build();
+                Player matched = Player.restoreBuilder().name("Matched").playerId("matched").chips(100).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(10).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Game matchedGame = Game.restoreBuilder().gameId("runout-matched").players(List.of(allIn, matched))
+                                .activePlayerIds(List.of("ai", "matched")).remainingDeck(List.of()).communityCards(List.of())
+                                .pot(20).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(1)
+                                .currentHighestBet(10).currentPhase(GamePhase.PRE_FLOP).gameOver(false).smallBlind(5).bigBlind(10)
+                                .handContributions(Map.of("ai", 10, "matched", 10)).preHandCarryOver(0)
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(false).actedPlayersInRound(Set.of())
+                                .scheduledTaskDeadlines(Map.of()).handEvaluator(mockHandEvaluator).build();
+                assertTrue(matchedGame.shouldAutoRunout(), "No active contender owes chips, so forced runout starts immediately");
+
+                Player owing = Player.restoreBuilder().name("Owing").playerId("owing").chips(100).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Game owingGame = Game.restoreBuilder().gameId("runout-owed-call").players(List.of(allIn, owing))
+                                .activePlayerIds(List.of("ai", "owing")).remainingDeck(List.of()).communityCards(List.of())
+                                .pot(10).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(1)
+                                .currentHighestBet(10).currentPhase(GamePhase.PRE_FLOP).gameOver(false).smallBlind(5).bigBlind(10)
+                                .handContributions(Map.of("ai", 10)).preHandCarryOver(0).readyCountdownActive(false)
+                                .everyoneHasHadInitialTurn(false).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+                assertFalse(owingGame.shouldAutoRunout(), "A genuine call remains available even when only one player can act");
+                assertFalse(owingGame.isBettingRoundComplete(), "An owed call keeps the street open before the actor responds");
+        }
+
+        @Test
+        void departedBlindIdentityStaysAnchoredAndNextDealerWalksOriginalSeatOrder() {
+                Player dealer = new Player("D", "d", 100);
+                Player smallBlind = new Player("A", "a", 100);
+                Player bigBlind = new Player("B", "b", 100);
+                Player c = new Player("C", "c", 100);
+                Game anchored = Game.restoreBuilder().gameId("position-anchor")
+                                .players(List.of(dealer, smallBlind, bigBlind, c)).activePlayerIds(List.of("d", "a", "b", "c"))
+                                .remainingDeck(List.of()).communityCards(List.of()).pot(0).dealerPosition(0)
+                                .smallBlindPosition(1).bigBlindPosition(2).currentPlayerPosition(3).currentHighestBet(0)
+                                .currentPhase(GamePhase.FLOP).gameOver(false).smallBlind(5).bigBlind(10)
+                                .handContributions(Map.of()).preHandCarryOver(0).handSeatOrder(List.of("d", "a", "b", "c"))
+                                .dealerAnchorPlayerId("d").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                                .scheduledTaskDeadlines(Map.of()).handEvaluator(mockHandEvaluator).build();
+
+                anchored.removePlayerFromGame(dealer);
+                anchored.removePlayerFromGame(bigBlind);
+
+                assertEquals("a", anchored.getSmallBlindPlayerId());
+                assertEquals("b", anchored.getBigBlindPlayerId(), "The departed payer identity is retained, not reassigned");
+                assertFalse(anchored.getActivePlayers().stream().anyMatch(p -> p.getPlayerId().equals("b")));
+                anchored.advancePositions();
+                assertEquals("a", anchored.getDealerAnchorPlayerId());
+                assertEquals("a", anchored.getSmallBlindPlayerId());
+                assertEquals("c", anchored.getBigBlindPlayerId());
+        }
+
+        @Test
+        void postFlopActorUsesDealerAnchorAfterSmallBlindLeavesDuringPreFlop() {
+                Player a = restoredPlayer("A", "a", 990, 10, false);
+                Player b = restoredPlayer("B", "b", 980, 20, false);
+                Player c = restoredPlayer("C", "c", 1000, 0, false);
+                Player d = restoredPlayer("D", "d", 1000, 0, false);
+                Game hand = Game.restoreBuilder().gameId("post-flop-seat-anchor")
+                                .players(List.of(a, b, c, d)).activePlayerIds(List.of("a", "b", "c", "d"))
+                                .remainingDeck(List.of(new Card(Rank.TWO, Suit.SPADES), new Card(Rank.THREE, Suit.SPADES),
+                                                new Card(Rank.FOUR, Suit.SPADES), new Card(Rank.FIVE, Suit.SPADES),
+                                                new Card(Rank.SIX, Suit.SPADES))).communityCards(List.of()).pot(30).dealerPosition(3)
+                                .smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(2)
+                                .currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP).gameOver(false)
+                                .smallBlind(10).bigBlind(20).handContributions(Map.of("a", 10, "b", 20))
+                                .preHandCarryOver(0).handSeatOrder(List.of("a", "b", "c", "d"))
+                                .dealerAnchorPlayerId("d").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                hand.removePlayerFromGame(a);
+                assertEquals("c", hand.getCurrentPlayer().getPlayerId());
+                hand.processPlayerDecision(c, new PlayerDecision(PlayerAction.CALL, 0, "c"));
+                hand.processPlayerDecision(d, new PlayerDecision(PlayerAction.CALL, 0, "d"));
+                hand.processPlayerDecision(b, new PlayerDecision(PlayerAction.CHECK, 0, "b"));
+
+                assertEquals(GamePhase.FLOP, hand.getCurrentPhase());
+                assertEquals("b", hand.getCurrentPlayer().getPlayerId(),
+                                "First post-flop action starts after departed dealer D's stable hand anchor");
+                assertEquals("d", hand.getDealerAnchorPlayerId());
+                assertEquals("a", hand.getSmallBlindPlayerId(), "The departed blind payer identity remains recorded");
+
+                Player a2 = restoredPlayer("A2", "a2", 1000, 0, false);
+                Player b2 = restoredPlayer("B2", "b2", 1000, 0, false);
+                Player c2 = restoredPlayer("C2", "c2", 1000, 0, false);
+                Player d2 = restoredPlayer("D2", "d2", 1000, 0, false);
+                Game dealerLeft = Game.restoreBuilder().gameId("departed-dealer-post-flop")
+                                .players(List.of(a2, b2, c2, d2)).activePlayerIds(List.of("a2", "b2", "c2", "d2"))
+                                .remainingDeck(List.of()).communityCards(List.of()).pot(0).dealerPosition(3)
+                                .smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(2)
+                                .currentHighestBet(0).currentPhase(GamePhase.FLOP).gameOver(false)
+                                .smallBlind(10).bigBlind(20).handContributions(Map.of()).preHandCarryOver(0)
+                                .handSeatOrder(List.of("a2", "b2", "c2", "d2")).dealerAnchorPlayerId("d2")
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+                dealerLeft.removePlayerFromGame(d2);
+                dealerLeft.resetBetsForRound();
+                assertEquals("a2", dealerLeft.getCurrentPlayer().getPlayerId(),
+                                "A departed dealer anchor still determines the clockwise first seat");
+        }
+
+        @Test
+        void removingCurrentPlayerKeepsImmediateEligibleSuccessorAsActor() {
+                Player a = restoredPlayer("A", "a", 1000, 0, false);
+                Player b = restoredPlayer("B", "b", 1000, 0, false);
+                Player c = restoredPlayer("C", "c", 1000, 0, false);
+                Player d = restoredPlayer("D", "d", 1000, 0, false);
+                Game hand = Game.restoreBuilder().gameId("leave-successor")
+                                .players(List.of(a, b, c, d)).activePlayerIds(List.of("a", "b", "c", "d"))
+                                .remainingDeck(List.of()).communityCards(List.of()).pot(0).dealerPosition(0)
+                                .smallBlindPosition(1).bigBlindPosition(2).currentPlayerPosition(1)
+                                .currentHighestBet(0).currentPhase(GamePhase.FLOP).gameOver(false).smallBlind(5).bigBlind(10)
+                                .handContributions(Map.of()).preHandCarryOver(0).handSeatOrder(List.of("a", "b", "c", "d"))
+                                .dealerAnchorPlayerId("a").readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                hand.removePlayerFromGame(b);
+                TurnOutcome outcome = hand.reconcileAfterPlayerRemoval();
+
+                assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, outcome.type());
+                assertEquals("c", hand.getCurrentPlayer().getPlayerId(), "The successor is selected exactly once");
+        }
+
+        @Test
+        void departureThatCompletesMatchedFlopTurnsAdvancesToTurnOnce() {
+                Player a = restoredPlayer("A", "a", 1000, 0, false);
+                Player b = restoredPlayer("B", "b", 1000, 0, false);
+                Player c = restoredPlayer("C", "c", 1000, 0, false);
+                Game hand = Game.restoreBuilder().gameId("leave-completes-flop")
+                                .players(List.of(a, b, c)).activePlayerIds(List.of("a", "b", "c"))
+                                .remainingDeck(List.of(new Card(Rank.SIX, Suit.CLUBS))).communityCards(List.of(
+                                                new Card(Rank.TWO, Suit.CLUBS), new Card(Rank.THREE, Suit.DIAMONDS),
+                                                new Card(Rank.FOUR, Suit.HEARTS)))
+                                .pot(0).dealerPosition(0).smallBlindPosition(1).bigBlindPosition(2)
+                                .currentPlayerPosition(2).currentHighestBet(0).currentPhase(GamePhase.FLOP)
+                                .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
+                                .handSeatOrder(List.of("a", "b", "c")).dealerAnchorPlayerId("a")
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of("a", "b")).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                hand.removePlayerFromGame(c);
+                TurnOutcome outcome = hand.reconcileAfterPlayerRemoval();
+
+                assertEquals(TurnOutcome.TurnOutcomeType.PHASE_ADVANCED, outcome.type());
+                assertEquals(GamePhase.TURN, hand.getCurrentPhase());
+                assertEquals(4, hand.getCommunityCards().size(), "The turn card is dealt once after the three-card flop");
+        }
+
+        @Test
+        void departureLeavingOneContenderSettlesHandWithoutAnotherAction() {
+                Player a = restoredPlayer("A", "a", 950, 50, false);
+                Player folded = restoredPlayer("Folded", "folded", 950, 50, false);
+                folded.doAction(PlayerAction.FOLD, 0, 0);
+                Player leaving = restoredPlayer("Leaving", "leaving", 1000, 0, false);
+                Game hand = Game.restoreBuilder().gameId("leave-finishes-hand")
+                                .players(List.of(a, folded, leaving)).activePlayerIds(List.of("a", "folded", "leaving"))
+                                .remainingDeck(List.of()).communityCards(List.of()).pot(100).dealerPosition(0)
+                                .smallBlindPosition(1).bigBlindPosition(2).currentPlayerPosition(2)
+                                .currentHighestBet(0).currentPhase(GamePhase.FLOP).gameOver(false).smallBlind(5).bigBlind(10)
+                                .handContributions(Map.of("a", 50, "folded", 50)).preHandCarryOver(0)
+                                .handSeatOrder(List.of("a", "folded", "leaving")).dealerAnchorPlayerId("a")
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of("a", "folded")).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                hand.removePlayerFromGame(leaving);
+                TurnOutcome outcome = hand.reconcileAfterPlayerRemoval();
+
+                assertEquals(TurnOutcome.TurnOutcomeType.SHOWDOWN, outcome.type());
+                assertEquals(List.of(a), outcome.winners());
+                assertEquals(1050, a.getChips());
+                assertEquals(950, folded.getChips(), "The folded contributor receives no award");
+                assertEquals(0, hand.getPot());
+                assertTrue(hand.getLastSettlementResult().settled());
+        }
+
+        @Test
+        void riverCallThatCompletesBettingReturnsShowdownImmediately() {
+                Player allIn = restoredPlayer("AllIn", "allIn", 0, 100, true);
+                Player caller = restoredPlayer("Caller", "caller", 100, 0, false);
+                Game hand = Game.restoreBuilder().gameId("river-call-showdown")
+                                .players(List.of(allIn, caller)).activePlayerIds(List.of("allIn", "caller"))
+                                .remainingDeck(List.of()).communityCards(List.of(
+                                                new Card(Rank.TWO, Suit.CLUBS), new Card(Rank.THREE, Suit.DIAMONDS),
+                                                new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.FIVE, Suit.SPADES),
+                                                new Card(Rank.SIX, Suit.CLUBS)))
+                                .pot(100).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
+                                .currentPlayerPosition(1).currentHighestBet(100).currentPhase(GamePhase.RIVER)
+                                .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of("allIn", 100))
+                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of("allIn")).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+                when(mockHandEvaluator.getBestHand(any(), any()))
+                                .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
+                when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
+
+                TurnOutcome outcome = hand.processPlayerDecision(caller,
+                                new PlayerDecision(PlayerAction.CALL, 0, "caller"));
+
+                assertEquals(TurnOutcome.TurnOutcomeType.SHOWDOWN, outcome.type());
+                assertEquals(GamePhase.SHOWDOWN, hand.getCurrentPhase());
+                assertTrue(hand.getLastSettlementResult().settled());
+        }
+
+        @Test
+        void foldedContributionBoundariesDoNotCreateOddChipsAcrossSameEligiblePot() {
+                List<Card> highCard = List.of(new Card(Rank.ACE, Suit.SPADES));
+                when(mockHandEvaluator.getBestHand(any(), any()))
+                                .thenReturn(new HandEvaluationResult(highCard, HandRank.HIGH_CARD));
+                when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
+                Player a = Player.restoreBuilder().name("A").playerId("a").chips(900).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(100).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player b = Player.restoreBuilder().name("B").playerId("b").chips(900).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(100).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player f1 = Player.restoreBuilder().name("F1").playerId("f1").chips(995).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(5).hasFolded(true)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player f2 = Player.restoreBuilder().name("F2").playerId("f2").chips(990).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(10).hasFolded(true)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player f3 = Player.restoreBuilder().name("F3").playerId("f3").chips(985).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(15).hasFolded(true)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Game ordinary = Game.restoreBuilder().gameId("coalesce-ordinary-pots")
+                                .players(List.of(a, b, f1, f2, f3)).activePlayerIds(List.of("a", "b", "f1", "f2", "f3"))
+                                .remainingDeck(List.of()).communityCards(List.of()).pot(230).dealerPosition(0)
+                                .smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(0).currentHighestBet(100)
+                                .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
+                                .handContributions(Map.of("a", 100, "b", 100, "f1", 5, "f2", 10, "f3", 15))
+                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                ordinary.conductShowdown();
+
+                assertEquals(1015, a.getChips());
+                assertEquals(1015, b.getChips());
+                assertEquals(0, ordinary.getPot());
+        }
+
+        @Test
         void testProcessPlayerDecisionBetLessThanBigBlind() {
                 Player player = game.getCurrentPlayer();
                 // Big blind is 20. Try to bet 10.
@@ -451,7 +821,7 @@ class GameTest {
                                 BadRequestException.class,
                                 () -> game.processPlayerDecision(raiser, decision));
 
-                assertTrue(exception.getMessage().contains("Raise amount must be at least the big blind"));
+                assertTrue(exception.getMessage().contains("Raise increment must be at least 20"));
                 assertEquals("MIN_RAISE", exception.actionErrorCode());
                 assertEquals("Min raise: 40; yours: 30", exception.actionErrorMessage());
         }
@@ -604,8 +974,8 @@ class GameTest {
 
                 List<Player> winners = game.conductShowdown();
 
-                assertEquals(1, winners.size());
-                assertEquals("Player3", winners.getFirst().getName());
+                assertTrue(winners.isEmpty(), "A refund-only recipient is not a contested-pot winner");
+                assertEquals(1000, game.getPlayers().get(2).getChips());
                 assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
         }
 
@@ -643,6 +1013,10 @@ class GameTest {
                 // Add chips to pot
                 game.processPlayerDecision(game.getActivePlayers().getFirst(),
                                 new PlayerDecision(PlayerAction.BET, 100, "p1"));
+                game.processPlayerDecision(game.getActivePlayers().get(1),
+                                new PlayerDecision(PlayerAction.CALL, 100, "p2"));
+                game.processPlayerDecision(game.getActivePlayers().get(2),
+                                new PlayerDecision(PlayerAction.CALL, 100, "p3"));
 
                 List<Player> winners = game.conductShowdown();
 
@@ -687,6 +1061,8 @@ class GameTest {
                                 new Card(Rank.EIGHT, Suit.HEARTS),
                                 new Card(Rank.TWO, Suit.CLUBS)));
 
+                headsUpGame.postBlinds();
+
                 List<Player> winners = headsUpGame.conductShowdown();
 
                 assertEquals(HandRank.ONE_PAIR, josh.getHandRank());
@@ -727,12 +1103,16 @@ class GameTest {
                 when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any()))
                                 .thenReturn(false);
 
-                game.processPlayerDecision(game.getActivePlayers().getFirst(),
-                                new PlayerDecision(PlayerAction.BET, 100, "p1"));
+                game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 51, "p1"));
+                game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 51, "p2"));
+                game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 51, "p3"));
+                game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0, game.getPot());
 
                 game.conductShowdown();
 
                 assertEquals(1, game.getPot());
+                assertEquals(List.of(1), game.getPotBreakdown());
+                assertEquals(0, game.getUncalledAmount());
         }
 
         /**
@@ -752,8 +1132,10 @@ class GameTest {
                 when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any()))
                                 .thenReturn(false);
 
-                game.processPlayerDecision(game.getActivePlayers().getFirst(),
-                                new PlayerDecision(PlayerAction.BET, 100, "p1"));
+                game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 51, "p1"));
+                game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 51, "p2"));
+                game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 51, "p3"));
+                game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0, game.getPot());
                 game.conductShowdown();
 
                 assertEquals(1, game.getPot());
@@ -778,14 +1160,17 @@ class GameTest {
                 when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any()))
                                 .thenReturn(false);
 
-                game.processPlayerDecision(game.getActivePlayers().getFirst(),
-                                new PlayerDecision(PlayerAction.BET, 100, "p1"));
+                game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 51, "p1"));
+                game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 51, "p2"));
+                game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 51, "p3"));
+                game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0, game.getPot());
                 game.conductShowdown();
                 assertEquals(1, game.getPot());
 
                 game.resetForNewHand();
-                game.processPlayerDecision(game.getCurrentPlayer(),
-                                new PlayerDecision(PlayerAction.BET, 99, game.getCurrentPlayer().getPlayerId()));
+                game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 50, "p1"));
+                game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 50, "p2"));
+                game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0, game.getPot());
                 game.conductShowdown();
 
                 assertEquals(1, game.getPot());
@@ -1008,6 +1393,210 @@ class GameTest {
                 assertEquals(0, sidePotGame.getPot());
         }
 
+        @Test
+        void deadUpperLayersJoinNearestEligibleLowerAllocation() {
+                Player a = Player.restoreBuilder().name("A").playerId("a").chips(0).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player b = Player.restoreBuilder().name("B").playerId("b").chips(0).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player c = Player.restoreBuilder().name("C").playerId("c").chips(0).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(true)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player d = Player.restoreBuilder().name("D").playerId("d").chips(0).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(true)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Game game = Game.restoreBuilder().gameId("dead-upper-layer").players(List.of(a, b, c, d))
+                                .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(List.of())
+                                .communityCards(List.of()).pot(550).dealerPosition(0).smallBlindPosition(1)
+                                .bigBlindPosition(2).currentPlayerPosition(0).currentHighestBet(200)
+                                .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
+                                .handContributions(Map.of("a", 50, "b", 100, "c", 200, "d", 200))
+                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+                List<Card> high = List.of(new Card(Rank.ACE, Suit.SPADES));
+                List<Card> low = List.of(new Card(Rank.KING, Suit.SPADES));
+                when(mockHandEvaluator.getBestHand(any(), any()))
+                                .thenReturn(new HandEvaluationResult(high, HandRank.ROYAL_FLUSH))
+                                .thenReturn(new HandEvaluationResult(low, HandRank.ONE_PAIR));
+
+                assertEquals(List.of(a, b), game.conductShowdown());
+                assertEquals(200, a.getChips());
+                assertEquals(350, b.getChips());
+                assertEquals(0, game.getPot());
+                assertEquals(Map.of("a", 200, "b", 350), game.getLastSettlementResult().contestedAwards());
+                assertTrue(game.getLastSettlementResult().refunds().isEmpty());
+        }
+
+        @Test
+        void departureCapsUncallableTopWagerToRetainedContenderAndRunsOut() {
+                Player shortStack = restoredPlayer("Short", "s", 0, 50, true);
+                Player retained = restoredPlayer("A", "a", 500, 100, false);
+                Player departing = restoredPlayer("B", "b", 300, 200, false);
+                Game game = restoredBettingGame("departure-uncallable-top", List.of(shortStack, retained, departing),
+                                350, 200, 1, Map.of("s", 50, "a", 100, "b", 200), Map.of("PRE_FLOP", 100), Map.of());
+
+                game.removePlayerFromGame(departing);
+                TurnOutcome outcome = game.reconcileAfterPlayerRemoval();
+
+                assertEquals(100, game.getCurrentHighestBet());
+                assertEquals(0, game.getCallDifference(retained));
+                assertEquals(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, outcome.type());
+                assertEquals(Map.of("s", 50, "a", 100, "b", 200), game.getHandContributionsSnapshot());
+        }
+
+        @Test
+        void departureCapsGenuineAllInCallToRetainedAllInWager() {
+                Player shortStack = restoredPlayer("Short", "s", 0, 200, true);
+                Player retained = restoredPlayer("A", "a", 100, 100, false);
+                Player departing = restoredPlayer("B", "b", 700, 300, false);
+                Game game = restoredBettingGame("departure-genuine-call", List.of(shortStack, retained, departing),
+                                600, 300, 1, Map.of("s", 200, "a", 100, "b", 300), Map.of("PRE_FLOP", 100), Map.of());
+
+                game.removePlayerFromGame(departing);
+                TurnOutcome outcome = game.reconcileAfterPlayerRemoval();
+
+                assertEquals(200, game.getCurrentHighestBet());
+                assertEquals(100, game.getCallDifference(retained));
+                assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, outcome.type());
+                assertEquals(List.of(PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.ALL_IN), game.getLegalActionsFor(retained));
+                game.processPlayerDecision(retained, new PlayerDecision(PlayerAction.ALL_IN, 0, retained.getPlayerId()));
+                assertEquals(200, retained.getCurrentBet());
+                assertEquals(Map.of("s", 200, "a", 200, "b", 300), game.getHandContributionsSnapshot());
+        }
+
+        @Test
+        void aggressionIsUnavailableWhenNoOpponentCanActButCallAllInRemainsLegal() {
+                Player actor = restoredPlayer("Actor", "a", 500, 0, false);
+                Player allIn = restoredPlayer("All-in", "b", 0, 100, true);
+                Game game = restoredBettingGame("uncallable-aggression", List.of(actor, allIn), 100, 100,
+                                0, Map.of("b", 100), Map.of("PRE_FLOP", 100), Map.of());
+
+                assertEquals(List.of(PlayerAction.FOLD, PlayerAction.CALL), game.getLegalActionsFor(actor));
+                assertThrows(UnauthorisedActionException.class,
+                                () -> game.processPlayerDecision(actor, new PlayerDecision(PlayerAction.RAISE, 100, "a")));
+                assertThrows(UnauthorisedActionException.class,
+                                () -> game.processPlayerDecision(actor, new PlayerDecision(PlayerAction.ALL_IN, 0, "a")));
+                actor.setChips(100);
+                assertTrue(game.getLegalActionsFor(actor).contains(PlayerAction.ALL_IN));
+                game.processPlayerDecision(actor, new PlayerDecision(PlayerAction.ALL_IN, 0, "a"));
+                assertEquals(100, actor.getCurrentBet());
+        }
+
+        @Test
+        void departedContributionStillDefinesSidePotAndCannotReceiveRefund() {
+                Player shortPlayer = new Player("Short", "s", 0);
+                Player midPlayer = new Player("Mid", "m", 150);
+                Game game = Game.restoreBuilder().gameId("departed-contributor").players(List.of(shortPlayer, midPlayer))
+                                .activePlayerIds(List.of("s", "m")).remainingDeck(List.of()).communityCards(List.of())
+                                .pot(350).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
+                                .currentPlayerPosition(0).currentHighestBet(150).currentPhase(GamePhase.RIVER)
+                                .gameOver(false).smallBlind(10).bigBlind(20)
+                                .handContributions(Map.of("s", 50, "m", 150, "departed", 150))
+                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+                List<Card> high = List.of(new Card(Rank.ACE, Suit.SPADES));
+                List<Card> low = List.of(new Card(Rank.KING, Suit.SPADES));
+                when(mockHandEvaluator.getBestHand(any(), any()))
+                                .thenReturn(new HandEvaluationResult(high, HandRank.ROYAL_FLUSH))
+                                .thenReturn(new HandEvaluationResult(low, HandRank.ONE_PAIR));
+
+                game.conductShowdown();
+
+                assertEquals(150, shortPlayer.getChips());
+                assertEquals(350, midPlayer.getChips());
+                assertEquals(0, game.getPot());
+                assertEquals(Map.of("s", 150, "m", 200), game.getLastSettlementResult().contestedAwards());
+                assertTrue(game.getLastSettlementResult().refunds().isEmpty());
+        }
+
+        @Test
+        void deadBlindLayersPayRetainedZeroContributionContender() {
+                Player contender = new Player("Contender", "a", 100);
+                Player foldedSmallBlind = Player.restoreBuilder().name("Folded SB").playerId("b").chips(90)
+                                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(10)
+                                .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player foldedBigBlind = Player.restoreBuilder().name("Folded BB").playerId("c").chips(80)
+                                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(20)
+                                .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Game game = Game.restoreBuilder().gameId("zero-contribution-contender")
+                                .players(List.of(contender, foldedSmallBlind, foldedBigBlind))
+                                .activePlayerIds(List.of("a", "b", "c")).remainingDeck(List.of()).communityCards(List.of())
+                                .pot(30).dealerPosition(0).smallBlindPosition(1).bigBlindPosition(2)
+                                .currentPlayerPosition(0).currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP)
+                                .gameOver(false).smallBlind(10).bigBlind(20)
+                                .handContributions(Map.of("b", 10, "c", 20)).preHandCarryOver(0)
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                game.conductShowdown();
+
+                assertEquals(130, contender.getChips());
+                assertEquals(0, game.getPot());
+                assertEquals(Map.of("a", 30), game.getLastSettlementResult().contestedAwards());
+        }
+
+        @Test
+        void realEvaluatorAwardsAceHighInPublicGameShowdown() {
+                List<Card> board = List.of(new Card(Rank.TWO, Suit.SPADES), new Card(Rank.FOUR, Suit.HEARTS),
+                                new Card(Rank.SEVEN, Suit.DIAMONDS), new Card(Rank.NINE, Suit.CLUBS),
+                                new Card(Rank.JACK, Suit.SPADES));
+                Player ace = Player.restoreBuilder().name("Ace").playerId("ace").chips(950)
+                                .holeCards(List.of(new Card(Rank.ACE, Suit.HEARTS), new Card(Rank.THREE, Suit.DIAMONDS)))
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player king = Player.restoreBuilder().name("King").playerId("king").chips(950)
+                                .holeCards(List.of(new Card(Rank.KING, Suit.HEARTS), new Card(Rank.EIGHT, Suit.DIAMONDS)))
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Game game = Game.restoreBuilder().gameId("real-high-card-showdown").players(List.of(ace, king))
+                                .activePlayerIds(List.of("ace", "king")).remainingDeck(List.of()).communityCards(board)
+                                .pot(100).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
+                                .currentPlayerPosition(0).currentHighestBet(50).currentPhase(GamePhase.RIVER)
+                                .gameOver(false).smallBlind(10).bigBlind(20)
+                                .handContributions(Map.of("ace", 50, "king", 50)).preHandCarryOver(0)
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(new HandEvaluatorService()).build();
+
+                assertEquals(List.of(ace), game.conductShowdown());
+                assertEquals(1050, ace.getChips());
+                assertEquals(950, king.getChips());
+                assertEquals(Map.of("ace", 100), game.getLastSettlementResult().contestedAwards());
+        }
+
+        @Test
+        void finalizedCarryOverRemainderIsProjectedWithoutReopeningLedger() {
+                List<Card> evaluated = List.of(new Card(Rank.ACE, Suit.SPADES));
+                when(mockHandEvaluator.getBestHand(any(), any()))
+                                .thenReturn(new HandEvaluationResult(evaluated, HandRank.HIGH_CARD));
+                Player a = Player.restoreBuilder().name("A").playerId("a").chips(50).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false)
+                                .allIn(true).out(false).disconnected(false).readyForNextHand(false).build();
+                Player b = Player.restoreBuilder().name("B").playerId("b").chips(50).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false)
+                                .allIn(true).out(false).disconnected(false).readyForNextHand(false).build();
+                Game game = Game.restoreBuilder().gameId("carry-over-remainder").players(List.of(a, b))
+                                .activePlayerIds(List.of("a", "b")).remainingDeck(List.of()).communityCards(List.of())
+                                .pot(101).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
+                                .currentPlayerPosition(0).currentHighestBet(50).currentPhase(GamePhase.RIVER)
+                                .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50, "b", 50))
+                                .preHandCarryOver(1).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                game.conductShowdown();
+
+                assertEquals(1, game.getPot());
+                assertEquals(List.of(1), game.getPotBreakdown());
+                assertEquals(0, game.getUncalledAmount());
+                assertEquals(1, game.getLastSettlementResult().remainder());
+        }
+
         /**
          * Protects the expected behavior for conduct showdown short stack cannot win beyond main pot edge case.
          */
@@ -1139,8 +1728,45 @@ class GameTest {
                 shoveGame.processPlayerDecision(allInPlayer,
                                 new PlayerDecision(PlayerAction.ALL_IN, 0, allInPlayer.getPlayerId()));
 
-                assertEquals(List.of(30, 20), shoveGame.getPotBreakdown());
-                assertEquals(460, shoveGame.getUncalledAmount());
+                assertEquals(List.of(510), shoveGame.getPotBreakdown());
+                assertEquals(0, shoveGame.getUncalledAmount());
+        }
+
+        @Test
+        void livePotKeepsEstablishedAllInCapAndPendingBetVisible() {
+                Player shortStack = Player.restoreBuilder().name("Short").playerId("short").chips(0).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(50).hasFolded(false)
+                                .allIn(true).out(false).disconnected(false).readyForNextHand(false).build();
+                Player bettor = Player.restoreBuilder().name("Bettor").playerId("bettor").chips(800).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(250).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player owing = Player.restoreBuilder().name("Owing").playerId("owing").chips(950).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(50).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Game live = Game.restoreBuilder().gameId("live-cap-pending-bet").players(List.of(shortStack, bettor, owing))
+                                .activePlayerIds(List.of("short", "bettor", "owing")).remainingDeck(List.of())
+                                .communityCards(List.of()).pot(350).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
+                                .currentPlayerPosition(2).currentHighestBet(250).currentPhase(GamePhase.FLOP)
+                                .gameOver(false).smallBlind(10).bigBlind(20)
+                                .handContributions(Map.of("short", 50, "bettor", 250, "owing", 50))
+                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                assertEquals(List.of(150, 200), live.getPotBreakdown());
+                assertEquals(0, live.getUncalledAmount());
+        }
+
+        @Test
+        void liveCapSlicesIncludeFoldedChipsBelowCapAndPreHandCarryOver() {
+                Game live = livePotWithFoldedBlindAndCarryOver(370, 0);
+                assertEquals(List.of(170, 200), live.getPotBreakdown());
+                assertEquals(0, live.getUncalledAmount());
+
+                Game carried = livePotWithFoldedBlindAndCarryOver(380, 10);
+                assertEquals(List.of(180, 200), carried.getPotBreakdown(),
+                                "Pre-hand carry-over belongs in the main live allocation");
+                assertEquals(0, carried.getUncalledAmount());
         }
 
         /**
@@ -1597,15 +2223,111 @@ class GameTest {
 
                 List<Player> firstWinners = testGame.conductShowdown();
                 assertEquals(1, firstWinners.size());
+                var settledResult = testGame.getLastSettlementResult();
+                assertEquals(Set.of("p1"), settledResult.winnerIds());
                 assertEquals(2000, p1.getChips());
                 assertEquals(0, p2.getChips());
                 assertEquals(0, testGame.getPot());
 
                 // Second showdown invocation must be idempotent
-                testGame.conductShowdown();
+                List<Player> repeatedWinners = testGame.conductShowdown();
+                assertEquals(firstWinners.stream().map(Player::getPlayerId).toList(),
+                                repeatedWinners.stream().map(Player::getPlayerId).toList());
+                assertEquals(settledResult, testGame.getLastSettlementResult());
                 assertEquals(2000, p1.getChips(), "Chips should not increase on second showdown");
                 assertEquals(0, p2.getChips());
                 assertEquals(0, testGame.getPot());
+        }
+
+        @Test
+        void zeroContenderVoidRetainsCarryOverAcrossRetryAndNextHand() {
+                List<Player> players = new ArrayList<>(List.of(
+                                new Player("A", "a", 100), new Player("B", "b", 100)));
+                Game voidGame = new Game("void-hand", players, 10, 20, mockHandEvaluator);
+                voidGame.processPlayerDecision(players.get(0), new PlayerDecision(PlayerAction.BET, 50, "a"));
+                voidGame.processPlayerDecision(players.get(1), new PlayerDecision(PlayerAction.CALL, 50, "b"));
+                players.forEach(player -> player.doAction(PlayerAction.FOLD, 0, voidGame.getPot()));
+
+                assertTrue(voidGame.conductShowdown().isEmpty());
+                var result = voidGame.getLastSettlementResult();
+                assertTrue(result.settled());
+                assertTrue(result.winnerIds().isEmpty());
+                assertEquals(100, result.remainder());
+                assertEquals(100, voidGame.getPot());
+                assertTrue(voidGame.conductShowdown().isEmpty());
+                assertEquals(result, voidGame.getLastSettlementResult());
+                assertEquals(100, voidGame.getPot());
+
+                assertFalse(voidGame.resetForNewHand());
+                assertEquals(100, voidGame.getPot());
+                assertEquals(100, voidGame.getPreHandCarryOver());
+        }
+
+        @Test
+        void terminalResetDoesNotReclassifyUnsettledContributionsAsCarryOver() {
+                Player a = Player.restoreBuilder().name("A").playerId("a").chips(50).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(50).hasFolded(false)
+                                .allIn(true).out(false).disconnected(false).readyForNextHand(false).build();
+                Game unsettled = Game.restoreBuilder().gameId("terminal-reset-ledger").players(List.of(a))
+                                .activePlayerIds(List.of("a")).remainingDeck(List.of()).communityCards(List.of())
+                                .pot(50).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(0)
+                                .currentPlayerPosition(0).currentHighestBet(50).currentPhase(GamePhase.RIVER)
+                                .gameOver(true).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50))
+                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                assertTrue(unsettled.resetForNewHand());
+                assertEquals(0, unsettled.getPreHandCarryOver());
+                assertEquals(Map.of("a", 50), unsettled.getHandContributionsSnapshot());
+                assertEquals(50, unsettled.getPot());
+        }
+
+        @Test
+        void terminalSettlementAwardsFinalBlindPotAs1010ExactlyOnce() {
+                List<Player> players = new ArrayList<>(List.of(
+                                new Player("Small", "small", 1000), new Player("Big", "big", 1000)));
+                Game terminalGame = new Game("terminal-blind-pot", players, 10, 20, new HandEvaluatorService());
+                terminalGame.postBlinds();
+                Player small = players.get(0);
+                Player big = players.get(1);
+                terminalGame.removePlayerFromGame(small);
+
+                Player winner = terminalGame.resolveGameWinner();
+                terminalGame.completeGameSettlement(winner);
+
+                assertSame(big, winner);
+                assertEquals(1010, big.getChips());
+                assertEquals(0, terminalGame.getPot());
+                assertTrue(terminalGame.isTerminalCarryOverSettled());
+                terminalGame.completeGameSettlement(winner);
+                assertEquals(1010, big.getChips());
+                assertEquals(0, terminalGame.getPot());
+        }
+
+        @Test
+        void terminalSettlementPaysOddCarryOverToResolvedWinnerOnce() {
+                Player a = new Player("A", "a", 100);
+                Player b = new Player("B", "b", 100);
+                Game terminalGame = Game.restoreBuilder().gameId("terminal-odd-carry").players(List.of(a, b))
+                                .activePlayerIds(List.of("a", "b")).remainingDeck(List.of()).communityCards(List.of())
+                                .pot(1).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
+                                .currentPlayerPosition(0).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
+                                .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of())
+                                .preHandCarryOver(1).lastSettlementResult(new HandSettlementResult(
+                                                Map.of(), Map.of(), Set.of(), 1, true))
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+                Player winner = terminalGame.resolveGameWinner();
+
+                terminalGame.completeGameSettlement(winner);
+                terminalGame.completeGameSettlement(winner);
+
+                assertEquals(101, winner.getChips());
+                assertEquals(0, terminalGame.getPot());
+                assertEquals(1, terminalGame.getLastSettlementResult().remainder(),
+                                "Hand payout metadata remains distinct from the terminal game payout");
         }
 
         @Test
@@ -1691,5 +2413,52 @@ class GameTest {
                 assertEquals(2, restored.getActivePlayers().size());
                 assertEquals(10, restored.getSmallBlind());
                 assertEquals(20, restored.getBigBlind());
+        }
+
+        private Player restoredPlayer(String name, String id, int chips, int currentBet, boolean allIn) {
+                return Player.restoreBuilder().name(name).playerId(id).chips(chips).currentBet(currentBet)
+                                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
+                                .hasFolded(false).allIn(allIn).out(false).disconnected(false)
+                                .readyForNextHand(false).build();
+        }
+
+        private Game restoredBettingGame(String id, List<Player> handPlayers, int pot, int highestBet,
+                        int currentPlayerPosition, Map<String, Integer> contributions,
+                        Map<String, Integer> lastFullRaiseByStreet,
+                        Map<String, Integer> lastActedWagerByPlayer) {
+                return Game.restoreBuilder().gameId(id).players(handPlayers)
+                                .activePlayerIds(handPlayers.stream().map(Player::getPlayerId).toList())
+                                .remainingDeck(List.of()).communityCards(List.of()).pot(pot).dealerPosition(0)
+                                .smallBlindPosition(0).bigBlindPosition(Math.min(1, handPlayers.size() - 1))
+                                .currentPlayerPosition(currentPlayerPosition).currentHighestBet(highestBet)
+                                .currentPhase(GamePhase.PRE_FLOP).gameOver(false).smallBlind(5).bigBlind(10)
+                                .handContributions(contributions).preHandCarryOver(0)
+                                .lastFullRaiseByStreet(lastFullRaiseByStreet)
+                                .lastActedWagerByPlayer(lastActedWagerByPlayer)
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+        }
+
+        private Game livePotWithFoldedBlindAndCarryOver(int pot, int carryOver) {
+                Player shortStack = restoredPlayer("Short", "short-" + pot, 0, 50, true);
+                Player bettor = restoredPlayer("Bettor", "bettor-" + pot, 800, 250, false);
+                Player owing = restoredPlayer("Owing", "owing-" + pot, 950, 50, false);
+                Player foldedBlind = Player.restoreBuilder().name("Folded BB").playerId("folded-" + pot).chips(980)
+                                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(20)
+                                .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                String shortId = shortStack.getPlayerId();
+                String bettorId = bettor.getPlayerId();
+                String owingId = owing.getPlayerId();
+                String foldedId = foldedBlind.getPlayerId();
+                return Game.restoreBuilder().gameId("live-folded-cap-" + pot)
+                                .players(List.of(shortStack, bettor, owing, foldedBlind))
+                                .activePlayerIds(List.of(shortId, bettorId, owingId, foldedId)).remainingDeck(List.of())
+                                .communityCards(List.of()).pot(pot).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
+                                .currentPlayerPosition(2).currentHighestBet(250).currentPhase(GamePhase.FLOP).gameOver(false)
+                                .smallBlind(10).bigBlind(20).handContributions(Map.of(shortId, 50, bettorId, 250,
+                                                owingId, 50, foldedId, 20)).preHandCarryOver(carryOver)
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                                .scheduledTaskDeadlines(Map.of()).handEvaluator(mockHandEvaluator).build();
         }
 }

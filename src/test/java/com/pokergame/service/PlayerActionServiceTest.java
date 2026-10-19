@@ -321,7 +321,7 @@ class PlayerActionServiceTest {
      * Protects the contract that process player action all in with low chips should go all in.
      */
     @Test
-    void processPlayerAction_AllInWithLowChips_ShouldGoAllIn() {
+    void processPlayerAction_AggressiveAllInCannotBeContested_ShouldReject() {
         // Create a player with very few chips
         List<Player> lowChipPlayers = new ArrayList<>();
         lowChipPlayers.add(new Player("LowChip", UUID.randomUUID().toString(), 5)); // Only 5 chips
@@ -337,7 +337,9 @@ class PlayerActionServiceTest {
         Player currentPlayer = lowChipGame.getCurrentPlayer();
         PlayerActionRequest request = new PlayerActionRequest(PlayerAction.ALL_IN, null);
 
-        assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
+        UnauthorisedActionException exception = assertThrows(UnauthorisedActionException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
+        assertEquals("RAISE_NOT_AVAILABLE", exception.actionErrorCode());
     }
 
     // ==================== processPlayerAction - Bet Tests ====================

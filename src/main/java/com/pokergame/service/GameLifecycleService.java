@@ -1,6 +1,7 @@
 package com.pokergame.service;
 
 import com.pokergame.dto.response.ApiResponse;
+import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
@@ -193,11 +194,35 @@ public class GameLifecycleService {
 
             game.dealHoleCards();
             game.postBlinds();
-            gameStateService.broadcastGameState(gameId, game);
+            publishProgression(gameId, game, game.reconcileAfterForcedBlinds());
         }
 
         logger.info("New hand started successfully for game: {} | Current player: {} | Phase: {} | Pot: {}",
                 gameId, game.getCurrentPlayer().getName(), game.getCurrentPhase(), game.getPot());
+    }
+
+    private void publishProgression(String gameId, Game game, TurnOutcome outcome) {
+        switch (outcome.type()) {
+            case NEXT_PLAYER, PHASE_ADVANCED -> {
+                game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
+                gameStateService.broadcastGameState(gameId, game);
+            }
+            case AUTO_ADVANCING -> {
+                if (game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE) == null) {
+                    scheduleAutoAdvance(gameId);
+                }
+                gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Auto-advancing...");
+            }
+            case SHOWDOWN -> {
+                game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
+                gameStateService.broadcastShowdownResults(gameId, game, outcome.winners(), outcome.winningsPerPlayer());
+                if (game.isTournamentOver()) {
+                    scheduleGameEnd(gameId, FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
+                } else {
+                    startReadyCountdown(gameId, configuredReadyCountdownMs);
+                }
+            }
+        }
     }
 
     /**
@@ -216,6 +241,11 @@ public class GameLifecycleService {
         }
 
         synchronized (game) {
+            if ((game.getLastSettlementResult() != null && game.getLastSettlementResult().settled())
+                    || game.isTerminalCarryOverSettled()) {
+                logger.info("Skipping stale auto-advance callback for settled game {}", gameId);
+                return true;
+            }
             return switch (game.getCurrentPhase()) {
                 case PRE_FLOP -> {
                     game.dealFlop();
@@ -292,10 +322,6 @@ public class GameLifecycleService {
                 throw new BadRequestException("Player not found in game");
             }
 
-            // Check if the leaving player was the current player.
-            boolean wasCurrentPlayer = !game.getActivePlayers().isEmpty()
-                    && game.getCurrentPlayer().equals(playerToRemove);
-
             // Remove player and reconcile turn index to prevent stale current-player
             // pointer.
             game.removePlayerFromGame(playerToRemove);
@@ -323,18 +349,17 @@ public class GameLifecycleService {
                     return;
                 }
 
-                // If the leaving player was the current player, advance to the next player
-                if (wasCurrentPlayer && !game.getActivePlayers().isEmpty()) {
-                    game.nextPlayer();
-                }
-
                 if (roomService.getRoom(gameId) == null) {
                     logger.info("Room {} was destroyed during leave flow. Cleaning up active game state.", gameId);
                     activeGames.remove(gameId);
                     return;
                 }
 
-                gameStateService.broadcastGameState(gameId, game);
+                if (game.getCurrentPhase() == com.pokergame.enums.GamePhase.SHOWDOWN || game.isReadyCountdownActive()) {
+                    gameStateService.broadcastGameState(gameId, game);
+                } else {
+                    publishProgression(gameId, game, game.reconcileAfterPlayerRemoval());
+                }
             }
 
             if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
@@ -358,6 +383,15 @@ public class GameLifecycleService {
 
         Player winner;
         synchronized (game) {
+            // Freeze the terminal winner and event once carry-over has been paid.
+            // Membership can change during the result display window, so delayed
+            // callbacks must not resolve a different winner from mutable players.
+            if (game.isGameOver() && game.isTerminalCarryOverSettled()) return;
+            // Resolve any in-flight hand and its carried remainder inside the same
+            // game lock before choosing the final game winner or freezing its DTO.
+            if (game.getLastSettlementResult() == null || !game.getLastSettlementResult().settled()) {
+                game.conductShowdown();
+            }
             // Find the winner by chip count, not seat order (activePlayers still
             // contains the busted player at this point since conductShowdown() does
             // not run cleanupAfterHand())
@@ -369,6 +403,10 @@ public class GameLifecycleService {
                         .findFirst()
                         .orElse(game.getPlayers().stream().findFirst().orElse(null));
             }
+
+            game.completeGameSettlement(winner);
+            Player resolvedWinner = game.resolveGameWinner();
+            if (resolvedWinner != null) winner = resolvedWinner;
 
             game.markGameOver();
             game.closeReadyCountdown();

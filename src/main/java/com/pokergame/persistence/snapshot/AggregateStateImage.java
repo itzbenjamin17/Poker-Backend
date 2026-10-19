@@ -26,7 +26,7 @@ import java.util.Set;
  */
 public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState room, String currentHost,
         GameState game) {
-    public static final int CURRENT_SCHEMA_VERSION = 1;
+    public static final int CURRENT_SCHEMA_VERSION = 2;
 
     /**
      * Details about the room itself (the lobby) that we need to restore, like passwords and who joined when.
@@ -72,6 +72,15 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
      * @param everyoneHasHadInitialTurn     true if everyone got a chance to bet this round
      * @param actedPlayerIds                who has already made a move this round
      * @param scheduledTaskDeadlines        when upcoming automatic actions are supposed to happen
+     * @param preHandCarryOver               explicit chips carried from a completed prior hand
+     * @param lastFullRaiseByStreet          full-raise increments governing the current betting history
+     * @param lastActedWagerByPlayer         each player's wager baseline for raise-reopening decisions
+     * @param handSeatOrder                  stable seats retained across departures during this hand
+     * @param dealerAnchorPlayerId           original dealer identity for correct clockwise position recovery
+     * @param smallBlindPlayerId             actual small blind payer identity, even if that player departed
+     * @param bigBlindPlayerId               actual big blind payer identity, even if that player departed
+     * @param lastSettlementResult           immutable settled awards, refunds, winners and explicit remainder
+     * @param terminalCarryOverSettled       guards the final carry-over award against recovery-time repayout
      */
     public record GameState(String gameId, List<PlayerState> players, List<String> activePlayerIds,
             List<CardState> remainingDeck, List<CardState> communityCards, int pot, int dealerPosition,
@@ -79,8 +88,15 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
             GamePhase currentPhase, boolean gameOver, int smallBlind, int bigBlind,
             Map<String, Integer> handContributions, boolean readyCountdownActive,
             Long readyCountdownDeadlineEpochMs, boolean everyoneHasHadInitialTurn, Set<String> actedPlayerIds,
-            Map<ScheduledGameTask, Long> scheduledTaskDeadlines) {
+            Map<ScheduledGameTask, Long> scheduledTaskDeadlines, int preHandCarryOver,
+            Map<String, Integer> lastFullRaiseByStreet, Map<String, Integer> lastActedWagerByPlayer,
+            List<String> handSeatOrder, String dealerAnchorPlayerId, String smallBlindPlayerId,
+            String bigBlindPlayerId, SettlementState lastSettlementResult, boolean terminalCarryOverSettled) {
     }
+
+    /** Plain persisted form of the immutable hand settlement result. */
+    public record SettlementState(Map<String, Integer> contestedAwards, Map<String, Integer> refunds,
+            Set<String> winnerIds, int remainder, boolean settled) { }
 
     /**
      * Everything we need to know about a specific player during a hand.

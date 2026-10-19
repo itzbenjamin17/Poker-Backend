@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Service class responsible for managing and broadcasting game state.
@@ -150,18 +151,33 @@ public class GameStateService {
             String currentPlayerName = null;
             String currentPlayerId = null;
 
-            // Get winner names
-            winnerNames = winners.stream().map(Player::getName).toList();
+            com.pokergame.model.HandSettlementResult settlement = game.getLastSettlementResult();
+            boolean retainedSettlement = settlement != null && settlement.settled();
+            Set<String> winnerIds = retainedSettlement
+                    ? settlement.winnerIds()
+                    : winners.stream().map(Player::getPlayerId).collect(java.util.stream.Collectors.toSet());
+            Map<String, Integer> contestedAwards = retainedSettlement
+                    ? settlement.contestedAwards()
+                    : winners.stream().collect(java.util.stream.Collectors.toMap(Player::getPlayerId,
+                            ignored -> winningsPerPlayer, (left, right) -> left));
+            List<Player> projectedWinners = game.getPlayers().stream()
+                    .filter(player -> winnerIds.contains(player.getPlayerId())).toList();
+            winnerNames = projectedWinners.stream().map(Player::getName).toList();
+            Integer legacyWinnings = null;
+            if (!winnerIds.isEmpty()) {
+                List<Integer> awards = winnerIds.stream().map(id -> contestedAwards.getOrDefault(id, 0)).toList();
+                if (awards.stream().distinct().count() == 1) legacyWinnings = awards.getFirst();
+            }
 
             // Check if this is an actual showdown (i.e. not a win by fold)
-            boolean isActualShowdown = winners.stream()
+            boolean isActualShowdown = projectedWinners.stream()
                     .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != com.pokergame.enums.HandRank.NO_HAND);
             String smallBlindPlayerId = game.getSmallBlindPlayerId();
             String bigBlindPlayerId = game.getBigBlindPlayerId();
 
             // Convert players to PublicPlayerState DTOs with showdown information
             List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
-                boolean isWinner = winners.contains(player);
+                boolean isWinner = winnerIds.contains(player.getPlayerId());
                 boolean isActive = !player.getHasFolded() && !player.getIsOut();
                 String status = resolvePlayerStatus(player);
                 return new PublicPlayerState(
@@ -178,7 +194,7 @@ public class GameStateService {
                         isActive ? player.getHandRank() : null,
                         isActive ? player.getBestHand() : List.of(),
                         isWinner,
-                        isWinner ? winningsPerPlayer : 0,
+                        contestedAwards.getOrDefault(player.getPlayerId(), 0),
                         (isActive && isActualShowdown) ? player.getHoleCards() : null,
                         player.getDisconnectDeadlineEpochMs(),
                         player.getIsReadyForNextHand());
@@ -197,13 +213,15 @@ public class GameStateService {
                     currentPlayerName,
                     currentPlayerId,
                     winnerNames,
-                    winningsPerPlayer,
+                    legacyWinnings,
                     null,
                     null,
                     game.isReadyCountdownActive(),
                     game.getReadyCountdownDeadlineEpochMs(),
                     null,
-                    null);
+                    null,
+                    retainedSettlement,
+                    retainedSettlement ? settlement.remainder() : null);
         }
 
         // Broadcast showdown results to all players
@@ -240,22 +258,16 @@ public class GameStateService {
             int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
             // Get current player information
-            Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
-            if (currentPlayer != null) {
-                logger.debug("Auto-advance - current player: {} (ID: {})", currentPlayer.getName(),
-                        currentPlayer.getPlayerId());
-            } else {
-                logger.debug("Auto-advance - no active players found");
-            }
-            String currentPlayerName = currentPlayer != null ? currentPlayer.getName() : null;
-            String currentPlayerId = currentPlayer != null ? currentPlayer.getPlayerId() : null;
+            Player currentPlayer = null;
+            String currentPlayerName = null;
+            String currentPlayerId = null;
             String smallBlindPlayerId = game.getSmallBlindPlayerId();
             String bigBlindPlayerId = game.getBigBlindPlayerId();
 
             // Convert players to PlayerState DTOs
             List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
                 String status = resolvePlayerStatus(player);
-                boolean isCurrentPlayer = player.equals(currentPlayer);
+                boolean isCurrentPlayer = false;
                 return new PublicPlayerState(
                         player.getPlayerId(),
                         player.getName(),
@@ -295,6 +307,11 @@ public class GameStateService {
                     game.isReadyCountdownActive(),
                     game.getReadyCountdownDeadlineEpochMs(),
                     null,
+                    null,
+                    null,
+                    null,
+                    List.of(),
+                    null,
                     null);
         }
 
@@ -315,13 +332,9 @@ public class GameStateService {
             return;
         }
 
-        logger.info(
-                "Broadcasting auto-advance notification for game {}: No further betting actions are possible, advancing to showdown",
-                gameId);
-
-        sendAfterCommit("/game/" + gameId,
-                new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_START,
-                        "No further betting actions are possible. Auto-advancing to showdown...", null, gameId));
+        logger.info("Broadcasting immediate auto-advance state for game {}", gameId);
+        broadcastGameStateWithAutoAdvance(gameId, game,
+                "No further betting actions are possible. Auto-advancing to showdown...");
     }
 
     /**
@@ -516,7 +529,15 @@ public class GameStateService {
             throw new ResourceNotFoundException("Room not found");
         }
         List<PublicPlayerState> playerStateList = new ArrayList<>();
-        Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
+        boolean autoAdvancing = game.getScheduledTaskDeadline(com.pokergame.enums.ScheduledGameTask.AUTO_ADVANCE) != null;
+        com.pokergame.model.HandSettlementResult settlement = game.getLastSettlementResult();
+        boolean handSettled = settlement != null && settlement.settled();
+        boolean revealSettledHands = handSettled && game.getPlayers().stream()
+                .filter(player -> settlement.winnerIds().contains(player.getPlayerId()))
+                .anyMatch(player -> player.getHandRank() != null
+                        && player.getHandRank() != com.pokergame.enums.HandRank.NO_HAND);
+        Player currentPlayer = !autoAdvancing && !handSettled && !game.getActivePlayers().isEmpty()
+                ? game.getCurrentPlayer() : null;
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
         if (currentPlayer != null) {
@@ -527,6 +548,9 @@ public class GameStateService {
         }
         for (Player player : game.getPlayers()) {
             String status = resolvePlayerStatus(player);
+            boolean isActive = !player.getHasFolded() && !player.getIsOut();
+            Boolean isWinner = handSettled ? settlement.winnerIds().contains(player.getPlayerId()) : null;
+            Integer chipsWon = handSettled ? settlement.contestedAwards().getOrDefault(player.getPlayerId(), 0) : null;
             playerStateList.add(new PublicPlayerState(
                     player.getPlayerId(),
                     player.getName(),
@@ -538,17 +562,27 @@ public class GameStateService {
                     player.getHasFolded(),
                     player.getPlayerId().equals(smallBlindPlayerId),
                     player.getPlayerId().equals(bigBlindPlayerId),
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
+                    handSettled && !settlement.winnerIds().isEmpty() && isActive ? player.getHandRank() : null,
+                    handSettled && !settlement.winnerIds().isEmpty() && isActive ? player.getBestHand() : null,
+                    isWinner,
+                    chipsWon,
+                    revealSettledHands && isActive ? player.getHoleCards() : null,
                     player.getDisconnectDeadlineEpochMs(),
                     player.getIsReadyForNextHand()));
         }
 
         String claimWinPlayerName = computeClaimWinPlayerName(game);
         boolean claimWinAvailable = claimWinPlayerName != null;
+        List<String> winnerNames = handSettled
+                ? game.getPlayers().stream().filter(player -> settlement.winnerIds().contains(player.getPlayerId()))
+                        .map(Player::getName).toList()
+                : null;
+        Integer winningsPerPlayer = null;
+        if (handSettled && !settlement.winnerIds().isEmpty()) {
+            List<Integer> awards = settlement.winnerIds().stream()
+                    .map(id -> settlement.contestedAwards().getOrDefault(id, 0)).toList();
+            if (awards.stream().distinct().count() == 1) winningsPerPlayer = awards.getFirst();
+        }
 
         return new PublicGameStateResponse(
                 room.getMaxPlayers(),
@@ -561,14 +595,19 @@ public class GameStateService {
                 playerStateList,
                 currentPlayer != null ? currentPlayer.getName() : null,
                 currentPlayer != null ? currentPlayer.getPlayerId() : null,
-                null,
-                null,
-                null,
-                null,
+                winnerNames,
+                winningsPerPlayer,
+                autoAdvancing,
+                autoAdvancing ? "Auto-advancing..." : null,
                 game.isReadyCountdownActive(),
                 game.getReadyCountdownDeadlineEpochMs(),
                 claimWinAvailable,
-                claimWinPlayerName);
+                claimWinPlayerName,
+                handSettled,
+                handSettled ? settlement.remainder() : null,
+                currentPlayer == null ? List.of() : game.getLegalActionsFor(currentPlayer),
+                currentPlayer == null ? null : game.getBigBlind(),
+                currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer));
 
     }
 
