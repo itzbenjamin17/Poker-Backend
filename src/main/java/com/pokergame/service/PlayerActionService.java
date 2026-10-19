@@ -7,6 +7,7 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.ResponseMessage;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.persistence.transaction.DurableMutation;
@@ -122,7 +123,7 @@ public class PlayerActionService {
             // If there was a conversion, notify the player
             if (outcome.conversionMessage() != null) {
                 logger.info("Sending conversion message to player {}: {}", currentPlayer.getName(), outcome.conversionMessage());
-                gameStateService.sendPlayerNotification(gameId, currentPlayer.getName(), outcome.conversionMessage());
+                gameStateService.sendPrivatePlayerNotification(gameId, currentPlayer.getName(), outcome.conversionMessage(), ResponseMessage.PLAYER_NOTIFICATION);
             }
 
             try {

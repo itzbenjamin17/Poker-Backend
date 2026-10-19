@@ -1,10 +1,13 @@
 package com.pokergame.service;
 
 import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.Rank;
+import com.pokergame.enums.Suit;
 import com.pokergame.model.*;
 import com.pokergame.exception.BadRequestException;
 import org.junit.jupiter.api.BeforeEach;
@@ -897,5 +900,200 @@ class GameStateServiceTest {
         testGame.getActivePlayers().clear();
 
         assertDoesNotThrow(() -> gameStateService.broadcastGameState(GAME_ID, testGame));
+    }
+
+    // ==================== Status Precedence Tests ====================
+
+    @Test
+    void resolvePlayerStatus_FoldedAndDisconnected_ReturnsFolded() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player player = Player.restoreBuilder()
+                .name("Player1")
+                .playerId(testPlayers.get(0).getPlayerId())
+                .chips(100)
+                .holeCards(List.of())
+                .bestHand(List.of())
+                .hasFolded(true)
+                .disconnected(true)
+                .build();
+        testGame.getPlayers().set(0, player);
+
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicPlayerState p1State = response.players().stream()
+                .filter(p -> p.id().equals(player.getPlayerId()))
+                .findFirst().orElseThrow();
+
+        assertEquals("FOLDED", p1State.status());
+    }
+
+    @Test
+    void resolvePlayerStatus_OutAndDisconnected_ReturnsOut() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player player = Player.restoreBuilder()
+                .name("Player1")
+                .playerId(testPlayers.get(0).getPlayerId())
+                .chips(0)
+                .holeCards(List.of())
+                .bestHand(List.of())
+                .out(true)
+                .disconnected(true)
+                .build();
+        testGame.getPlayers().set(0, player);
+
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicPlayerState p1State = response.players().stream()
+                .filter(p -> p.id().equals(player.getPlayerId()))
+                .findFirst().orElseThrow();
+
+        assertEquals("OUT", p1State.status());
+    }
+
+    @Test
+    void resolvePlayerStatus_OutAndFolded_ReturnsOut() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player player = Player.restoreBuilder()
+                .name("Player1")
+                .playerId(testPlayers.get(0).getPlayerId())
+                .chips(0)
+                .holeCards(List.of())
+                .bestHand(List.of())
+                .out(true)
+                .hasFolded(true)
+                .build();
+        testGame.getPlayers().set(0, player);
+
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicPlayerState p1State = response.players().stream()
+                .filter(p -> p.id().equals(player.getPlayerId()))
+                .findFirst().orElseThrow();
+
+        assertEquals("OUT", p1State.status());
+    }
+
+    @Test
+    void resolvePlayerStatus_DisconnectedAndAllIn_ReturnsDisconnected() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player player = Player.restoreBuilder()
+                .name("Player1")
+                .playerId(testPlayers.get(0).getPlayerId())
+                .chips(0)
+                .holeCards(List.of())
+                .bestHand(List.of())
+                .disconnected(true)
+                .allIn(true)
+                .build();
+        testGame.getPlayers().set(0, player);
+
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicPlayerState p1State = response.players().stream()
+                .filter(p -> p.id().equals(player.getPlayerId()))
+                .findFirst().orElseThrow();
+
+        assertEquals("DISCONNECTED", p1State.status());
+    }
+
+    @Test
+    void resolvePlayerStatus_AllIn_ReturnsAllIn() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player player = Player.restoreBuilder()
+                .name("Player1")
+                .playerId(testPlayers.get(0).getPlayerId())
+                .chips(0)
+                .holeCards(List.of())
+                .bestHand(List.of())
+                .allIn(true)
+                .build();
+        testGame.getPlayers().set(0, player);
+
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicPlayerState p1State = response.players().stream()
+                .filter(p -> p.id().equals(player.getPlayerId()))
+                .findFirst().orElseThrow();
+
+        assertEquals("ALL_IN", p1State.status());
+    }
+
+    @Test
+    void resolvePlayerStatus_Active_ReturnsActive() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player player = Player.restoreBuilder()
+                .name("Player1")
+                .playerId(testPlayers.get(0).getPlayerId())
+                .chips(100)
+                .holeCards(List.of())
+                .bestHand(List.of())
+                .build();
+        testGame.getPlayers().set(0, player);
+
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicPlayerState p1State = response.players().stream()
+                .filter(p -> p.id().equals(player.getPlayerId()))
+                .findFirst().orElseThrow();
+
+        assertEquals("ACTIVE", p1State.status());
+    }
+
+    // ==================== Private Player State Tests ====================
+
+    @Test
+    void getPrivatePlayerStateSnapshot_ShouldIncludeHandNumberAndDefensivelyCopyCards() {
+        testGame.resetForNewHand();
+        Player player = testPlayers.get(0);
+        player.getHoleCards().add(new Card(Rank.ACE, Suit.HEARTS));
+        player.getHoleCards().add(new Card(Rank.KING, Suit.SPADES));
+
+        PrivatePlayerState snapshot = gameStateService.getPrivatePlayerStateSnapshot(testGame, player.getName());
+
+        assertNotNull(snapshot);
+        assertEquals(player.getPlayerId(), snapshot.playerId());
+        assertEquals(testGame.getHandNumber(), snapshot.handNumber());
+        assertEquals(2, snapshot.holeCards().size());
+        assertEquals(player.getHoleCards(), snapshot.holeCards());
+
+        // Mutating the original player cards list does not mutate the snapshot
+        player.getHoleCards().add(new Card(Rank.QUEEN, Suit.CLUBS));
+        assertEquals(2, snapshot.holeCards().size());
+    }
+
+    @Test
+    void getPrivatePlayerStateSnapshot_WithNullCards_ReturnsEmptyList() {
+        Player player1 = mock(Player.class);
+        when(player1.getName()).thenReturn("Player1");
+        when(player1.getPlayerId()).thenReturn("p1-id");
+        when(player1.getHoleCards()).thenReturn(null);
+
+        Player player2 = new Player("Player2", UUID.randomUUID().toString(), 100);
+
+        List<Player> players = List.of(player1, player2);
+        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+
+        PrivatePlayerState snapshot = gameStateService.getPrivatePlayerStateSnapshot(game, "Player1");
+
+        assertNotNull(snapshot);
+        assertEquals("p1-id", snapshot.playerId());
+        assertEquals(game.getHandNumber(), snapshot.handNumber());
+        assertNotNull(snapshot.holeCards());
+        assertTrue(snapshot.holeCards().isEmpty());
+    }
+
+    @Test
+    void broadcastGameState_ShouldSendPrivateStateWithHandNumber() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testGame.resetForNewHand();
+
+        gameStateService.broadcastGameState(GAME_ID, testGame);
+
+        ArgumentCaptor<PrivatePlayerState> captor = ArgumentCaptor.forClass(PrivatePlayerState.class);
+        for (Player player : testGame.getPlayers()) {
+            String compositeName = player.getName() + ":" + GAME_ID;
+            verify(messagingTemplate).convertAndSendToUser(
+                    eq(compositeName),
+                    eq("/queue/private"),
+                    captor.capture());
+
+            PrivatePlayerState sentState = captor.getValue();
+            assertEquals(player.getPlayerId(), sentState.playerId());
+            assertEquals(testGame.getHandNumber(), sentState.handNumber());
+        }
     }
 }

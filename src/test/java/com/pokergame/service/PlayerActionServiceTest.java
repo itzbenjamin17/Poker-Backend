@@ -5,6 +5,7 @@ import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.Rank;
+import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.Suit;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
@@ -295,8 +296,10 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
         assertEquals(0, currentPlayer.getChips());
         assertTrue(currentPlayer.getIsAllIn());
-        verify(gameStateService, atLeastOnce()).sendPlayerNotification(eq(GAME_ID), eq(currentPlayer.getName()),
-                contains("converted to all-in"));
+        verify(gameStateService, atLeastOnce()).sendPrivatePlayerNotification(eq(GAME_ID), eq(currentPlayer.getName()),
+                contains("converted to all-in"), eq(ResponseMessage.PLAYER_NOTIFICATION));
+        verify(gameStateService, never()).sendPlayerNotification(eq(GAME_ID), eq(currentPlayer.getName()),
+                anyString());
     }
 
     // ==================== processPlayerAction - All-In Tests ====================
