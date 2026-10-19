@@ -82,6 +82,10 @@ class JwtAuthenticationFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(response.getContentType()).contains("application/json");
+        assertThat(response.getContentAsString()).contains("\"status\":401")
+                .contains("\"error\":\"Unauthorized\"")
+                .contains("\"message\":\"Session expired or invalid token\"");
         assertThat(filterChain.getRequest()).isNull();
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }

@@ -384,6 +384,18 @@ public class RoomService {
     }
 
     /**
+     * Checks if a player is currently a member of a specific room.
+     *
+     * @param roomId room identifier
+     * @param playerName player name to check
+     * @return true if player is currently in the room, false otherwise
+     */
+    public boolean isPlayerInRoom(String roomId, String playerName) {
+        Room room = rooms.get(roomId);
+        return room != null && room.getPlayers().contains(playerName);
+    }
+
+    /**
      * Finds a room by its name (case-insensitive).
      *
      * @param roomName the name of the room to find

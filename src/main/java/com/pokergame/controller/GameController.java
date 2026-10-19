@@ -21,6 +21,7 @@ import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import jakarta.validation.Valid;
 
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
@@ -165,7 +166,7 @@ public class GameController {
     @MessageMapping("/{gameId}/action")
     public void performAction(
             @DestinationVariable String gameId,
-            @Payload PlayerActionRequest actionRequest,
+            @Payload @Valid PlayerActionRequest actionRequest,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.info("Processing player action for game {} by {}: {}", gameId, playerName, actionRequest);

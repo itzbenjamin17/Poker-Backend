@@ -17,6 +17,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.Collections;
 
+import com.pokergame.dto.response.ErrorResponse;
+import tools.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+
 /**
  * Filter that extracts JWT from the Authorisation header and sets up Spring
  * Security context.
@@ -28,6 +32,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final Logger logger = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
 
     private final JwtService jwtService;
+    private final ObjectMapper objectMapper;
+
+    /**
+     * Creates the request filter with the service used to validate bearer tokens and object mapper.
+     *
+     * @param jwtService token validator and principal extractor
+     * @param objectMapper object mapper for JSON response writing
+     */
+    @Autowired
+    public JwtAuthenticationFilter(JwtService jwtService, @Autowired(required = false) ObjectMapper objectMapper) {
+        this.jwtService = jwtService;
+        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
+    }
 
     /**
      * Creates the request filter with the service used to validate bearer tokens.
@@ -35,7 +52,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
      * @param jwtService token validator and principal extractor
      */
     public JwtAuthenticationFilter(JwtService jwtService) {
-        this.jwtService = jwtService;
+        this(jwtService, new ObjectMapper());
     }
 
     /**
@@ -75,7 +92,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 logger.warn("Rejecting request with invalid or expired JWT");
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                 response.setContentType("application/json");
-                response.getWriter().write("{\"message\": \"Session expired or invalid token\"}");
+                response.getWriter().write(objectMapper.writeValueAsString(
+                        new ErrorResponse(HttpServletResponse.SC_UNAUTHORIZED, "Unauthorized", "Session expired or invalid token")));
                 return;
             }
         }

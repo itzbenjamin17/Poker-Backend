@@ -101,4 +101,125 @@ class WebSocketExceptionHandlerTest {
         return MessageBuilder.withPayload("{\"action\":\"" + action + "\"}")
                 .setHeader("simpDestination", "/app/" + gameId + "/action").build();
     }
+
+    /**
+     * Routing uses playerPrincipal.roomId() and playerName(), not the destination header.
+     */
+    @Test
+    void routingUsesPrincipalRoomIdNotDestinationHeader() {
+        Message<String> spoofedFrame = MessageBuilder.withPayload("{\"action\":\"BET\",\"amount\":100}")
+                .setHeader("simpDestination", "/app/spoofed-game-999/action").build();
+
+        handler.handleMessageException(
+                new UnauthorisedActionException("old detail", "NOT_YOUR_TURN", "Wait for your turn"),
+                principal, spoofedFrame);
+
+        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+                new ActionErrorResponse("NOT_YOUR_TURN", PlayerAction.BET, "Wait for your turn"));
+        verify(messagingTemplate, org.mockito.Mockito.never()).convertAndSendToUser(
+                org.mockito.ArgumentMatchers.contains("spoofed-game-999"),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any());
+    }
+
+    /**
+     * Cause chain traversal prefers nested ActionFeedbackException over outer MessageConversionException.
+     */
+    @Test
+    void nestedActionFeedbackExceptionIsPreferredOverMessageConversion() {
+        BadRequestException nested = new BadRequestException("Action amount cannot be negative",
+                "NEGATIVE_AMOUNT", "Amount must be positive; yours: -10");
+        org.springframework.messaging.converter.MessageConversionException wrapped =
+                new org.springframework.messaging.converter.MessageConversionException("conversion failed", nested);
+
+        handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.BET));
+
+        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+                new ActionErrorResponse("NEGATIVE_AMOUNT", PlayerAction.BET, "Amount must be positive; yours: -10"));
+    }
+
+    /**
+     * Cause chain traversal preserves AMOUNT_REQUIRED code.
+     */
+    @Test
+    void nestedAmountRequiredInCauseChainIsPreserved() {
+        BadRequestException nested = new BadRequestException("Bet/raise amount must be greater than 0",
+                "AMOUNT_REQUIRED", "Enter a positive amount");
+        RuntimeException wrapped = new RuntimeException("outer", nested);
+
+        handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.BET));
+
+        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+                new ActionErrorResponse("AMOUNT_REQUIRED", PlayerAction.BET, "Enter a positive amount"));
+    }
+
+    /**
+     * Cause chain traversal preserves UNEXPECTED_AMOUNT code.
+     */
+    @Test
+    void nestedUnexpectedAmountInCauseChainIsPreserved() {
+        BadRequestException nested = new BadRequestException("No amount is needed for CALL actions",
+                "UNEXPECTED_AMOUNT", "No amount needed; yours: 50");
+        RuntimeException wrapped = new RuntimeException("outer", nested);
+
+        handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.CALL));
+
+        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+                new ActionErrorResponse("UNEXPECTED_AMOUNT", PlayerAction.CALL, "No amount needed; yours: 50"));
+    }
+
+    /**
+     * Cause chain traversal preserves ResourceNotFoundException as GAME_NOT_FOUND.
+     */
+    @Test
+    void nestedResourceNotFoundExceptionPreservesGameNotFound() {
+        com.pokergame.exception.ResourceNotFoundException nested =
+                new com.pokergame.exception.ResourceNotFoundException("Game not found");
+        RuntimeException wrapped = new RuntimeException("outer", nested);
+
+        handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.CHECK));
+
+        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+                new ActionErrorResponse("GAME_NOT_FOUND", PlayerAction.CHECK, "Game unavailable"));
+    }
+
+    /**
+     * Bean Validation failure on amount > 10,000,000 extracts exact validation message and uses INVALID_ACTION_FORMAT.
+     */
+    @Test
+    void beanValidationFailureAboveMaxAmountReturnsInvalidActionFormatWithExactMessage() throws Exception {
+        Message<String> frame = MessageBuilder.withPayload("{\"action\":\"RAISE\",\"amount\":10000001}")
+                .setHeader("simpDestination", "/app/" + gameId + "/action").build();
+
+        java.lang.reflect.Method method = WebSocketExceptionHandlerTest.class.getDeclaredMethod("actionFrame", PlayerAction.class);
+        org.springframework.core.MethodParameter methodParameter = new org.springframework.core.MethodParameter(method, 0);
+        org.springframework.validation.BeanPropertyBindingResult bindingResult =
+                new org.springframework.validation.BeanPropertyBindingResult(new Object(), "actionRequest");
+        bindingResult.addError(new org.springframework.validation.FieldError(
+                "actionRequest", "amount", "Amount cannot exceed 10,000,000"));
+        org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException validationException =
+                new org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException(
+                        frame, methodParameter, bindingResult);
+
+        handler.handleMessageException(validationException, principal, frame);
+
+        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+                new ActionErrorResponse("INVALID_ACTION_FORMAT", PlayerAction.RAISE, "Amount cannot exceed 10,000,000"));
+    }
+
+    /**
+     * Action is recovered from typed PlayerActionRequest payload when already deserialized.
+     */
+    @Test
+    void typedRequestPayloadRecoversAction() {
+        com.pokergame.dto.request.PlayerActionRequest request =
+                new com.pokergame.dto.request.PlayerActionRequest(PlayerAction.FOLD, null);
+        Message<com.pokergame.dto.request.PlayerActionRequest> frame = MessageBuilder.withPayload(request)
+                .setHeader("simpDestination", "/app/" + gameId + "/action").build();
+
+        handler.handleMessageException(new RuntimeException("processing failed"), principal, frame);
+
+        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+                new ActionErrorResponse("ACTION_REJECTED", PlayerAction.FOLD, "Action unavailable"));
+    }
 }

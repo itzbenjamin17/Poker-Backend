@@ -163,6 +163,57 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
         }
 
         /**
+         * Protects the contract that an action amount exceeding 10,000,000 is rejected before mutation.
+         */
+        @Test
+        @DisplayName("should reject action amount above 10,000,000 before mutation")
+        void givenOversizedAmount_whenSendOverWebSocket_thenReceiveInvalidActionFormatError() throws Exception {
+            TestGameSession gameSession = createStartedGame();
+            gameLifecycleService.createGameFromRoom(gameSession.roomId());
+            String currentPlayer = gameLifecycleService.getGame(gameSession.roomId()).getCurrentPlayer().getName();
+            String actingToken = HOST_NAME.equals(currentPlayer) ? gameSession.hostToken() : gameSession.otherToken();
+
+            WebSocketStompClient stompClient = createStompClient();
+            StompSession session = connectSession(stompClient, actingToken);
+            CompletableFuture<ActionErrorResponse> errorFuture = new CompletableFuture<>();
+
+            session.subscribe(
+                    "/user/queue/private",
+                    new StompFrameHandler() {
+                        @Override
+                        public Type getPayloadType(@NonNull StompHeaders headers) {
+                            return ActionErrorResponse.class;
+                        }
+
+                        @Override
+                        public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                            if (payload instanceof ActionErrorResponse notification
+                                    && notification.type() == ResponseMessage.ACTION_ERROR
+                                    && !errorFuture.isDone()) {
+                                errorFuture.complete(notification);
+                            }
+                        }
+                    });
+
+            session.send("/app/" + gameSession.roomId() + "/action",
+                    new PlayerActionRequest(PlayerAction.RAISE, 10_000_001));
+
+            ActionErrorResponse error = errorFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+
+            assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
+            assertThat(error.code()).isEqualTo("INVALID_ACTION_FORMAT");
+            assertThat(error.action()).isEqualTo(RejectedAction.RAISE);
+            assertThat(error.message()).isEqualTo("Amount cannot exceed 10,000,000");
+
+            // Verify game was not mutated (current player remains the same)
+            com.pokergame.model.Game game = gameLifecycleService.getGame(gameSession.roomId());
+            assertThat(game.getCurrentPlayer().getName()).isEqualTo(currentPlayer);
+
+            session.disconnect();
+            stompClient.stop();
+        }
+
+        /**
          * Protects the contract that the system should broadcast a public game update when a valid action is sent.
          */
         @Test

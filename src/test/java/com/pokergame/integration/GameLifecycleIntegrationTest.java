@@ -215,13 +215,13 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
          */
         @Test
         @DisplayName("should reject game leave requests without a token")
-        void givenMissingToken_whenLeaveGame_thenReturnForbidden() {
+        void givenMissingToken_whenLeaveGame_thenReturnUnauthorized() {
             HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
                     .uri("/api/game/some-game-id/leave")
                     .retrieve()
                     .body(String.class));
 
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         }
 
         /**

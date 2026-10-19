@@ -98,7 +98,7 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
          */
         @Test
         @DisplayName("should reject leave room requests without a token")
-        void givenMissingToken_whenLeaveRoom_thenReturnForbidden() {
+        void givenMissingToken_whenLeaveRoom_thenReturnUnauthorized() {
             String roomId = roomService.createRoom(new CreateRoomRequest(
                     uniqueName("SecureLeaveRoom"),
                     "TestHost",
@@ -113,7 +113,7 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
                     .retrieve()
                     .body(String.class));
 
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         }
 
         /**
@@ -164,7 +164,7 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
          */
         @Test
         @DisplayName("should reject missing tokens for start game, leave game, and claim win")
-        void givenMissingTokens_whenCallingProtectedEndpoints_thenReturnForbidden() {
+        void givenMissingTokens_whenCallingProtectedEndpoints_thenReturnUnauthorized() {
             String roomId = roomService.createRoom(new CreateRoomRequest(
                     uniqueName("ProtectedEndpoints"),
                     "TestHost",
@@ -177,17 +177,17 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(assertThrows(HttpClientErrorException.class, () -> restClient.post()
                     .uri("/api/room/" + roomId + "/start-game")
                     .retrieve()
-                    .body(String.class)).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                    .body(String.class)).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 
             assertThat(assertThrows(HttpClientErrorException.class, () -> restClient.post()
                     .uri("/api/game/some-game-id/leave")
                     .retrieve()
-                    .body(String.class)).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                    .body(String.class)).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 
             assertThat(assertThrows(HttpClientErrorException.class, () -> restClient.post()
                     .uri("/api/game/some-game-id/claim-win")
                     .retrieve()
-                    .body(String.class)).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                    .body(String.class)).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         }
     }
 
