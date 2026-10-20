@@ -2157,10 +2157,20 @@ public class Game {
         this.stateRevision++;
     }
 
+    /**
+     * Gets the frozen terminal result retained for post-game review and late reconnects.
+     *
+     * @return the retained terminal {@link com.pokergame.dto.response.GameEndResponse}, or {@code null} if the game has not concluded
+     */
     public com.pokergame.dto.response.GameEndResponse getRetainedTerminalResult() {
         return retainedTerminalResult;
     }
 
+    /**
+     * Retains the frozen terminal result for post-game review and durable snapshot persistence.
+     *
+     * @param retainedTerminalResult the frozen terminal {@link com.pokergame.dto.response.GameEndResponse} to retain
+     */
     public void setRetainedTerminalResult(com.pokergame.dto.response.GameEndResponse retainedTerminalResult) {
         this.retainedTerminalResult = retainedTerminalResult;
     }

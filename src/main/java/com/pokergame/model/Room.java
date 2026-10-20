@@ -181,6 +181,12 @@ public class Room {
 
         private boolean terminal;
 
+        /**
+         * Sets whether the restored room has reached a terminal state (post-game review or closure).
+         *
+         * @param terminal {@code true} if the room is terminal, {@code false} otherwise
+         * @return this builder instance
+         */
         public RoomRestoreBuilder terminal(boolean terminal) {
             this.terminal = terminal;
             return this;
