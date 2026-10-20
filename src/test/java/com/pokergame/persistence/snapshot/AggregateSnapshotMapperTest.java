@@ -300,6 +300,18 @@ class AggregateSnapshotMapperTest {
         assertEquals("Alice", recovered.currentHost(), "Current host remains an actual Room member");
     }
 
+    @Test
+    void rejectsUnsupportedAggregateSnapshotSchema() {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+        String legacyJson = "{\"schemaVersion\":2,\"deleted\":false,\"room\":{\"roomId\":\"r1\"}}";
+        com.pokergame.persistence.config.PersistenceException ex = assertThrows(
+                com.pokergame.persistence.config.PersistenceException.class,
+                () -> mapper.deserialize(legacyJson.getBytes(StandardCharsets.UTF_8)));
+        assertTrue(ex.getMessage().contains("Unsupported aggregate snapshot schema: 2"));
+    }
+
     private Player bettingPlayer(String name, String id, int chips, int currentBet, boolean allIn) {
         return Player.restoreBuilder().name(name).playerId(id).chips(chips).currentBet(currentBet)
                 .holeCards(List.of()).bestHand(List.of()).handRank(com.pokergame.enums.HandRank.NO_HAND)

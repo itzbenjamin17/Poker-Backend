@@ -90,11 +90,13 @@ public final class AggregateSnapshotMapper {
      */
     public RecoveredAggregate deserialize(byte[] bytes) {
         try {
-            AggregateStateImage image = objectMapper.readValue(bytes, AggregateStateImage.class);
+            tools.jackson.databind.JsonNode root = objectMapper.readTree(bytes);
+            int schemaVersion = root.path("schemaVersion").asInt(-1);
             // Verify that we can actually read this snapshot version
-            if (image.schemaVersion() != AggregateStateImage.CURRENT_SCHEMA_VERSION) {
-                throw new PersistenceException("Unsupported aggregate snapshot schema: " + image.schemaVersion());
+            if (schemaVersion != AggregateStateImage.CURRENT_SCHEMA_VERSION) {
+                throw new PersistenceException("Unsupported aggregate snapshot schema: " + schemaVersion);
             }
+            AggregateStateImage image = objectMapper.treeToValue(root, AggregateStateImage.class);
             // If this snapshot marks a deleted room, just return a deleted result
             if (image.deleted()) {
                 return new RecoveredAggregate(null, null, null, true);
