@@ -2,6 +2,7 @@ package com.pokergame.controller;
 
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.ApiResponse;
+import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -249,16 +250,49 @@ public class GameController {
     }
 
     /**
+     * Fetches the frozen terminal result for post-game review.
+     * SECURED ENDPOINT - Requires JWT token.
+     *
+     * @param gameId          game identifier
+     * @param playerPrincipal authenticated player principal
+     * @return direct GameEndResponse
+     */
+    @GetMapping("/{gameId}/review")
+    public ResponseEntity<GameEndResponse> getGameReview(
+            @PathVariable String gameId,
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
+        String playerName = playerPrincipal.playerName();
+        logger.debug("Player {} requested game review for {}", playerName, gameId);
+
+        // Security check: ensure the token is actually for THIS game/room
+        if (!playerPrincipal.roomId().equals(gameId)) {
+            throw new UnauthorisedActionException("Token is not valid for this game.");
+        }
+
+        ReentrantLock lock = durableMutationAspect != null ? durableMutationAspect.getRoomLock(gameId) : null;
+        if (lock != null) {
+            lock.lock();
+        }
+        try {
+            return ResponseEntity.ok(gameLifecycleService.getGameReview(gameId, playerName));
+        } finally {
+            if (lock != null) {
+                lock.unlock();
+            }
+        }
+    }
+
+    /**
      * Allows the remaining connected player to claim a win immediately when all
      * other non-out players are disconnected.
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param gameId    game identifier
      * @param playerPrincipal authenticated player principal
-     * @return success confirmation
+     * @return terminal result confirmation
      */
     @PostMapping("/{gameId}/claim-win")
-    public ResponseEntity<ApiResponse<Void>> claimWin(
+    public ResponseEntity<ApiResponse<GameEndResponse>> claimWin(
             @PathVariable String gameId,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
@@ -269,8 +303,8 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        gameLifecycleService.claimWin(gameId, playerName);
+        GameEndResponse result = gameLifecycleService.claimWin(gameId, playerName);
         logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
-        return ResponseEntity.ok(ApiResponse.success("Win claimed successfully"));
+        return ResponseEntity.ok(ApiResponse.success("Win claimed successfully", result));
     }
 }

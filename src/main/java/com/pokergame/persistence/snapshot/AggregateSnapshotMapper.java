@@ -12,6 +12,9 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 import java.time.LocalDateTime;
+import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.persistence.config.PersistenceException;
 
 /**
@@ -182,7 +185,8 @@ public final class AggregateSnapshotMapper {
                 game.getHandSeatOrderSnapshot(), game.getDealerAnchorPlayerId(), game.getSmallBlindPlayerId(),
                 game.getBigBlindPlayerId(), settlementState(game.getLastSettlementResult()),
                 game.isTerminalCarryOverSettled(), game.getReadyGateState(), game.getHandNumber(),
-                game.getScheduledTaskGenerationsSnapshot(), game.isForfeitPending(), game.getStateRevision());
+                game.getScheduledTaskGenerationsSnapshot(), game.isForfeitPending(), game.getStateRevision(),
+                toTerminalResultState(game.getRetainedTerminalResult()));
     }
 
     /**
@@ -210,6 +214,9 @@ public final class AggregateSnapshotMapper {
     private Game restoreGame(AggregateStateImage.GameState state) {
         if (state.stateRevision() < 0) {
             throw new PersistenceException("Invalid negative public state revision in snapshot");
+        }
+        if (state.retainedTerminalResult() != null) {
+            validateTerminalResult(state.gameId(), state.retainedTerminalResult());
         }
         // Rebuild all the players first
         List<Player> players = state.players().stream().map(player -> Player.restoreBuilder()
@@ -264,8 +271,163 @@ public final class AggregateSnapshotMapper {
                 .handNumber(state.handNumber())
                 .forfeitPending(state.forfeitPending())
                 .stateRevision(state.stateRevision())
+                .retainedTerminalResult(fromTerminalResultState(state.retainedTerminalResult()))
                 .handEvaluator(handEvaluator) // Reattach the service needed for evaluating hands
                 .build();
+    }
+
+    private void validateTerminalResult(String expectedGameId, AggregateStateImage.TerminalResultState state) {
+        if (state == null) return;
+        if (state.gameId() == null || !state.gameId().equals(expectedGameId)) {
+            throw new PersistenceException("Retained terminal result gameId does not match game identity");
+        }
+        if (state.winner() == null || state.winner().trim().isEmpty()) {
+            throw new PersistenceException("Retained terminal result missing winner name");
+        }
+        if (state.winnerChips() < 0) {
+            throw new PersistenceException("Retained terminal result has invalid negative winner chips");
+        }
+        if (state.finalState() == null) {
+            throw new PersistenceException("Retained terminal result missing final state projection");
+        }
+        if (state.finalState().stateRevision() < 0) {
+            throw new PersistenceException("Retained terminal result has invalid negative state revision");
+        }
+        if (state.finalState().players() == null) {
+            throw new PersistenceException("Retained terminal result missing final players projection");
+        }
+    }
+
+    private AggregateStateImage.TerminalResultState toTerminalResultState(GameEndResponse response) {
+        if (response == null) return null;
+        return new AggregateStateImage.TerminalResultState(
+                response.type(),
+                response.gameId(),
+                response.winner(),
+                response.winnerChips(),
+                response.isForfeit(),
+                response.message(),
+                toFinalGameState(response.finalState()));
+    }
+
+    private AggregateStateImage.FinalGameState toFinalGameState(PublicGameStateResponse finalState) {
+        if (finalState == null) return null;
+        return new AggregateStateImage.FinalGameState(
+                finalState.maxPlayers(),
+                finalState.pot(),
+                finalState.pots(),
+                finalState.uncalledAmount(),
+                finalState.phase(),
+                finalState.currentBet(),
+                cards(finalState.communityCards()),
+                finalState.players() == null ? null : finalState.players().stream().map(this::toFinalPlayerState).toList(),
+                finalState.currentPlayerName(),
+                finalState.currentPlayerId(),
+                finalState.winners(),
+                finalState.winningsPerPlayer(),
+                finalState.isAutoAdvancing(),
+                finalState.autoAdvanceMessage(),
+                finalState.isReadyCountdownActive(),
+                finalState.readyCountdownDeadlineEpochMs(),
+                finalState.claimWinAvailable(),
+                finalState.claimWinPlayerName(),
+                finalState.handSettled(),
+                finalState.carryOverAmount(),
+                finalState.legalActions(),
+                finalState.minimumBetAmount(),
+                finalState.minimumRaiseAmount(),
+                finalState.handNumber(),
+                finalState.readyGateState(),
+                finalState.serverTimeEpochMs(),
+                finalState.stateRevision());
+    }
+
+    private AggregateStateImage.FinalPlayerState toFinalPlayerState(PublicPlayerState player) {
+        if (player == null) return null;
+        return new AggregateStateImage.FinalPlayerState(
+                player.id(),
+                player.name(),
+                player.chips(),
+                player.currentBet(),
+                player.status(),
+                player.isAllIn(),
+                player.isCurrentPlayer(),
+                player.hasFolded(),
+                player.isSmallBlind(),
+                player.isBigBlind(),
+                player.handRank(),
+                cards(player.bestHand()),
+                player.isWinner(),
+                player.chipsWon(),
+                cards(player.holeCards()),
+                player.disconnectDeadlineEpochMs(),
+                player.isReadyForNextHand());
+    }
+
+    private GameEndResponse fromTerminalResultState(AggregateStateImage.TerminalResultState state) {
+        if (state == null) return null;
+        return new GameEndResponse(
+                state.type(),
+                state.gameId(),
+                state.winner(),
+                state.winnerChips(),
+                state.isForfeit(),
+                state.message(),
+                fromFinalGameState(state.finalState()));
+    }
+
+    private PublicGameStateResponse fromFinalGameState(AggregateStateImage.FinalGameState state) {
+        if (state == null) return null;
+        return new PublicGameStateResponse(
+                state.maxPlayers(),
+                state.pot(),
+                state.pots(),
+                state.uncalledAmount(),
+                state.phase(),
+                state.currentBet(),
+                cardsFromState(state.communityCards()),
+                state.players() == null ? null : state.players().stream().map(this::fromFinalPlayerState).toList(),
+                state.currentPlayerName(),
+                state.currentPlayerId(),
+                state.winners(),
+                state.winningsPerPlayer(),
+                state.isAutoAdvancing(),
+                state.autoAdvanceMessage(),
+                state.isReadyCountdownActive(),
+                state.readyCountdownDeadlineEpochMs(),
+                state.claimWinAvailable(),
+                state.claimWinPlayerName(),
+                state.handSettled(),
+                state.carryOverAmount(),
+                state.legalActions(),
+                state.minimumBetAmount(),
+                state.minimumRaiseAmount(),
+                state.handNumber(),
+                state.readyGateState(),
+                state.serverTimeEpochMs(),
+                state.stateRevision());
+    }
+
+    private PublicPlayerState fromFinalPlayerState(AggregateStateImage.FinalPlayerState state) {
+        if (state == null) return null;
+        return new PublicPlayerState(
+                state.id(),
+                state.name(),
+                state.chips(),
+                state.currentBet(),
+                state.status(),
+                state.isAllIn(),
+                state.isCurrentPlayer(),
+                state.hasFolded(),
+                state.isSmallBlind(),
+                state.isBigBlind(),
+                state.handRank(),
+                cardsFromState(state.bestHand()),
+                state.isWinner(),
+                state.chipsWon(),
+                cardsFromState(state.holeCards()),
+                state.disconnectDeadlineEpochMs(),
+                state.isReadyForNextHand());
     }
 
     private static AggregateStateImage.SettlementState settlementState(com.pokergame.model.HandSettlementResult result) {
@@ -288,6 +450,7 @@ public final class AggregateSnapshotMapper {
      * @return a safe-to-save list of card records
      */
     private static List<AggregateStateImage.CardState> cards(List<Card> cards) {
+        if (cards == null) return null;
         return cards.stream().map(card -> new AggregateStateImage.CardState(card.rank(), card.suit())).toList();
     }
 
@@ -299,6 +462,7 @@ public final class AggregateSnapshotMapper {
      * @return the restored game cards
      */
     private static List<Card> cardsFromState(List<AggregateStateImage.CardState> cards) {
+        if (cards == null) return null;
         return cards.stream().map(card -> new Card(card.rank(), card.suit())).toList();
     }
 }

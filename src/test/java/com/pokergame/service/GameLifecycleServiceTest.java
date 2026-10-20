@@ -2,7 +2,9 @@ package com.pokergame.service;
 
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
+import com.pokergame.exception.ConflictException;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
@@ -97,10 +99,19 @@ class GameLifecycleServiceTest {
         lenient().when(gameStateService.captureGameEnd(anyString(), any(Game.class), any(Player.class), anyBoolean(), anyInt()))
                 .thenAnswer(invocation -> {
                     String id = invocation.getArgument(0);
+                    Game game = invocation.getArgument(1);
                     Player winner = invocation.getArgument(2);
                     boolean forfeit = invocation.getArgument(3);
+                    int maxPlayers = invocation.getArgument(4);
+                    PublicGameStateResponse finalState = new PublicGameStateResponse(
+                            maxPlayers, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(),
+                            game != null && game.getPlayers() != null ? game.getPlayers().stream().map(p -> new PublicPlayerState(
+                                    p.getPlayerId(), p.getName(), p.getChips(), 0, "status", false, false, false,
+                                    false, false, null, List.of(), p.equals(winner), null, null, null, false)).toList() : List.of(),
+                            null, null, List.of(winner.getName()), null, false, null, false, null, false, null,
+                            true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, System.currentTimeMillis(), 1);
                     return new GameEndResponse("GAME_END", id, winner.getName(), winner.getChips(), forfeit,
-                            winner.getName() + " wins", null);
+                            winner.getName() + " wins", finalState);
                 });
     }
 
@@ -1657,5 +1668,115 @@ class GameLifecycleServiceTest {
         if (finalGame != null) {
             assertTrue(finalGame.getPlayers().size() >= 0, "Player count should be valid");
         }
+    }
+
+    @Test
+    @DisplayName("claimWin returns frozen terminal result and is idempotent without settlement re-execution or timer extension")
+    void claimWin_IdempotenceAndNoExtension() {
+        testRoom.addPlayer("Player3");
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", System.currentTimeMillis() + 120_000);
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", System.currentTimeMillis() + 120_000);
+
+        reset(gameStateService);
+        stubGameEndCapture();
+
+        GameEndResponse initialResult = gameLifecycleService.claimWin(ROOM_ID, "Host");
+        assertNotNull(initialResult);
+        assertEquals("Host", initialResult.winner());
+        assertTrue(initialResult.isForfeit());
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        assertNotNull(game);
+        assertTrue(game.isGameOver());
+        assertSame(initialResult, game.getRetainedTerminalResult());
+        Long initialCleanupDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
+        assertNotNull(initialCleanupDeadline);
+
+        reset(gameStateService);
+
+        // Repeating claimWin
+        GameEndResponse repeatedResult = gameLifecycleService.claimWin(ROOM_ID, "Host");
+        assertSame(initialResult, repeatedResult);
+        verify(gameStateService, never()).sendGameEnd(any());
+        assertEquals(initialCleanupDeadline, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+
+        // Unauthorized player (not in terminal roster) cannot claimWin on finished game
+        assertThrows(UnauthorisedActionException.class,
+                () -> gameLifecycleService.claimWin(ROOM_ID, "Stranger"));
+    }
+
+    @Test
+    @DisplayName("getGameReview enforces 200, 409, 404, 403 authorization rules")
+    void getGameReview_AuthorizationAndStatusRules() {
+        testRoom.addPlayer("Player3");
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+
+        // 1. Active game -> 409 Conflict
+        assertThrows(ConflictException.class,
+                () -> gameLifecycleService.getGameReview(ROOM_ID, "Host"));
+
+        // End the game
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", System.currentTimeMillis() + 120_000);
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", System.currentTimeMillis() + 120_000);
+        GameEndResponse terminal = gameLifecycleService.claimWin(ROOM_ID, "Host");
+
+        // 2. Winner can review -> 200
+        GameEndResponse reviewWinner = gameLifecycleService.getGameReview(ROOM_ID, "Host");
+        assertSame(terminal, reviewWinner);
+
+        // 3. OUT / forfeit player in terminal roster can review -> 200
+        GameEndResponse reviewOutPlayer = gameLifecycleService.getGameReview(ROOM_ID, "Player2");
+        assertSame(terminal, reviewOutPlayer);
+
+        // 4. Departed room member (removed from Room, but in terminal roster) can review -> 200
+        testRoom.removePlayer("Player3");
+        assertFalse(testRoom.getPlayers().contains("Player3"));
+        GameEndResponse reviewDepartedMember = gameLifecycleService.getGameReview(ROOM_ID, "Player3");
+        assertSame(terminal, reviewDepartedMember);
+
+        // 5. Unauthorized player (not in terminal roster) -> 403 Forbidden
+        assertThrows(UnauthorisedActionException.class,
+                () -> gameLifecycleService.getGameReview(ROOM_ID, "Stranger"));
+
+        // 6. Non-existent game -> 404 Not Found
+        assertThrows(ResourceNotFoundException.class,
+                () -> gameLifecycleService.getGameReview("non-existent-game", "Host"));
+
+        // 7. Expired game (now >= cleanupDeadline) -> 404 Not Found
+        game.scheduleTask(ScheduledGameTask.CLEANUP, System.currentTimeMillis() - 1000);
+        assertTrue(gameLifecycleService.isGameExpired(game));
+        assertFalse(gameLifecycleService.gameExists(ROOM_ID));
+        assertThrows(ResourceNotFoundException.class,
+                () -> gameLifecycleService.getGameReview(ROOM_ID, "Host"));
+    }
+
+    @Test
+    @DisplayName("Empty terminal room preserves container until cleanup, closed to joining")
+    void terminalRoom_PreservesContainerWhenEmptyUntilCleanup() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", System.currentTimeMillis() + 120_000);
+        gameLifecycleService.claimWin(ROOM_ID, "Host");
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        assertTrue(game.isGameOver());
+        assertTrue(testRoom.isTerminal());
+
+        // Host leaves after terminal settlement
+        gameLifecycleService.departParticipants(ROOM_ID, List.of("Host"));
+        assertTrue(testRoom.isTerminal());
+        // Verify room was NOT destroyed upon reaching 0 members because it's terminal
+        verify(roomService, never()).destroyRoom(ROOM_ID);
+
+        // Perform cleanup durably destroys room and removes game
+        gameLifecycleService.performGameCleanup(ROOM_ID);
+        assertNull(gameLifecycleService.getGame(ROOM_ID));
+        verify(roomService, times(1)).destroyRoom(ROOM_ID);
     }
 }

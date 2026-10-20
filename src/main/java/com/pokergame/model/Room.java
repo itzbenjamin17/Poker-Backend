@@ -35,6 +35,7 @@ public class Room {
     private final String password;
     private LocalDateTime createdAt;
     private boolean isGameStarted;
+    private boolean isTerminal;
 
 
     /**
@@ -178,6 +179,13 @@ public class Room {
             return this;
         }
 
+        private boolean terminal;
+
+        public RoomRestoreBuilder terminal(boolean terminal) {
+            this.terminal = terminal;
+            return this;
+        }
+
         public Room build() {
             Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, password);
             synchronized (room) {
@@ -187,6 +195,7 @@ public class Room {
                 }
                 room.createdAt = createdAt;
                 room.isGameStarted = gameStarted;
+                room.isTerminal = terminal;
             }
             return room;
         }
@@ -391,5 +400,23 @@ public class Room {
      */
     public void setGameStarted(boolean gameStarted) {
         isGameStarted = gameStarted;
+    }
+
+    /**
+     * Checks if this room is in a terminal post-game state.
+     *
+     * @return true if game is terminal
+     */
+    public synchronized boolean isTerminal() {
+        return isTerminal;
+    }
+
+    /**
+     * Marks this room as a terminal post-game persistence container.
+     *
+     * @param terminal whether the room is in post-game review
+     */
+    public synchronized void setTerminal(boolean terminal) {
+        this.isTerminal = terminal;
     }
 }

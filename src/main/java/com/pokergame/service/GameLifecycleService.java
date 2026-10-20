@@ -1,10 +1,12 @@
 package com.pokergame.service;
 
 import com.pokergame.dto.response.ApiResponse;
+import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
@@ -219,6 +221,9 @@ public class GameLifecycleService {
         boolean settledTournamentOver = game.getLastSettlementResult() != null
                 && game.getLastSettlementResult().settled() && game.isTournamentOver();
         if ((game.isGameOver() || settledTournamentOver) && !game.isForfeitPending()) {
+            if (room != null) {
+                room.setTerminal(true);
+            }
             if (!game.isGameOver() || !game.isTerminalCarryOverSettled()) {
                 handleGameEnd(roomId, false);
             }
@@ -271,6 +276,9 @@ public class GameLifecycleService {
                     cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
                 } else {
                     handleGameEndWithForfeits(roomId, survivor, departingGamePlayers.stream().map(Player::getName).collect(Collectors.toSet()));
+                    if (room != null) {
+                        room.setTerminal(true);
+                    }
                     List<String> roomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
                     if (!roomMembers.isEmpty() && roomService.getRoom(roomId) != null) {
                         roomService.leavePlayersBatch(roomId, roomMembers);
@@ -617,7 +625,15 @@ public class GameLifecycleService {
             game.closeReadyCountdown();
             game.invalidateProgressionTasks();
             cancelRuntimeTasks(gameId, true);
-            event = gameStateService.captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
+            if (game.getRetainedTerminalResult() != null) {
+                event = game.getRetainedTerminalResult();
+            } else {
+                event = gameStateService.captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
+                game.setRetainedTerminalResult(event);
+            }
+            if (room != null) {
+                room.setTerminal(true);
+            }
         }
 
         if (winner == null) {
@@ -664,6 +680,12 @@ public class GameLifecycleService {
      */
     public void restoreGame(Game game) {
         activeGames.put(game.getGameId(), game);
+        if (game.isGameOver()) {
+            Room room = roomService.getRoom(game.getGameId());
+            if (room != null) {
+                room.setTerminal(true);
+            }
+        }
     }
 
     /**
@@ -942,13 +964,26 @@ public class GameLifecycleService {
     }
 
     /**
-     * Checks if a game with the specified ID exists in the active games.
+     * Checks if a game has reached its scheduled cleanup deadline.
+     *
+     * @param game game to check
+     * @return true if cleanup deadline is set and current time is at or past it
+     */
+    public boolean isGameExpired(Game game) {
+        if (game == null) return true;
+        Long cleanupDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
+        return cleanupDeadline != null && System.currentTimeMillis() >= cleanupDeadline;
+    }
+
+    /**
+     * Checks if a game with the specified ID exists in the active games and has not expired.
      *
      * @param gameId the unique identifier of the game to check
-     * @return true if the game exists in active games, false otherwise
+     * @return true if the game exists in active games and is not expired, false otherwise
      */
     public boolean gameExists(String gameId) {
-        return activeGames.containsKey(gameId);
+        Game game = activeGames.get(gameId);
+        return game != null && !isGameExpired(game);
     }
 
     /**
@@ -1263,15 +1298,17 @@ public class GameLifecycleService {
 
     /**
      * Claims an immediate game win for a connected player when all other
-     * non-out players are disconnected.
+     * non-out players are disconnected. Repeating claim-win on a completed
+     * game returns the retained result without settlement, broadcast, or timer extension.
      *
      * @param gameId     game identifier
      * @param playerName claimant name
+     * @return frozen terminal result
      */
     @DurableMutation(roomId = "#gameId")
-    public void claimWin(String gameId, String playerName) {
+    public GameEndResponse claimWin(String gameId, String playerName) {
         Game game = getGame(gameId);
-        if (game == null) {
+        if (game == null || isGameExpired(game)) {
             throw new ResourceNotFoundException("Game not found");
         }
 
@@ -1279,6 +1316,20 @@ public class GameLifecycleService {
         if (room == null) throw new ResourceNotFoundException("Room not found");
         synchronized (room) {
             synchronized (game) {
+                if (game.isGameOver()) {
+                    GameEndResponse retained = game.getRetainedTerminalResult();
+                    if (retained == null) {
+                        throw new ResourceNotFoundException("Game not found");
+                    }
+                    boolean authorized = retained.finalState() != null
+                            && retained.finalState().players() != null
+                            && retained.finalState().players().stream().anyMatch(p -> p.name().equals(playerName));
+                    if (!authorized) {
+                        throw new UnauthorisedActionException("You are not part of this game's terminal result.");
+                    }
+                    return retained;
+                }
+
                 if (!canPlayerClaimWin(game, playerName)) throw new UnauthorisedActionException("Cannot claim win right now.");
                 List<String> opponents = game.getPlayers().stream()
                         .filter(player -> !player.getName().equals(playerName))
@@ -1286,7 +1337,43 @@ public class GameLifecycleService {
                         .map(Player::getName)
                         .toList();
                 departParticipantsUnderLock(gameId, opponents, room, game);
+                return game.getRetainedTerminalResult();
             }
+        }
+    }
+
+    /**
+     * Retrieves the frozen terminal result for post-game review.
+     *
+     * @param gameId     game identifier
+     * @param playerName requesting player name
+     * @return frozen terminal result
+     */
+    public GameEndResponse getGameReview(String gameId, String playerName) {
+        Game game = getGame(gameId);
+        if (game == null || isGameExpired(game)) {
+            throw new ResourceNotFoundException("Game not found");
+        }
+
+        synchronized (game) {
+            if (!game.isGameOver()) {
+                throw new ConflictException("Game has not finished");
+            }
+
+            GameEndResponse retained = game.getRetainedTerminalResult();
+            if (retained == null) {
+                throw new ResourceNotFoundException("Game not found");
+            }
+
+            boolean authorized = retained.finalState() != null
+                    && retained.finalState().players() != null
+                    && retained.finalState().players().stream().anyMatch(p -> p.name().equals(playerName));
+
+            if (!authorized) {
+                throw new UnauthorisedActionException("You are not part of this game's terminal result.");
+            }
+
+            return retained;
         }
     }
 
