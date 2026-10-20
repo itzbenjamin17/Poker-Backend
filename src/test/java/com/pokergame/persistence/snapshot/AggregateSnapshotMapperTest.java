@@ -1,15 +1,21 @@
 package com.pokergame.persistence.snapshot;
 
 import tools.jackson.databind.json.JsonMapper;
+import com.pokergame.model.Card;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.dto.internal.PlayerDecision;
+import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.enums.Suit;
+import com.pokergame.enums.Rank;
 import com.pokergame.service.HandEvaluatorService;
 import org.junit.jupiter.api.Test;
 
@@ -60,7 +66,7 @@ class AggregateSnapshotMapperTest {
     }
 
     @Test
-    void settlementAndSchemaThreeRoundTripAndRejectsVersionTwo() {
+    void settlementAndSchemaFourRoundTripAndRejectsVersionThreeAndTwo() {
         HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room("room-2", "Recovery", "Alice", 4, 5, 10, 1000, "secret");
         room.addPlayer("Alice");
@@ -101,6 +107,7 @@ class AggregateSnapshotMapperTest {
         assertTrue(restored.isForfeitPending());
         assertEquals(19, restored.getStateRevision(), "Persisted same-hand public revision must survive restart");
         assertTrue(new String(snapshot, StandardCharsets.UTF_8).contains("\"stateRevision\":19"));
+        assertTrue(new String(snapshot, StandardCharsets.UTF_8).contains("\"schemaVersion\":4"));
         restored.completeGameSettlement(restored.getPlayers().getFirst());
         assertEquals(1033, restored.getPlayers().getFirst().getChips(),
                 "A recovered terminal marker prevents a second carry-over payout");
@@ -111,7 +118,12 @@ class AggregateSnapshotMapperTest {
         assertEquals(aliceBeforeRetry, restored.getPlayers().getFirst().getChips());
         assertEquals(bobBeforeRetry, restored.getPlayers().get(1).getChips());
 
-        String versionTwo = new String(snapshot, StandardCharsets.UTF_8).replace("\"schemaVersion\":3", "\"schemaVersion\":2");
+        String versionThree = new String(snapshot, StandardCharsets.UTF_8).replace("\"schemaVersion\":4", "\"schemaVersion\":3");
+        assertNotEquals(new String(snapshot, StandardCharsets.UTF_8), versionThree);
+        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+                () -> mapper.deserialize(versionThree.getBytes(StandardCharsets.UTF_8)));
+
+        String versionTwo = new String(snapshot, StandardCharsets.UTF_8).replace("\"schemaVersion\":4", "\"schemaVersion\":2");
         assertNotEquals(new String(snapshot, StandardCharsets.UTF_8), versionTwo);
         assertThrows(com.pokergame.persistence.config.PersistenceException.class,
                 () -> mapper.deserialize(versionTwo.getBytes(StandardCharsets.UTF_8)));
@@ -124,6 +136,95 @@ class AggregateSnapshotMapperTest {
         mutableAwards.put("b", 2);
         assertEquals(Map.of("a", 1), immutable.contestedAwards());
         assertThrows(UnsupportedOperationException.class, () -> immutable.contestedAwards().put("b", 2));
+    }
+
+    @Test
+    void retainedTerminalResultRoundTripAndValidation() {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        Room room = new Room("room-terminal", "Final Table", "Alice", 6, 5, 10, 1000, null);
+        room.addPlayer("Alice");
+        room.addPlayer("Bob");
+        room.setGameStarted(true);
+        room.setTerminal(true);
+
+        List<Player> players = List.of(
+                Player.restoreBuilder().name("Alice").playerId("a").chips(2000).currentBet(0)
+                        .holeCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
+                        .bestHand(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
+                        .handRank(com.pokergame.enums.HandRank.HIGH_CARD)
+                        .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build(),
+                Player.restoreBuilder().name("Bob").playerId("b").chips(0).currentBet(0)
+                        .holeCards(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.DIAMONDS)))
+                        .bestHand(List.of())
+                        .handRank(com.pokergame.enums.HandRank.NO_HAND)
+                        .hasFolded(false).allIn(false).out(true).disconnected(false).readyForNextHand(false).build());
+
+        PublicGameStateResponse finalState = new PublicGameStateResponse(
+                6, 0, List.of(), 0, GamePhase.SHOWDOWN, 0,
+                List.of(new Card(Rank.TEN, Suit.CLUBS)),
+                List.of(
+                        new PublicPlayerState("a", "Alice", 2000, 0, "Winner", false, false, false, true, false,
+                                com.pokergame.enums.HandRank.HIGH_CARD, List.of(new Card(Rank.ACE, Suit.SPADES)),
+                                true, null, List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)), null, false),
+                        new PublicPlayerState("b", "Bob", 0, 0, "Out", false, false, false, false, true,
+                                null, List.of(), false, null, null, null, false)),
+                null, null, List.of("Alice"), null, false, null, false, null, false, null,
+                true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, 123456789L, 42);
+
+        GameEndResponse terminalResult = new GameEndResponse("GAME_END", "room-terminal", "Alice", 2000, false,
+                "🏆 Alice wins the game with 2000 chips!", finalState);
+
+        Game game = Game.restoreBuilder().gameId("room-terminal").players(players).activePlayerIds(List.of("a", "b"))
+                .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
+                .dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(0).currentHighestBet(0)
+                .currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10).handContributions(Map.of())
+                .preHandCarryOver(0).lastFullRaiseByStreet(Map.of()).lastActedWagerByPlayer(Map.of())
+                .handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
+                .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 1L))
+                .handNumber(1).readyGateState(ReadyGateState.CLOSED).forfeitPending(false).stateRevision(42)
+                .retainedTerminalResult(terminalResult)
+                .handEvaluator(evaluator).build();
+
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+
+        byte[] snapshot = mapper.serialize(room, "Alice", game);
+        String json = new String(snapshot, StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"schemaVersion\":4"));
+        assertTrue(json.contains("\"retainedTerminalResult\""));
+        assertTrue(json.contains("\"winner\":\"Alice\""));
+        assertTrue(json.contains("\"winnerChips\":2000"));
+
+        Game restored = mapper.deserialize(snapshot).game();
+        assertNotNull(restored.getRetainedTerminalResult());
+        GameEndResponse restoredResult = restored.getRetainedTerminalResult();
+        assertEquals("GAME_END", restoredResult.type());
+        assertEquals("room-terminal", restoredResult.gameId());
+        assertEquals("Alice", restoredResult.winner());
+        assertEquals(2000, restoredResult.winnerChips());
+        assertFalse(restoredResult.isForfeit());
+        assertEquals("🏆 Alice wins the game with 2000 chips!", restoredResult.message());
+        assertNotNull(restoredResult.finalState());
+        assertEquals(42, restoredResult.finalState().stateRevision());
+        assertEquals(2, restoredResult.finalState().players().size());
+        assertEquals("Alice", restoredResult.finalState().players().get(0).name());
+        assertEquals("Bob", restoredResult.finalState().players().get(1).name());
+
+        // Validate corrupt terminal results
+        String wrongGameId = json.replace("\"retainedTerminalResult\":{\"type\":\"GAME_END\",\"gameId\":\"room-terminal\"",
+                "\"retainedTerminalResult\":{\"type\":\"GAME_END\",\"gameId\":\"wrong-game-id\"");
+        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+                () -> mapper.deserialize(wrongGameId.getBytes(StandardCharsets.UTF_8)));
+
+        String negativeChips = json.replace("\"winnerChips\":2000", "\"winnerChips\":-1");
+        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+                () -> mapper.deserialize(negativeChips.getBytes(StandardCharsets.UTF_8)));
+
+        String missingWinner = json.replace("\"winner\":\"Alice\"", "\"winner\":\"\"");
+        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+                () -> mapper.deserialize(missingWinner.getBytes(StandardCharsets.UTF_8)));
     }
 
     @Test

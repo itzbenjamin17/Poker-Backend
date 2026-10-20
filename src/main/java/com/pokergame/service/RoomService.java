@@ -255,11 +255,19 @@ public class RoomService {
                 room.removePlayer(playerName);
 
                 if (room.getPlayers().isEmpty()) {
-                    logger.info("Host {} left room {} and no players remain, destroying room", playerName,
-                            room.getRoomName());
-                    sendAfterCommit("/room/" + roomId,
-                            new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
-                    destroyRoom(roomId);
+                    if (room.isTerminal()) {
+                        roomHosts.remove(roomId);
+                        logger.info("Host {} left terminal room {} and no players remain; preserving container until cleanup",
+                                playerName, room.getRoomName());
+                        sendAfterCommit("/room/" + roomId,
+                                new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                    } else {
+                        logger.info("Host {} left room {} and no players remain, destroying room", playerName,
+                                room.getRoomName());
+                        sendAfterCommit("/room/" + roomId,
+                                new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                        destroyRoom(roomId);
+                    }
                 } else {
                     String newHost = room.getPlayers().getFirst();
                     roomHosts.put(roomId, newHost);
@@ -279,12 +287,19 @@ public class RoomService {
             sendAfterCommit("/room/" + roomId,
                     new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
 
-            // If no players left after removal, also destroy the room
+            // If no players left after removal, also destroy the room unless preserved as terminal container
             if (room.getPlayers().isEmpty()) {
-                logger.info("No players remaining in room {}, destroying room", room.getRoomName());
-                sendAfterCommit("/room/" + roomId,
-                        new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
-                destroyRoom(roomId);
+                if (room.isTerminal()) {
+                    roomHosts.remove(roomId);
+                    logger.info("No players remaining in terminal room {}, preserving container until cleanup", room.getRoomName());
+                    sendAfterCommit("/room/" + roomId,
+                            new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                } else {
+                    logger.info("No players remaining in room {}, destroying room", room.getRoomName());
+                    sendAfterCommit("/room/" + roomId,
+                            new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                    destroyRoom(roomId);
+                }
             }
         }
     }
@@ -302,9 +317,15 @@ public class RoomService {
             present.forEach(room::removePlayer);
             if (hostLeaving && !room.getPlayers().isEmpty()) roomHosts.put(roomId, room.getPlayers().getFirst());
             if (room.getPlayers().isEmpty()) {
-                sendAfterCommit("/room/" + roomId,
-                        new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
-                destroyRoom(roomId);
+                if (room.isTerminal()) {
+                    roomHosts.remove(roomId);
+                    sendAfterCommit("/room/" + roomId,
+                            new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                } else {
+                    sendAfterCommit("/room/" + roomId,
+                            new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
+                    destroyRoom(roomId);
+                }
             } else {
                 sendAfterCommit("/room/" + roomId,
                         new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));

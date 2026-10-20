@@ -5,9 +5,13 @@ import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;
@@ -282,10 +286,65 @@ class PersistenceRestartIntegrationTest {
         }
     }
 
+    @Test
+    void terminalResultAndEmptyRoomSurviveRestartUntilCleanup() throws Exception {
+        String roomId;
+        GameEndResponse originalResult;
 
+        try (ConfigurableApplicationContext first = startApplication(120000, 20000)) {
+            RoomService rooms = first.getBean(RoomService.class);
+            roomId = rooms.createRoom(new CreateRoomRequest("Terminal Room", "Alice", 6, 5, 10, 1000, null));
+            rooms.joinRoom(new JoinRoomRequest("Terminal Room", "Bob", null));
+            GameLifecycleService games = first.getBean(GameLifecycleService.class);
+            games.createGameFromRoom(roomId);
 
+            games.markPlayerDisconnected(roomId, "Bob", System.currentTimeMillis() + 60_000);
+            originalResult = games.claimWin(roomId, "Alice");
+            assertNotNull(originalResult);
+            assertEquals("Alice", originalResult.winner());
 
+            // Alice leaves the finished game -> room becomes empty
+            games.leaveGame(roomId, "Alice");
+            Room room = rooms.getRoom(roomId);
+            assertNotNull(room);
+            assertTrue(room.getPlayers().isEmpty());
+            assertTrue(room.isTerminal());
+        }
 
+        // Restart with long cleanup window so we can inspect
+        try (ConfigurableApplicationContext second = startApplication(120000, 20000)) {
+            RoomService rooms = second.getBean(RoomService.class);
+            GameLifecycleService games = second.getBean(GameLifecycleService.class);
+
+            Room recoveredRoom = rooms.getRoom(roomId);
+            assertNotNull(recoveredRoom, "Terminal empty room container must survive restart");
+            assertTrue(recoveredRoom.getPlayers().isEmpty(), "Recovered terminal room has 0 members");
+            assertTrue(recoveredRoom.isTerminal(), "Recovered room remains terminal");
+
+            // Joining terminal room must be rejected
+            assertThrows(BadRequestException.class, () ->
+                    rooms.joinRoom(new JoinRoomRequest("Terminal Room", "Charlie", null)));
+
+            Game recoveredGame = games.getGame(roomId);
+            assertNotNull(recoveredGame, "Finished game aggregate must survive restart");
+            assertTrue(recoveredGame.isGameOver());
+
+            // Review reads return the exact frozen terminal result
+            GameEndResponse reviewAlice = games.getGameReview(roomId, "Alice");
+            assertNotNull(reviewAlice);
+            assertEquals(originalResult.winner(), reviewAlice.winner());
+            assertEquals(originalResult.winnerChips(), reviewAlice.winnerChips());
+            assertEquals(originalResult.type(), reviewAlice.type());
+
+            GameEndResponse reviewBob = games.getGameReview(roomId, "Bob");
+            assertNotNull(reviewBob);
+            assertEquals(originalResult.winner(), reviewBob.winner());
+
+            // Unauthorized stranger cannot review
+            assertThrows(UnauthorisedActionException.class, () ->
+                    games.getGameReview(roomId, "Charlie"));
+        }
+    }
 
     /**
      * Starts a persistence-enabled application with the default disconnect grace.
@@ -296,13 +355,18 @@ class PersistenceRestartIntegrationTest {
         return startApplication(120000);
     }
 
+    private ConfigurableApplicationContext startApplication(long disconnectGracePeriodMs) {
+        return startApplication(disconnectGracePeriodMs, 500);
+    }
+
     /**
      * Starts an isolated persistence-enabled application against the test WAL directory.
      *
      * @param disconnectGracePeriodMs reconnect grace duration for the context
+     * @param gameEndDisplayDelayMs   review delay before cleanup
      * @return running application context
      */
-    private ConfigurableApplicationContext startApplication(long disconnectGracePeriodMs) {
+    private ConfigurableApplicationContext startApplication(long disconnectGracePeriodMs, long gameEndDisplayDelayMs) {
         String key = Base64.getEncoder().encodeToString(new byte[32]);
         return new SpringApplicationBuilder(PokerApplication.class)
                 .profiles("test")
@@ -316,7 +380,7 @@ class PersistenceRestartIntegrationTest {
                         "poker.rate-limiting.enabled=false")
                 .run(
                         "--poker.disconnect.grace-period-ms=" + disconnectGracePeriodMs,
-                        "--poker.game-end.display-delay-ms=500",
+                        "--poker.game-end.display-delay-ms=" + gameEndDisplayDelayMs,
                         "--poker.persistence.enabled=true",
                         "--poker.persistence.directory=" + walDirectory.toString().replace('\\', '/'),
                         "--poker.persistence.current-key-id=current",

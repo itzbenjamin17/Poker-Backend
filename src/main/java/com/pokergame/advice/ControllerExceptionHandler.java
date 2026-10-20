@@ -1,6 +1,7 @@
 package com.pokergame.advice;
 
 import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.TooManyRequestsException;
 import com.pokergame.exception.UnauthorisedActionException;
@@ -55,6 +56,19 @@ public class ControllerExceptionHandler {
         ErrorResponse error = new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", ex.getMessage());
         // returns 400 Bad Request
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Maps resource state conflicts to HTTP 409.
+     *
+     * @param ex conflict failure
+     * @return structured conflict response
+     */
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ErrorResponse> handleConflictException(ConflictException ex) {
+        logger.warn("Conflict: {}", ex.getMessage());
+        ErrorResponse error = new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
     /**

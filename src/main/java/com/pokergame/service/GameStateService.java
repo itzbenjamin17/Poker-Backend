@@ -7,6 +7,7 @@ import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.dto.response.PlayerNotificationResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.PlayerStatus;
+import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.RejectedAction;
@@ -439,7 +440,12 @@ public class GameStateService {
         int maxPlayers = room == null ? 0 : room.getMaxPlayers();
         GameEndResponse event;
         synchronized (game) {
-            event = captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
+            if (game.getRetainedTerminalResult() != null) {
+                event = game.getRetainedTerminalResult();
+            } else {
+                event = captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
+                game.setRetainedTerminalResult(event);
+            }
         }
         sendGameEnd(event);
 
@@ -473,12 +479,20 @@ public class GameStateService {
      * @param gameId          the unique identifier of the game
      * @param game            the Game object containing the final state
      * @param winner          the winning player, or null if undetermined
-     * @param revealHoleCards true to reveal hole cards (showdown path); false to
-     *                        withhold them (forfeit path)
+     * @param isForfeit       true if the game ended due to forfeit
+     * @param maxPlayers      configured max players from room
      * @return a {@link PublicGameStateResponse} representing the frozen final state
      */
     private PublicGameStateResponse buildFinalStateResponse(String gameId, Game game, Player winner,
             boolean isForfeit, int maxPlayers) {
+        int resolvedMaxPlayers;
+        if (maxPlayers >= 2 && maxPlayers <= 10) {
+            resolvedMaxPlayers = maxPlayers;
+        } else {
+            int retainedPlayerCount = game != null && game.getPlayers() != null ? game.getPlayers().size() : 2;
+            resolvedMaxPlayers = Math.min(10, Math.max(2, retainedPlayerCount));
+        }
+
         boolean contestedShowdown = game.getCurrentPhase() == com.pokergame.enums.GamePhase.SHOWDOWN
                 && game.getLastSettlementResult() != null && game.getLastSettlementResult().settled()
                 && game.getActivePlayers().stream().filter(player -> !player.getHasFolded() && !player.getIsOut()).count() > 1;
@@ -512,9 +526,10 @@ public class GameStateService {
         }).toList();
 
         List<String> winnerNames = winner != null ? List.of(winner.getName()) : List.of();
+        boolean handSettled = game.getLastSettlementResult() != null && game.getLastSettlementResult().settled();
 
         return new PublicGameStateResponse(
-                maxPlayers,
+                resolvedMaxPlayers,
                 game.getPot(),
                 game.getPotBreakdown(),
                 game.getUncalledAmount(),
@@ -525,15 +540,21 @@ public class GameStateService {
                 null,
                 null,
                 winnerNames,
-                winner != null ? winner.getChips() : null,
+                null,
                 false,
                 null,
-                game.isReadyCountdownActive(),
-                game.getReadyCountdownDeadlineEpochMs(),
+                false,
+                null,
+                false,
+                null,
+                handSettled,
+                null,
+                List.of(),
                 null,
                 null,
-                null, null, null, null, null,
-                game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
+                game.getHandNumber(),
+                ReadyGateState.CLOSED,
+                System.currentTimeMillis(),
                 game.getStateRevision());
     }
 

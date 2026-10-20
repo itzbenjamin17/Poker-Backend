@@ -1,10 +1,14 @@
 package com.pokergame.controller;
 
 import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.exception.ConflictException;
+import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.security.JwtAuthenticationFilter;
 import com.pokergame.security.PlayerPrincipal;
@@ -219,12 +223,82 @@ class GameControllerTest {
     @Test
     @DisplayName("POST /api/game/{gameId}/claim-win - Success")
     void claimWin_Success() throws Exception {
+        GameEndResponse endResponse = new GameEndResponse("GAME_END", gameId, playerName, 1000, true, "Winner", null);
+        when(gameLifecycleService.claimWin(gameId, playerName)).thenReturn(endResponse);
+
         mockMvc.perform(post("/api/game/{gameId}/claim-win", gameId)
                 .principal(auth))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Win claimed successfully"));
+                .andExpect(jsonPath("$.message").value("Win claimed successfully"))
+                .andExpect(jsonPath("$.data.winner").value(playerName))
+                .andExpect(jsonPath("$.data.winnerChips").value(1000));
 
         verify(gameLifecycleService).claimWin(gameId, playerName);
+    }
+
+    @Test
+    @DisplayName("GET /api/game/{gameId}/review - Success (200 OK)")
+    void getGameReview_Success() throws Exception {
+        GameEndResponse endResponse = new GameEndResponse("GAME_END", gameId, playerName, 1000, false, "Winner", null);
+        when(gameLifecycleService.getGameReview(gameId, playerName)).thenReturn(endResponse);
+
+        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
+                .principal(auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.winner").value(playerName))
+                .andExpect(jsonPath("$.winnerChips").value(1000))
+                .andExpect(jsonPath("$.type").value("GAME_END"));
+
+        verify(gameLifecycleService).getGameReview(gameId, playerName);
+    }
+
+    @Test
+    @DisplayName("GET /api/game/{gameId}/review - Conflict when game is not finished (409)")
+    void getGameReview_GameNotFinished() throws Exception {
+        when(gameLifecycleService.getGameReview(gameId, playerName))
+                .thenThrow(new ConflictException("Game has not finished"));
+
+        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
+                .principal(auth))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.message").value("Game has not finished"));
+    }
+
+    @Test
+    @DisplayName("GET /api/game/{gameId}/review - Not Found when absent or expired (404)")
+    void getGameReview_NotFound() throws Exception {
+        when(gameLifecycleService.getGameReview(gameId, playerName))
+                .thenThrow(new ResourceNotFoundException("Game not found"));
+
+        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
+                .principal(auth))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404));
+    }
+
+    @Test
+    @DisplayName("GET /api/game/{gameId}/review - Forbidden when token room does not match (403)")
+    void getGameReview_WrongTokenRoom() throws Exception {
+        PlayerPrincipal wrongPrincipal = new PlayerPrincipal(playerName, "other-room");
+        Authentication wrongAuth = new PreAuthenticatedAuthenticationToken(wrongPrincipal, "token", Collections.emptyList());
+
+        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
+                .principal(wrongAuth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403));
+    }
+
+    @Test
+    @DisplayName("GET /api/game/{gameId}/review - Forbidden when player not in terminal roster (403)")
+    void getGameReview_NotInTerminalRoster() throws Exception {
+        when(gameLifecycleService.getGameReview(gameId, playerName))
+                .thenThrow(new UnauthorisedActionException("You are not part of this game's terminal result."));
+
+        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
+                .principal(auth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403));
     }
 
 

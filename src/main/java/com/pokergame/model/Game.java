@@ -55,6 +55,7 @@ public class Game {
     private ReadyGateState readyGateState;
     private long handNumber;
     private long stateRevision;
+    private com.pokergame.dto.response.GameEndResponse retainedTerminalResult;
 
     // Track if everyone has had their initial turn in the current betting round
     private boolean everyoneHasHadInitialTurn;
@@ -292,6 +293,8 @@ public class Game {
         public GameRestoreBuilder readyGateState(ReadyGateState value) { this.readyGateState = value; return this; }
         public GameRestoreBuilder handNumber(long value) { this.handNumber = value; return this; }
         public GameRestoreBuilder stateRevision(long value) { this.stateRevision = value; return this; }
+        private com.pokergame.dto.response.GameEndResponse retainedTerminalResult;
+        public GameRestoreBuilder retainedTerminalResult(com.pokergame.dto.response.GameEndResponse value) { this.retainedTerminalResult = value; return this; }
 
         public GameRestoreBuilder everyoneHasHadInitialTurn(boolean everyoneHasHadInitialTurn) {
             this.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
@@ -359,6 +362,7 @@ public class Game {
                     : readyGateState;
             game.handNumber = handNumber;
             game.stateRevision = stateRevision;
+            game.retainedTerminalResult = retainedTerminalResult;
             game.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
             game.actedPlayersInRound.clear();
             game.actedPlayersInRound.addAll(actedPlayersInRound);
@@ -2151,5 +2155,13 @@ public class Game {
 
     public void incrementStateRevision() {
         this.stateRevision++;
+    }
+
+    public com.pokergame.dto.response.GameEndResponse getRetainedTerminalResult() {
+        return retainedTerminalResult;
+    }
+
+    public void setRetainedTerminalResult(com.pokergame.dto.response.GameEndResponse retainedTerminalResult) {
+        this.retainedTerminalResult = retainedTerminalResult;
     }
 }

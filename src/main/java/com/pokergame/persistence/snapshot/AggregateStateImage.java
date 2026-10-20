@@ -2,6 +2,7 @@ package com.pokergame.persistence.snapshot;
 
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
+import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
 import com.pokergame.enums.ScheduledGameTask;
@@ -27,7 +28,7 @@ import java.util.Set;
  */
 public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState room, String currentHost,
         GameState game) {
-    public static final int CURRENT_SCHEMA_VERSION = 3;
+    public static final int CURRENT_SCHEMA_VERSION = 4;
 
     /**
      * Details about the room itself (the lobby) that we need to restore, like passwords and who joined when.
@@ -82,6 +83,12 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
      * @param bigBlindPlayerId               actual big blind payer identity, even if that player departed
      * @param lastSettlementResult           immutable settled awards, refunds, winners and explicit remainder
      * @param terminalCarryOverSettled       guards the final carry-over award against recovery-time repayout
+     * @param readyGateState                 current ready-gate state machine phase
+     * @param handNumber                     authoritative completed-hand count
+     * @param scheduledTaskGenerations       generation tokens protecting asynchronous task executions
+     * @param forfeitPending                 whether a pending forfeit preserves out standings
+     * @param stateRevision                  monotonically increasing public state revision
+     * @param retainedTerminalResult         frozen immutable terminal result retained across post-game review
      */
     public record GameState(String gameId, List<PlayerState> players, List<String> activePlayerIds,
             List<CardState> remainingDeck, List<CardState> communityCards, int pot, int dealerPosition,
@@ -94,12 +101,75 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
             List<String> handSeatOrder, String dealerAnchorPlayerId, String smallBlindPlayerId,
             String bigBlindPlayerId, SettlementState lastSettlementResult, boolean terminalCarryOverSettled,
             ReadyGateState readyGateState, long handNumber, Map<ScheduledGameTask, Long> scheduledTaskGenerations,
-            boolean forfeitPending, long stateRevision) {
+            boolean forfeitPending, long stateRevision, TerminalResultState retainedTerminalResult) {
     }
 
     /** Plain persisted form of the immutable hand settlement result. */
     public record SettlementState(Map<String, Integer> contestedAwards, Map<String, Integer> refunds,
             Set<String> winnerIds, int remainder, boolean settled) { }
+
+    /** Plain persisted form of the immutable terminal game end result. */
+    public record TerminalResultState(
+            String type,
+            String gameId,
+            String winner,
+            int winnerChips,
+            boolean isForfeit,
+            String message,
+            FinalGameState finalState) {
+    }
+
+    /** Plain persisted form of the complete final game state projection. */
+    public record FinalGameState(
+            int maxPlayers,
+            int pot,
+            List<Integer> pots,
+            Integer uncalledAmount,
+            GamePhase phase,
+            int currentBet,
+            List<CardState> communityCards,
+            List<FinalPlayerState> players,
+            String currentPlayerName,
+            String currentPlayerId,
+            List<String> winners,
+            Integer winningsPerPlayer,
+            Boolean isAutoAdvancing,
+            String autoAdvanceMessage,
+            Boolean isReadyCountdownActive,
+            Long readyCountdownDeadlineEpochMs,
+            Boolean claimWinAvailable,
+            String claimWinPlayerName,
+            Boolean handSettled,
+            Integer carryOverAmount,
+            List<PlayerAction> legalActions,
+            Integer minimumBetAmount,
+            Integer minimumRaiseAmount,
+            long handNumber,
+            ReadyGateState readyGateState,
+            long serverTimeEpochMs,
+            long stateRevision) {
+    }
+
+    /** Plain persisted form of a player's public state in the terminal projection. */
+    public record FinalPlayerState(
+            String id,
+            String name,
+            int chips,
+            int currentBet,
+            String status,
+            boolean isAllIn,
+            boolean isCurrentPlayer,
+            boolean hasFolded,
+            boolean isSmallBlind,
+            boolean isBigBlind,
+            HandRank handRank,
+            List<CardState> bestHand,
+            Boolean isWinner,
+            Integer chipsWon,
+            List<CardState> holeCards,
+            Long disconnectDeadlineEpochMs,
+            Boolean isReadyForNextHand) {
+    }
 
     /**
      * Everything we need to know about a specific player during a hand.
