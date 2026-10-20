@@ -205,15 +205,24 @@ class RoomControllerTest {
     @DisplayName("GET /api/room/{roomId} - Success")
     void getRoomInfo_ShouldReturnRoomData() throws Exception {
         String roomId = "room-123";
-        PlayerJoinInfo pInfo = new PlayerJoinInfo("Player1", true, "2026-05-17T12:00:00");
-        RoomDataResponse roomData = new RoomDataResponse(roomId, "Room1", 6, 1000, 10, 20, LocalDateTime.now(), "Player1", List.of(pInfo), 1, true, false);
+        String playerName = "Player1";
+        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
+
+        com.pokergame.model.Room room = new com.pokergame.model.Room(roomId, "Room1", playerName, 6, 10, 20, 1000, null);
+        room.addPlayer(playerName);
+        when(roomService.getRoom(roomId)).thenReturn(room);
+
+        PlayerJoinInfo pInfo = new PlayerJoinInfo(playerName, true, "2026-05-17T12:00:00");
+        RoomDataResponse roomData = new RoomDataResponse(roomId, "Room1", 6, 1000, 10, 20, LocalDateTime.now(), playerName, List.of(pInfo), 1, true, false);
         when(roomService.getRoomData(roomId)).thenReturn(roomData);
 
-        mockMvc.perform(get("/api/room/{roomId}", roomId))
+        mockMvc.perform(get("/api/room/{roomId}", roomId)
+                .principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.roomId").value(roomId))
                 .andExpect(jsonPath("$.roomName").value("Room1"))
-                .andExpect(jsonPath("$.hostName").value("Player1"));
+                .andExpect(jsonPath("$.hostName").value(playerName));
     }
 
     /**
@@ -223,10 +232,56 @@ class RoomControllerTest {
     @DisplayName("GET /api/room/{roomId} - Not Found")
     void getRoomInfo_NotFound_ShouldReturn404() throws Exception {
         String roomId = "unknown";
-        when(roomService.getRoomData(roomId)).thenReturn(null);
+        PlayerPrincipal principal = new PlayerPrincipal("Player1", roomId);
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
+        when(roomService.getRoom(roomId)).thenReturn(null);
 
-        mockMvc.perform(get("/api/room/{roomId}", roomId))
+        mockMvc.perform(get("/api/room/{roomId}", roomId)
+                .principal(auth))
                 .andExpect(status().isNotFound());
+    }
+
+    /**
+     * Verifies that GET /api/room/{roomId} rejects tokens issued for another room with 403 before resource lookup.
+     */
+    @Test
+    @DisplayName("GET /api/room/{roomId} - Cross-Room Token (403)")
+    void getRoomInfo_CrossRoomToken_ShouldReturn403() throws Exception {
+        String roomId = "room-123";
+        PlayerPrincipal principal = new PlayerPrincipal("Player1", "different-room-456");
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
+
+        mockMvc.perform(get("/api/room/{roomId}", roomId)
+                .principal(auth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("Forbidden"))
+                .andExpect(jsonPath("$.message").value("Token is not valid for this room."));
+
+        verify(roomService, never()).getRoom(anyString());
+        verify(roomService, never()).getRoomData(anyString());
+    }
+
+    /**
+     * Verifies that GET /api/room/{roomId} rejects authenticated non-members with 403.
+     */
+    @Test
+    @DisplayName("GET /api/room/{roomId} - Non-Member (403)")
+    void getRoomInfo_NonMember_ShouldReturn403() throws Exception {
+        String roomId = "room-123";
+        PlayerPrincipal principal = new PlayerPrincipal("NonMemberPlayer", roomId);
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
+
+        com.pokergame.model.Room room = new com.pokergame.model.Room(roomId, "Room1", "HostPlayer", 6, 10, 20, 1000, null);
+        room.addPlayer("HostPlayer");
+        when(roomService.getRoom(roomId)).thenReturn(room);
+
+        mockMvc.perform(get("/api/room/{roomId}", roomId)
+                .principal(auth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("Forbidden"))
+                .andExpect(jsonPath("$.message").value("You are not a member of this room."));
+
+        verify(roomService, never()).getRoomData(anyString());
     }
 
     /**

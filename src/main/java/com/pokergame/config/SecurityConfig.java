@@ -17,6 +17,12 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.List;
 
+import com.pokergame.dto.response.ErrorResponse;
+import tools.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import jakarta.servlet.http.HttpServletResponse;
+
 /**
  * Security configuration for stateless JWT authentication.
  * - No sessions (stateless)
@@ -30,6 +36,7 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final PayloadSizeFilter payloadSizeFilter;
     private final EndpointRateLimitFilter endpointRateLimitFilter;
+    private final ObjectMapper objectMapper;
 
     /**
      * Creates the security configuration with the filters that protect HTTP traffic.
@@ -37,13 +44,26 @@ public class SecurityConfig {
      * @param jwtAuthenticationFilter authenticates bearer tokens
      * @param payloadSizeFilter rejects oversized request bodies
      * @param endpointRateLimitFilter throttles sensitive public endpoints
+     * @param objectMapper serializes error responses
+     */
+    @Autowired
+    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
+                          com.pokergame.security.PayloadSizeFilter payloadSizeFilter,
+                          com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter,
+                          @Autowired(required = false) ObjectMapper objectMapper) {
+        this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.payloadSizeFilter = payloadSizeFilter;
+        this.endpointRateLimitFilter = endpointRateLimitFilter;
+        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
+    }
+
+    /**
+     * Creates the security configuration with the default object mapper.
      */
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
                           com.pokergame.security.PayloadSizeFilter payloadSizeFilter,
                           com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter) {
-        this.jwtAuthenticationFilter = jwtAuthenticationFilter;
-        this.payloadSizeFilter = payloadSizeFilter;
-        this.endpointRateLimitFilter = endpointRateLimitFilter;
+        this(jwtAuthenticationFilter, payloadSizeFilter, endpointRateLimitFilter, new ObjectMapper());
     }
 
     /**
@@ -77,6 +97,15 @@ public class SecurityConfig {
 
                 // Stateless session - no cookies, no session
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+
+                // Configure authentication entry point for unauthenticated requests
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint((request, response, authException) -> {
+                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                            response.getWriter().write(objectMapper.writeValueAsString(
+                                    new ErrorResponse(HttpServletResponse.SC_UNAUTHORIZED, "Unauthorized", "Session expired or invalid token")));
+                        }))
 
                 // Authorisation rules
                 .authorizeHttpRequests(auth -> auth

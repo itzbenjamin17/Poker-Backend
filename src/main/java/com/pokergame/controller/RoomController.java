@@ -20,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import com.pokergame.model.Room;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -140,23 +141,36 @@ public class RoomController {
 
     /**
      * Retrieves room data including players, settings, and status.
+     * SECURED ENDPOINT - Requires JWT token bound to this room and active membership.
      *
      * @param roomId room identifier
+     * @param playerPrincipal authenticated player principal
      * @return room data, or 404 if not found
      */
     @GetMapping("/{roomId}")
-    public ResponseEntity<RoomDataResponse> getRoomInfo(@PathVariable String roomId) {
+    public ResponseEntity<RoomDataResponse> getRoomInfo(
+            @PathVariable String roomId,
+            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
+        // Check binding before exposing resource existence
+        if (!playerPrincipal.roomId().equals(roomId)) {
+            throw new UnauthorisedActionException("Token is not valid for this room.");
+        }
+
         ReentrantLock lock = durableMutationAspect != null ? durableMutationAspect.getRoomLock(roomId) : null;
         if (lock != null) {
             lock.lock();
         }
         try {
             logger.debug("Fetching room info for room: {}", roomId);
-            RoomDataResponse roomData = roomService.getRoomData(roomId);
-            if (roomData == null) {
+            Room room = roomService.getRoom(roomId);
+            if (room == null) {
                 logger.warn("Room not found: {}", roomId);
                 return ResponseEntity.notFound().build();
             }
+            if (!room.getPlayers().contains(playerPrincipal.playerName())) {
+                throw new UnauthorisedActionException("You are not a member of this room.");
+            }
+            RoomDataResponse roomData = roomService.getRoomData(roomId);
             logger.debug("Room info retrieved successfully for room: {}", roomId);
             return ResponseEntity.ok(roomData);
         } finally {

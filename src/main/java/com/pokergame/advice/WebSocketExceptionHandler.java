@@ -56,18 +56,10 @@ public class WebSocketExceptionHandler {
             Message<?> message) {
         PlayerPrincipal playerPrincipal = SecurityUtils.getPlayer(principal);
         String playerName = playerPrincipal.playerName();
+        String gameId = playerPrincipal.roomId();
 
-        // Extract gameId from the destination header manually
         SimpMessageHeaderAccessor accessor = SimpMessageHeaderAccessor.wrap(message);
         String destination = accessor.getDestination();
-        String gameId = "unknown";
-
-        if (destination != null) {
-            String[] parts = destination.split("/");
-            if (parts.length >= 3) {
-                gameId = parts[2];
-            }
-        }
 
         logger.warn("WebSocket failure for player {} in game {}: {}", playerName, gameId, exception.getMessage());
         if (gameStateService == null) return;
@@ -92,19 +84,85 @@ public class WebSocketExceptionHandler {
             return;
         }
 
+        ActionFeedbackException actionFeedback = null;
+        ResourceNotFoundException resourceNotFound = null;
+        boolean validationOrConversion = false;
+        String validationMessage = null;
+
+        java.util.Set<Throwable> visited = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        Throwable cause = exception;
+        while (cause != null && visited.add(cause)) {
+            if (actionFeedback == null && cause instanceof ActionFeedbackException afe && afe.actionErrorCode() != null) {
+                actionFeedback = afe;
+            }
+            if (resourceNotFound == null && cause instanceof ResourceNotFoundException rnfe) {
+                resourceNotFound = rnfe;
+            }
+            if (isValidationOrConversionFailure(cause)) {
+                validationOrConversion = true;
+                if (validationMessage == null) {
+                    validationMessage = extractValidationMessage(cause);
+                }
+            }
+            cause = cause.getCause();
+        }
+
         String code = "ACTION_REJECTED";
         String displayMessage = "Action unavailable";
-        if (exception instanceof ActionFeedbackException details && details.actionErrorCode() != null) {
-            code = details.actionErrorCode();
-            displayMessage = details.actionErrorMessage();
-        } else if (exception instanceof ResourceNotFoundException) {
+
+        if (actionFeedback != null) {
+            code = actionFeedback.actionErrorCode();
+            displayMessage = actionFeedback.actionErrorMessage() != null ? actionFeedback.actionErrorMessage() : actionFeedback.getMessage();
+        } else if (resourceNotFound != null) {
             code = "GAME_NOT_FOUND";
             displayMessage = "Game unavailable";
-        } else if (exception instanceof MessageConversionException) {
+        } else if (validationOrConversion) {
             code = "INVALID_ACTION_FORMAT";
-            displayMessage = "Enter a valid action amount";
+            displayMessage = (validationMessage != null && !validationMessage.isBlank())
+                    ? validationMessage
+                    : "Enter a valid action amount";
         }
+
         gameStateService.sendActionError(gameId, playerName, code, action, displayMessage);
+    }
+
+    private boolean isValidationOrConversionFailure(Throwable throwable) {
+        return throwable instanceof MessageConversionException
+                || throwable instanceof org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException
+                || throwable instanceof org.springframework.web.bind.MethodArgumentNotValidException
+                || throwable instanceof org.springframework.validation.BindException
+                || throwable instanceof jakarta.validation.ValidationException
+                || throwable instanceof org.springframework.validation.method.MethodValidationException
+                || (throwable != null && throwable.getClass().getName().contains("JacksonException"));
+    }
+
+    private String extractValidationMessage(Throwable throwable) {
+        if (throwable instanceof org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException e) {
+            if (e.getBindingResult() != null && e.getBindingResult().getFieldError() != null) {
+                return e.getBindingResult().getFieldError().getDefaultMessage();
+            }
+        }
+        if (throwable instanceof org.springframework.web.bind.MethodArgumentNotValidException e) {
+            if (e.getBindingResult() != null && e.getBindingResult().getFieldError() != null) {
+                return e.getBindingResult().getFieldError().getDefaultMessage();
+            }
+        }
+        if (throwable instanceof org.springframework.validation.BindException e) {
+            if (e.getFieldError() != null) {
+                return e.getFieldError().getDefaultMessage();
+            }
+        }
+        if (throwable instanceof jakarta.validation.ConstraintViolationException e) {
+            if (e.getConstraintViolations() != null && !e.getConstraintViolations().isEmpty()) {
+                return e.getConstraintViolations().iterator().next().getMessage();
+            }
+        }
+        if (throwable instanceof org.springframework.validation.method.MethodValidationException e) {
+            if (e.getAllErrors() != null && !e.getAllErrors().isEmpty()) {
+                return e.getAllErrors().get(0).getDefaultMessage();
+            }
+        }
+        return null;
     }
 
     /** Recovers the requested action from the original frame without guessing from exception text. */
