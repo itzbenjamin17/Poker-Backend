@@ -27,13 +27,34 @@ public class Room {
     private final String roomId;
     private final String roomName;
     private final String hostName;
-    private final java.util.Map<String, LocalDateTime> playersWithJoinTime;
+    /**
+     * Join-order and arrival timestamps for players in this room.
+     * Guarded by this Room instance monitor (all mutations and accesses must synchronize on this).
+     */
+    private final LinkedHashMap<String, LocalDateTime> playersWithJoinTime;
+    /**
+     * Process-local membership identities created per addPlayer.
+     * Guarded by this Room instance monitor. Excluded from WAL serialization.
+     */
+    private final Map<String, String> playerMembershipIds = new LinkedHashMap<>();
+
+    /**
+     * Process-local absence deadlines for players awaiting first connection or reconnect grace.
+     * Guarded by this Room instance monitor. Excluded from WAL serialization.
+     */
+    private final Map<String, Long> playerAbsenceDeadlines = new LinkedHashMap<>();
+
+    /**
+     * Process-local active socket presence bounded by room membership.
+     * Guarded by this Room instance monitor. Excluded from WAL serialization.
+     */
+    private final java.util.Set<String> connectedPlayers = new java.util.HashSet<>();
     private final int maxPlayers;
     private final int smallBlind;
     private final int bigBlind;
     private final int buyIn;
     private final String password;
-    private LocalDateTime createdAt;
+    private final LocalDateTime createdAt;
     private boolean isGameStarted;
     private volatile boolean isTerminal;
 
@@ -54,6 +75,25 @@ public class Room {
      */
     public Room(String roomId, String roomName, String hostName, int maxPlayers,
             int smallBlind, int bigBlind, int buyIn, String password) {
+        this(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, password, LocalDateTime.now());
+    }
+
+    /**
+     * Package-private constructor used to restore persisted Room instances with their
+     * original creation timestamp.
+     *
+     * @param roomId     unique identifier of the room
+     * @param roomName   display name of the room
+     * @param hostName   name of the creator / initial host
+     * @param maxPlayers maximum capacity of the room
+     * @param smallBlind small blind amount
+     * @param bigBlind   big blind amount
+     * @param buyIn      buy-in amount
+     * @param password   optional password for private rooms
+     * @param createdAt  persisted creation timestamp
+     */
+    Room(String roomId, String roomName, String hostName, int maxPlayers,
+            int smallBlind, int bigBlind, int buyIn, String password, LocalDateTime createdAt) {
 
         if (roomId == null || roomId.trim().isEmpty()) {
             logger.error("Invalid roomId: '{}'", roomId);
@@ -94,8 +134,8 @@ public class Room {
         this.bigBlind = bigBlind;
         this.buyIn = buyIn;
         this.password = (password != null && password.trim().isEmpty()) ? null : password;
-        this.playersWithJoinTime = java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>());
-        this.createdAt = LocalDateTime.now();
+        this.playersWithJoinTime = new LinkedHashMap<>();
+        this.createdAt = createdAt != null ? createdAt : LocalDateTime.now();
     }
 
     /**
@@ -193,13 +233,15 @@ public class Room {
         }
 
         public Room build() {
-            Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, password);
+            Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, password, createdAt);
             synchronized (room) {
                 room.playersWithJoinTime.clear();
                 if (playersWithJoinTime != null) {
                     room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
+                    for (String playerName : room.playersWithJoinTime.keySet()) {
+                        room.playerMembershipIds.put(playerName, java.util.UUID.randomUUID().toString());
+                    }
                 }
-                room.createdAt = createdAt;
                 room.isGameStarted = gameStarted;
                 room.isTerminal = terminal;
             }
@@ -212,11 +254,13 @@ public class Room {
      *
      * @param playerName the name of the player to add
      */
-    public synchronized void addPlayer(String playerName) {
+    public synchronized String addPlayer(String playerName) {
         if (!playersWithJoinTime.containsKey(playerName)) {
             playersWithJoinTime.put(playerName, LocalDateTime.now());
-        }
-        else{
+            String membershipId = java.util.UUID.randomUUID().toString();
+            playerMembershipIds.put(playerName, membershipId);
+            return membershipId;
+        } else {
             throw new BadRequestException(String.format("Cannot add %s to room as they are already in the room", playerName));
         }
     }
@@ -229,11 +273,13 @@ public class Room {
     public synchronized void removePlayer(String playerName) {
         if (playersWithJoinTime.containsKey(playerName)) {
             playersWithJoinTime.remove(playerName);
+            playerMembershipIds.remove(playerName);
+            playerAbsenceDeadlines.remove(playerName);
+            connectedPlayers.remove(playerName);
         } else {
             throw new BadRequestException(
                 String.format("Cannot remove %s from room as they are not already in the room", playerName));
         }
-
     }
 
     /**
@@ -285,7 +331,7 @@ public class Room {
      * @return formatted string describing the room
      */
     @Override
-    public String toString() {
+    public synchronized String toString() {
         return roomName + " (" + roomId + ")" + " by " + hostName + " with " + playersWithJoinTime.size() + " players";
     }
 
@@ -395,7 +441,7 @@ public class Room {
      *
      * @return whether gameplay has started
      */
-    public boolean isGameStarted() {
+    public synchronized boolean isGameStarted() {
         return isGameStarted;
     }
 
@@ -404,8 +450,8 @@ public class Room {
      *
      * @param gameStarted whether gameplay has started
      */
-    public void setGameStarted(boolean gameStarted) {
-        isGameStarted = gameStarted;
+    public synchronized void setGameStarted(boolean gameStarted) {
+        this.isGameStarted = gameStarted;
     }
 
     /**
@@ -424,5 +470,65 @@ public class Room {
      */
     public void setTerminal(boolean terminal) {
         this.isTerminal = terminal;
+    }
+
+    /**
+     * Returns the opaque process-local membership ID for a player in this room.
+     *
+     * @param playerName the name of the player
+     * @return membership ID, or null if player is not in room
+     */
+    public synchronized String getMembershipId(String playerName) {
+        return playerMembershipIds.get(playerName);
+    }
+
+    /**
+     * Returns the process-local absence deadline epoch ms for a player in this room.
+     *
+     * @param playerName the name of the player
+     * @return absence deadline epoch ms, or null if none set
+     */
+    public synchronized Long getAbsenceDeadline(String playerName) {
+        return playerAbsenceDeadlines.get(playerName);
+    }
+
+    /**
+     * Sets or clears the process-local absence deadline epoch ms for a player.
+     *
+     * @param playerName the name of the player
+     * @param deadlineEpochMs the absence deadline epoch ms, or null to clear
+     */
+    public synchronized void setAbsenceDeadline(String playerName, Long deadlineEpochMs) {
+        if (deadlineEpochMs == null) {
+            playerAbsenceDeadlines.remove(playerName);
+        } else {
+            playerAbsenceDeadlines.put(playerName, deadlineEpochMs);
+        }
+    }
+
+    /**
+     * Checks if a player currently has an active confirmed connection in this room.
+     *
+     * @param playerName the name of the player
+     * @return true if connected, false otherwise
+     */
+    public synchronized boolean isPlayerConnected(String playerName) {
+        return connectedPlayers.contains(playerName);
+    }
+
+    /**
+     * Updates the process-local connection status for a player in this room.
+     * Confirming connected clears any pending absence deadline.
+     *
+     * @param playerName the name of the player
+     * @param connected true if connected, false if disconnected/absent
+     */
+    public synchronized void setPlayerConnected(String playerName, boolean connected) {
+        if (connected) {
+            connectedPlayers.add(playerName);
+            playerAbsenceDeadlines.remove(playerName);
+        } else {
+            connectedPlayers.remove(playerName);
+        }
     }
 }

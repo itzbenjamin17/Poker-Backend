@@ -137,4 +137,24 @@ class RateLimitServiceTest {
         assertThat(service.tryConsumeRest(restKey)).isTrue();
         assertThat(service.tryConsumeWs(wsUser)).isTrue();
     }
+    @Test
+    @DisplayName("should evict idle WebSocket buckets after idle threshold and retain active ones")
+    void givenActiveAndIdleWsBuckets_whenEvicted_thenOnlyIdleBucketsRemoved() {
+        String idleUser = "IdleUser:room-1";
+        String activeUser = "ActiveUser:room-1";
+
+        service.tryConsumeWs(idleUser);
+        service.tryConsumeWs(activeUser);
+
+        assertThat(service.wsBucketCount()).isEqualTo(2);
+
+        // Manually simulate time passing for idleUser by setting its last access to 65 seconds ago
+        service.setLastAccessForTesting(idleUser, System.currentTimeMillis() - 65_000);
+
+        service.evictIdleWsBuckets(60_000);
+
+        assertThat(service.wsBucketCount()).isEqualTo(1);
+        assertThat(service.hasWsBucket(activeUser)).isTrue();
+        assertThat(service.hasWsBucket(idleUser)).isFalse();
+    }
 }

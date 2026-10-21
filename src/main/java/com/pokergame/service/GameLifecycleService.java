@@ -1,6 +1,7 @@
 package com.pokergame.service;
 
 import com.pokergame.dto.response.ApiResponse;
+import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.ResponseMessage;
@@ -153,6 +154,53 @@ public class GameLifecycleService {
         }
     }
 
+    /**
+     * Reconciles host succession following participant departure.
+     * Selects:
+     * 1. Preserves current host if still present.
+     * 2. First remaining connected contender in room join order.
+     * 3. First remaining disconnected contender in room join order.
+     * 4. First remaining member in room join order as spectator/terminal fallback.
+     * 5. Null if no members remain.
+     */
+    private String determineSurvivingHost(Room room, Game game, Collection<String> departingMembers) {
+        if (room == null) return null;
+        String currentHost = roomService.getCurrentHost(room.getRoomId());
+        List<String> remaining = room.getPlayers().stream()
+                .filter(name -> departingMembers == null || !departingMembers.contains(name))
+                .toList();
+        if (remaining.isEmpty()) {
+            return null;
+        }
+        if (currentHost != null && remaining.contains(currentHost)) {
+            return currentHost;
+        }
+        if (game != null) {
+            // Priority 1: first remaining connected contender in room join order
+            for (String name : remaining) {
+                Player player = game.getPlayers().stream()
+                        .filter(p -> p.getName().equals(name))
+                        .findFirst()
+                        .orElse(null);
+                if (player != null && TournamentEligibility.isContender(game, player) && !player.getIsDisconnected()) {
+                    return name;
+                }
+            }
+            // Priority 2: first remaining disconnected contender in room join order
+            for (String name : remaining) {
+                Player player = game.getPlayers().stream()
+                        .filter(p -> p.getName().equals(name))
+                        .findFirst()
+                        .orElse(null);
+                if (player != null && TournamentEligibility.isContender(game, player)) {
+                    return name;
+                }
+            }
+        }
+        // Priority 3: first remaining member in room join order (spectator/terminal fallback)
+        return remaining.getFirst();
+    }
+
     private void departParticipantsUnderLock(String roomId, Collection<String> playerNames, Room room, Game game) {
         if (playerNames == null || playerNames.isEmpty()) return;
         List<String> departing = playerNames.stream()
@@ -173,9 +221,9 @@ public class GameLifecycleService {
             boolean hostLeaving = currentHost != null && roomMembers.contains(currentHost);
             if (hostLeaving) {
                 // Lobby host leaves destroys room
-                roomService.leaveRoom(roomId, currentHost, true);
+                roomService.leaveRoom(roomId, currentHost);
             } else {
-                roomService.leavePlayersBatch(roomId, roomMembers);
+                roomService.leavePlayersBatch(roomId, roomMembers, currentHost);
             }
             return;
         }
@@ -210,7 +258,8 @@ public class GameLifecycleService {
             }
             List<String> membersToDetach = getTournamentContenderCount(game) == 0
                     ? room.getPlayers() : roomMembersToLeave;
-            roomService.leavePlayersBatch(roomId, membersToDetach);
+            String survivingHost = determineSurvivingHost(room, game, membersToDetach);
+            roomService.leavePlayersBatch(roomId, membersToDetach, survivingHost);
             if (roomService.getRoom(roomId) != null) gameStateService.broadcastGameState(roomId, game);
             cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
             return;
@@ -229,7 +278,8 @@ public class GameLifecycleService {
             }
             List<String> roomMembersToLeave = departing.stream().filter(room.getPlayers()::contains).toList();
             if (!roomMembersToLeave.isEmpty()) {
-                roomService.leavePlayersBatch(roomId, roomMembersToLeave);
+                String survivingHost = determineSurvivingHost(room, game, roomMembersToLeave);
+                roomService.leavePlayersBatch(roomId, roomMembersToLeave, survivingHost);
             }
             return;
         }
@@ -238,7 +288,8 @@ public class GameLifecycleService {
         if (departingGamePlayers.isEmpty()) {
             List<String> roomMembersToLeave = departing.stream().filter(room.getPlayers()::contains).toList();
             if (!roomMembersToLeave.isEmpty()) {
-                roomService.leavePlayersBatch(roomId, roomMembersToLeave);
+                String survivingHost = determineSurvivingHost(room, game, roomMembersToLeave);
+                roomService.leavePlayersBatch(roomId, roomMembersToLeave, survivingHost);
             }
             return;
         }
@@ -270,7 +321,8 @@ public class GameLifecycleService {
                     cancelRuntimeTasks(roomId, false);
                     List<String> roomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
                     if (!roomMembers.isEmpty() && roomService.getRoom(roomId) != null) {
-                        roomService.leavePlayersBatch(roomId, roomMembers);
+                        String survivingHost = determineSurvivingHost(room, game, roomMembers);
+                        roomService.leavePlayersBatch(roomId, roomMembers, survivingHost);
                     }
                     if (roomService.getRoom(roomId) != null) gameStateService.broadcastGameState(roomId, game);
                     cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
@@ -281,7 +333,8 @@ public class GameLifecycleService {
                     }
                     List<String> roomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
                     if (!roomMembers.isEmpty() && roomService.getRoom(roomId) != null) {
-                        roomService.leavePlayersBatch(roomId, roomMembers);
+                        String survivingHost = determineSurvivingHost(room, game, roomMembers);
+                        roomService.leavePlayersBatch(roomId, roomMembers, survivingHost);
                     }
                 }
                 return;
@@ -294,7 +347,8 @@ public class GameLifecycleService {
             }
             List<String> roomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
             if (!roomMembers.isEmpty() && roomService.getRoom(roomId) != null) {
-                roomService.leavePlayersBatch(roomId, roomMembers);
+                String survivingHost = determineSurvivingHost(room, game, roomMembers);
+                roomService.leavePlayersBatch(roomId, roomMembers, survivingHost);
             }
             cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
             return;
@@ -306,7 +360,8 @@ public class GameLifecycleService {
         }
         List<String> roomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
         if (!roomMembers.isEmpty() && roomService.getRoom(roomId) != null) {
-            roomService.leavePlayersBatch(roomId, roomMembers);
+            String survivingHost = determineSurvivingHost(room, game, roomMembers);
+            roomService.leavePlayersBatch(roomId, roomMembers, survivingHost);
         }
 
         if (roomService.getRoom(roomId) == null) {
@@ -387,22 +442,27 @@ public class GameLifecycleService {
 
             // Create the actual poker game
             List<String> playerNames = new ArrayList<>(room.getPlayers());
-            List<Player> players = playerNames.stream()
-                    .map(name -> new Player(name, UUID.randomUUID().toString(), room.getBuyIn()))
-                    .collect(Collectors.toList());
+            List<Player> players = new ArrayList<>();
+            for (String name : playerNames) {
+                Player player = new Player(name, UUID.randomUUID().toString(), room.getBuyIn());
+                Long absenceDeadline = room.getAbsenceDeadline(name);
+                boolean connected = room.isPlayerConnected(name);
+                if (!connected && absenceDeadline != null) {
+                    player.setDisconnected(true);
+                    player.setDisconnectDeadlineEpochMs(absenceDeadline);
+                }
+                players.add(player);
+            }
 
             Game game = new Game(roomId, players, room.getSmallBlind(), room.getBigBlind(), handEvaluator);
             activeGames.put(roomId, game);
 
-            // Broadcast to all players in the room that the game has started
-            Map<String, Object> gameStartMessage = new ConcurrentHashMap<>();
-            gameStartMessage.put("gameId", roomId);
-            gameStartMessage.put("message", "Game started! Redirecting to game...");
+            // Mark room started and capture start event payload before scheduling broadcast
+            room.setGameStarted(true);
+            RoomDataResponse startPayload = roomService.getRoomData(roomId);
 
             DurableTransactionContext.afterCommit(() -> messagingTemplate.convertAndSend("/room/" + roomId,
-                    new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), gameStartMessage)));
-
-            room.setGameStarted(true);
+                    new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), startPayload)));
         }
 
         logger.info("Game created and started for room: {} with {} players", roomId, room.getPlayers().size());
@@ -957,11 +1017,15 @@ public class GameLifecycleService {
         if (registration != null) registration.cancel();
     }
 
-    private void cancelRuntimeTasks(String gameId, boolean keepCleanup) {
+    public void cancelRuntimeTasks(String gameId, boolean keepCleanup) {
         runtimeTasks.forEach((key, registration) -> {
             if (key.gameId().equals(gameId) && (!keepCleanup || key.task() != ScheduledGameTask.CLEANUP)
                     && runtimeTasks.remove(key, registration)) registration.cancel();
         });
+    }
+
+    public int getRuntimeTaskCount(String gameId) {
+        return (int) runtimeTasks.keySet().stream().filter(k -> k.gameId().equals(gameId)).count();
     }
 
     /**
@@ -1000,8 +1064,10 @@ public class GameLifecycleService {
             return false;
         }
 
-        return game.getPlayers().stream()
-                .anyMatch(player -> player.getName().equals(playerName) && !player.getIsOut());
+        synchronized (game) {
+            return game.getPlayers().stream()
+                    .anyMatch(player -> player.getName().equals(playerName) && !player.getIsOut());
+        }
     }
 
     /**
@@ -1061,13 +1127,31 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void markPlayerReconnected(String gameId, String playerName) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            logger.debug("Cannot mark player reconnected: game not found for gameId={}", gameId);
-            return;
+        Room room = roomService.getRoom(gameId);
+        if (room != null) {
+            synchronized (room) {
+                if (roomService.getRoom(gameId) != room) return;
+                Game game = getGame(gameId);
+                if (game != null) {
+                    synchronized (game) {
+                        reconcilePlayerReconnectedUnderLock(gameId, playerName, room, game);
+                    }
+                } else {
+                    reconcilePlayerReconnectedUnderLock(gameId, playerName, room, null);
+                }
+            }
+        } else {
+            Game game = getGame(gameId);
+            if (game != null) {
+                synchronized (game) {
+                    reconcilePlayerReconnectedUnderLock(gameId, playerName, null, game);
+                }
+            }
         }
+    }
 
-        synchronized (game) {
+    private void reconcilePlayerReconnectedUnderLock(String gameId, String playerName, Room room, Game game) {
+        if (game != null) {
             if (game.isGameOver()) {
                 logger.debug("Skipping reconnect for player {} because game {} is already over", playerName, gameId);
                 return;
@@ -1077,33 +1161,35 @@ public class GameLifecycleService {
                     .findFirst()
                     .orElse(null);
 
-            if (player == null) {
-                logger.debug("Cannot mark player reconnected: player {} not found in game {}", playerName, gameId);
-                return;
-            }
-            if (!player.getIsDisconnected()) {
-                logger.debug("Player {} already connected in game {}", playerName, gameId);
-                return;
-            }
+            if (player != null && player.getIsDisconnected()) {
+                player.setDisconnected(false);
+                player.setDisconnectDeadlineEpochMs(null);
+                logger.info("Player {} marked reconnected in game {}", playerName, gameId);
 
-            player.setDisconnected(false);
-            player.setDisconnectDeadlineEpochMs(null);
-            logger.info("Player {} marked reconnected in game {}", playerName, gameId);
+                if (game.isForfeitPending() && getTournamentContenderCount(game) == 1
+                        && isTournamentContender(game, player)) {
+                    game.setForfeitPending(false);
+                    handleGameEndWithForfeits(gameId, player, Set.of());
+                    if (room != null && room.hasPlayer(playerName)) {
+                        room.setPlayerConnected(playerName, true);
+                        room.setAbsenceDeadline(playerName, null);
+                    }
+                    return;
+                }
 
-            if (game.isForfeitPending() && getTournamentContenderCount(game) == 1
-                    && isTournamentContender(game, player)) {
-                game.setForfeitPending(false);
-                handleGameEndWithForfeits(gameId, player, Set.of());
-                return;
+                if (room != null) {
+                    gameStateService.broadcastGameState(gameId, game);
+                }
+                if (game.getReadyGateState() == com.pokergame.enums.ReadyGateState.WAITING_FOR_PLAYERS
+                        && game.getReadyEligibleCount() >= 2) {
+                    startReadyCountdown(gameId, configuredReadyCountdownMs);
+                }
             }
+        }
 
-            if (roomService.getRoom(gameId) != null) {
-                gameStateService.broadcastGameState(gameId, game);
-            }
-            if (game.getReadyGateState() == com.pokergame.enums.ReadyGateState.WAITING_FOR_PLAYERS
-                    && game.getReadyEligibleCount() >= 2) {
-                startReadyCountdown(gameId, configuredReadyCountdownMs);
-            }
+        if (room != null && room.hasPlayer(playerName)) {
+            room.setPlayerConnected(playerName, true);
+            room.setAbsenceDeadline(playerName, null);
         }
     }
 
@@ -1418,9 +1504,112 @@ public class GameLifecycleService {
      * @param gameId    room/game identity
      * @param playerName player whose reconnect grace expired
      */
+    /**
+     * Removes a grace-expired player from room and game under one room transaction
+     * when the expected membership identity and expected deadline match current domain state.
+     *
+     * @param gameId                room/game identity
+     * @param playerName            player whose reconnect grace expired
+     * @param expectedMembershipId  opaque process-local membership ID expected to expire
+     * @param expectedDeadlineEpochMs exact absolute deadline epoch ms expected
+     */
     @DurableMutation(roomId = "#gameId")
-    public void removeDisconnectedPlayer(String gameId, String playerName) {
-        departParticipants(gameId, List.of(playerName));
+    public void removeDisconnectedPlayer(String gameId, String playerName, String expectedMembershipId, long expectedDeadlineEpochMs) {
+        if (gameId == null || playerName == null || expectedMembershipId == null) {
+            return;
+        }
+        Room room = roomService.getRoom(gameId);
+        if (room == null) {
+            return;
+        }
+
+        synchronized (room) {
+            if (!room.hasPlayer(playerName)) {
+                return;
+            }
+            String currentMembershipId = room.getMembershipId(playerName);
+            if (!Objects.equals(expectedMembershipId, currentMembershipId)) {
+                return;
+            }
+
+            Game game = getGame(gameId);
+            if (game == null) {
+                // Lobby case: guard the lease and membership identity
+                if (room.isPlayerConnected(playerName)) {
+                    return;
+                }
+                Long absenceDeadline = room.getAbsenceDeadline(playerName);
+                if (absenceDeadline == null || absenceDeadline != expectedDeadlineEpochMs) {
+                    return;
+                }
+                if (System.currentTimeMillis() < expectedDeadlineEpochMs) {
+                    return;
+                }
+                departParticipantsUnderLock(gameId, List.of(playerName), room, null);
+                return;
+            }
+
+            synchronized (game) {
+                boolean isTerminal = (game.isGameOver() || (game.getLastSettlementResult() != null
+                        && game.getLastSettlementResult().settled() && game.isTournamentOver()))
+                        && !game.isForfeitPending();
+
+                if (isTerminal) {
+                    Player gamePlayer = game.getPlayers().stream()
+                            .filter(p -> p.getName().equals(playerName))
+                            .findFirst()
+                            .orElse(null);
+
+                    Long currentDeadline = (gamePlayer != null && gamePlayer.getDisconnectDeadlineEpochMs() != null)
+                            ? gamePlayer.getDisconnectDeadlineEpochMs()
+                            : room.getAbsenceDeadline(playerName);
+
+                    if (currentDeadline == null || currentDeadline != expectedDeadlineEpochMs) {
+                        return;
+                    }
+                    if (System.currentTimeMillis() < expectedDeadlineEpochMs) {
+                        return;
+                    }
+                    if (gamePlayer != null && !gamePlayer.getIsDisconnected()) {
+                        return;
+                    }
+                    if (gamePlayer == null && room.isPlayerConnected(playerName)) {
+                        return;
+                    }
+
+                    departParticipantsUnderLock(gameId, List.of(playerName), room, game);
+                    return;
+                }
+
+                // Active game
+                Player gamePlayer = game.getPlayers().stream()
+                        .filter(p -> p.getName().equals(playerName))
+                        .findFirst()
+                        .orElse(null);
+
+                if (gamePlayer == null) {
+                    if (room.isPlayerConnected(playerName)) return;
+                    Long absenceDeadline = room.getAbsenceDeadline(playerName);
+                    if (absenceDeadline == null || absenceDeadline != expectedDeadlineEpochMs) return;
+                    if (System.currentTimeMillis() < expectedDeadlineEpochMs) return;
+                    departParticipantsUnderLock(gameId, List.of(playerName), room, game);
+                    return;
+                }
+
+                if (!gamePlayer.getIsDisconnected()) {
+                    return;
+                }
+                Long currentDeadline = gamePlayer.getDisconnectDeadlineEpochMs();
+                if (currentDeadline == null || currentDeadline != expectedDeadlineEpochMs) {
+                    return;
+                }
+                if (System.currentTimeMillis() < expectedDeadlineEpochMs) {
+                    return;
+                }
+
+                departParticipantsUnderLock(gameId, List.of(playerName), room, game);
+            }
+        }
     }
 
     /**

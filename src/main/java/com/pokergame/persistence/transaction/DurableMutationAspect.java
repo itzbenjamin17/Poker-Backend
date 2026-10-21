@@ -5,6 +5,7 @@ import com.pokergame.model.Room;
 import com.pokergame.persistence.config.PersistenceException;
 import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.snapshot.AggregateStateImage;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.WalTransaction;
 import com.pokergame.service.GameLifecycleService;
@@ -28,7 +29,8 @@ import java.lang.reflect.Method;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.ReentrantLock;
+import com.pokergame.util.KeyedLockRegistry;
+import com.pokergame.util.LockLease;
 import org.springframework.scheduling.annotation.Scheduled;
 
 /**
@@ -47,7 +49,7 @@ public final class DurableMutationAspect {
     private final ObjectProvider<RoomService> roomService;
     private final ObjectProvider<GameLifecycleService> gameLifecycleService;
     private final PersistenceProperties properties;
-    private final ConcurrentHashMap<String, ReentrantLock> roomLocks = new ConcurrentHashMap<>();
+    private final KeyedLockRegistry<String> roomLocks = new KeyedLockRegistry<>();
     private final ConcurrentHashMap<String, AtomicInteger> recordsSinceCompaction = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, PendingSave> pendingSaves = new ConcurrentHashMap<>();
     private final Set<String> blockedSnapshotRooms = ConcurrentHashMap.newKeySet();
@@ -79,8 +81,16 @@ public final class DurableMutationAspect {
      * @param roomId the room identifier
      * @return the room lock
      */
-    public ReentrantLock getRoomLock(String roomId) {
-        return roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
+    public LockLease acquireRoomLock(String roomId) {
+        return roomLocks.acquire(roomId);
+    }
+
+    public LockLease tryAcquireRoomLock(String roomId) {
+        return roomLocks.tryAcquire(roomId);
+    }
+
+    public KeyedLockRegistry<String> getLockRegistry() {
+        return roomLocks;
     }
 
     /**
@@ -108,10 +118,7 @@ public final class DurableMutationAspect {
                 return joinPoint.proceed();
             }
 
-            ReentrantLock lock = getRoomLock(roomId);
-            lock.lock();
-            long lockStartNano = System.nanoTime();
-            try {
+            try (LockLease lease = roomLocks.acquire(roomId)) {
                 DurableTransactionContext.begin(roomId);
                 WalTransaction transaction = null;
                 if (store.isHealthy() && !store.requiresCheckpoint(roomId)) {
@@ -147,7 +154,6 @@ public final class DurableMutationAspect {
                 return result;
             } finally {
                 DurableTransactionContext.discard();
-                lock.unlock();
             }
         } finally {
             if (previousRoom == null) {
@@ -161,9 +167,9 @@ public final class DurableMutationAspect {
     @Scheduled(fixedDelay = 5000, initialDelay = 5000)
     public void retryPendingSaves() {
         for (String roomId : pendingSaves.keySet()) {
-            ReentrantLock lock = getRoomLock(roomId);
-            if (!lock.tryLock()) continue;
-            try {
+            LockLease lease = roomLocks.tryAcquire(roomId);
+            if (lease == null) continue;
+            try (lease) {
                 PendingSave pending = pendingSaves.get(roomId);
                 if (pending == null) continue;
                 if (pending.image() == null) {
@@ -174,8 +180,6 @@ public final class DurableMutationAspect {
                 saveState(roomId, pending, null);
             } catch (RuntimeException failure) {
                 recordStorageFailure(roomId, failure);
-            } finally {
-                lock.unlock();
             }
         }
     }
@@ -184,8 +188,18 @@ public final class DurableMutationAspect {
         Room room = roomService.getObject().getRoom(roomId);
         if (room == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
         Game game = gameLifecycleService.getObject().getGame(roomId);
-        return new PendingSave(snapshotMapper.serialize(room,
-                roomService.getObject().getCurrentHost(roomId), game), false);
+        AggregateStateImage stateImage;
+        synchronized (room) {
+            String currentHost = roomService.getObject().getCurrentHost(roomId);
+            if (game != null) {
+                synchronized (game) {
+                    stateImage = snapshotMapper.captureStateImage(room, currentHost, game);
+                }
+            } else {
+                stateImage = snapshotMapper.captureStateImage(room, currentHost, null);
+            }
+        }
+        return new PendingSave(snapshotMapper.serialize(stateImage), false);
     }
 
     private void saveState(String roomId, PendingSave pending, WalTransaction transaction) {
@@ -219,6 +233,7 @@ public final class DurableMutationAspect {
 
     private void cleanupAbortedCreation(String roomId) {
         try {
+            recordsSinceCompaction.remove(roomId);
             if (roomService.getObject().getRoom(roomId) == null && store.recoverLatest(roomId).isEmpty()) {
                 store.delete(roomId);
             }

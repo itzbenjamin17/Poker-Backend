@@ -1,5 +1,12 @@
 package com.pokergame.service;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
+import com.pokergame.config.WebSocketEventListener;
+
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.RoomDataResponse;
@@ -388,7 +395,7 @@ class RoomServiceTest {
         void givenHostLeavesLobby_whenLeaveRoom_thenRoomIsDestroyed() {
             String roomId = roomService.createRoom(validCreateRequest);
 
-            roomService.leaveRoom(roomId, "HostPlayer", true);
+            roomService.leaveRoom(roomId, "HostPlayer");
 
             assertThat(roomService.getRoom(roomId)).isNull();
             verify(messagingTemplate, times(2))
@@ -406,7 +413,7 @@ class RoomServiceTest {
             roomService.joinRoom(new JoinRoomRequest("Test Room", "Player3", null));
             reset(messagingTemplate);
 
-            roomService.leaveRoom(roomId, "HostPlayer", false);
+            roomService.leaveRoom(roomId, "HostPlayer", "Player2");
 
             Room room = roomService.getRoom(roomId);
             RoomDataResponse roomData = roomService.getRoomData(roomId);
@@ -433,6 +440,60 @@ class RoomServiceTest {
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessage("Room not found");
         }
+
+        @Test
+        @DisplayName("concurrent active-host and successor departures never select an absent host or throw on empty list")
+        void givenConcurrentHostAndSuccessorLeave_whenLeaveRoom_thenNeverSelectsAbsentHost() throws Exception {
+            for (int i = 0; i < 50; i++) {
+                String roomName = "Concurrent Room " + i;
+                CreateRoomRequest request = new CreateRoomRequest(roomName, "Host", 6, 10, 20, 1000, null);
+                String roomId = roomService.createRoom(request);
+                roomService.joinRoom(new JoinRoomRequest(roomName, "Successor", null));
+                roomService.joinRoom(new JoinRoomRequest(roomName, "Player3", null));
+
+                java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(2);
+                java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+
+                Thread t1 = new Thread(() -> {
+                    try {
+                        startLatch.await();
+                        roomService.leaveRoom(roomId, "Host", "Successor");
+                    } catch (Throwable t) {
+                        error.compareAndSet(null, t);
+                    } finally {
+                        doneLatch.countDown();
+                    }
+                });
+
+                Thread t2 = new Thread(() -> {
+                    try {
+                        startLatch.await();
+                        roomService.leaveRoom(roomId, "Successor", "Player3");
+                    } catch (Throwable t) {
+                        error.compareAndSet(null, t);
+                    } finally {
+                        doneLatch.countDown();
+                    }
+                });
+
+                t1.start();
+                t2.start();
+                startLatch.countDown();
+
+                boolean completed = doneLatch.await(3, java.util.concurrent.TimeUnit.SECONDS);
+                org.junit.jupiter.api.Assertions.assertTrue(completed, "Leave operations timed out at iteration " + i);
+                org.junit.jupiter.api.Assertions.assertNull(error.get(), "Unexpected error during concurrent leave: " + error.get());
+
+                Room room = roomService.getRoom(roomId);
+                if (room != null) {
+                    String currentHost = roomService.getCurrentHost(roomId);
+                    org.junit.jupiter.api.Assertions.assertNotNull(currentHost, "Current host must not be null if room exists");
+                    org.junit.jupiter.api.Assertions.assertTrue(room.getPlayers().contains(currentHost), "Current host must be a member of the room, was: " + currentHost);
+                    org.junit.jupiter.api.Assertions.assertEquals("Player3", currentHost);
+                }
+            }
+        }
     }
 
     /** Groups test scenarios for room queries. */
@@ -443,6 +504,45 @@ class RoomServiceTest {
         /**
          * Protects the contract that the system should expose room data including host flags and start eligibility.
          */
+        @Test
+        @DisplayName("getRoomData synchronizes on Room monitor for coherent projection")
+        void givenRoomDataRequest_whenGetRoomData_thenSynchronizesOnRoomMonitor() throws Exception {
+            String roomId = roomService.createRoom(validCreateRequest);
+            roomService.joinRoom(new JoinRoomRequest("Test Room", "Player2", null));
+            Room room = roomService.getRoom(roomId);
+
+            java.util.concurrent.CountDownLatch lockAcquired = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch releaseLock = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.atomic.AtomicBoolean getRoomDataStarted = new java.util.concurrent.atomic.AtomicBoolean(false);
+            java.util.concurrent.atomic.AtomicBoolean getRoomDataFinished = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+            Thread holder = new Thread(() -> {
+                synchronized (room) {
+                    lockAcquired.countDown();
+                    try {
+                        releaseLock.await();
+                    } catch (InterruptedException ignored) {}
+                }
+            });
+            holder.start();
+            lockAcquired.await();
+
+            Thread reader = new Thread(() -> {
+                getRoomDataStarted.set(true);
+                roomService.getRoomData(roomId);
+                getRoomDataFinished.set(true);
+            });
+            reader.start();
+
+            org.awaitility.Awaitility.await().atMost(2, java.util.concurrent.TimeUnit.SECONDS).untilTrue(getRoomDataStarted);
+            org.junit.jupiter.api.Assertions.assertFalse(getRoomDataFinished.get(), "getRoomData must block while Room monitor is held by another thread");
+
+            releaseLock.countDown();
+            reader.join(2000);
+            holder.join(2000);
+            org.junit.jupiter.api.Assertions.assertTrue(getRoomDataFinished.get());
+        }
+
         @Test
         @DisplayName("should expose room data including host flags and start eligibility")
         void givenRoomDataRequest_whenGetRoomData_thenReturnProjectedLobbyState() {
@@ -458,6 +558,20 @@ class RoomServiceTest {
             assertThat(roomData.players())
                     .extracting(player -> player.name() + ":" + player.isHost())
                     .containsExactly("HostPlayer:true", "Player2:false");
+        }
+
+        @Test
+        @DisplayName("should set canStartGame to false once the game has started even if player count >= 2")
+        void givenGameStarted_whenGetRoomData_thenCanStartGameIsFalse() {
+            String roomId = roomService.createRoom(validCreateRequest);
+            roomService.joinRoom(new JoinRoomRequest("Test Room", "Player2", null));
+            Room room = roomService.getRoom(roomId);
+            room.setGameStarted(true);
+
+            RoomDataResponse roomData = roomService.getRoomData(roomId);
+
+            assertThat(roomData.gameStarted()).isTrue();
+            assertThat(roomData.canStartGame()).isFalse();
         }
 
         /**
@@ -563,4 +677,38 @@ class RoomServiceTest {
             assertThat(successCount).hasValue(1);
         }
     }
+
+    @Test
+    @DisplayName("createRoom establishes first connection allowance with original acceptance deadline")
+    void createRoom_EstablishesFirstConnectionRegistrationWithAcceptanceDeadline() {
+        WebSocketEventListener listener = mock(WebSocketEventListener.class);
+        RoomService serviceWithListener = new RoomService(messagingTemplate, listener, 60_000L);
+
+        String roomId = serviceWithListener.createRoom(validCreateRequest);
+        Room createdRoom = serviceWithListener.getRoom(roomId);
+
+        assertNotNull(createdRoom.getAbsenceDeadline("HostPlayer"));
+        String membershipId = createdRoom.getMembershipId("HostPlayer");
+        assertNotNull(membershipId);
+
+        verify(listener).registerInitialConnection(eq(roomId), eq("HostPlayer"), eq(membershipId), eq(createdRoom.getAbsenceDeadline("HostPlayer")));
+    }
+
+    @Test
+    @DisplayName("joinRoom establishes first connection allowance with original acceptance deadline")
+    void joinRoom_EstablishesFirstConnectionRegistrationWithAcceptanceDeadline() {
+        WebSocketEventListener listener = mock(WebSocketEventListener.class);
+        RoomService serviceWithListener = new RoomService(messagingTemplate, listener, 60_000L);
+
+        String roomId = serviceWithListener.createRoom(validCreateRequest);
+        serviceWithListener.joinRoom(new JoinRoomRequest("Test Room", "Player2", null));
+
+        Room room = serviceWithListener.getRoom(roomId);
+        assertNotNull(room.getAbsenceDeadline("Player2"));
+        String p2MembershipId = room.getMembershipId("Player2");
+        assertNotNull(p2MembershipId);
+
+        verify(listener).registerInitialConnection(eq(roomId), eq("Player2"), eq(p2MembershipId), eq(room.getAbsenceDeadline("Player2")));
+    }
+
 }

@@ -1,6 +1,7 @@
 package com.pokergame.persistence;
 
 import com.pokergame.PokerApplication;
+import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
@@ -56,6 +57,10 @@ class PersistenceAvailabilityIntegrationTest {
             roomId = rooms.createRoom(new CreateRoomRequest("Available game", "Alice", 6, 5, 10, 1000, null));
             rooms.joinRoom(new JoinRoomRequest("Available game", "Bob", null));
             rooms.joinRoom(new JoinRoomRequest("Available game", "Carol", null));
+            WebSocketEventListener listener = context.getBean(WebSocketEventListener.class);
+            listener.registerSession(new com.pokergame.security.PlayerPrincipal("Alice", roomId), "session-alice");
+            listener.registerSession(new com.pokergame.security.PlayerPrincipal("Bob", roomId), "session-bob");
+            listener.registerSession(new com.pokergame.security.PlayerPrincipal("Carol", roomId), "session-carol");
             GameLifecycleService lifecycle = context.getBean(GameLifecycleService.class);
             lifecycle.createGameFromRoom(roomId);
             Game game = lifecycle.getGame(roomId);

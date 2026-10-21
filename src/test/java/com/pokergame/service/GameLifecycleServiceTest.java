@@ -4,6 +4,12 @@ import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
+import com.pokergame.dto.response.ApiResponse;
+import com.pokergame.dto.response.RoomDataResponse;
+import com.pokergame.dto.internal.PlayerJoinInfo;
+import com.pokergame.enums.ResponseMessage;
+import org.mockito.ArgumentCaptor;
+import java.time.LocalDateTime;
 import com.pokergame.exception.ConflictException;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
@@ -767,6 +773,79 @@ class GameLifecycleServiceTest {
         assertFalse(gameLifecycleService.playerExistsInGame("nonexistent-id", "Player"));
     }
 
+    @Test
+    @DisplayName("playerExistsInGame holds monitor throughout lookup and excludes OUT players")
+    void playerExistsInGame_HoldsMonitorThroughoutLookupAndExcludesOutPlayers() {
+        Game game = mock(Game.class);
+        when(game.getGameId()).thenReturn("mock-game");
+        Player activePlayer = new Player("Alice", "p1", 100);
+        Player outPlayer = new Player("Bob", "p2", 0);
+        outPlayer.setIsOut();
+
+        List<Player> playerList = new ArrayList<>(List.of(activePlayer, outPlayer)) {
+            @Override
+            public java.util.Spliterator<Player> spliterator() {
+                assertTrue(Thread.holdsLock(game), "Game monitor must be held during playerExistsInGame lookup");
+                return super.spliterator();
+            }
+
+            @Override
+            public java.util.Iterator<Player> iterator() {
+                assertTrue(Thread.holdsLock(game), "Game monitor must be held during playerExistsInGame lookup");
+                return super.iterator();
+            }
+        };
+
+        when(game.getPlayers()).thenReturn(playerList);
+        gameLifecycleService.restoreGame(game);
+
+        assertTrue(gameLifecycleService.playerExistsInGame("mock-game", "Alice"));
+        assertFalse(gameLifecycleService.playerExistsInGame("mock-game", "Bob"));
+        assertFalse(gameLifecycleService.playerExistsInGame("mock-game", "Charlie"));
+    }
+
+    @Test
+    @DisplayName("playerExistsInGame with concurrent player mutation completes without iteration exceptions")
+    void playerExistsInGame_ConcurrentWithPlayerMutation_CompletesWithoutExceptions() throws Exception {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+
+        java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
+        java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+
+        Thread lookupThread = new Thread(() -> {
+            while (running.get() && error.get() == null) {
+                try {
+                    gameLifecycleService.playerExistsInGame(ROOM_ID, "Host");
+                } catch (Throwable t) {
+                    error.set(t);
+                }
+            }
+        });
+
+        Thread mutationThread = new Thread(() -> {
+            int count = 0;
+            while (running.get() && error.get() == null && count < 2000) {
+                synchronized (game) {
+                    Player temp = new Player("Temp" + count, "id" + count, 100);
+                    game.getPlayers().add(temp);
+                    game.getPlayers().remove(temp);
+                }
+                count++;
+            }
+            running.set(false);
+        });
+
+        lookupThread.start();
+        mutationThread.start();
+        mutationThread.join(5000);
+        running.set(false);
+        lookupThread.join(5000);
+
+        assertNull(error.get(), "Concurrent player lookup threw an exception: " + error.get());
+    }
+
     /**
      * Protects the contract that mark player disconnected when player exists should set disconnected and broadcast.
      */
@@ -830,8 +909,8 @@ class GameLifecycleServiceTest {
         assertDoesNotThrow(() -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
 
         verify(gameStateService).sendGameEnd(argThat(event -> event != null && event.winner().equals("Host") && event.isForfeit()));
-        verify(roomService, times(1)).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2", "Player3")));
-        verify(roomService, never()).leaveRoom(anyString(), anyString(), anyBoolean());
+        verify(roomService, times(1)).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2", "Player3")), any());
+        verify(roomService, never()).leaveRoom(anyString(), anyString());
         verify(gameStateService).captureGameEnd(eq(ROOM_ID), argThat(game ->
                 game.getPlayers().stream().map(Player::getName).collect(java.util.stream.Collectors.toSet())
                         .equals(Set.of("Host", "Player2", "Player3"))
@@ -866,8 +945,8 @@ class GameLifecycleServiceTest {
 
         gameLifecycleService.departParticipants(ROOM_ID, List.of("Host"));
 
-        verify(roomService).leaveRoom(ROOM_ID, "Host", true);
-        verify(roomService, never()).leavePlayersBatch(anyString(), anyList());
+        verify(roomService).leaveRoom(ROOM_ID, "Host");
+        verify(roomService, never()).leavePlayersBatch(anyString(), anyList(), any());
     }
 
     @Test
@@ -878,7 +957,7 @@ class GameLifecycleServiceTest {
 
         gameLifecycleService.departParticipants(ROOM_ID, List.of("Host"));
 
-        verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host"));
+        verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host"), "Player2");
         Game game = gameLifecycleService.getGame(ROOM_ID);
         assertNotNull(game);
         assertFalse(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Host")));
@@ -896,7 +975,7 @@ class GameLifecycleServiceTest {
 
         gameLifecycleService.departParticipants(ROOM_ID, List.of("Player3", "Player4"));
 
-        verify(roomService, times(1)).leavePlayersBatch(ROOM_ID, List.of("Player3", "Player4"));
+        verify(roomService, times(1)).leavePlayersBatch(ROOM_ID, List.of("Player3", "Player4"), "Host");
         Game game = gameLifecycleService.getGame(ROOM_ID);
         assertNotNull(game);
         assertEquals(2, game.getPlayers().size());
@@ -914,7 +993,7 @@ class GameLifecycleServiceTest {
 
         gameLifecycleService.departParticipants(ROOM_ID, List.of("Player2"));
 
-        verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Player2"));
+        verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Player2"), "Host");
         // Game roster remains intact and frozen
         assertTrue(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Player2")));
     }
@@ -945,9 +1024,11 @@ class GameLifecycleServiceTest {
             leaving.forEach(testRoom::removePlayer);
             if (testRoom.getPlayers().isEmpty()) roomPresent.set(0);
             return null;
-        }).when(roomService).leavePlayersBatch(eq(ROOM_ID), anyList());
+        }).when(roomService).leavePlayersBatch(eq(ROOM_ID), anyList(), any());
 
-        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, survivor.getName());
+        long p2Deadline = System.currentTimeMillis() - 100;
+        survivor.setDisconnectDeadlineEpochMs(p2Deadline);
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, survivor.getName(), testRoom.getMembershipId(survivor.getName()), p2Deadline);
 
         assertEquals(0, roomPresent.get(), "The emptied Room is gone");
         assertTrue(testRoom.getPlayers().isEmpty());
@@ -974,7 +1055,7 @@ class GameLifecycleServiceTest {
             leaving.forEach(testRoom::removePlayer);
             if (testRoom.getPlayers().isEmpty()) roomPresent.set(0);
             return null;
-        }).when(roomService).leavePlayersBatch(eq(ROOM_ID), anyList());
+        }).when(roomService).leavePlayersBatch(eq(ROOM_ID), anyList(), any());
 
         gameLifecycleService.departParticipants(ROOM_ID, List.of("Host"));
         assertTrue(game.isForfeitPending());
@@ -987,7 +1068,9 @@ class GameLifecycleServiceTest {
         assertTrue(game.isForfeitPending(), "A spectator departure cannot resolve or progress the pending forfeit");
         assertTrue(gameLifecycleService.gameExists(ROOM_ID));
 
-        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2");
+        long p2ForfeitDeadline = System.currentTimeMillis() - 100;
+        game.getPlayers().stream().filter(p -> p.getName().equals("Player2")).findFirst().orElseThrow().setDisconnectDeadlineEpochMs(p2ForfeitDeadline);
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), p2ForfeitDeadline);
         assertEquals(0, roomPresent.get(), "No-contender abandonment closes the whole leftover Room");
         assertFalse(gameLifecycleService.gameExists(ROOM_ID));
         assertTrue(game.getScheduledTaskDeadlinesSnapshot().isEmpty());
@@ -1016,7 +1099,7 @@ class GameLifecycleServiceTest {
             @SuppressWarnings("unchecked") List<String> leaving = invocation.getArgument(1);
             leaving.forEach(testRoom::removePlayer);
             return null;
-        }).when(roomService).leavePlayersBatch(eq(ROOM_ID), anyList());
+        }).when(roomService).leavePlayersBatch(eq(ROOM_ID), anyList(), any());
         long handBefore = game.getHandNumber();
         int potBefore = game.getPot();
         int departingStackBefore = departing.getChips();
@@ -1073,8 +1156,8 @@ class GameLifecycleServiceTest {
         assertDoesNotThrow(() -> gameLifecycleService.departParticipants(ROOM_ID, List.of()));
         assertDoesNotThrow(() -> gameLifecycleService.departParticipants("missing-room", List.of("Player2")));
 
-        verify(roomService, never()).leavePlayersBatch(anyString(), anyList());
-        verify(roomService, never()).leaveRoom(anyString(), anyString(), anyBoolean());
+        verify(roomService, never()).leavePlayersBatch(anyString(), anyList(), any());
+        verify(roomService, never()).leaveRoom(anyString(), anyString());
     }
 
     /**
@@ -1197,7 +1280,9 @@ class GameLifecycleServiceTest {
             } else if (ending.equals("claim")) {
                 lifecycle.claimWin(gameId, bigBlind.getName());
             } else {
-                lifecycle.removeDisconnectedPlayer(gameId, smallBlind.getName());
+                long sbDeadline = System.currentTimeMillis() - 100;
+                smallBlind.setDisconnectDeadlineEpochMs(sbDeadline);
+                lifecycle.removeDisconnectedPlayer(gameId, smallBlind.getName(), room.getMembershipId(smallBlind.getName()), sbDeadline);
             }
 
             org.mockito.ArgumentCaptor<Object> captor = org.mockito.ArgumentCaptor.forClass(Object.class);
@@ -1835,5 +1920,570 @@ class GameLifecycleServiceTest {
             boolean finished = doneLatch.await(3, java.util.concurrent.TimeUnit.SECONDS);
             assertTrue(finished, "Deadlock detected between handleGameEnd and handlePlayerLeave at iteration " + i);
         }
+    }
+
+    @Test
+    @DisplayName("Race start with guest leave: legal results follow winning operation without departed guest in seat")
+    void raceStartWithGuestLeave_LegalResultsFollowWinningOperation() throws Exception {
+        java.util.Map<String, Room> activeRooms = new java.util.concurrent.ConcurrentHashMap<>();
+        org.mockito.Mockito.lenient().when(roomService.getRoom(anyString())).thenAnswer(inv -> activeRooms.get(inv.getArgument(0)));
+        org.mockito.Mockito.lenient().when(roomService.getCurrentHost(anyString())).thenAnswer(inv -> {
+            Room r = activeRooms.get(inv.getArgument(0));
+            return (r == null || r.getPlayers().isEmpty()) ? null : r.getPlayers().getFirst();
+        });
+        org.mockito.Mockito.lenient().doAnswer(inv -> {
+            String rid = inv.getArgument(0);
+            List<String> toLeave = inv.getArgument(1);
+            Room r = activeRooms.get(rid);
+            if (r != null && toLeave != null) {
+                toLeave.forEach(p -> { if (r.hasPlayer(p)) r.removePlayer(p); });
+            }
+            return null;
+        }).when(roomService).leavePlayersBatch(anyString(), any(), any());
+        org.mockito.Mockito.lenient().doAnswer(inv -> {
+            String rid = inv.getArgument(0);
+            String p = inv.getArgument(1);
+            Room r = activeRooms.get(rid);
+            if (r != null) {
+                activeRooms.remove(rid);
+            }
+            return null;
+        }).when(roomService).leaveRoom(anyString(), anyString());
+
+        for (int i = 0; i < 30; i++) {
+            String roomId = "race-guest-" + i;
+            Room room = new Room(roomId, "Race Room " + i, "Host", 6, 10, 20, 1000, null);
+            room.addPlayer("Host");
+            room.addPlayer("Guest");
+            activeRooms.put(roomId, room);
+
+            java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(2);
+            java.util.concurrent.atomic.AtomicReference<Throwable> startError = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicReference<Throwable> leaveError = new java.util.concurrent.atomic.AtomicReference<>();
+
+            Thread startThread = new Thread(() -> {
+                try {
+                    startLatch.await();
+                    gameLifecycleService.createGameFromRoom(roomId);
+                } catch (Throwable t) {
+                    startError.set(t);
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+
+            Thread leaveThread = new Thread(() -> {
+                try {
+                    startLatch.await();
+                    gameLifecycleService.departParticipants(roomId, List.of("Guest"));
+                } catch (Throwable t) {
+                    leaveError.set(t);
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+
+            startThread.start();
+            leaveThread.start();
+            startLatch.countDown();
+
+            boolean done = doneLatch.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(done, "Race timed out at iteration " + i);
+
+            Game game = gameLifecycleService.getGame(roomId);
+            if (game != null) {
+                // Start won: guest departed afterwards, so guest must NOT remain in an active seat
+                assertFalse(gameLifecycleService.playerExistsInGame(roomId, "Guest"),
+                        "Departed guest must not remain in an active seat");
+                assertFalse(room.hasPlayer("Guest"), "Departed guest must not remain in room");
+            } else {
+                // Leave won: start must have failed due to < 2 players
+                assertNotNull(startError.get(), "Start must fail when guest leave won");
+                assertInstanceOf(UnauthorisedActionException.class, startError.get());
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Race start with host leave: legal results follow winning operation")
+    void raceStartWithHostLeave_LegalResultsFollowWinningOperation() throws Exception {
+        java.util.Map<String, Room> activeRooms = new java.util.concurrent.ConcurrentHashMap<>();
+        org.mockito.Mockito.lenient().when(roomService.getRoom(anyString())).thenAnswer(inv -> activeRooms.get(inv.getArgument(0)));
+        org.mockito.Mockito.lenient().when(roomService.getCurrentHost(anyString())).thenAnswer(inv -> {
+            Room r = activeRooms.get(inv.getArgument(0));
+            return (r == null || r.getPlayers().isEmpty()) ? null : r.getPlayers().getFirst();
+        });
+        org.mockito.Mockito.lenient().doAnswer(inv -> {
+            String rid = inv.getArgument(0);
+            List<String> toLeave = inv.getArgument(1);
+            Room r = activeRooms.get(rid);
+            if (r != null && toLeave != null) {
+                toLeave.forEach(p -> { if (r.hasPlayer(p)) r.removePlayer(p); });
+            }
+            return null;
+        }).when(roomService).leavePlayersBatch(anyString(), any(), any());
+        org.mockito.Mockito.lenient().doAnswer(inv -> {
+            String rid = inv.getArgument(0);
+            String p = inv.getArgument(1);
+            Room r = activeRooms.get(rid);
+            if (r != null) {
+                activeRooms.remove(rid);
+            }
+            return null;
+        }).when(roomService).leaveRoom(anyString(), anyString());
+
+        for (int i = 0; i < 30; i++) {
+            String roomId = "race-host-" + i;
+            Room room = new Room(roomId, "Race Room " + i, "Host", 6, 10, 20, 1000, null);
+            room.addPlayer("Host");
+            room.addPlayer("Guest");
+            activeRooms.put(roomId, room);
+
+            java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(2);
+            java.util.concurrent.atomic.AtomicReference<Throwable> startError = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicReference<Throwable> leaveError = new java.util.concurrent.atomic.AtomicReference<>();
+
+            Thread startThread = new Thread(() -> {
+                try {
+                    startLatch.await();
+                    gameLifecycleService.createGameFromRoom(roomId);
+                } catch (Throwable t) {
+                    startError.set(t);
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+
+            Thread leaveThread = new Thread(() -> {
+                try {
+                    startLatch.await();
+                    gameLifecycleService.departParticipants(roomId, List.of("Host"));
+                } catch (Throwable t) {
+                    leaveError.set(t);
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+
+            startThread.start();
+            leaveThread.start();
+            startLatch.countDown();
+
+            boolean done = doneLatch.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(done, "Race timed out at iteration " + i);
+
+            Game game = gameLifecycleService.getGame(roomId);
+            if (game != null) {
+                // Start won: host left active game, room and game preserved
+                assertNotNull(game);
+            } else {
+                // Host left lobby first: room was destroyed, start was prevented
+                assertNotNull(startError.get(), "Start must fail when host lobby leave won");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("departParticipants concurrent active-host and successor departures never select absent host")
+    void departParticipants_ConcurrentHostAndSuccessorLeave_NeverSelectsAbsentHost() throws Exception {
+        java.util.Map<String, Room> activeRooms = new java.util.concurrent.ConcurrentHashMap<>();
+        org.mockito.Mockito.lenient().when(roomService.getRoom(anyString())).thenAnswer(inv -> activeRooms.get(inv.getArgument(0)));
+        org.mockito.Mockito.lenient().when(roomService.getCurrentHost(anyString())).thenAnswer(inv -> {
+            Room r = activeRooms.get(inv.getArgument(0));
+            return (r == null || r.getPlayers().isEmpty()) ? null : r.getPlayers().getFirst();
+        });
+        org.mockito.Mockito.lenient().doAnswer(inv -> {
+            String rid = inv.getArgument(0);
+            List<String> toLeave = inv.getArgument(1);
+            Room r = activeRooms.get(rid);
+            if (r != null && toLeave != null) {
+                toLeave.forEach(p -> { if (r.hasPlayer(p)) r.removePlayer(p); });
+            }
+            return null;
+        }).when(roomService).leavePlayersBatch(anyString(), any(), any());
+        org.mockito.Mockito.lenient().doAnswer(inv -> {
+            String rid = inv.getArgument(0);
+            String p = inv.getArgument(1);
+            Room r = activeRooms.get(rid);
+            if (r != null) {
+                activeRooms.remove(rid);
+            }
+            return null;
+        }).when(roomService).leaveRoom(anyString(), anyString());
+
+        for (int i = 0; i < 30; i++) {
+            String roomId = "depart-race-" + i;
+            Room room = new Room(roomId, "Depart Room " + i, "Host", 6, 10, 20, 1000, null);
+            room.addPlayer("Host");
+            room.addPlayer("Successor");
+            room.addPlayer("Player3");
+            room.setGameStarted(true);
+            activeRooms.put(roomId, room);
+
+            Game game = new Game(roomId, List.of(
+                    new Player("Host", "p1", 1000),
+                    new Player("Successor", "p2", 1000),
+                    new Player("Player3", "p3", 1000)
+            ), 10, 20, handEvaluator);
+            game.dealHoleCards();
+            game.postBlinds();
+
+            gameLifecycleService.restoreGame(game);
+
+            java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(2);
+            java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+
+            Thread t1 = new Thread(() -> {
+                try {
+                    startLatch.await();
+                    gameLifecycleService.departParticipants(roomId, List.of("Host"));
+                } catch (Throwable t) {
+                    error.compareAndSet(null, t);
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+
+            Thread t2 = new Thread(() -> {
+                try {
+                    startLatch.await();
+                    gameLifecycleService.departParticipants(roomId, List.of("Successor"));
+                } catch (Throwable t) {
+                    error.compareAndSet(null, t);
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+
+            t1.start();
+            t2.start();
+            startLatch.countDown();
+
+            boolean done = doneLatch.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(done, "Depart timed out at iteration " + i);
+            assertNull(error.get(), "Unexpected error during concurrent departures: " + error.get());
+        }
+    }
+
+    @Test
+    @DisplayName("Guarded removeDisconnectedPlayer departs disconnected player when all guards match")
+    void removeDisconnectedPlayer_ActiveGame_AllGuardsMatch_DepartsParticipant() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        long deadline = System.currentTimeMillis() - 100;
+
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
+        String p2MembershipId = testRoom.getMembershipId("Player2");
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", p2MembershipId, deadline);
+
+        verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
+    }
+
+    @Test
+    @DisplayName("Guarded removeDisconnectedPlayer is no-op if player is connected")
+    void removeDisconnectedPlayer_ActiveGame_ConnectedPlayer_IsNoOp() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        long deadline = System.currentTimeMillis() - 100;
+        String p2MembershipId = testRoom.getMembershipId("Player2");
+
+        // Player2 is connected (not marked disconnected)
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", p2MembershipId, deadline);
+
+        assertTrue(testRoom.hasPlayer("Player2"), "Connected Player2 must not be removed");
+        assertTrue(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Player2") && !p.getIsOut()));
+    }
+
+    @Test
+    @DisplayName("Guarded removeDisconnectedPlayer is no-op if deadline is mismatched or in future")
+    void removeDisconnectedPlayer_ActiveGame_MismatchedOrFutureDeadline_IsNoOp() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        long deadline = System.currentTimeMillis() + 60_000;
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
+        String p2MembershipId = testRoom.getMembershipId("Player2");
+
+        // Calling with different deadline:
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", p2MembershipId, deadline - 5000);
+        assertTrue(testRoom.hasPlayer("Player2"), "Mismatched deadline must be a no-op");
+
+        // Calling with matching deadline but now < deadline:
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", p2MembershipId, deadline);
+        assertTrue(testRoom.hasPlayer("Player2"), "Future deadline (not yet reached) must be a no-op");
+    }
+
+    @Test
+    @DisplayName("Guarded removeDisconnectedPlayer is no-op if membership ID is obsolete")
+    void removeDisconnectedPlayer_ObsoleteMembershipId_IsNoOp() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        long deadline = System.currentTimeMillis() - 100;
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
+
+        // Calling with an obsolete membership ID:
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "obsolete-id-12345", deadline);
+
+        assertTrue(testRoom.hasPlayer("Player2"), "Obsolete membership ID must be a no-op");
+    }
+
+    @Test
+    @DisplayName("Guarded removeDisconnectedPlayer closes room if lobby host expires")
+    void removeDisconnectedPlayer_LobbyHostExpired_DestroysRoom() {
+        Room lobby = new Room("lobby-1", "Lobby", "Host", 4, 10, 20, 1000, null);
+        lobby.addPlayer("Host");
+        when(roomService.getRoom("lobby-1")).thenReturn(lobby);
+        when(roomService.getCurrentHost("lobby-1")).thenReturn("Host");
+        long deadline = System.currentTimeMillis() - 100;
+        lobby.setAbsenceDeadline("Host", deadline);
+        String hostMembershipId = lobby.getMembershipId("Host");
+
+        gameLifecycleService.removeDisconnectedPlayer("lobby-1", "Host", hostMembershipId, deadline);
+
+        verify(roomService).leaveRoom("lobby-1", "Host");
+    }
+
+    @Test
+    @DisplayName("Guarded removeDisconnectedPlayer releases seat if lobby guest expires")
+    void removeDisconnectedPlayer_LobbyGuestExpired_ReleasesSeat() {
+        Room lobby = new Room("lobby-2", "Lobby", "Host", 4, 10, 20, 1000, null);
+        lobby.addPlayer("Host");
+        lobby.addPlayer("Guest");
+        when(roomService.getRoom("lobby-2")).thenReturn(lobby);
+        when(roomService.getCurrentHost("lobby-2")).thenReturn("Host");
+        long deadline = System.currentTimeMillis() - 100;
+        lobby.setAbsenceDeadline("Guest", deadline);
+        String guestMembershipId = lobby.getMembershipId("Guest");
+
+        gameLifecycleService.removeDisconnectedPlayer("lobby-2", "Guest", guestMembershipId, deadline);
+
+        verify(roomService).leavePlayersBatch("lobby-2", List.of("Guest"), "Host");
+    }
+
+    @Test
+    @DisplayName("Guarded removeDisconnectedPlayer expires busted room member even if playerExistsInGame is false")
+    void removeDisconnectedPlayer_BustedRoomMember_ExpiresAndLeavesRoom() {
+        testRoom.addPlayer("Player3");
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        Player p3 = game.getPlayers().stream().filter(p -> p.getName().equals("Player3")).findFirst().orElseThrow();
+        p3.setChips(0);
+        p3.setIsOut(); // OUT player! playerExistsInGame(ROOM_ID, "Player3") will return false!
+        assertFalse(gameLifecycleService.playerExistsInGame(ROOM_ID, "Player3"));
+
+        long deadline = System.currentTimeMillis() - 100;
+        p3.setDisconnected(true);
+        p3.setDisconnectDeadlineEpochMs(deadline);
+        String p3MembershipId = testRoom.getMembershipId("Player3");
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player3", p3MembershipId, deadline);
+
+        verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player3")), any());
+    }
+
+    @Test
+    @DisplayName("createGameFromRoom reconciles absent seat lease into disconnected flag and retains connected state for connected seat")
+    void createGameFromRoom_ReconcilesAbsentSeatLeaseAndRetainsConnectedSeat() {
+        testRoom.setPlayerConnected("Host", true);
+        testRoom.setPlayerConnected("Player2", false);
+        long p2Deadline = System.currentTimeMillis() + 45_000;
+        testRoom.setAbsenceDeadline("Player2", p2Deadline);
+
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        Player host = game.getPlayers().stream().filter(p -> p.getName().equals("Host")).findFirst().orElseThrow();
+        Player player2 = game.getPlayers().stream().filter(p -> p.getName().equals("Player2")).findFirst().orElseThrow();
+
+        assertFalse(host.getIsDisconnected(), "Connected host must retain normal connected state");
+        assertNull(host.getDisconnectDeadlineEpochMs());
+
+        assertTrue(player2.getIsDisconnected(), "Absent player2 must have isDisconnected = true");
+        assertEquals(p2Deadline, player2.getDisconnectDeadlineEpochMs(), "Absent player2 must receive absence deadline");
+    }
+
+
+    @Test
+    @DisplayName("createGameFromRoom emits canonical GAME_STARTED with RoomDataResponse captured after gameStarted set")
+    void createGameFromRoom_EmitsCanonicalGameStartedWithRoomDataResponse() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        RoomDataResponse mockRoomData = new RoomDataResponse(
+                ROOM_ID, "Test Room", 6, 1000, 10, 20, LocalDateTime.now(), "Host",
+                List.of(new PlayerJoinInfo("Host", true, "now"), new PlayerJoinInfo("Player2", false, "now")),
+                2, false, true
+        );
+        when(roomService.getRoomData(ROOM_ID)).thenAnswer(inv -> {
+            assertTrue(testRoom.isGameStarted(), "room.setGameStarted(true) must be called BEFORE capturing start event");
+            return mockRoomData;
+        });
+
+        ArgumentCaptor<ApiResponse> captor = ArgumentCaptor.forClass(ApiResponse.class);
+
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        verify(messagingTemplate).convertAndSend(eq("/room/" + ROOM_ID), captor.capture());
+        ApiResponse<?> startResponse = captor.getAllValues().stream()
+                .filter(res -> ResponseMessage.GAME_STARTED.getMessage().equals(res.message()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Expected GAME_STARTED event"));
+
+        assertEquals(mockRoomData, startResponse.data());
+        assertTrue(testRoom.isGameStarted());
+    }
+
+    @Test
+    @DisplayName("departParticipants chooses later connected contender over earlier-joined busted member")
+    void departParticipants_HostLeaves_ChoosesConnectedContenderOverEarlierBustedMember() {
+        testRoom.addPlayer("Player3"); // Room join order: Host, Player2, Player3
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+
+        // Player2 is busted (out)
+        Player p2 = game.getPlayers().stream().filter(p -> p.getName().equals("Player2")).findFirst().orElseThrow();
+        p2.setChips(0);
+        p2.setIsOut();
+
+        // Player3 is connected contender
+        Player p3 = game.getPlayers().stream().filter(p -> p.getName().equals("Player3")).findFirst().orElseThrow();
+        p3.setChips(1000);
+        p3.setDisconnected(false);
+
+        reset(roomService);
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+
+        gameLifecycleService.departParticipants(ROOM_ID, List.of("Host"));
+
+        verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host"), "Player3");
+    }
+
+    @Test
+    @DisplayName("departParticipants chooses unsettled zero-stack all-in candidate as contender")
+    void departParticipants_HostLeaves_ChoosesUnsettledAllInCandidateAsContender() {
+        testRoom.addPlayer("Player3"); // Room join order: Host, Player2, Player3
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+
+        // Player2 is all-in with 0 chips during unsettled hand (PRE_FLOP / FLOP)
+        Player p2 = game.getPlayers().stream().filter(p -> p.getName().equals("Player2")).findFirst().orElseThrow();
+        p2.setChips(0);
+        assertFalse(p2.getIsOut());
+        p2.setDisconnected(false);
+
+        reset(roomService);
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+
+        gameLifecycleService.departParticipants(ROOM_ID, List.of("Host"));
+
+        // Player2 is contender (unsettled) and joined earlier than Player3
+        verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host"), "Player2");
+    }
+
+    @Test
+    @DisplayName("departParticipants chooses disconnected contender when no connected contender remains")
+    void departParticipants_HostLeaves_ChoosesDisconnectedContenderOverSpectator() {
+        testRoom.addPlayer("Player3"); // Player3 in room but not in game (spectator)
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        // Remove Player3 from game so Player3 is just a room spectator
+        Player p3Game = game.getPlayers().stream().filter(p -> p.getName().equals("Player3")).findFirst().orElse(null);
+        if (p3Game != null) game.removePlayerFromGame(p3Game);
+
+        // Player2 is disconnected contender
+        Player p2 = game.getPlayers().stream().filter(p -> p.getName().equals("Player2")).findFirst().orElseThrow();
+        p2.setChips(1000);
+        p2.setDisconnected(true);
+
+        reset(roomService);
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+
+        gameLifecycleService.departParticipants(ROOM_ID, List.of("Host"));
+
+        // Player2 chosen because Player2 is disconnected contender, Player3 is spectator
+        verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host"), "Player2");
+    }
+
+    @Test
+    @DisplayName("departParticipants chooses spectator fallback in room join order when no contenders remain")
+    void departParticipants_HostLeaves_ChoosesSpectatorFallbackInRoomJoinOrder() {
+        testRoom.addPlayer("Spectator1");
+        testRoom.addPlayer("Spectator2");
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+
+        // All non-host game players are busted
+        Player p2 = game.getPlayers().stream().filter(p -> p.getName().equals("Player2")).findFirst().orElseThrow();
+        p2.setChips(0);
+        p2.setIsOut();
+
+        // Spectator1 and Spectator2 are not in game
+        Player s1Game = game.getPlayers().stream().filter(p -> p.getName().equals("Spectator1")).findFirst().orElse(null);
+        if (s1Game != null) game.removePlayerFromGame(s1Game);
+        Player s2Game = game.getPlayers().stream().filter(p -> p.getName().equals("Spectator2")).findFirst().orElse(null);
+        if (s2Game != null) game.removePlayerFromGame(s2Game);
+
+        reset(roomService);
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+
+        gameLifecycleService.departParticipants(ROOM_ID, List.of("Host"));
+
+        // Fallback in room join order: Player2 (busted) was first, Spectator1 was next...
+        verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host"), "Player2");
+    }
+
+    @Test
+    @DisplayName("departParticipants handles batch departure of multiple potential successors")
+    void departParticipants_HostLeavesInBatchWithSuccessors_ChoosesFirstRemainingContender() {
+        testRoom.addPlayer("Player3");
+        testRoom.addPlayer("Player4");
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        reset(roomService);
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+
+        // Host, Player2, and Player3 leave together in one batch
+        gameLifecycleService.departParticipants(ROOM_ID, List.of("Host", "Player2", "Player3"));
+
+        verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host", "Player2", "Player3"), "Player4");
+    }
+
+    @Test
+    @DisplayName("departParticipants passes null host when room becomes empty")
+    void departParticipants_EmptyTerminalRoom_PassesNullHost() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        game.markGameOver();
+
+        reset(roomService);
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
+
+        // Both Host and Player2 leave
+        gameLifecycleService.departParticipants(ROOM_ID, List.of("Host", "Player2"));
+
+        verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host", "Player2"), null);
     }
 }

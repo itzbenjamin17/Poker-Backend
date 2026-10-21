@@ -21,8 +21,8 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import com.pokergame.model.Room;
+import com.pokergame.util.LockLease;
 import java.util.List;
-import java.util.concurrent.locks.ReentrantLock;
 
 
 /**
@@ -156,11 +156,7 @@ public class RoomController {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
 
-        ReentrantLock lock = durableMutationAspect != null ? durableMutationAspect.getRoomLock(roomId) : null;
-        if (lock != null) {
-            lock.lock();
-        }
-        try {
+        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(roomId) : LockLease.none()) {
             logger.debug("Fetching room info for room: {}", roomId);
             Room room = roomService.getRoom(roomId);
             if (room == null) {
@@ -174,10 +170,6 @@ public class RoomController {
                 RoomDataResponse roomData = roomService.getRoomData(roomId);
                 logger.debug("Room info retrieved successfully for room: {}", roomId);
                 return ResponseEntity.ok(roomData);
-            }
-        } finally {
-            if (lock != null) {
-                lock.unlock();
             }
         }
     }

@@ -6,6 +6,8 @@ import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.enums.ResponseMessage;
+import com.pokergame.config.WebSocketEventListener;
+import org.springframework.beans.factory.annotation.Value;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
@@ -35,6 +37,8 @@ public class RoomService {
     private static final Logger logger = LoggerFactory.getLogger(RoomService.class);
 
     private final SimpMessagingTemplate messagingTemplate;
+    private final WebSocketEventListener webSocketEventListener;
+    private final long disconnectGracePeriodMs;
     private RoomService self;
 
     /**
@@ -43,7 +47,23 @@ public class RoomService {
      * @param messagingTemplate WebSocket messaging collaborator
      */
     public RoomService(SimpMessagingTemplate messagingTemplate) {
+        this(messagingTemplate, null, 120_000L);
+    }
+
+    /**
+     * Creates the room registry with WebSocket event listener for initial connection leases.
+     *
+     * @param messagingTemplate       WebSocket messaging collaborator
+     * @param webSocketEventListener process-local connection listener
+     * @param disconnectGracePeriodMs reconnect grace interval in ms
+     */
+    @Autowired
+    public RoomService(SimpMessagingTemplate messagingTemplate,
+            @Lazy WebSocketEventListener webSocketEventListener,
+            @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
         this.messagingTemplate = messagingTemplate;
+        this.webSocketEventListener = webSocketEventListener;
+        this.disconnectGracePeriodMs = disconnectGracePeriodMs;
     }
 
     /**
@@ -108,10 +128,23 @@ public class RoomService {
 
             // Add the host as the first player
             room.addPlayer(sanitizedPlayerName);
+            long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
+            room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
+            String membershipId = room.getMembershipId(sanitizedPlayerName);
 
             rooms.put(roomId, room);
             roomHosts.put(roomId, sanitizedPlayerName);
         }
+
+        DurableTransactionContext.afterCommit(() -> {
+            if (webSocketEventListener != null) {
+                Room createdRoom = rooms.get(roomId);
+                String membershipId = createdRoom != null ? createdRoom.getMembershipId(sanitizedPlayerName) : null;
+                Long absenceDeadline = createdRoom != null ? createdRoom.getAbsenceDeadline(sanitizedPlayerName) : null;
+                long deadline = absenceDeadline != null ? absenceDeadline : (System.currentTimeMillis() + disconnectGracePeriodMs);
+                webSocketEventListener.registerInitialConnection(roomId, sanitizedPlayerName, membershipId, deadline);
+            }
+        });
 
         sendAfterCommit("/room/" + roomId,
                 new ApiResponse<>(ResponseMessage.ROOM_CREATED.getMessage(), getRoomData(roomId)));
@@ -195,7 +228,20 @@ public class RoomService {
             }
 
             room.addPlayer(sanitizedPlayerName);
+            long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
+            room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
+            String membershipId = room.getMembershipId(sanitizedPlayerName);
         }
+
+        DurableTransactionContext.afterCommit(() -> {
+            if (webSocketEventListener != null) {
+                Room joinedRoom = rooms.get(roomId);
+                String mId = joinedRoom != null ? joinedRoom.getMembershipId(sanitizedPlayerName) : null;
+                Long absenceDeadline = joinedRoom != null ? joinedRoom.getAbsenceDeadline(sanitizedPlayerName) : null;
+                long deadline = absenceDeadline != null ? absenceDeadline : (System.currentTimeMillis() + disconnectGracePeriodMs);
+                webSocketEventListener.registerInitialConnection(roomId, sanitizedPlayerName, mId, deadline);
+            }
+        });
 
         logger.info("Player {} joined room: {}", sanitizedPlayerName, room.getRoomName());
 
@@ -206,8 +252,8 @@ public class RoomService {
     }
 
     /**
-     * Removes a player from a room. If the host leaves, the entire room is
-     * destroyed.
+     * Removes a player from a room during the lobby phase.
+     * If the host leaves, the entire room is destroyed.
      * If all players leave, the room is also destroyed.
      *
      * @param roomId     the unique identifier of the room
@@ -216,35 +262,29 @@ public class RoomService {
      */
     @DurableMutation(roomId = "#roomId")
     public void leaveRoom(String roomId, String playerName) {
-        leaveRoom(roomId, playerName, true);
-    }
-
-    /**
-     * Removes a player from a room with contextual host-leave behaviour.
-     *
-     * <p>
-     * When the host leaves and {@code closeRoomWhenHostLeaves} is true,
-     * the room is closed (lobby behaviour). When false, the host is transferred
-     * to the next remaining player and the room stays open (active game behaviour).
-     * </p>
-     *
-     * @param roomId                  the unique identifier of the room
-     * @param playerName              the name of the player leaving
-     * @param closeRoomWhenHostLeaves true to close room on host leave, false to
-     *                                transfer host
-     * @throws ResourceNotFoundException if room not found
-     */
-    @DurableMutation(roomId = "#roomId")
-    public void leaveRoom(String roomId, String playerName, boolean closeRoomWhenHostLeaves) {
         Room room = rooms.get(roomId);
         if (room == null) {
             logger.warn("Leave attempt failed: room not found for id {} (player: {})", roomId, playerName);
             throw new ResourceNotFoundException("Room not found");
         }
 
-        // Check if the leaving player is the host
-        if (isRoomHost(roomId, playerName)) {
-            if (closeRoomWhenHostLeaves) {
+        synchronized (room) {
+            if (rooms.get(roomId) != room) {
+                logger.warn("Leave attempt failed: room not found for id {} (player: {})", roomId, playerName);
+                throw new ResourceNotFoundException("Room not found");
+            }
+
+            if (!room.hasPlayer(playerName)) {
+                logger.warn("Leave attempt failed: player {} not in room {}", playerName, roomId);
+                throw new BadRequestException(
+                        String.format("Cannot remove %s from room as they are not already in the room", playerName));
+            }
+
+            String currentHost = roomHosts.getOrDefault(roomId, room.getHostName());
+            boolean isHost = playerName.equals(currentHost);
+            String membershipId = room.getMembershipId(playerName);
+
+            if (isHost) {
                 // Host is leaving the lobby phase - destroy the room.
                 logger.info("Host {} leaving room {} during lobby phase, destroying room", playerName,
                         room.getRoomName());
@@ -252,74 +292,76 @@ public class RoomService {
                         new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
                 destroyRoom(roomId);
             } else {
-                // Host is leaving during an active game - transfer host and keep room alive.
+                // Regular player leaving lobby
                 room.removePlayer(playerName);
+                if (webSocketEventListener != null) {
+                    DurableTransactionContext.afterCommit(() ->
+                            webSocketEventListener.publishMembershipRetired(roomId, playerName, membershipId));
+                }
+                logger.info("Player {} left room: {}", playerName, room.getRoomName());
 
                 if (room.getPlayers().isEmpty()) {
                     if (room.isTerminal()) {
                         roomHosts.remove(roomId);
-                        logger.info("Host {} left terminal room {} and no players remain; preserving container until cleanup",
-                                playerName, room.getRoomName());
+                        logger.info("No players remaining in terminal room {}, preserving container until cleanup", room.getRoomName());
                         sendAfterCommit("/room/" + roomId,
                                 new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
                     } else {
-                        logger.info("Host {} left room {} and no players remain, destroying room", playerName,
-                                room.getRoomName());
+                        logger.info("No players remaining in room {}, destroying room", room.getRoomName());
                         sendAfterCommit("/room/" + roomId,
                                 new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
                         destroyRoom(roomId);
                     }
                 } else {
-                    String newHost = room.getPlayers().getFirst();
-                    roomHosts.put(roomId, newHost);
-
-                    logger.info("Host {} left room {} during active game. New host is {}",
-                            playerName,
-                            room.getRoomName(),
-                            newHost);
                     sendAfterCommit("/room/" + roomId,
                             new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
-                }
-            }
-        } else {
-            // Regular player leaving - just remove them from the room
-            room.removePlayer(playerName);
-            logger.info("Player {} left room: {}", playerName, room.getRoomName());
-            sendAfterCommit("/room/" + roomId,
-                    new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
-
-            // If no players left after removal, also destroy the room unless preserved as terminal container
-            if (room.getPlayers().isEmpty()) {
-                if (room.isTerminal()) {
-                    roomHosts.remove(roomId);
-                    logger.info("No players remaining in terminal room {}, preserving container until cleanup", room.getRoomName());
-                    sendAfterCommit("/room/" + roomId,
-                            new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
-                } else {
-                    logger.info("No players remaining in room {}, destroying room", room.getRoomName());
-                    sendAfterCommit("/room/" + roomId,
-                            new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
-                    destroyRoom(roomId);
                 }
             }
         }
     }
 
-    /** Detaches a set of active-game members with one host reconciliation and projection. */
+    /**
+     * Active-game single-player removal helper requiring an explicit preselected successor.
+     * All production active departures enter through the lifecycle command.
+     *
+     * @param roomId                the unique identifier of the room
+     * @param playerName            the name of the player leaving
+     * @param preselectedSuccessor  the preselected successor host if host changes, or current host if preserved
+     */
     @DurableMutation(roomId = "#roomId")
-    public void leavePlayersBatch(String roomId, List<String> playerNames) {
+    public void leaveRoom(String roomId, String playerName, String preselectedSuccessor) {
+        leavePlayersBatch(roomId, List.of(playerName), preselectedSuccessor);
+    }
+
+    /**
+     * Detaches a set of active-game members with one host reconciliation and projection.
+     * Requires the preselected surviving host computed by the lifecycle layer.
+     *
+     * @param roomId         the unique identifier of the room
+     * @param playerNames    the names of players departing
+     * @param survivingHost  the preselected surviving host, or null if no players remain
+     */
+    @DurableMutation(roomId = "#roomId")
+    public void leavePlayersBatch(String roomId, List<String> playerNames, String survivingHost) {
         Room room = rooms.get(roomId);
         if (room == null || playerNames == null || playerNames.isEmpty()) return;
         synchronized (room) {
             if (rooms.get(roomId) != room) return;
             List<String> present = playerNames.stream().filter(room.getPlayers()::contains).distinct().toList();
             if (present.isEmpty()) return;
-            boolean hostLeaving = present.contains(roomHosts.getOrDefault(roomId, room.getHostName()));
+            java.util.Map<String, String> retiredMemberships = new java.util.HashMap<>();
+            for (String name : present) {
+                retiredMemberships.put(name, room.getMembershipId(name));
+            }
             present.forEach(room::removePlayer);
-            if (hostLeaving && !room.getPlayers().isEmpty()) roomHosts.put(roomId, room.getPlayers().getFirst());
+            if (webSocketEventListener != null) {
+                DurableTransactionContext.afterCommit(() ->
+                        retiredMemberships.forEach((name, mid) ->
+                                webSocketEventListener.publishMembershipRetired(roomId, name, mid)));
+            }
             if (room.getPlayers().isEmpty()) {
+                roomHosts.remove(roomId);
                 if (room.isTerminal()) {
-                    roomHosts.remove(roomId);
                     sendAfterCommit("/room/" + roomId,
                             new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null));
                 } else {
@@ -328,6 +370,11 @@ public class RoomService {
                     destroyRoom(roomId);
                 }
             } else {
+                if (survivingHost != null && room.getPlayers().contains(survivingHost)) {
+                    roomHosts.put(roomId, survivingHost);
+                } else if (!roomHosts.containsKey(roomId) || !room.getPlayers().contains(roomHosts.get(roomId))) {
+                    roomHosts.put(roomId, room.getPlayers().getFirst());
+                }
                 sendAfterCommit("/room/" + roomId,
                         new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
             }
@@ -363,35 +410,37 @@ public class RoomService {
             throw new ResourceNotFoundException("Room not found");
         }
 
-        String currentHost = roomHosts.getOrDefault(roomId, room.getHostName());
+        synchronized (room) {
+            String currentHost = roomHosts.getOrDefault(roomId, room.getHostName());
 
-        // Convert player names to PlayerInfoDTO objects
-        List<PlayerJoinInfo> playerObjects = room.getPlayers().stream()
-                .map(playerName -> {
-                    LocalDateTime joinedAt = room.getJoinedAt(playerName);
-                    String joinedAtStr = (joinedAt != null) ? joinedAt.toString() : "recently";
-                    return new PlayerJoinInfo(
-                            playerName,
-                            currentHost.equals(playerName),
-                            joinedAtStr
-                    );
-                })
-                .collect(Collectors.toList());
+            // Convert player names to PlayerInfoDTO objects
+            List<PlayerJoinInfo> playerObjects = room.getPlayers().stream()
+                    .map(playerName -> {
+                        LocalDateTime joinedAt = room.getJoinedAt(playerName);
+                        String joinedAtStr = (joinedAt != null) ? joinedAt.toString() : "recently";
+                        return new PlayerJoinInfo(
+                                playerName,
+                                currentHost.equals(playerName),
+                                joinedAtStr
+                        );
+                    })
+                    .collect(Collectors.toList());
 
-        // Create and return the RoomDataDTO
-        return new RoomDataResponse(
-                roomId,
-                room.getRoomName(),
-                room.getMaxPlayers(),
-                room.getBuyIn(),
-                room.getSmallBlind(),
-                room.getBigBlind(),
-                room.getCreatedAt(),
-                currentHost,
-                playerObjects,
-                playerObjects.size(),
-                playerObjects.size() >= 2,
-                room.isGameStarted());
+            // Create and return the RoomDataDTO
+            return new RoomDataResponse(
+                    roomId,
+                    room.getRoomName(),
+                    room.getMaxPlayers(),
+                    room.getBuyIn(),
+                    room.getSmallBlind(),
+                    room.getBigBlind(),
+                    room.getCreatedAt(),
+                    currentHost,
+                    playerObjects,
+                    playerObjects.size(),
+                    !room.isGameStarted() && playerObjects.size() >= 2,
+                    room.isGameStarted());
+        }
     }
 
 
@@ -438,7 +487,8 @@ public class RoomService {
      * @return true if the player is the room host, false otherwise
      */
     public boolean isRoomHost(String roomId, String playerName) {
-        String hostName = roomHosts.get(roomId);
+        Room room = rooms.get(roomId);
+        String hostName = roomHosts.getOrDefault(roomId, room == null ? null : room.getHostName());
         return hostName != null && hostName.equals(playerName);
     }
 
@@ -479,6 +529,9 @@ public class RoomService {
         roomHosts.remove(roomId);
         if (room != null) {
             logger.info("Room destroyed: {} (ID: {})", room.getRoomName(), roomId);
+        }
+        if (webSocketEventListener != null) {
+            DurableTransactionContext.afterCommit(() -> webSocketEventListener.publishRoomDestroyed(roomId));
         }
     }
 

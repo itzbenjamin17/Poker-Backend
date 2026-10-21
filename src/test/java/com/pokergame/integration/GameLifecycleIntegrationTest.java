@@ -417,14 +417,24 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             String guestToken = joinRoom(roomName, "EndGuest").path("token").asText();
             startGame(gameId, hostToken);
 
-            String leaveBody = restClient.post()
-                    .uri("/api/game/" + gameId + "/leave")
-                    .header("Authorization", "Bearer " + guestToken)
-                    .retrieve()
-                    .body(String.class);
+            var stompClient = createStompClient();
+            StompSession hostSession = connectSession(stompClient, hostToken);
+            StompSession guestSession = connectSession(stompClient, guestToken);
 
-            assertThat(leaveBody).contains("Successfully left game");
-            awaitRoomDestruction(gameId, hostToken, Duration.ofSeconds(12));
+            try {
+                String leaveBody = restClient.post()
+                        .uri("/api/game/" + gameId + "/leave")
+                        .header("Authorization", "Bearer " + guestToken)
+                        .retrieve()
+                        .body(String.class);
+
+                assertThat(leaveBody).contains("Successfully left game");
+                awaitRoomDestruction(gameId, hostToken, Duration.ofSeconds(12));
+            } finally {
+                hostSession.disconnect();
+                guestSession.disconnect();
+                stompClient.stop();
+            }
         }
 
         /**
@@ -441,16 +451,24 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             joinRoom(roomName, "ClaimGuest");
             startGame(gameId, hostToken);
 
-            gameLifecycleService.markPlayerDisconnected(gameId, "ClaimGuest", System.currentTimeMillis() + 120_000);
+            var stompClient = createStompClient();
+            StompSession hostSession = connectSession(stompClient, hostToken);
 
-            JsonNode response = objectMapper.readTree(restClient.post()
-                    .uri("/api/game/" + gameId + "/claim-win")
-                    .header("Authorization", "Bearer " + hostToken)
-                    .retrieve()
-                    .body(String.class));
+            try {
+                gameLifecycleService.markPlayerDisconnected(gameId, "ClaimGuest", System.currentTimeMillis() + 120_000);
 
-            assertThat(response.path("message").asText()).isEqualTo("Win claimed successfully");
-            awaitRoomDestruction(gameId, hostToken, Duration.ofSeconds(12));
+                JsonNode response = objectMapper.readTree(restClient.post()
+                        .uri("/api/game/" + gameId + "/claim-win")
+                        .header("Authorization", "Bearer " + hostToken)
+                        .retrieve()
+                        .body(String.class));
+
+                assertThat(response.path("message").asText()).isEqualTo("Win claimed successfully");
+                awaitRoomDestruction(gameId, hostToken, Duration.ofSeconds(12));
+            } finally {
+                hostSession.disconnect();
+                stompClient.stop();
+            }
         }
 
         /**
@@ -466,17 +484,25 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
             joinRoom(roomName, "ClaimRejectGuest");
             startGame(gameId, hostToken);
 
-            gameLifecycleService.markPlayerDisconnected(gameId, "ClaimRejectGuest", System.currentTimeMillis() + 120_000);
-            gameLifecycleService.markPlayerReconnected(gameId, "ClaimRejectGuest");
+            var stompClient = createStompClient();
+            StompSession hostSession = connectSession(stompClient, hostToken);
 
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
-                    .uri("/api/game/" + gameId + "/claim-win")
-                    .header("Authorization", "Bearer " + hostToken)
-                    .retrieve()
-                    .body(String.class));
+            try {
+                gameLifecycleService.markPlayerDisconnected(gameId, "ClaimRejectGuest", System.currentTimeMillis() + 120_000);
+                gameLifecycleService.markPlayerReconnected(gameId, "ClaimRejectGuest");
 
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-            assertThat(exception.getResponseBodyAsString().toLowerCase()).contains("claim");
+                HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
+                        .uri("/api/game/" + gameId + "/claim-win")
+                        .header("Authorization", "Bearer " + hostToken)
+                        .retrieve()
+                        .body(String.class));
+
+                assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(exception.getResponseBodyAsString().toLowerCase()).contains("claim");
+            } finally {
+                hostSession.disconnect();
+                stompClient.stop();
+            }
         }
     }
 

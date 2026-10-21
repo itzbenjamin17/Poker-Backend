@@ -9,6 +9,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * Service to manage rate limit buckets for REST and WebSocket endpoints.
@@ -20,7 +21,17 @@ public class RateLimitService {
     private boolean enabled;
 
     private final Map<String, Bucket> restBuckets = new ConcurrentHashMap<>();
-    private final Map<String, Bucket> wsBuckets = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, WsBucketEntry> wsBuckets = new ConcurrentHashMap<>();
+
+    private static final class WsBucketEntry {
+        final Bucket bucket;
+        volatile long lastAccessEpochMs;
+
+        WsBucketEntry(Bucket bucket, long now) {
+            this.bucket = bucket;
+            this.lastAccessEpochMs = now;
+        }
+    }
 
     // REST Limit: 5 attempts per 15 minutes (per IP + PlayerName/Path)
     private static final Bandwidth REST_LIMIT = Bandwidth.builder()
@@ -52,8 +63,15 @@ public class RateLimitService {
      */
     public boolean tryConsumeWs(String username) {
         if (!enabled) return true;
-        Bucket bucket = wsBuckets.computeIfAbsent(username, k -> Bucket.builder().addLimit(WS_LIMIT).build());
-        return bucket.tryConsume(1);
+        long now = System.currentTimeMillis();
+        WsBucketEntry entry = wsBuckets.compute(username, (k, existing) -> {
+            if (existing == null) {
+                return new WsBucketEntry(Bucket.builder().addLimit(WS_LIMIT).build(), now);
+            }
+            existing.lastAccessEpochMs = now;
+            return existing;
+        });
+        return entry.bucket.tryConsume(1);
     }
 
     /**
@@ -63,6 +81,56 @@ public class RateLimitService {
      */
     public void cleanUpWs(String username) {
         wsBuckets.remove(username);
+    }
+
+    /**
+     * Evicts idle WebSocket buckets where inactivity duration exceeds the given window.
+     *
+     * @param idleWindowMs minimum milliseconds of inactivity before eviction
+     */
+    public void evictIdleWsBuckets(long idleWindowMs) {
+        long cutoff = System.currentTimeMillis() - idleWindowMs;
+        wsBuckets.entrySet().removeIf(entry -> entry.getValue().lastAccessEpochMs < cutoff);
+    }
+
+    /**
+     * Periodically clear idle WebSocket buckets (every 60 seconds) to prevent memory leaks.
+     */
+    @Scheduled(fixedRate = 60000)
+    public void periodicWsCleanup() {
+        evictIdleWsBuckets(60_000);
+    }
+
+    /**
+     * Returns the number of currently tracked WebSocket rate-limit bucket entries.
+     *
+     * @return current count of WebSocket rate-limit entries
+     */
+    public int wsBucketCount() {
+        return wsBuckets.size();
+    }
+
+    /**
+     * Checks whether a rate-limit bucket exists for the given username.
+     *
+     * @param username user composite name
+     * @return {@code true} if a bucket exists, {@code false} otherwise
+     */
+    public boolean hasWsBucket(String username) {
+        return wsBuckets.containsKey(username);
+    }
+
+    /**
+     * Overrides the last access timestamp of a WebSocket bucket for unit testing.
+     *
+     * @param username user composite name
+     * @param epochMs  timestamp in milliseconds
+     */
+    void setLastAccessForTesting(String username, long epochMs) {
+        WsBucketEntry entry = wsBuckets.get(username);
+        if (entry != null) {
+            entry.lastAccessEpochMs = epochMs;
+        }
     }
 
 

@@ -54,16 +54,72 @@ public final class AggregateSnapshotMapper {
      * @return the bytes of the saved snapshot
      * @throws PersistenceException if the snapshot cannot be created
      */
-    public byte[] serialize(Room room, String currentHost, Game game) {
-        // Create a snapshot of the room's current state
-        AggregateStateImage.RoomState roomState = new AggregateStateImage.RoomState(
+    /**
+     * Captures an immutable state image from live Room and Game aggregates under their respective monitors.
+     * Room monitor is acquired before Game monitor.
+     * All live domain fields, players, and cards are converted into independent immutable records.
+     * No JSON serialization or I/O is performed under the monitors.
+     *
+     * @param room the room aggregate
+     * @param currentHost the current host
+     * @param game the game aggregate, or null if room is a lobby
+     * @return independent immutable state image
+     */
+    public AggregateStateImage captureStateImage(Room room, String currentHost, Game game) {
+        if (room == null) {
+            throw new PersistenceException("Room cannot be null for aggregate state capture");
+        }
+        AggregateStateImage.RoomState roomState;
+        AggregateStateImage.GameState gameState;
+        synchronized (room) {
+            roomState = toRoomState(room);
+            if (game != null) {
+                synchronized (game) {
+                    gameState = toState(game);
+                }
+            } else {
+                gameState = null;
+            }
+        }
+        return new AggregateStateImage(AggregateStateImage.CURRENT_SCHEMA_VERSION, false, roomState,
+                currentHost, gameState);
+    }
+
+    private AggregateStateImage.RoomState toRoomState(Room room) {
+        return new AggregateStateImage.RoomState(
                 room.getRoomId(), room.getRoomName(), room.getHostName(), room.getMaxPlayers(), room.getSmallBlind(),
                 room.getBigBlind(), room.getBuyIn(), room.getPasswordForPersistence(), room.getCreatedAt(),
                 room.getPlayersWithJoinTimeSnapshot(), room.isGameStarted());
-        // If there is an active game, capture its state as well
-        AggregateStateImage.GameState gameState = game == null ? null : toState(game);
-        return write(new AggregateStateImage(AggregateStateImage.CURRENT_SCHEMA_VERSION, false, roomState,
-                currentHost, gameState));
+    }
+
+    /**
+     * Serializes an already-captured immutable state image to JSON bytes.
+     * Must be called after releasing aggregate monitors.
+     *
+     * @param image the state image to serialize
+     * @return the serialized bytes
+     * @throws PersistenceException if JSON serialization fails
+     */
+    public byte[] serialize(AggregateStateImage image) {
+        if (image == null) {
+            throw new PersistenceException("State image cannot be null for serialization");
+        }
+        return write(image);
+    }
+
+    /**
+     * Takes a room and its game, captures state under aggregate monitors, and turns it into a snapshot.
+     * Aggregate monitors are released before JSON serialization.
+     *
+     * @param room        the room being saved
+     * @param currentHost the current host, which could be different from the original creator
+     * @param game        the active game, or {@code null} if the room is still a lobby
+     * @return the bytes of the saved snapshot
+     * @throws PersistenceException if the snapshot cannot be created
+     */
+    public byte[] serialize(Room room, String currentHost, Game game) {
+        AggregateStateImage image = captureStateImage(room, currentHost, game);
+        return serialize(image);
     }
 
     /**
@@ -175,7 +231,8 @@ public final class AggregateSnapshotMapper {
      * @return a simple snapshot of the game
      */
     private AggregateStateImage.GameState toState(Game game) {
-        return new AggregateStateImage.GameState(
+        synchronized (game) {
+            return new AggregateStateImage.GameState(
                 game.getGameId(), game.getPlayers().stream().map(this::toState).toList(),
                 game.getActivePlayers().stream().map(Player::getPlayerId).toList(),
                 cards(game.getRemainingDeckSnapshot()), cards(game.getCommunityCards()), game.getPot(),
@@ -191,6 +248,7 @@ public final class AggregateSnapshotMapper {
                 game.isTerminalCarryOverSettled(), game.getReadyGateState(), game.getHandNumber(),
                 game.getScheduledTaskGenerationsSnapshot(), game.isForfeitPending(), game.getStateRevision(),
                 toTerminalResultState(game.getRetainedTerminalResult()));
+        }
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.pokergame.config;
 
+import com.pokergame.model.Room;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.security.RateLimitService;
 import com.pokergame.service.GameLifecycleService;
@@ -40,6 +41,130 @@ class WebSocketEventListenerTest {
     }
 
     @Test
+    void disconnectWithoutPrecedingRegisteredSessionIsIgnored() {
+        RoomService roomService = mock(RoomService.class);
+        GameLifecycleService lifecycle = mock(GameLifecycleService.class);
+        RateLimitService rateLimit = mock(RateLimitService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
+
+        listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
+                message(StompCommand.DISCONNECT, "unregistered-session", principal), "unregistered-session", null)));
+
+        verifyNoInteractions(scheduler);
+        verify(lifecycle, never()).markPlayerDisconnected(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    void disconnectOneOfMultipleSessionsDoesNotScheduleGraceTimer() {
+        RoomService roomService = mock(RoomService.class);
+        GameLifecycleService lifecycle = mock(GameLifecycleService.class);
+        RateLimitService rateLimit = mock(RateLimitService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
+
+        // Connect session-1 and session-2
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-1", principal))));
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-2", principal))));
+
+        // Disconnect session-1
+        listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
+                message(StompCommand.DISCONNECT, "session-1", principal), "session-1", null)));
+
+        verifyNoInteractions(scheduler);
+        verify(lifecycle, never()).markPlayerDisconnected(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    void disconnectLastSocketSchedulesGraceTimerWithExactInstant() {
+        RoomService roomService = mock(RoomService.class);
+        GameLifecycleService lifecycle = mock(GameLifecycleService.class);
+        RateLimitService rateLimit = mock(RateLimitService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        org.mockito.ArgumentCaptor<Instant> instantCaptor = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        org.mockito.ArgumentCaptor<Long> deadlineCaptor = org.mockito.ArgumentCaptor.forClass(Long.class);
+        doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
+        PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
+
+        when(lifecycle.gameExists("room")).thenReturn(true);
+        when(lifecycle.playerExistsInGame("room", "Alice")).thenReturn(true);
+
+        // Connect then disconnect last socket
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-1", principal))));
+        listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
+                message(StompCommand.DISCONNECT, "session-1", principal), "session-1", null)));
+
+        verify(lifecycle).markPlayerDisconnected(eq("room"), eq("Alice"), deadlineCaptor.capture());
+        long deadline = deadlineCaptor.getValue();
+        Instant scheduledInstant = instantCaptor.getValue();
+        org.junit.jupiter.api.Assertions.assertEquals(Instant.ofEpochMilli(deadline), scheduledInstant,
+                "TaskScheduler instant must exactly match the domain deadline epoch ms");
+    }
+
+    @Test
+    void duplicateConnectIsIdempotent() {
+        RoomService roomService = mock(RoomService.class);
+        GameLifecycleService lifecycle = mock(GameLifecycleService.class);
+        RateLimitService rateLimit = mock(RateLimitService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        doReturn(future).when(scheduler).schedule(any(Runnable.class), any(Instant.class));
+        PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
+
+        when(lifecycle.gameExists("room")).thenReturn(true);
+        when(lifecycle.playerExistsInGame("room", "Alice")).thenReturn(true);
+
+        // Connect session-1 twice
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-1", principal))));
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-1", principal))));
+
+        // Disconnecting session-1 once transitions to 0 and schedules
+        listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
+                message(StompCommand.DISCONNECT, "session-1", principal), "session-1", null)));
+
+        verify(scheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
+
+        // A second disconnect for session-1 is a duplicate/already-retired disconnect and produces no new schedule
+        listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
+                message(StompCommand.DISCONNECT, "session-1", principal), "session-1", null)));
+
+        verify(scheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    void disconnectWithSessionOwnershipMismatchIsIgnored() {
+        RoomService roomService = mock(RoomService.class);
+        GameLifecycleService lifecycle = mock(GameLifecycleService.class);
+        RateLimitService rateLimit = mock(RateLimitService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        PlayerPrincipal alicePrincipal = new PlayerPrincipal("Alice", "room");
+        PlayerPrincipal bobPrincipal = new PlayerPrincipal("Bob", "room");
+
+        // Alice connects session-1
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-1", alicePrincipal))));
+
+        // Disconnect arrives for session-1 with Bob's principal
+        listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
+                message(StompCommand.DISCONNECT, "session-1", bobPrincipal), "session-1", null)));
+
+        // Must be ignored - no scheduling, Alice still connected
+        verifyNoInteractions(scheduler);
+        verify(lifecycle, never()).markPlayerDisconnected(anyString(), anyString(), anyLong());
+    }
+
+    @Test
     void obsoleteGraceCallbackCannotRemoveReconnectedPlayer() {
         RoomService roomService = mock(RoomService.class);
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
@@ -51,6 +176,8 @@ class WebSocketEventListenerTest {
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-a", principal))));
         listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
                 message(StompCommand.DISCONNECT, "session-a", principal), "session-a", null)));
         Runnable expired = callback.getValue();
@@ -59,7 +186,7 @@ class WebSocketEventListenerTest {
                 message(StompCommand.CONNECT, "session-b", principal))));
         expired.run();
 
-        verify(lifecycle, never()).removeDisconnectedPlayer(anyString(), anyString());
+        verify(lifecycle, never()).removeDisconnectedPlayer(anyString(), anyString(), anyString(), anyLong());
         verify(future).cancel(false);
     }
 
@@ -75,7 +202,9 @@ class WebSocketEventListenerTest {
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
-        // Disconnect player so a pending disconnect is registered
+        // Connect player first, then disconnect so a pending disconnect is registered
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-a", principal))));
         listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
                 message(StompCommand.DISCONNECT, "session-a", principal), "session-a", null)));
         Runnable cleanupTask = callback.getValue();
@@ -106,6 +235,10 @@ class WebSocketEventListenerTest {
         doReturn(future).when(scheduler).schedule(any(Runnable.class), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
+        // Connect first so session is known
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-a", principal))));
+
         when(lifecycle.gameExists("room")).thenReturn(true);
         when(lifecycle.playerExistsInGame("room", "Alice")).thenReturn(true);
         doThrow(new RuntimeException("Persistence unavailable")).when(lifecycle).markPlayerDisconnected(eq("room"), eq("Alice"), anyLong());
@@ -124,4 +257,51 @@ class WebSocketEventListenerTest {
     }
 
     private static <T> T event(T value) { return value; }
+
+    @Test
+    void registerInitialConnection_SchedulesGraceTimerWithAcceptanceDeadline() {
+        RoomService roomService = mock(RoomService.class);
+        GameLifecycleService lifecycle = mock(GameLifecycleService.class);
+        RateLimitService rateLimit = mock(RateLimitService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        org.mockito.ArgumentCaptor<Instant> instantCaptor = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
+
+        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        String membershipId = room.getMembershipId("Alice");
+        when(roomService.getRoom("room")).thenReturn(room);
+
+        long deadline = System.currentTimeMillis() + 60_000;
+        listener.registerInitialConnection("room", "Alice", membershipId, deadline);
+
+        verify(scheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(deadline)));
+    }
+
+    @Test
+    void registerInitialConnection_PlayerAlreadyConnected_DoesNotScheduleTimer() {
+        RoomService roomService = mock(RoomService.class);
+        GameLifecycleService lifecycle = mock(GameLifecycleService.class);
+        RateLimitService rateLimit = mock(RateLimitService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+
+        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        String membershipId = room.getMembershipId("Alice");
+        when(roomService.getRoom("room")).thenReturn(room);
+
+        PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
+        // Alice connects first
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-1", principal))));
+
+        long deadline = System.currentTimeMillis() + 60_000;
+        // Late registration runs
+        listener.registerInitialConnection("room", "Alice", membershipId, deadline);
+
+        verifyNoInteractions(scheduler);
+    }
 }

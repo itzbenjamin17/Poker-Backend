@@ -226,6 +226,10 @@ class PersistenceRestartIntegrationTest {
             RoomService rooms = context.getBean(RoomService.class);
             roomId = rooms.createRoom(new CreateRoomRequest("End Room", "Alice", 6, 5, 10, 1000, null));
             rooms.joinRoom(new JoinRoomRequest("End Room", "Bob", null));
+            context.getBean(WebSocketEventListener.class)
+                    .handleWebSocketConnectListener(connectEvent("Alice", roomId, "alice-session"));
+            context.getBean(WebSocketEventListener.class)
+                    .handleWebSocketConnectListener(connectEvent("Bob", roomId, "bob-session"));
             GameLifecycleService games = context.getBean(GameLifecycleService.class);
             games.createGameFromRoom(roomId);
 
@@ -295,6 +299,10 @@ class PersistenceRestartIntegrationTest {
             RoomService rooms = first.getBean(RoomService.class);
             roomId = rooms.createRoom(new CreateRoomRequest("Terminal Room", "Alice", 6, 5, 10, 1000, null));
             rooms.joinRoom(new JoinRoomRequest("Terminal Room", "Bob", null));
+            first.getBean(WebSocketEventListener.class)
+                    .handleWebSocketConnectListener(connectEvent("Alice", roomId, "alice-session"));
+            first.getBean(WebSocketEventListener.class)
+                    .handleWebSocketConnectListener(connectEvent("Bob", roomId, "bob-session"));
             GameLifecycleService games = first.getBean(GameLifecycleService.class);
             games.createGameFromRoom(roomId);
 

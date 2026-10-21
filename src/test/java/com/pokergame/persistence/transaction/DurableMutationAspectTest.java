@@ -31,6 +31,10 @@ import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.persistence.wal.WalFaultPoint;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.snapshot.AggregateStateImage;
+import org.junit.jupiter.api.DisplayName;
+import com.pokergame.model.Game;
+import com.pokergame.model.Player;
 import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.config.PersistenceException;
 
@@ -71,6 +75,10 @@ class DurableMutationAspectTest {
     @BeforeEach
     void setUp() {
         properties = new PersistenceProperties();
+        AggregateStateImage mockImage = org.mockito.Mockito.mock(AggregateStateImage.class);
+        org.mockito.Mockito.lenient().when(snapshotMapper.captureStateImage(any(), any(), any())).thenReturn(mockImage);
+        org.mockito.Mockito.lenient().when(snapshotMapper.serialize(any(AggregateStateImage.class))).thenReturn(new byte[]{1, 2, 3});
+        org.mockito.Mockito.lenient().when(snapshotMapper.serialize(any(Room.class), any(), any())).thenReturn(new byte[]{1, 2, 3});
     }
 
     @AfterEach
@@ -149,7 +157,7 @@ class DurableMutationAspectTest {
 
         Room room = mock(Room.class);
         when(roomService.getRoom("room-4")).thenReturn(room);
-        when(snapshotMapper.serialize(any(), any(), any())).thenReturn(new byte[]{1, 2, 3});
+        org.mockito.Mockito.lenient().when(snapshotMapper.serialize(any(), any(), any())).thenReturn(new byte[]{1, 2, 3});
 
         assertEquals("ok", aspect.persist(joinPoint, mutation));
         assertEquals(List.of("state-1", "timer-1"), effects, "Accepted effects are released exactly once");
@@ -216,7 +224,7 @@ class DurableMutationAspectTest {
             DurableTransactionContext.afterCommit(() -> effects.add("effect-" + move));
             return move;
         });
-        when(snapshotMapper.serialize(any(), any(), any())).thenThrow(new PersistenceException("injected serialization failure"));
+        when(snapshotMapper.serialize(any(AggregateStateImage.class))).thenThrow(new PersistenceException("injected serialization failure"));
 
         assertEquals(1, aspect.persist(joinPoint, validMutation()));
         assertEquals(List.of("effect-1"), effects);
@@ -240,6 +248,52 @@ class DurableMutationAspectTest {
         assertTrue(published.isEmpty());
         assertNull(DurableTransactionContext.currentRoomId());
         verify(snapshotMapper, never()).serialize(any(), any(), any());
+        verify(snapshotMapper, never()).serialize(any(AggregateStateImage.class));
+    }
+
+    @Test
+    @DisplayName("captureState acquires Room monitor before Game monitor and serializes outside monitors")
+    void captureState_AcquiresMonitorsInOrderAndEncodesOutsideMonitors() throws Throwable {
+        when(roomServiceProvider.getObject()).thenReturn(roomService);
+        when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
+
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+
+        Room room = new Room("room-capture", "Capture Room", "Host", 6, 10, 20, 1000, null);
+        room.addPlayer("Host");
+        room.addPlayer("Guest");
+        Game game = new Game("room-capture", List.of(new Player("Host", "p1", 1000), new Player("Guest", "p2", 1000)), 10, 20, new com.pokergame.service.HandEvaluatorService());
+
+        when(roomService.getRoom("room-capture")).thenReturn(room);
+        when(gameLifecycleService.getGame("room-capture")).thenReturn(game);
+        when(roomService.getCurrentHost("room-capture")).thenAnswer(inv -> {
+            assertTrue(Thread.holdsLock(room), "getCurrentHost must be read under Room monitor");
+            assertFalse(Thread.holdsLock(game), "Game monitor must not be held when reading host");
+            return "Host";
+        });
+
+        AggregateStateImage capturedImage = mock(AggregateStateImage.class);
+        when(snapshotMapper.captureStateImage(any(), any(), any())).thenAnswer(inv -> {
+            assertTrue(Thread.holdsLock(room), "Room monitor must be held during captureStateImage");
+            assertTrue(Thread.holdsLock(game), "Game monitor must be held during captureStateImage");
+            return capturedImage;
+        });
+
+        when(snapshotMapper.serialize(capturedImage)).thenAnswer(inv -> {
+            assertFalse(Thread.holdsLock(room), "Room monitor must be released before JSON serialization");
+            assertFalse(Thread.holdsLock(game), "Game monitor must be released before JSON serialization");
+            return new byte[]{4, 5, 6};
+        });
+
+        ProceedingJoinPoint joinPoint = mutationPoint("room-capture", () -> "done");
+        aspect.persist(joinPoint, validMutation());
+
+        verify(snapshotMapper).captureStateImage(room, "Host", game);
+        verify(snapshotMapper).serialize(capturedImage);
     }
 
     /** An accepted action's timer must still run if its preceding broadcast callback fails. */
@@ -248,7 +302,7 @@ class DurableMutationAspectTest {
         AtomicBoolean unavailable = new AtomicBoolean(false);
         EncryptedWalStore store = failingStore(unavailable);
         DurableMutationAspect aspect = aspectForRoom(store, "room-callback");
-        when(snapshotMapper.serialize(any(), any(), any())).thenReturn(new byte[]{1});
+        when(snapshotMapper.serialize(any(AggregateStateImage.class))).thenReturn(new byte[]{1});
         List<String> effects = new ArrayList<>();
         ProceedingJoinPoint joinPoint = mutationPoint("room-callback", () -> {
             DurableTransactionContext.afterCommit(() -> { throw new IllegalStateException("broker unavailable"); });

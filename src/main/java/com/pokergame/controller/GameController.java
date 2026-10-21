@@ -8,6 +8,7 @@ import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.persistence.transaction.DurableMutationAspect;
+import com.pokergame.util.LockLease;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
@@ -25,7 +26,6 @@ import org.springframework.web.bind.annotation.*;
 import jakarta.validation.Valid;
 
 import java.util.List;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * REST controller for active poker game operations.
@@ -82,17 +82,9 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        ReentrantLock lock = durableMutationAspect != null ? durableMutationAspect.getRoomLock(gameId) : null;
-        if (lock != null) {
-            lock.lock();
-        }
-        try {
+        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
             Game game = getAuthorisedGame(gameId, playerName);
             return ResponseEntity.ok(gameStateService.getPublicGameStateSnapshot(gameId, game));
-        } finally {
-            if (lock != null) {
-                lock.unlock();
-            }
         }
     }
 
@@ -116,17 +108,9 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        ReentrantLock lock = durableMutationAspect != null ? durableMutationAspect.getRoomLock(gameId) : null;
-        if (lock != null) {
-            lock.lock();
-        }
-        try {
+        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
             Game game = getAuthorisedGame(gameId, playerName);
             return ResponseEntity.ok(gameStateService.getPrivatePlayerStateSnapshot(game, playerName));
-        } finally {
-            if (lock != null) {
-                lock.unlock();
-            }
         }
     }
 
@@ -269,16 +253,8 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        ReentrantLock lock = durableMutationAspect != null ? durableMutationAspect.getRoomLock(gameId) : null;
-        if (lock != null) {
-            lock.lock();
-        }
-        try {
+        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
             return ResponseEntity.ok(gameLifecycleService.getGameReview(gameId, playerName));
-        } finally {
-            if (lock != null) {
-                lock.unlock();
-            }
         }
     }
 

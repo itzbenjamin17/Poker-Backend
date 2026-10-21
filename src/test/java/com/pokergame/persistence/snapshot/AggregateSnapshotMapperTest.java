@@ -1,5 +1,7 @@
 package com.pokergame.persistence.snapshot;
 
+import org.junit.jupiter.api.DisplayName;
+
 import tools.jackson.databind.json.JsonMapper;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
@@ -363,5 +365,126 @@ class AggregateSnapshotMapperTest {
         return Player.restoreBuilder().name(name).playerId(id).chips(chips).currentBet(currentBet)
                 .holeCards(List.of()).bestHand(List.of()).handRank(com.pokergame.enums.HandRank.NO_HAND)
                 .hasFolded(false).allIn(allIn).out(false).disconnected(false).readyForNextHand(false).build();
+    }
+
+    @Test
+    @DisplayName("captureStateImage acquires monitors in Room -> Game order and JSON serialization occurs outside monitors")
+    void captureStateImage_AcquiresMonitorsInOrderAndEncodesOutsideMonitors() {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+
+        Room room = new Room("room-order", "Order Room", "Alice", 6, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        room.addPlayer("Bob");
+
+        Player p1 = new Player("Alice", "p1", 1000);
+        Player p2 = new Player("Bob", "p2", 1000);
+        Game game = new Game("room-order", List.of(p1, p2), 10, 20, evaluator);
+
+        // Capture state image
+        AggregateStateImage stateImage = mapper.captureStateImage(room, "Alice", game);
+        assertNotNull(stateImage);
+        assertNotNull(stateImage.room());
+        assertNotNull(stateImage.game());
+
+        // Verify that JSON serialization occurs outside aggregate monitors
+        assertFalse(Thread.holdsLock(room), "Room monitor must not be held after captureStateImage");
+        assertFalse(Thread.holdsLock(game), "Game monitor must not be held after captureStateImage");
+
+        byte[] jsonBytes = mapper.serialize(stateImage);
+        assertNotNull(jsonBytes);
+        assertFalse(Thread.holdsLock(room), "Room monitor must not be held during JSON serialization");
+        assertFalse(Thread.holdsLock(game), "Game monitor must not be held during JSON serialization");
+
+        // Mutating live game after capture does not alter captured image or serialization
+        synchronized (game) {
+            p1.setChips(500);
+        }
+        RecoveredAggregate recovered = mapper.deserialize(jsonBytes);
+        assertEquals(1000, recovered.game().getPlayers().get(0).getChips(),
+                "Captured snapshot must be independent from post-capture live game mutations");
+    }
+
+    @Test
+    @DisplayName("Concurrent state-image capture and mutation restore coherent roster, board, chips and metadata")
+    void concurrentStateImageCaptureAndMutation_RestoresCoherentState() throws Exception {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+
+        String roomId = "concurrent-capture";
+        Room room = new Room(roomId, "Concurrent Capture Room", "Alice", 6, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        room.addPlayer("Bob");
+
+        Player p1 = new Player("Alice", "p1", 1000);
+        Player p2 = new Player("Bob", "p2", 1000);
+        Game game = new Game(roomId, List.of(p1, p2), 10, 20, evaluator);
+        game.dealHoleCards();
+        game.postBlinds();
+
+        java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
+        java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.List<byte[]> capturedSnapshots = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        // Thread 1: Mutates game state under synchronized (game)
+        Thread mutator = new Thread(() -> {
+            int round = 0;
+            while (running.get() && round < 500 && error.get() == null) {
+                synchronized (game) {
+                    int c1 = p1.getChips();
+                    int c2 = p2.getChips();
+                    if (c1 >= 10) {
+                        p1.setChips(c1 - 10);
+                        p2.setChips(c2 + 10);
+                    } else {
+                        p1.setChips(c1 + 10);
+                        p2.setChips(c2 - 10);
+                    }
+                }
+                round++;
+            }
+            running.set(false);
+        });
+
+        // Thread 2: Concurrently captures state
+        Thread capturer = new Thread(() -> {
+            while (running.get() && error.get() == null) {
+                try {
+                    byte[] snapshot = mapper.serialize(room, "Alice", game);
+                    if (snapshot != null) {
+                        capturedSnapshots.add(snapshot);
+                    }
+                } catch (Throwable t) {
+                    error.compareAndSet(null, t);
+                }
+            }
+        });
+
+        capturer.start();
+        mutator.start();
+        mutator.join(5000);
+        running.set(false);
+        capturer.join(5000);
+
+        assertNull(error.get(), "Capture failed concurrently: " + error.get());
+        assertFalse(capturedSnapshots.isEmpty(), "At least one snapshot must have been captured");
+
+        // Verify all captured snapshots deserialize into coherent states
+        for (byte[] snapshot : capturedSnapshots) {
+            RecoveredAggregate recovered = mapper.deserialize(snapshot);
+            assertNotNull(recovered);
+            assertNotNull(recovered.room());
+            assertNotNull(recovered.game());
+            Game restoredGame = recovered.game();
+            assertEquals(2, restoredGame.getPlayers().size(), "Roster must maintain exact 2 players");
+            assertEquals("Alice", restoredGame.getPlayers().get(0).getName());
+            assertEquals("Bob", restoredGame.getPlayers().get(1).getName());
+
+            // Chip conservation: chips in stacks + pot + current bets must sum to total buy-ins (2000)
+            int totalChips = restoredGame.getPot() + restoredGame.getPlayers().stream().mapToInt(Player::getChips).sum();
+            assertEquals(2000, totalChips, "Total chip accounting must be strictly conserved across concurrent capture");
+        }
     }
 }

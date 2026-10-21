@@ -635,4 +635,69 @@ class RoomTest {
         assertEquals(player2JoinTime, restoredRoom.getJoinedAt("Bob"));
         assertTrue(restoredRoom.isGameStarted());
     }
+
+    @Test
+    @DisplayName("addPlayer generates opaque process-local membership ID and rejoining generates a different ID")
+    void playerMembershipId_GeneratedPerAddAndDistinctOnRejoin() {
+        room.addPlayer("Alice");
+        String id1 = room.getMembershipId("Alice");
+        assertNotNull(id1, "Membership ID must not be null");
+        assertFalse(id1.trim().isEmpty(), "Membership ID must not be empty");
+
+        room.removePlayer("Alice");
+        assertNull(room.getMembershipId("Alice"), "Membership ID must be cleared after player removal");
+
+        room.addPlayer("Alice");
+        String id2 = room.getMembershipId("Alice");
+        assertNotNull(id2);
+        assertNotEquals(id1, id2, "Rejoining same name must receive different membership ID");
+    }
+
+    @Test
+    @DisplayName("Restored room assigns fresh runtime membership IDs to all restored players")
+    void restoredRoom_AssignsFreshRuntimeMembershipIds() {
+        Map<String, LocalDateTime> joinTimes = new LinkedHashMap<>();
+        joinTimes.put("Alice", LocalDateTime.now().minusMinutes(5));
+        joinTimes.put("Bob", LocalDateTime.now().minusMinutes(3));
+
+        Room restored = Room.restoreBuilder()
+                .roomId("restored-1")
+                .roomName("Restored Room")
+                .hostName("Alice")
+                .maxPlayers(6)
+                .smallBlind(10)
+                .bigBlind(20)
+                .buyIn(1000)
+                .playersWithJoinTime(joinTimes)
+                .build();
+
+        String aliceId = restored.getMembershipId("Alice");
+        String bobId = restored.getMembershipId("Bob");
+        assertNotNull(aliceId, "Restored Alice must have membership ID");
+        assertNotNull(bobId, "Restored Bob must have membership ID");
+        assertNotEquals(aliceId, bobId, "Each restored player must have unique membership ID");
+    }
+
+    @Test
+    @DisplayName("Connection lease tracks absence deadline and connection status bounded by membership")
+    void connectionLease_TracksAbsenceDeadlineAndConnectedState() {
+        room.addPlayer("Alice");
+        assertFalse(room.isPlayerConnected("Alice"), "Newly added player is not connected initially");
+        assertNull(room.getAbsenceDeadline("Alice"), "No absence deadline until set");
+
+        long deadline = System.currentTimeMillis() + 60_000;
+        room.setAbsenceDeadline("Alice", deadline);
+        assertEquals(deadline, room.getAbsenceDeadline("Alice"));
+
+        room.setPlayerConnected("Alice", true);
+        assertTrue(room.isPlayerConnected("Alice"));
+        assertNull(room.getAbsenceDeadline("Alice"), "Connecting clears absence deadline");
+
+        room.setPlayerConnected("Alice", false);
+        assertFalse(room.isPlayerConnected("Alice"));
+
+        room.removePlayer("Alice");
+        assertNull(room.getAbsenceDeadline("Alice"), "Removing player clears lease deadline");
+        assertFalse(room.isPlayerConnected("Alice"), "Removing player clears connected status");
+    }
 }
