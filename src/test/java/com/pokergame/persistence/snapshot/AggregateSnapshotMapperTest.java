@@ -163,11 +163,11 @@ class AggregateSnapshotMapperTest {
                 6, 0, List.of(), 0, GamePhase.SHOWDOWN, 0,
                 List.of(new Card(Rank.TEN, Suit.CLUBS)),
                 List.of(
-                        new PublicPlayerState("a", "Alice", 2000, 0, "Winner", false, false, false, true, false,
+                        new PublicPlayerState("a", "Alice", 2000, 0, "ACTIVE", false, false, false, true, false,
                                 com.pokergame.enums.HandRank.HIGH_CARD, List.of(new Card(Rank.ACE, Suit.SPADES)),
                                 true, null, List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)), null, false),
-                        new PublicPlayerState("b", "Bob", 0, 0, "Out", false, false, false, false, true,
-                                null, List.of(), false, null, null, null, false)),
+                        new PublicPlayerState("b", "Bob", 0, 0, "OUT", false, false, false, false, true,
+                                null, List.of(), false, null, null, null, true)),
                 null, null, List.of("Alice"), null, false, null, false, null, false, null,
                 true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, 123456789L, 42);
 
@@ -230,13 +230,48 @@ class AggregateSnapshotMapperTest {
         assertThrows(com.pokergame.persistence.config.PersistenceException.class,
                 () -> mapper.deserialize(missingMessage.getBytes(StandardCharsets.UTF_8)));
 
-        String invalidCapacityLow = json.replace("\"maxPlayers\":6", "\"maxPlayers\":1");
-        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
-                () -> mapper.deserialize(invalidCapacityLow.getBytes(StandardCharsets.UTF_8)));
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"maxPlayers\":6", "\"maxPlayers\":1");
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"maxPlayers\":6", "\"maxPlayers\":11");
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"name\":\"Alice\",\"chips\":2000", "\"name\":\"Alice\",\"chips\":-1");
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"winners\":[\"Alice\"]", "\"winners\":[]");
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"id\":\"b\",\"name\":\"Bob\"", "\"id\":\"a\",\"name\":\"Bob\"");
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"status\":\"ACTIVE\"", "\"status\":\"UNKNOWN\"");
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"currentPlayerName\":null", "\"currentPlayerName\":\"Alice\"");
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"readyCountdownDeadlineEpochMs\":null", "\"readyCountdownDeadlineEpochMs\":-1");
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"handNumber\":1", "\"handNumber\":-1");
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"holeCards\":null", "\"holeCards\":[{\"rank\":\"TWO\",\"suit\":\"HEARTS\"}]");
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"holeCards\":null", "\"holeCards\":[{\"rank\":\"TEN\",\"suit\":\"CLUBS\"},{\"rank\":\"THREE\",\"suit\":\"DIAMONDS\"}]");
+        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"isWinner\":true", "\"isWinner\":false");
+        assertTerminalCorruptionRejected(mapper, json, "\"type\":\"GAME_END\"", "\"type\":\"OTHER\"");
+    }
 
-        String invalidCapacityHigh = json.replace("\"maxPlayers\":6", "\"maxPlayers\":11");
+    private static void assertTerminalCorruptionRejected(AggregateSnapshotMapper mapper, String json,
+            String target, String replacement) {
+        int terminalStart = json.indexOf("\"retainedTerminalResult\":{");
+        assertTrue(terminalStart >= 0);
+        String prefix = json.substring(0, terminalStart);
+        String terminal = json.substring(terminalStart);
+        assertTrue(terminal.contains(target), "terminal fixture mutation target missing: " + target);
+        String corrupted = prefix + terminal.replaceFirst(java.util.regex.Pattern.quote(target),
+                java.util.regex.Matcher.quoteReplacement(replacement));
+        assertTrue(corrupted.startsWith(prefix), "room and live game fixture must remain unchanged");
         assertThrows(com.pokergame.persistence.config.PersistenceException.class,
-                () -> mapper.deserialize(invalidCapacityHigh.getBytes(StandardCharsets.UTF_8)));
+                () -> mapper.deserialize(corrupted.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static void assertTerminalFinalStateCorruptionRejected(AggregateSnapshotMapper mapper, String json,
+            String target, String replacement) {
+        int finalStateStart = json.indexOf("\"finalState\":{", json.indexOf("\"retainedTerminalResult\":{"));
+        assertTrue(finalStateStart >= 0);
+        String prefix = json.substring(0, finalStateStart);
+        String finalState = json.substring(finalStateStart);
+        assertTrue(finalState.contains(target), "nested final state mutation target missing: " + target);
+        String corrupted = prefix + finalState.replaceFirst(java.util.regex.Pattern.quote(target),
+                java.util.regex.Matcher.quoteReplacement(replacement));
+        assertEquals(json.substring(0, finalStateStart), corrupted.substring(0, finalStateStart),
+                "room, live game, and retained terminal envelope must remain unchanged");
+        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+                () -> mapper.deserialize(corrupted.getBytes(StandardCharsets.UTF_8)));
     }
 
     @Test

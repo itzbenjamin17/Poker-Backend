@@ -11,6 +11,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 import java.time.LocalDateTime;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
@@ -288,6 +290,11 @@ public final class AggregateSnapshotMapper {
      */
     private void validateTerminalResult(String expectedGameId, AggregateStateImage.TerminalResultState state) {
         if (state == null) return;
+        final long jsMaxSafeInteger = 9_007_199_254_740_991L;
+        final var finalState = state.finalState();
+        if (!"GAME_END".equals(state.type())) {
+            throw new PersistenceException("Retained terminal result has invalid type");
+        }
         if (state.gameId() == null || !state.gameId().equals(expectedGameId)) {
             throw new PersistenceException("Retained terminal result gameId does not match game identity");
         }
@@ -300,18 +307,112 @@ public final class AggregateSnapshotMapper {
         if (state.message() == null || state.message().trim().isEmpty()) {
             throw new PersistenceException("Retained terminal result missing message");
         }
-        if (state.finalState() == null) {
+        if (finalState == null) {
             throw new PersistenceException("Retained terminal result missing final state projection");
         }
-        if (state.finalState().maxPlayers() < 2 || state.finalState().maxPlayers() > 10) {
+        if (finalState.maxPlayers() < 2 || finalState.maxPlayers() > 10) {
             throw new PersistenceException("Retained terminal result final state has invalid max players capacity");
         }
-        if (state.finalState().stateRevision() < 0) {
+        if (finalState.stateRevision() < 0 || finalState.stateRevision() > jsMaxSafeInteger ||
+                finalState.handNumber() < 0 || finalState.handNumber() > jsMaxSafeInteger ||
+                finalState.serverTimeEpochMs() < 0 || finalState.serverTimeEpochMs() > jsMaxSafeInteger) {
             throw new PersistenceException("Retained terminal result has invalid negative state revision");
         }
-        if (state.finalState().players() == null) {
+        if (finalState.players() == null || finalState.players().isEmpty()) {
             throw new PersistenceException("Retained terminal result missing final players projection");
         }
+        if (finalState.players().size() > finalState.maxPlayers()) {
+            throw new PersistenceException("Retained terminal result exceeds player capacity");
+        }
+        if (finalState.phase() == null || finalState.readyGateState() == null || finalState.pots() == null ||
+                finalState.communityCards() == null || finalState.winners() == null || finalState.legalActions() == null) {
+            throw new PersistenceException("Retained terminal result has incomplete final state");
+        }
+        if (finalState.pot() < 0 || finalState.currentBet() < 0 ||
+                (finalState.uncalledAmount() != null && finalState.uncalledAmount() < 0) ||
+                (finalState.carryOverAmount() != null && finalState.carryOverAmount() < 0) ||
+                (finalState.minimumBetAmount() != null && finalState.minimumBetAmount() < 0) ||
+                (finalState.minimumRaiseAmount() != null && finalState.minimumRaiseAmount() < 0) ||
+                finalState.pots().stream().anyMatch(value -> value == null || value < 0) ||
+                finalState.communityCards().size() > 5) {
+            throw new PersistenceException("Retained terminal result has invalid final state bounds");
+        }
+        if (finalState.currentPlayerName() != null || finalState.currentPlayerId() != null ||
+                !finalState.legalActions().isEmpty() || Boolean.TRUE.equals(finalState.isReadyCountdownActive()) ||
+                finalState.readyCountdownDeadlineEpochMs() != null || !Boolean.FALSE.equals(finalState.isAutoAdvancing()) ||
+                !Boolean.FALSE.equals(finalState.isReadyCountdownActive()) || !Boolean.FALSE.equals(finalState.claimWinAvailable()) ||
+                finalState.claimWinPlayerName() != null || finalState.winningsPerPlayer() != null ||
+                finalState.readyGateState() != com.pokergame.enums.ReadyGateState.CLOSED) {
+            throw new PersistenceException("Retained terminal result contains live-game controls");
+        }
+        if (!validateCards(finalState.communityCards(), 5)) {
+            throw new PersistenceException("Retained terminal result has invalid community cards");
+        }
+        if (finalState.winners().size() != 1 || !state.winner().equals(finalState.winners().get(0))) {
+            throw new PersistenceException("Retained terminal result winner roster is incoherent");
+        }
+
+        Set<String> ids = new HashSet<>();
+        Set<String> names = new HashSet<>();
+        Set<String> allHoleCards = new HashSet<>();
+        Set<String> seenCards = new HashSet<>();
+        for (var card : finalState.communityCards()) seenCards.add(card.rank() + ":" + card.suit());
+        AggregateStateImage.FinalPlayerState champion = null;
+        int champions = 0;
+        for (var player : finalState.players()) {
+            if (player == null || blank(player.id()) || blank(player.name()) || player.chips() < 0 ||
+                    player.currentBet() < 0 || player.status() == null ||
+                    !Set.of("FOLDED", "OUT", "DISCONNECTED", "ACTIVE", "ALL_IN").contains(player.status()) ||
+                    !ids.add(player.id()) || !names.add(player.name())) {
+                throw new PersistenceException("Retained terminal result has invalid player identity or fields");
+            }
+            if (player.isCurrentPlayer() || player.chipsWon() != null) {
+                throw new PersistenceException("Retained terminal result contains live player fields");
+            }
+            if (player.bestHand() != null && !validateCards(player.bestHand(), 5)) {
+                throw new PersistenceException("Retained terminal result has invalid best-hand cards");
+            }
+            if (player.holeCards() != null && !player.holeCards().isEmpty() && player.holeCards().size() != 2) {
+                throw new PersistenceException("Retained terminal result has invalid hole cards");
+            }
+            if (player.holeCards() != null && !validateCards(player.holeCards(), 2)) {
+                throw new PersistenceException("Retained terminal result has invalid hole cards");
+            }
+            if (player.holeCards() != null) {
+                for (var card : player.holeCards()) {
+                    String identity = card.rank() + ":" + card.suit();
+                    if (!allHoleCards.add(identity) || !seenCards.add(identity)) {
+                        throw new PersistenceException("Retained terminal result contains duplicate hole cards");
+                    }
+                }
+            }
+            if (Boolean.TRUE.equals(player.isWinner())) {
+                champions++;
+                champion = player;
+            } else if (player.isWinner() == null || player.isWinner()) {
+                throw new PersistenceException("Retained terminal result has invalid champion flags");
+            }
+            if (player.disconnectDeadlineEpochMs() != null &&
+                    (player.disconnectDeadlineEpochMs() < 0 || player.disconnectDeadlineEpochMs() > jsMaxSafeInteger)) {
+                throw new PersistenceException("Retained terminal result has invalid player deadline");
+            }
+        }
+        if (champions != 1 || champion == null || !state.winner().equals(champion.name()) ||
+                champion.chips() != state.winnerChips()) {
+            throw new PersistenceException("Retained terminal result champion does not match frozen players");
+        }
+    }
+
+    private static boolean blank(String value) { return value == null || value.trim().isEmpty(); }
+
+    private static boolean validateCards(List<AggregateStateImage.CardState> cards, int maxSize) {
+        if (cards == null || cards.size() > maxSize) return false;
+        Set<String> unique = new HashSet<>();
+        for (var card : cards) {
+            if (card == null || card.rank() == null || card.suit() == null ||
+                    !unique.add(card.rank() + ":" + card.suit())) return false;
+        }
+        return true;
     }
 
     /**
