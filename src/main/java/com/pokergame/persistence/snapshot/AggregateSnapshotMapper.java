@@ -297,8 +297,14 @@ public final class AggregateSnapshotMapper {
         if (state.winnerChips() < 0) {
             throw new PersistenceException("Retained terminal result has invalid negative winner chips");
         }
+        if (state.message() == null || state.message().trim().isEmpty()) {
+            throw new PersistenceException("Retained terminal result missing message");
+        }
         if (state.finalState() == null) {
             throw new PersistenceException("Retained terminal result missing final state projection");
+        }
+        if (state.finalState().maxPlayers() < 2 || state.finalState().maxPlayers() > 10) {
+            throw new PersistenceException("Retained terminal result final state has invalid max players capacity");
         }
         if (state.finalState().stateRevision() < 0) {
             throw new PersistenceException("Retained terminal result has invalid negative state revision");

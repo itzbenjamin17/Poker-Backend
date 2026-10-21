@@ -1779,4 +1779,61 @@ class GameLifecycleServiceTest {
         assertNull(gameLifecycleService.getGame(ROOM_ID));
         verify(roomService, times(1)).destroyRoom(ROOM_ID);
     }
+
+    @Test
+    @DisplayName("Game completion concurrent with leave does not deadlock")
+    void gameCompletion_ConcurrentWithPlayerLeave_DoesNotDeadlock() throws Exception {
+        stubGameEndCapture();
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        int iterations = 20;
+        for (int i = 0; i < iterations; i++) {
+            String roomId = "deadlock-test-" + i;
+            Room room = new Room(roomId, "Deadlock Room", "Host", 6, 10, 20, 1000, null);
+            room.addPlayer("Host");
+            room.addPlayer("Player2");
+            room.setGameStarted(true);
+
+            Game game = new Game(roomId, List.of(
+                    new Player("Host", "p1", 1000),
+                    new Player("Player2", "p2", 1000)
+            ), 10, 20, handEvaluator);
+            game.dealHoleCards();
+            game.postBlinds();
+
+            when(roomService.getRoom(roomId)).thenReturn(room);
+            gameLifecycleService.restoreGame(game);
+
+            java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(2);
+
+            Thread t1 = new Thread(() -> {
+                try {
+                    startLatch.await();
+                    gameLifecycleService.handleGameEnd(roomId, false);
+                } catch (Exception ignored) {
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+
+            Thread t2 = new Thread(() -> {
+                try {
+                    startLatch.await();
+                    gameLifecycleService.departParticipants(roomId, List.of("Player2"));
+                } catch (Exception ignored) {
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+
+            t1.start();
+            t2.start();
+            startLatch.countDown();
+
+            boolean finished = doneLatch.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(finished, "Deadlock detected between handleGameEnd and handlePlayerLeave at iteration " + i);
+        }
+    }
 }

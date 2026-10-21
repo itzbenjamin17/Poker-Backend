@@ -167,12 +167,14 @@ public class RoomController {
                 logger.warn("Room not found: {}", roomId);
                 return ResponseEntity.notFound().build();
             }
-            if (!room.getPlayers().contains(playerPrincipal.playerName())) {
-                throw new UnauthorisedActionException("You are not a member of this room.");
+            synchronized (room) {
+                if (!room.getPlayers().contains(playerPrincipal.playerName())) {
+                    throw new UnauthorisedActionException("You are not a member of this room.");
+                }
+                RoomDataResponse roomData = roomService.getRoomData(roomId);
+                logger.debug("Room info retrieved successfully for room: {}", roomId);
+                return ResponseEntity.ok(roomData);
             }
-            RoomDataResponse roomData = roomService.getRoomData(roomId);
-            logger.debug("Room info retrieved successfully for room: {}", roomId);
-            return ResponseEntity.ok(roomData);
         } finally {
             if (lock != null) {
                 lock.unlock();

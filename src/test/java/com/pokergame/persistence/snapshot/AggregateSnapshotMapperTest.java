@@ -225,6 +225,18 @@ class AggregateSnapshotMapperTest {
         String missingWinner = json.replace("\"winner\":\"Alice\"", "\"winner\":\"\"");
         assertThrows(com.pokergame.persistence.config.PersistenceException.class,
                 () -> mapper.deserialize(missingWinner.getBytes(StandardCharsets.UTF_8)));
+
+        String missingMessage = json.replace("\"message\":", "\"message\":\"\", \"oldMessage\":");
+        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+                () -> mapper.deserialize(missingMessage.getBytes(StandardCharsets.UTF_8)));
+
+        String invalidCapacityLow = json.replace("\"maxPlayers\":6", "\"maxPlayers\":1");
+        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+                () -> mapper.deserialize(invalidCapacityLow.getBytes(StandardCharsets.UTF_8)));
+
+        String invalidCapacityHigh = json.replace("\"maxPlayers\":6", "\"maxPlayers\":11");
+        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+                () -> mapper.deserialize(invalidCapacityHigh.getBytes(StandardCharsets.UTF_8)));
     }
 
     @Test

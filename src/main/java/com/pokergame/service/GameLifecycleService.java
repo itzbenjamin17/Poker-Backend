@@ -631,9 +631,10 @@ public class GameLifecycleService {
                 event = gameStateService.captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
                 game.setRetainedTerminalResult(event);
             }
-            if (room != null) {
-                room.setTerminal(true);
-            }
+        }
+
+        if (room != null) {
+            room.setTerminal(true);
         }
 
         if (winner == null) {

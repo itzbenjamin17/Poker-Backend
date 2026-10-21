@@ -35,7 +35,7 @@ public class Room {
     private final String password;
     private LocalDateTime createdAt;
     private boolean isGameStarted;
-    private boolean isTerminal;
+    private volatile boolean isTerminal;
 
 
     /**
@@ -413,7 +413,7 @@ public class Room {
      *
      * @return true if game is terminal
      */
-    public synchronized boolean isTerminal() {
+    public boolean isTerminal() {
         return isTerminal;
     }
 
@@ -422,7 +422,7 @@ public class Room {
      *
      * @param terminal whether the room is in post-game review
      */
-    public synchronized void setTerminal(boolean terminal) {
+    public void setTerminal(boolean terminal) {
         this.isTerminal = terminal;
     }
 }
