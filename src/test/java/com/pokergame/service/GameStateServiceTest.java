@@ -829,6 +829,253 @@ class GameStateServiceTest {
                 "No player must be marked isCurrentPlayer == true during showdown ready countdown broadcast");
     }
 
+    @Test
+    void broadcastGameState_DuringShowdownReadyCountdown_PreservesWinnersChipsWonAndCardsOnReadyToggle() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player winner = testPlayers.get(0);
+        Player loser = testPlayers.get(1);
+        winner.setHandRank(com.pokergame.enums.HandRank.TWO_PAIR);
+        winner.setBestHand(List.of(
+                new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.KING, Suit.CLUBS), new Card(Rank.KING, Suit.DIAMONDS),
+                new Card(Rank.QUEEN, Suit.SPADES)));
+        winner.getHoleCards().clear();
+        winner.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS)));
+
+        loser.setHandRank(com.pokergame.enums.HandRank.ONE_PAIR);
+        loser.setBestHand(List.of(
+                new Card(Rank.JACK, Suit.SPADES), new Card(Rank.JACK, Suit.HEARTS),
+                new Card(Rank.TEN, Suit.CLUBS), new Card(Rank.NINE, Suit.DIAMONDS),
+                new Card(Rank.EIGHT, Suit.SPADES)));
+        loser.getHoleCards().clear();
+        loser.getHoleCards().addAll(List.of(new Card(Rank.JACK, Suit.SPADES), new Card(Rank.JACK, Suit.HEARTS)));
+
+        HandSettlementResult settlement = new HandSettlementResult(
+                Map.of(winner.getPlayerId(), 200),
+                Map.of(),
+                Set.of(winner.getPlayerId()),
+                0,
+                true);
+
+        Game showdownGame = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
+                .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList())
+                .remainingDeck(List.of())
+                .communityCards(List.of(
+                        new Card(Rank.KING, Suit.CLUBS), new Card(Rank.KING, Suit.DIAMONDS),
+                        new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TEN, Suit.CLUBS),
+                        new Card(Rank.NINE, Suit.DIAMONDS)))
+                .pot(0)
+                .dealerPosition(0)
+                .smallBlindPosition(0)
+                .bigBlindPosition(1)
+                .currentPlayerPosition(0)
+                .currentHighestBet(0)
+                .currentPhase(GamePhase.SHOWDOWN)
+                .gameOver(false)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handContributions(Map.of())
+                .preHandCarryOver(0)
+                .lastSettlementResult(settlement)
+                .readyCountdownActive(true)
+                .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
+                .everyoneHasHadInitialTurn(true)
+                .actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of())
+                .handEvaluator(handEvaluator)
+                .build();
+
+        // 1. Initial ready toggle (Player 1 marks ready)
+        winner.setReadyForNextHand(true);
+        gameStateService.broadcastGameState(GAME_ID, showdownGame);
+
+        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        PublicGameStateResponse response = captor.getValue();
+
+        assertEquals(List.of("Player1"), response.winners());
+        assertEquals(200, response.winningsPerPlayer());
+        assertTrue(response.handSettled());
+        assertNull(response.currentPlayerName());
+        assertNull(response.currentPlayerId());
+
+        PublicPlayerState winnerState = response.players().stream()
+                .filter(p -> p.id().equals(winner.getPlayerId())).findFirst().orElseThrow();
+        PublicPlayerState loserState = response.players().stream()
+                .filter(p -> p.id().equals(loser.getPlayerId())).findFirst().orElseThrow();
+
+        assertTrue(winnerState.isWinner());
+        assertEquals(200, winnerState.chipsWon());
+        assertEquals(winner.getHoleCards(), winnerState.holeCards());
+        assertEquals(com.pokergame.enums.HandRank.TWO_PAIR, winnerState.handRank());
+        assertTrue(winnerState.isReadyForNextHand());
+        assertFalse(winnerState.isCurrentPlayer());
+
+        assertFalse(loserState.isWinner());
+        assertEquals(0, loserState.chipsWon());
+        assertEquals(loser.getHoleCards(), loserState.holeCards());
+        assertEquals(com.pokergame.enums.HandRank.ONE_PAIR, loserState.handRank());
+        assertFalse(loserState.isReadyForNextHand());
+        assertFalse(loserState.isCurrentPlayer());
+
+        // 2. Intermediate ready toggle (Player 1 unmarks ready)
+        winner.setReadyForNextHand(false);
+        reset(messagingTemplate);
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        gameStateService.broadcastGameState(GAME_ID, showdownGame);
+
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        PublicGameStateResponse unreadyResponse = captor.getValue();
+
+        assertEquals(List.of("Player1"), unreadyResponse.winners());
+        assertEquals(200, unreadyResponse.winningsPerPlayer());
+        assertTrue(unreadyResponse.handSettled());
+
+        PublicPlayerState unreadyWinner = unreadyResponse.players().stream()
+                .filter(p -> p.id().equals(winner.getPlayerId())).findFirst().orElseThrow();
+        assertFalse(unreadyWinner.isReadyForNextHand());
+        assertTrue(unreadyWinner.isWinner());
+        assertEquals(200, unreadyWinner.chipsWon());
+        assertEquals(winner.getHoleCards(), unreadyWinner.holeCards());
+    }
+
+    @Test
+    void getPublicGameStateSnapshot_DuringShowdownReadyCountdown_RetainsShowdownSettlementResults() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player winner = testPlayers.get(0);
+        Player loser = testPlayers.get(1);
+        winner.setHandRank(com.pokergame.enums.HandRank.FULL_HOUSE);
+        winner.setBestHand(List.of(
+                new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.ACE, Suit.CLUBS), new Card(Rank.KING, Suit.DIAMONDS),
+                new Card(Rank.KING, Suit.SPADES)));
+        winner.getHoleCards().clear();
+        winner.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS)));
+
+        loser.setHandRank(com.pokergame.enums.HandRank.FLUSH);
+        loser.setBestHand(List.of(
+                new Card(Rank.KING, Suit.HEARTS), new Card(Rank.QUEEN, Suit.HEARTS),
+                new Card(Rank.TEN, Suit.HEARTS), new Card(Rank.EIGHT, Suit.HEARTS),
+                new Card(Rank.TWO, Suit.HEARTS)));
+        loser.getHoleCards().clear();
+        loser.getHoleCards().addAll(List.of(new Card(Rank.QUEEN, Suit.HEARTS), new Card(Rank.TWO, Suit.HEARTS)));
+
+        HandSettlementResult settlement = new HandSettlementResult(
+                Map.of(winner.getPlayerId(), 300),
+                Map.of(),
+                Set.of(winner.getPlayerId()),
+                0,
+                true);
+
+        Game countdownGame = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
+                .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList())
+                .remainingDeck(List.of())
+                .communityCards(List.of())
+                .pot(0)
+                .dealerPosition(0)
+                .smallBlindPosition(0)
+                .bigBlindPosition(1)
+                .currentPlayerPosition(0)
+                .currentHighestBet(0)
+                .currentPhase(GamePhase.SHOWDOWN)
+                .gameOver(false)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handContributions(Map.of())
+                .preHandCarryOver(0)
+                .lastSettlementResult(settlement)
+                .readyCountdownActive(true)
+                .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 6000)
+                .everyoneHasHadInitialTurn(true)
+                .actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of())
+                .handEvaluator(handEvaluator)
+                .build();
+
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, countdownGame);
+
+        assertEquals(List.of("Player1"), response.winners());
+        assertEquals(300, response.winningsPerPlayer());
+        assertTrue(response.handSettled());
+        assertNull(response.currentPlayerName());
+        assertNull(response.currentPlayerId());
+        assertTrue(response.legalActions().isEmpty());
+
+        PublicPlayerState p1 = response.players().stream()
+                .filter(p -> p.id().equals(winner.getPlayerId())).findFirst().orElseThrow();
+        PublicPlayerState p2 = response.players().stream()
+                .filter(p -> p.id().equals(loser.getPlayerId())).findFirst().orElseThrow();
+
+        assertTrue(p1.isWinner());
+        assertEquals(300, p1.chipsWon());
+        assertEquals(winner.getHoleCards(), p1.holeCards());
+        assertEquals(com.pokergame.enums.HandRank.FULL_HOUSE, p1.handRank());
+        assertFalse(p1.isCurrentPlayer());
+
+        assertFalse(p2.isWinner());
+        assertEquals(0, p2.chipsWon());
+        assertEquals(loser.getHoleCards(), p2.holeCards());
+        assertEquals(com.pokergame.enums.HandRank.FLUSH, p2.handRank());
+        assertFalse(p2.isCurrentPlayer());
+    }
+
+    @Test
+    void broadcastGameState_AfterBroadcastShowdownResultsWithoutGameLevelSettlement_PreservesSettlementAcrossReadyToggle() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player winner = testPlayers.getFirst();
+        winner.setHandRank(com.pokergame.enums.HandRank.STRAIGHT);
+        winner.getHoleCards().clear();
+        winner.getHoleCards().addAll(List.of(new Card(Rank.TEN, Suit.SPADES), new Card(Rank.NINE, Suit.HEARTS)));
+
+        Game gameWithoutSettlement = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
+                .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList())
+                .remainingDeck(List.of())
+                .communityCards(List.of())
+                .pot(100)
+                .dealerPosition(0)
+                .smallBlindPosition(0)
+                .bigBlindPosition(1)
+                .currentPlayerPosition(0)
+                .currentHighestBet(0)
+                .currentPhase(GamePhase.SHOWDOWN)
+                .gameOver(false)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handContributions(Map.of())
+                .preHandCarryOver(0)
+                .lastSettlementResult(null)
+                .readyCountdownActive(true)
+                .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
+                .everyoneHasHadInitialTurn(true)
+                .actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of())
+                .handEvaluator(handEvaluator)
+                .build();
+
+        // Broadcast initial showdown results (which populates retained settlement for the game)
+        gameStateService.broadcastShowdownResults(GAME_ID, gameWithoutSettlement, List.of(winner), 100);
+
+        // Player marks ready and triggers broadcastGameState
+        winner.setReadyForNextHand(true);
+        reset(messagingTemplate);
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        gameStateService.broadcastGameState(GAME_ID, gameWithoutSettlement);
+
+        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        PublicGameStateResponse response = captor.getValue();
+
+        assertEquals(List.of("Player1"), response.winners());
+        assertEquals(100, response.winningsPerPlayer());
+        assertTrue(response.handSettled());
+        PublicPlayerState p1 = response.players().stream()
+                .filter(p -> p.id().equals(winner.getPlayerId())).findFirst().orElseThrow();
+        assertTrue(p1.isWinner());
+        assertEquals(100, p1.chipsWon());
+        assertEquals(winner.getHoleCards(), p1.holeCards());
+        assertTrue(p1.isReadyForNextHand());
+    }
+
     private Player settledPlayer(String name, String id, int contribution) {
         return Player.restoreBuilder().name(name).playerId(id).chips(0).holeCards(List.of(
                         new com.pokergame.model.Card(com.pokergame.enums.Rank.ACE, com.pokergame.enums.Suit.SPADES),

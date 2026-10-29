@@ -30,6 +30,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import com.pokergame.model.HandSettlementResult;
 
 /**
  * Service class responsible for managing and broadcasting game state.
@@ -43,6 +45,8 @@ public class GameStateService {
     private final SimpMessagingTemplate messagingTemplate;
 
     private final RoomService roomService;
+
+    private final Map<String, HandSettlementResult> retainedSettlements = new ConcurrentHashMap<>();
 
     /**
      * Creates the projection service with room authorization context and the STOMP
@@ -167,6 +171,10 @@ public class GameStateService {
                     ? settlement.contestedAwards()
                     : winners.stream().collect(java.util.stream.Collectors.toMap(Player::getPlayerId,
                             ignored -> winningsPerPlayer, (left, right) -> left));
+            HandSettlementResult effectiveSettlement = retainedSettlement
+                    ? settlement
+                    : new HandSettlementResult(contestedAwards, Map.of(), winnerIds, 0, true);
+            retainedSettlements.put(gameId, effectiveSettlement);
             List<Player> projectedWinners = game.getPlayers().stream()
                     .filter(player -> winnerIds.contains(player.getPlayerId())).toList();
             winnerNames = projectedWinners.stream().map(Player::getName).toList();
@@ -576,13 +584,21 @@ public class GameStateService {
         }
         List<PublicPlayerState> playerStateList = new ArrayList<>();
         boolean autoAdvancing = game.getScheduledTaskDeadline(com.pokergame.enums.ScheduledGameTask.AUTO_ADVANCE) != null;
-        com.pokergame.model.HandSettlementResult settlement = game.getLastSettlementResult();
+        HandSettlementResult rawSettlement = game.getLastSettlementResult();
+        boolean isShowdown = game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive();
+        if (rawSettlement != null && rawSettlement.settled()) {
+            retainedSettlements.put(gameId, rawSettlement);
+        } else if (!isShowdown && !game.isGameOver()) {
+            retainedSettlements.remove(gameId);
+        }
+        final HandSettlementResult settlement = (rawSettlement != null && rawSettlement.settled())
+                ? rawSettlement
+                : (isShowdown ? retainedSettlements.get(gameId) : null);
         boolean handSettled = settlement != null && settlement.settled();
         boolean revealSettledHands = handSettled && game.getPlayers().stream()
                 .filter(player -> settlement.winnerIds().contains(player.getPlayerId()))
                 .anyMatch(player -> player.getHandRank() != null
                         && player.getHandRank() != com.pokergame.enums.HandRank.NO_HAND);
-        boolean isShowdown = game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive();
         Player currentPlayer = !isShowdown && !autoAdvancing && !handSettled && !game.getActivePlayers().isEmpty()
                 ? game.getCurrentPlayer() : null;
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
