@@ -6,6 +6,7 @@ import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.dto.response.PlayerNotificationResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerStatus;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ResponseMessage;
@@ -581,7 +582,8 @@ public class GameStateService {
                 .filter(player -> settlement.winnerIds().contains(player.getPlayerId()))
                 .anyMatch(player -> player.getHandRank() != null
                         && player.getHandRank() != com.pokergame.enums.HandRank.NO_HAND);
-        Player currentPlayer = !autoAdvancing && !handSettled && !game.getActivePlayers().isEmpty()
+        boolean isShowdown = game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive();
+        Player currentPlayer = !isShowdown && !autoAdvancing && !handSettled && !game.getActivePlayers().isEmpty()
                 ? game.getCurrentPlayer() : null;
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();

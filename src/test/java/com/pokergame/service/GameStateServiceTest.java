@@ -715,6 +715,120 @@ class GameStateServiceTest {
         assertNull(ready.players().stream().filter(p -> p.id().equals(oldOut.getPlayerId())).findFirst().orElseThrow().holeCards());
     }
 
+    @Test
+    void getPublicGameStateSnapshot_DuringShowdownPhase_NullifiesCurrentPlayerAndTurnPointers() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Game showdownGame = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
+                .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList())
+                .remainingDeck(List.of())
+                .communityCards(List.of())
+                .pot(100)
+                .dealerPosition(0)
+                .smallBlindPosition(0)
+                .bigBlindPosition(1)
+                .currentPlayerPosition(0)
+                .currentHighestBet(0)
+                .currentPhase(GamePhase.SHOWDOWN)
+                .gameOver(false)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handContributions(Map.of())
+                .preHandCarryOver(0)
+                .lastSettlementResult(null)
+                .readyCountdownActive(false)
+                .everyoneHasHadInitialTurn(true)
+                .actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of())
+                .handEvaluator(handEvaluator)
+                .build();
+
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, showdownGame);
+
+        assertNull(response.currentPlayerName(), "currentPlayerName must be null during SHOWDOWN phase");
+        assertNull(response.currentPlayerId(), "currentPlayerId must be null during SHOWDOWN phase");
+        assertTrue(response.legalActions().isEmpty(), "legalActions must be empty during SHOWDOWN phase");
+        assertTrue(response.players().stream().noneMatch(PublicPlayerState::isCurrentPlayer),
+                "No player must be marked isCurrentPlayer == true during SHOWDOWN phase");
+    }
+
+    @Test
+    void getPublicGameStateSnapshot_DuringReadyCountdownActive_NullifiesCurrentPlayerAndTurnPointers() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Game countdownGame = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
+                .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList())
+                .remainingDeck(List.of())
+                .communityCards(List.of())
+                .pot(100)
+                .dealerPosition(0)
+                .smallBlindPosition(0)
+                .bigBlindPosition(1)
+                .currentPlayerPosition(0)
+                .currentHighestBet(0)
+                .currentPhase(GamePhase.RIVER)
+                .gameOver(false)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handContributions(Map.of())
+                .preHandCarryOver(0)
+                .lastSettlementResult(null)
+                .readyCountdownActive(true)
+                .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
+                .everyoneHasHadInitialTurn(true)
+                .actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of())
+                .handEvaluator(handEvaluator)
+                .build();
+
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, countdownGame);
+
+        assertNull(response.currentPlayerName(), "currentPlayerName must be null during ready countdown");
+        assertNull(response.currentPlayerId(), "currentPlayerId must be null during ready countdown");
+        assertTrue(response.legalActions().isEmpty(), "legalActions must be empty during ready countdown");
+        assertTrue(response.players().stream().noneMatch(PublicPlayerState::isCurrentPlayer),
+                "No player must be marked isCurrentPlayer == true during ready countdown");
+    }
+
+    @Test
+    void broadcastGameState_DuringShowdownWithReadyCountdown_NullifiesCurrentPlayerAndTurnPointers() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Game showdownGame = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
+                .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList())
+                .remainingDeck(List.of())
+                .communityCards(List.of())
+                .pot(100)
+                .dealerPosition(0)
+                .smallBlindPosition(0)
+                .bigBlindPosition(1)
+                .currentPlayerPosition(0)
+                .currentHighestBet(0)
+                .currentPhase(GamePhase.SHOWDOWN)
+                .gameOver(false)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handContributions(Map.of())
+                .preHandCarryOver(0)
+                .lastSettlementResult(null)
+                .readyCountdownActive(true)
+                .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
+                .everyoneHasHadInitialTurn(true)
+                .actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of())
+                .handEvaluator(handEvaluator)
+                .build();
+
+        gameStateService.broadcastGameState(GAME_ID, showdownGame);
+
+        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        PublicGameStateResponse response = captor.getValue();
+
+        assertNull(response.currentPlayerName(), "currentPlayerName must be null during showdown ready countdown broadcast");
+        assertNull(response.currentPlayerId(), "currentPlayerId must be null during showdown ready countdown broadcast");
+        assertTrue(response.legalActions().isEmpty(), "legalActions must be empty during showdown ready countdown broadcast");
+        assertTrue(response.players().stream().noneMatch(PublicPlayerState::isCurrentPlayer),
+                "No player must be marked isCurrentPlayer == true during showdown ready countdown broadcast");
+    }
+
     private Player settledPlayer(String name, String id, int contribution) {
         return Player.restoreBuilder().name(name).playerId(id).chips(0).holeCards(List.of(
                         new com.pokergame.model.Card(com.pokergame.enums.Rank.ACE, com.pokergame.enums.Suit.SPADES),
