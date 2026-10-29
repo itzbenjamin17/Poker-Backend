@@ -846,6 +846,104 @@ class GameLifecycleServiceTest {
         assertNull(error.get(), "Concurrent player lookup threw an exception: " + error.get());
     }
 
+    @Test
+    @DisplayName("playerExistsInGame returns false when gameId or playerName is null")
+    void playerExistsInGame_WhenGameIdOrPlayerNameIsNull_ShouldReturnFalse() {
+        assertFalse(gameLifecycleService.playerExistsInGame(null, "Host"));
+        assertFalse(gameLifecycleService.playerExistsInGame(ROOM_ID, null));
+        assertFalse(gameLifecycleService.playerExistsInGame(null, null));
+    }
+
+    @Test
+    @DisplayName("playerExistsInGame returns false when game players list is null")
+    void playerExistsInGame_WhenGamePlayersListIsNull_ShouldReturnFalse() {
+        Game game = mock(Game.class);
+        when(game.getGameId()).thenReturn("mock-game-null-players");
+        when(game.getPlayers()).thenReturn(null);
+        gameLifecycleService.restoreGame(game);
+
+        assertFalse(gameLifecycleService.playerExistsInGame("mock-game-null-players", "Host"));
+    }
+
+    @Test
+    @DisplayName("playerExistsInGame safely skips null elements in players list")
+    void playerExistsInGame_WithNullElementsInPlayersList_ShouldHandleSafely() {
+        Game game = mock(Game.class);
+        when(game.getGameId()).thenReturn("mock-game-null-elements");
+        Player activePlayer = new Player("Alice", "p1", 100);
+        List<Player> playerList = new ArrayList<>();
+        playerList.add(null);
+        playerList.add(activePlayer);
+        playerList.add(null);
+
+        when(game.getPlayers()).thenReturn(playerList);
+        gameLifecycleService.restoreGame(game);
+
+        assertTrue(gameLifecycleService.playerExistsInGame("mock-game-null-elements", "Alice"));
+        assertFalse(gameLifecycleService.playerExistsInGame("mock-game-null-elements", "Bob"));
+    }
+
+    @Test
+    @DisplayName("playerExistsInGame under multi-threaded read/write stress completes without ConcurrentModificationException")
+    void playerExistsInGame_MultiThreadedStress_CompletesWithoutConcurrentModificationException() throws Exception {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+
+        int readerCount = 4;
+        int mutatorCount = 2;
+        int operationsPerThread = 1500;
+        java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
+        java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+        CountDownLatch startLatch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(mutatorCount);
+
+        ExecutorService executor = Executors.newFixedThreadPool(readerCount + mutatorCount);
+
+        for (int i = 0; i < readerCount; i++) {
+            final int readerId = i;
+            executor.submit(() -> {
+                try {
+                    startLatch.await();
+                    while (running.get() && error.get() == null) {
+                        String queryName = (readerId % 2 == 0) ? "Host" : "NonExistent";
+                        gameLifecycleService.playerExistsInGame(ROOM_ID, queryName);
+                    }
+                } catch (Throwable t) {
+                    error.set(t);
+                }
+            });
+        }
+
+        for (int i = 0; i < mutatorCount; i++) {
+            final int mutatorId = i;
+            executor.submit(() -> {
+                try {
+                    startLatch.await();
+                    for (int op = 0; op < operationsPerThread && running.get() && error.get() == null; op++) {
+                        synchronized (game) {
+                            Player p = new Player("StressPlayer_" + mutatorId + "_" + op, "stress_" + mutatorId + "_" + op, 50);
+                            game.getPlayers().add(p);
+                            game.getPlayers().remove(p);
+                        }
+                    }
+                } catch (Throwable t) {
+                    error.set(t);
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+        }
+
+        startLatch.countDown();
+        doneLatch.await(10, TimeUnit.SECONDS);
+        running.set(false);
+        executor.shutdown();
+        executor.awaitTermination(5, TimeUnit.SECONDS);
+
+        assertNull(error.get(), "Concurrent modification or unexpected error occurred: " + error.get());
+    }
+
     /**
      * Protects the contract that mark player disconnected when player exists should set disconnected and broadcast.
      */

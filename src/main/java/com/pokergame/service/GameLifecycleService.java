@@ -1059,14 +1059,22 @@ public class GameLifecycleService {
      * @return true if the player exists in the game, false otherwise
      */
     public boolean playerExistsInGame(String gameId, String playerName) {
+        if (gameId == null || playerName == null) {
+            return false;
+        }
         Game game = getGame(gameId);
         if (game == null) {
             return false;
         }
 
         synchronized (game) {
-            return game.getPlayers().stream()
-                    .anyMatch(player -> player.getName().equals(playerName) && !player.getIsOut());
+            List<Player> players = game.getPlayers();
+            if (players == null) {
+                return false;
+            }
+            return players.stream()
+                    .filter(Objects::nonNull)
+                    .anyMatch(player -> playerName.equals(player.getName()) && !player.getIsOut());
         }
     }
 
