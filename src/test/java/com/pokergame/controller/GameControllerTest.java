@@ -301,6 +301,47 @@ class GameControllerTest {
                 .andExpect(jsonPath("$.status").value(403));
     }
 
+    @Test
+    @DisplayName("GET /api/game/{gameId}/review - Success with matching query player name (200 OK)")
+    void getGameReview_MatchingQueryPlayerName_Success() throws Exception {
+        GameEndResponse endResponse = new GameEndResponse("GAME_END", gameId, playerName, 1000, false, "Winner", null);
+        when(gameLifecycleService.getGameReview(gameId, playerName)).thenReturn(endResponse);
+
+        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
+                .param("playerName", playerName)
+                .principal(auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.winner").value(playerName))
+                .andExpect(jsonPath("$.winnerChips").value(1000))
+                .andExpect(jsonPath("$.type").value("GAME_END"));
+
+        verify(gameLifecycleService).getGameReview(gameId, playerName);
+    }
+
+    @Test
+    @DisplayName("GET /api/game/{gameId}/review - Forbidden when query player name mismatches principal (403)")
+    void getGameReview_QueryPlayerNameMismatch_Forbidden() throws Exception {
+        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
+                .param("playerName", "different-player")
+                .principal(auth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.message").value("Query player name does not match authenticated player."));
+
+        verify(gameLifecycleService, never()).getGameReview(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("GET /api/game/{gameId}/review - Forbidden when unauthenticated (403)")
+    void getGameReview_Unauthenticated_Forbidden() throws Exception {
+        mockMvc.perform(get("/api/game/{gameId}/review", gameId))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.message").value("Invalid authentication principal"));
+
+        verify(gameLifecycleService, never()).getGameReview(anyString(), anyString());
+    }
+
 
     /**
      * Protects the contract that WebSocket actions delegate the authenticated

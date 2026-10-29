@@ -498,9 +498,15 @@ public class GameStateService {
         if (maxPlayers >= 2 && maxPlayers <= 10) {
             resolvedMaxPlayers = maxPlayers;
         } else {
-            int retainedPlayerCount = game != null && game.getPlayers() != null ? game.getPlayers().size() : 2;
-            resolvedMaxPlayers = Math.min(10, Math.max(2, retainedPlayerCount));
+            Room room = roomService != null ? roomService.getRoom(gameId) : null;
+            if (room != null && room.getMaxPlayers() >= 2 && room.getMaxPlayers() <= 10) {
+                resolvedMaxPlayers = room.getMaxPlayers();
+            } else {
+                int retainedPlayerCount = game != null && game.getPlayers() != null ? game.getPlayers().size() : 2;
+                resolvedMaxPlayers = Math.max(2, Math.min(10, retainedPlayerCount));
+            }
         }
+        resolvedMaxPlayers = Math.max(2, Math.min(10, resolvedMaxPlayers));
 
         boolean contestedShowdown = game.getCurrentPhase() == com.pokergame.enums.GamePhase.SHOWDOWN
                 && game.getLastSettlementResult() != null && game.getLastSettlementResult().settled()

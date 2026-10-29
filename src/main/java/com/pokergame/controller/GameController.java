@@ -237,20 +237,31 @@ public class GameController {
      * Fetches the frozen terminal result for post-game review.
      * SECURED ENDPOINT - Requires JWT token.
      *
-     * @param gameId          game identifier
-     * @param playerPrincipal authenticated player principal
+     * @param gameId              game identifier
+     * @param requestedPlayerName optional querying player name to match against principal
+     * @param playerPrincipal     authenticated player principal
      * @return direct GameEndResponse
      */
     @GetMapping("/{gameId}/review")
     public ResponseEntity<GameEndResponse> getGameReview(
             @PathVariable String gameId,
+            @RequestParam(value = "playerName", required = false) String requestedPlayerName,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
+        if (playerPrincipal == null) {
+            throw new UnauthorisedActionException("Authentication required.");
+        }
+
         String playerName = playerPrincipal.playerName();
         logger.debug("Player {} requested game review for {}", playerName, gameId);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
+        if (playerPrincipal.roomId() == null || !playerPrincipal.roomId().equals(gameId)) {
             throw new UnauthorisedActionException("Token is not valid for this game.");
+        }
+
+        // Security check: ensure querying player name matches the authenticated principal
+        if (requestedPlayerName != null && !requestedPlayerName.isBlank() && !requestedPlayerName.equals(playerName)) {
+            throw new UnauthorisedActionException("Query player name does not match authenticated player.");
         }
 
         try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {

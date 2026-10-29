@@ -1457,4 +1457,79 @@ class GameStateServiceTest {
             assertEquals(testGame.getHandNumber(), sentState.handNumber());
         }
     }
+
+    @Test
+    @DisplayName("captureGameEnd clamps maxPlayers to [2, 10] and never emits 0 when room is null")
+    void captureGameEnd_WhenRoomIsNull_ClampsMaxPlayersToValidRange() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(null);
+        Player winner = testPlayers.get(0);
+
+        GameEndResponse response = gameStateService.captureGameEnd(GAME_ID, testGame, winner, false, 0);
+
+        assertNotNull(response);
+        assertNotNull(response.finalState());
+        int maxPlayers = response.finalState().maxPlayers();
+        assertTrue(maxPlayers >= 2 && maxPlayers <= 10, "maxPlayers must be within [2, 10], got: " + maxPlayers);
+        assertEquals(2, maxPlayers, "Should resolve to retained player count (2) when room is null");
+        assertNotEquals(0, maxPlayers, "finalState.maxPlayers must never be 0");
+    }
+
+    @Test
+    @DisplayName("captureGameEnd clamps maxPlayers to retained count clamped at 10 when room is null")
+    void captureGameEnd_WhenRoomIsNullWithManyPlayers_ClampsMaxPlayersToRetainedCount() {
+        List<Player> fourPlayers = new ArrayList<>();
+        fourPlayers.add(new Player("P1", UUID.randomUUID().toString(), 100));
+        fourPlayers.add(new Player("P2", UUID.randomUUID().toString(), 100));
+        fourPlayers.add(new Player("P3", UUID.randomUUID().toString(), 100));
+        fourPlayers.add(new Player("P4", UUID.randomUUID().toString(), 100));
+        Game fourPlayerGame = new Game("four-player-game", fourPlayers, 5, 10, handEvaluator);
+        when(roomService.getRoom("four-player-game")).thenReturn(null);
+
+        GameEndResponse response = gameStateService.captureGameEnd("four-player-game", fourPlayerGame, fourPlayers.get(0), false, 0);
+
+        assertNotNull(response);
+        assertNotNull(response.finalState());
+        assertEquals(4, response.finalState().maxPlayers());
+    }
+
+    @Test
+    @DisplayName("captureGameEnd clamps maxPlayers out of bounds to [2, 10]")
+    void captureGameEnd_WhenConfiguredMaxPlayersOutOfBounds_ClampsToValidRange() {
+        Player winner = testPlayers.get(0);
+
+        // Negative maxPlayers
+        GameEndResponse responseNegative = gameStateService.captureGameEnd(GAME_ID, testGame, winner, false, -1);
+        assertNotNull(responseNegative.finalState());
+        assertTrue(responseNegative.finalState().maxPlayers() >= 2 && responseNegative.finalState().maxPlayers() <= 10);
+
+        // 1 player (below minimum 2)
+        GameEndResponse responseOne = gameStateService.captureGameEnd(GAME_ID, testGame, winner, false, 1);
+        assertNotNull(responseOne.finalState());
+        assertTrue(responseOne.finalState().maxPlayers() >= 2 && responseOne.finalState().maxPlayers() <= 10);
+
+        // Valid configured maxPlayers (6)
+        GameEndResponse responseSix = gameStateService.captureGameEnd(GAME_ID, testGame, winner, false, 6);
+        assertNotNull(responseSix.finalState());
+        assertEquals(6, responseSix.finalState().maxPlayers());
+    }
+
+    @Test
+    @DisplayName("broadcastGameEnd emits clamped maxPlayers in finalState when room is null")
+    void broadcastGameEnd_WhenRoomIsNull_EmitsClampedMaxPlayersInFinalState() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(null);
+        Player winner = testPlayers.get(0);
+
+        gameStateService.broadcastGameEnd(GAME_ID, testGame, winner, false);
+
+        GameEndResponse retained = testGame.getRetainedTerminalResult();
+        assertNotNull(retained);
+        assertNotNull(retained.finalState());
+        int maxPlayers = retained.finalState().maxPlayers();
+        assertTrue(maxPlayers >= 2 && maxPlayers <= 10, "maxPlayers must be within [2, 10], got: " + maxPlayers);
+        assertNotEquals(0, maxPlayers, "finalState.maxPlayers must never be 0 when room is null");
+
+        ArgumentCaptor<GameEndResponse> captor = ArgumentCaptor.forClass(GameEndResponse.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        assertEquals(maxPlayers, captor.getValue().finalState().maxPlayers());
+    }
 }
