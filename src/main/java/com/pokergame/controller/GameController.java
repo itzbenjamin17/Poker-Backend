@@ -282,16 +282,22 @@ public class GameController {
     public ResponseEntity<ApiResponse<GameEndResponse>> claimWin(
             @PathVariable String gameId,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
+        if (playerPrincipal == null) {
+            throw new UnauthorisedActionException("Authentication required.");
+        }
+
         String playerName = playerPrincipal.playerName();
         logger.info("Player {} attempting to claim win in game {}", playerName, gameId);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
+        if (playerPrincipal.roomId() == null || !playerPrincipal.roomId().equals(gameId)) {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        GameEndResponse result = gameLifecycleService.claimWin(gameId, playerName);
-        logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
-        return ResponseEntity.ok(ApiResponse.success("Win claimed successfully", result));
+        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+            GameEndResponse result = gameLifecycleService.claimWin(gameId, playerName);
+            logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
+            return ResponseEntity.ok(ApiResponse.success("Win claimed successfully", result));
+        }
     }
 }

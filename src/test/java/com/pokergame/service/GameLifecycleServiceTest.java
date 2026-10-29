@@ -1841,6 +1841,61 @@ class GameLifecycleServiceTest {
     }
 
     @Test
+    @DisplayName("claimWin returns ApiResponse-compatible GameEndResponse with valid terminal state and winner")
+    void claimWin_ReturnsGameEndResponseWithValidTerminalStateAndWinner() {
+        testRoom.addPlayer("Player3");
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", System.currentTimeMillis() + 120_000);
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", System.currentTimeMillis() + 120_000);
+
+        reset(gameStateService);
+        stubGameEndCapture();
+
+        GameEndResponse result = gameLifecycleService.claimWin(ROOM_ID, "Host");
+        assertNotNull(result, "claimWin must return a non-null GameEndResponse");
+        assertEquals("GAME_END", result.type());
+        assertEquals("Host", result.winner(), "Claimant must be recorded as terminal winner");
+        assertTrue(result.isForfeit(), "Disconnect claim must be marked as forfeit");
+        assertNotNull(result.finalState(), "finalState in GameEndResponse must not be null");
+        assertTrue(result.finalState().maxPlayers() >= 2 && result.finalState().maxPlayers() <= 10,
+                "finalState.maxPlayers must be within [2, 10]");
+        assertNotNull(result.finalState().players(), "finalState.players must not be null");
+        assertTrue(result.finalState().players().stream().anyMatch(p -> p.name().equals("Host") && Boolean.TRUE.equals(p.isWinner())),
+                "Claimant Host must be flagged as winner in finalState");
+
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        assertNotNull(game);
+        assertTrue(game.isGameOver(), "Game must be marked game over after claimWin");
+        assertSame(result, game.getRetainedTerminalResult(), "Retained terminal result must match returned result");
+    }
+
+    @Test
+    @DisplayName("getGameReview recovers terminal GameEndResponse after game is over without 404")
+    void getGameReview_WhenGameOverAndRetainedResultNull_RecoversWithout404() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        assertNotNull(game);
+
+        // Mark game over with null retainedTerminalResult
+        game.markGameOver();
+        game.setRetainedTerminalResult(null);
+
+        reset(gameStateService);
+        stubGameEndCapture();
+
+        // getGameReview should synthesize the retained terminal result instead of throwing 404 ResourceNotFoundException
+        GameEndResponse review = gameLifecycleService.getGameReview(ROOM_ID, "Host");
+        assertNotNull(review, "getGameReview must return non-null GameEndResponse");
+        assertEquals("GAME_END", review.type());
+        assertNotNull(review.winner(), "Winner must be resolved");
+        assertNotNull(review.finalState(), "finalState must be synthesized");
+        assertSame(review, game.getRetainedTerminalResult(), "Synthesized result must be retained on the game");
+    }
+
+    @Test
     @DisplayName("Empty terminal room preserves container until cleanup, closed to joining")
     void terminalRoom_PreservesContainerWhenEmptyUntilCleanup() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);

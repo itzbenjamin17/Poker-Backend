@@ -1406,11 +1406,25 @@ public class GameLifecycleService {
                 if (game.isGameOver()) {
                     GameEndResponse retained = game.getRetainedTerminalResult();
                     if (retained == null) {
+                        Player winner = game.resolveGameWinner();
+                        if (winner == null && !game.getPlayers().isEmpty()) {
+                            winner = game.getPlayers().stream()
+                                    .filter(p -> !p.getIsOut() && !p.getIsDisconnected())
+                                    .findFirst()
+                                    .orElse(game.getPlayers().get(0));
+                        }
+                        if (winner != null && gameStateService != null) {
+                            retained = gameStateService.captureGameEnd(gameId, game, winner, true, room.getMaxPlayers());
+                            game.setRetainedTerminalResult(retained);
+                        }
+                    }
+                    if (retained == null) {
                         throw new ResourceNotFoundException("Game not found");
                     }
-                    boolean authorized = retained.finalState() != null
+                    boolean authorized = (retained.finalState() != null
                             && retained.finalState().players() != null
-                            && retained.finalState().players().stream().anyMatch(p -> p.name().equals(playerName));
+                            && retained.finalState().players().stream().anyMatch(p -> p.name().equals(playerName)))
+                            || (game.getPlayers() != null && game.getPlayers().stream().anyMatch(p -> p.getName().equals(playerName)));
                     if (!authorized) {
                         throw new UnauthorisedActionException("You are not part of this game's terminal result.");
                     }
@@ -1424,7 +1438,18 @@ public class GameLifecycleService {
                         .map(Player::getName)
                         .toList();
                 departParticipantsUnderLock(gameId, opponents, room, game);
-                return game.getRetainedTerminalResult();
+                GameEndResponse retained = game.getRetainedTerminalResult();
+                if (retained == null && game.isGameOver()) {
+                    Player claimant = game.getPlayers().stream()
+                            .filter(p -> p.getName().equals(playerName))
+                            .findFirst()
+                            .orElse(null);
+                    if (claimant != null && gameStateService != null) {
+                        retained = gameStateService.captureGameEnd(gameId, game, claimant, true, room.getMaxPlayers());
+                        game.setRetainedTerminalResult(retained);
+                    }
+                }
+                return retained;
             }
         }
     }
@@ -1449,12 +1474,28 @@ public class GameLifecycleService {
 
             GameEndResponse retained = game.getRetainedTerminalResult();
             if (retained == null) {
+                Player winner = game.resolveGameWinner();
+                if (winner == null && !game.getPlayers().isEmpty()) {
+                    winner = game.getPlayers().stream()
+                            .filter(p -> !p.getIsOut() && !p.getIsDisconnected())
+                            .findFirst()
+                            .orElse(game.getPlayers().get(0));
+                }
+                if (winner != null && gameStateService != null) {
+                    Room room = roomService != null ? roomService.getRoom(gameId) : null;
+                    int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
+                    retained = gameStateService.captureGameEnd(gameId, game, winner, false, maxPlayers);
+                    game.setRetainedTerminalResult(retained);
+                }
+            }
+            if (retained == null) {
                 throw new ResourceNotFoundException("Game not found");
             }
 
-            boolean authorized = retained.finalState() != null
+            boolean authorized = (retained.finalState() != null
                     && retained.finalState().players() != null
-                    && retained.finalState().players().stream().anyMatch(p -> p.name().equals(playerName));
+                    && retained.finalState().players().stream().anyMatch(p -> p.name().equals(playerName)))
+                    || (game.getPlayers() != null && game.getPlayers().stream().anyMatch(p -> p.getName().equals(playerName)));
 
             if (!authorized) {
                 throw new UnauthorisedActionException("You are not part of this game's terminal result.");

@@ -4,8 +4,10 @@ import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.ReadyGateState;
 import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
@@ -237,6 +239,50 @@ class GameControllerTest {
     }
 
     @Test
+    @DisplayName("POST /api/game/{gameId}/claim-win - Returns ApiResponse<GameEndResponse> with valid terminal state and winner")
+    void claimWin_ReturnsApiResponseWithValidTerminalStateAndWinner() throws Exception {
+        PublicPlayerState playerState = new PublicPlayerState("p-1", playerName, 1000, 0, "CONNECTED", false, false, false,
+                false, false, null, List.of(), true, null, null, null, false);
+        PublicGameStateResponse finalState = new PublicGameStateResponse(
+                6, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(),
+                List.of(playerState),
+                null, null, List.of(playerName), null, false, null, false, null, false, null,
+                true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, System.currentTimeMillis(), 1);
+        GameEndResponse endResponse = new GameEndResponse("GAME_END", gameId, playerName, 1000, true, "Winner", finalState);
+        when(gameLifecycleService.claimWin(gameId, playerName)).thenReturn(endResponse);
+
+        mockMvc.perform(post("/api/game/{gameId}/claim-win", gameId)
+                .principal(auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Win claimed successfully"))
+                .andExpect(jsonPath("$.data.type").value("GAME_END"))
+                .andExpect(jsonPath("$.data.winner").value(playerName))
+                .andExpect(jsonPath("$.data.winnerChips").value(1000))
+                .andExpect(jsonPath("$.data.isForfeit").value(true))
+                .andExpect(jsonPath("$.data.finalState.maxPlayers").value(6))
+                .andExpect(jsonPath("$.data.finalState.players[0].name").value(playerName))
+                .andExpect(jsonPath("$.data.finalState.players[0].chips").value(1000))
+                .andExpect(jsonPath("$.data.finalState.players[0].isWinner").value(true));
+
+        verify(gameLifecycleService).claimWin(gameId, playerName);
+    }
+
+    @Test
+    @DisplayName("POST /api/game/{gameId}/claim-win - Forbidden when principal token room does not match")
+    void claimWin_WrongRoomId_ThrowsForbidden() throws Exception {
+        PlayerPrincipal wrongPrincipal = new PlayerPrincipal(playerName, "other-room");
+        Authentication wrongAuth = new PreAuthenticatedAuthenticationToken(wrongPrincipal, "token", Collections.emptyList());
+
+        mockMvc.perform(post("/api/game/{gameId}/claim-win", gameId)
+                .principal(wrongAuth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.message").value("Token is not valid for this game."));
+
+        verify(gameLifecycleService, never()).claimWin(anyString(), anyString());
+    }
+
+    @Test
     @DisplayName("GET /api/game/{gameId}/review - Success (200 OK)")
     void getGameReview_Success() throws Exception {
         GameEndResponse endResponse = new GameEndResponse("GAME_END", gameId, playerName, 1000, false, "Winner", null);
@@ -248,6 +294,32 @@ class GameControllerTest {
                 .andExpect(jsonPath("$.winner").value(playerName))
                 .andExpect(jsonPath("$.winnerChips").value(1000))
                 .andExpect(jsonPath("$.type").value("GAME_END"));
+
+        verify(gameLifecycleService).getGameReview(gameId, playerName);
+    }
+
+    @Test
+    @DisplayName("GET /api/game/{gameId}/review - Returns 200 with terminal GameEndResponse after game is over")
+    void getGameReview_AfterGameOver_Returns200WithTerminalGameEndResponse() throws Exception {
+        PublicPlayerState playerState = new PublicPlayerState("p-1", playerName, 1000, 0, "CONNECTED", false, false, false,
+                false, false, null, List.of(), true, null, null, null, false);
+        PublicGameStateResponse finalState = new PublicGameStateResponse(
+                6, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(),
+                List.of(playerState),
+                null, null, List.of(playerName), null, false, null, false, null, false, null,
+                true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, System.currentTimeMillis(), 1);
+        GameEndResponse endResponse = new GameEndResponse("GAME_END", gameId, playerName, 1000, false, "Winner", finalState);
+        when(gameLifecycleService.getGameReview(gameId, playerName)).thenReturn(endResponse);
+
+        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
+                .principal(auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.type").value("GAME_END"))
+                .andExpect(jsonPath("$.winner").value(playerName))
+                .andExpect(jsonPath("$.winnerChips").value(1000))
+                .andExpect(jsonPath("$.isForfeit").value(false))
+                .andExpect(jsonPath("$.finalState.maxPlayers").value(6))
+                .andExpect(jsonPath("$.finalState.players[0].name").value(playerName));
 
         verify(gameLifecycleService).getGameReview(gameId, playerName);
     }
