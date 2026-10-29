@@ -10,6 +10,11 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -699,5 +704,135 @@ class RoomTest {
         room.removePlayer("Alice");
         assertNull(room.getAbsenceDeadline("Alice"), "Removing player clears lease deadline");
         assertFalse(room.isPlayerConnected("Alice"), "Removing player clears connected status");
+    }
+
+    @Test
+    @DisplayName("Adding players up to maxPlayers capacity succeeds")
+    void addPlayer_UpToCapacity_Succeeds() {
+        Room smallRoom = new Room("cap-room", "Cap Room", "Host", 3, 5, 10, 500, null);
+        assertFalse(smallRoom.isFull());
+
+        smallRoom.addPlayer("P1");
+        assertFalse(smallRoom.isFull());
+        smallRoom.addPlayer("P2");
+        assertFalse(smallRoom.isFull());
+        smallRoom.addPlayer("P3");
+        assertTrue(smallRoom.isFull());
+
+        assertEquals(3, smallRoom.getPlayers().size());
+        assertTrue(smallRoom.hasPlayer("P1"));
+        assertTrue(smallRoom.hasPlayer("P2"));
+        assertTrue(smallRoom.hasPlayer("P3"));
+    }
+
+    @Test
+    @DisplayName("Attempting to add player when room is full throws IllegalStateException")
+    void addPlayer_WhenRoomFull_ThrowsIllegalStateException() {
+        Room smallRoom = new Room("cap-room", "Cap Room", "Host", 2, 5, 10, 500, null);
+        smallRoom.addPlayer("P1");
+        smallRoom.addPlayer("P2");
+        assertTrue(smallRoom.isFull());
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> smallRoom.addPlayer("P3"));
+        assertEquals("Room is full", ex.getMessage());
+        assertEquals(2, smallRoom.getPlayers().size());
+        assertFalse(smallRoom.hasPlayer("P3"));
+    }
+
+    @Test
+    @DisplayName("Adding existing player when room is full throws BadRequestException, not capacity exception")
+    void addPlayer_ExistingPlayerWhenRoomFull_ThrowsBadRequestExceptionNotCapacityException() {
+        Room smallRoom = new Room("cap-room", "Cap Room", "Host", 2, 5, 10, 500, null);
+        smallRoom.addPlayer("P1");
+        smallRoom.addPlayer("P2");
+        assertTrue(smallRoom.isFull());
+
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> smallRoom.addPlayer("P1"));
+        assertTrue(ex.getMessage().contains("already in the room"));
+        assertEquals(2, smallRoom.getPlayers().size());
+    }
+
+    @Test
+    @DisplayName("isFull correctly reflects capacity transitions across adds and removes")
+    void isFull_ReflectsCapacityTransitions() {
+        Room smallRoom = new Room("cap-room", "Cap Room", "Host", 2, 5, 10, 500, null);
+        assertFalse(smallRoom.isFull());
+
+        smallRoom.addPlayer("Alice");
+        assertFalse(smallRoom.isFull());
+
+        smallRoom.addPlayer("Bob");
+        assertTrue(smallRoom.isFull());
+
+        smallRoom.removePlayer("Alice");
+        assertFalse(smallRoom.isFull());
+
+        smallRoom.addPlayer("Charlie");
+        assertTrue(smallRoom.isFull());
+    }
+
+    @Test
+    @DisplayName("Concurrent addPlayer calls strictly enforce capacity invariant")
+    void addPlayer_ConcurrentJoins_StrictlyEnforcesMaxPlayers() throws InterruptedException {
+        int capacity = 4;
+        Room concurrentRoom = new Room("concurrent-room", "Concurrent Room", "Host", capacity, 5, 10, 500, null);
+        int totalThreads = 12;
+        ExecutorService executor = Executors.newFixedThreadPool(totalThreads);
+        CountDownLatch readyLatch = new CountDownLatch(totalThreads);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(totalThreads);
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger fullCount = new AtomicInteger(0);
+
+        for (int i = 0; i < totalThreads; i++) {
+            final String playerName = "Player" + i;
+            executor.submit(() -> {
+                readyLatch.countDown();
+                try {
+                    startLatch.await();
+                    concurrentRoom.addPlayer(playerName);
+                    successCount.incrementAndGet();
+                } catch (IllegalStateException e) {
+                    if ("Room is full".equals(e.getMessage())) {
+                        fullCount.incrementAndGet();
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+        }
+
+        readyLatch.await(5, TimeUnit.SECONDS);
+        startLatch.countDown();
+        assertTrue(doneLatch.await(5, TimeUnit.SECONDS), "All concurrent join threads must finish");
+        executor.shutdown();
+
+        assertEquals(capacity, successCount.get(), "Exactly maxPlayers joins must succeed");
+        assertEquals(totalThreads - capacity, fullCount.get(), "Excess join attempts must fail with Room is full");
+        assertEquals(capacity, concurrentRoom.getPlayers().size(), "Room player count must equal maxPlayers");
+        assertTrue(concurrentRoom.isFull(), "Room must report isFull() == true");
+    }
+
+    @Test
+    @DisplayName("restoreBuilder rejects snapshot if player count exceeds maxPlayers")
+    void restoreBuilder_ExceedingMaxPlayers_ThrowsIllegalStateException() {
+        Map<String, LocalDateTime> joinTimes = new LinkedHashMap<>();
+        joinTimes.put("P1", LocalDateTime.now());
+        joinTimes.put("P2", LocalDateTime.now());
+        joinTimes.put("P3", LocalDateTime.now());
+
+        assertThrows(IllegalStateException.class, () -> Room.restoreBuilder()
+                .roomId("overflow-room")
+                .roomName("Overflow Room")
+                .hostName("P1")
+                .maxPlayers(2)
+                .smallBlind(10)
+                .bigBlind(20)
+                .buyIn(1000)
+                .playersWithJoinTime(joinTimes)
+                .build());
     }
 }

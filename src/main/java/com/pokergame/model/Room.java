@@ -237,6 +237,9 @@ public class Room {
             synchronized (room) {
                 room.playersWithJoinTime.clear();
                 if (playersWithJoinTime != null) {
+                    if (playersWithJoinTime.size() > maxPlayers) {
+                        throw new IllegalStateException("Restored players count exceeds maxPlayers: " + playersWithJoinTime.size() + " > " + maxPlayers);
+                    }
                     room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
                     for (String playerName : room.playersWithJoinTime.keySet()) {
                         room.playerMembershipIds.put(playerName, java.util.UUID.randomUUID().toString());
@@ -250,19 +253,33 @@ public class Room {
     }
 
     /**
-     * Adds a player to the room if they are not already present.
+     * Checks if the room has reached its maximum player capacity.
+     *
+     * @return true if the room is full, false otherwise
+     */
+    public synchronized boolean isFull() {
+        return playersWithJoinTime.size() >= maxPlayers;
+    }
+
+    /**
+     * Adds a player to the room if they are not already present and the room has capacity.
      *
      * @param playerName the name of the player to add
+     * @return the process-local membership ID for the added player
+     * @throws BadRequestException if the player is already in the room
+     * @throws IllegalStateException if the room is full
      */
     public synchronized String addPlayer(String playerName) {
-        if (!playersWithJoinTime.containsKey(playerName)) {
-            playersWithJoinTime.put(playerName, LocalDateTime.now());
-            String membershipId = java.util.UUID.randomUUID().toString();
-            playerMembershipIds.put(playerName, membershipId);
-            return membershipId;
-        } else {
+        if (playersWithJoinTime.containsKey(playerName)) {
             throw new BadRequestException(String.format("Cannot add %s to room as they are already in the room", playerName));
         }
+        if (isFull()) {
+            throw new IllegalStateException("Room is full");
+        }
+        playersWithJoinTime.put(playerName, LocalDateTime.now());
+        String membershipId = java.util.UUID.randomUUID().toString();
+        playerMembershipIds.put(playerName, membershipId);
+        return membershipId;
     }
 
     /**
