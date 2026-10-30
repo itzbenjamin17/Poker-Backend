@@ -28,6 +28,7 @@ import java.util.List;
 /**
  * REST controller for poker room management.
  * Handles room creation, joining, leaving, and game initialisation.
+ * Secured operations hold the room lease from membership validation through completion.
  */
 @RestController
 @RequestMapping("/api/room")
@@ -143,12 +144,12 @@ public class RoomController {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
 
-        gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
-
-        gameLifecycleService.departParticipants(roomId, List.of(playerName));
-
-        logger.info("Player {} successfully left room {}", playerName, roomId);
-        return ResponseEntity.ok(ApiResponse.success("Successfully left room"));
+        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(roomId) : LockLease.none()) {
+            gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
+            gameLifecycleService.departParticipants(roomId, List.of(playerName));
+            logger.info("Player {} successfully left room {}", playerName, roomId);
+            return ResponseEntity.ok(ApiResponse.success("Successfully left room"));
+        }
     }
 
     /**
@@ -168,9 +169,8 @@ public class RoomController {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
 
-        gameLifecycleService.validatePlayerMembership(roomId, playerPrincipal.playerName(), playerPrincipal.membershipId());
-
         try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(roomId) : LockLease.none()) {
+            gameLifecycleService.validatePlayerMembership(roomId, playerPrincipal.playerName(), playerPrincipal.membershipId());
             logger.debug("Fetching room info for room: {}", roomId);
             Room room = roomService.getRoom(roomId);
             if (room == null) {
@@ -209,18 +209,19 @@ public class RoomController {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
 
-        gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
+        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(roomId) : LockLease.none()) {
+            gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
+            if (!roomService.isRoomHost(roomId, playerName)) {
+                logger.warn("Non-host player {} attempted to start game for room {}", playerName, roomId);
+                throw new UnauthorisedActionException(
+                        "Only the room host can start the game. Please ask the host to start.");
+            }
 
-        if (!roomService.isRoomHost(roomId, playerName)) {
-            logger.warn("Non-host player {} attempted to start game for room {}", playerName, roomId);
-            throw new UnauthorisedActionException(
-                    "Only the room host can start the game. Please ask the host to start.");
+            logger.info("Host {} authorized to start game for room {}", playerName, roomId);
+            String gameId = gameLifecycleService.createGameFromRoom(roomId);
+            logger.info("Game {} created successfully from room {}", gameId, roomId);
+
+            return ResponseEntity.ok(ApiResponse.success("Game started successfully", gameId));
         }
-
-        logger.info("Host {} authorized to start game for room {}", playerName, roomId);
-        String gameId = gameLifecycleService.createGameFromRoom(roomId);
-        logger.info("Game {} created successfully from room {}", gameId, roomId);
-
-        return ResponseEntity.ok(ApiResponse.success("Game started successfully", gameId));
     }
 }

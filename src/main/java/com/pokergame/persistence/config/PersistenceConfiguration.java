@@ -38,8 +38,8 @@ import com.pokergame.persistence.PersistenceRecovery;
  * Think of this class as the "master switchboard" for autosaving. When enabled,
  * it wires up all the necessary parts—like encryption keys, data storage, and 
  * recovery tools—so that active poker games can be safely saved to disk and
- * restored if the server crashes. All parts turn on or off together based on
- * a single setting.
+ * restored if the server crashes. Storage and recovery are conditional; the room
+ * serialization aspect remains active in memory-only mode for membership safety.
  * </p>
  */
 @Configuration
@@ -102,10 +102,10 @@ public class PersistenceConfiguration {
     }
 
     /**
-     * Sets up the "Autosave trigger" that automatically saves the game whenever players take actions.
-     * It works silently in the background, so the core poker logic doesn't even know it's being saved.
+     * Serializes room operations in every mode and saves accepted mutations when persistence is enabled.
+     * Authentication checks and their reads/mutations use the same room lease even without a WAL.
      *
-     * @param store                the secure vault where data is written
+     * @param store                optional secure vault, absent when persistence is disabled
      * @param snapshotMapper       the tool used to convert active game data into a saveable format
      * @param roomService          helps look up game rooms
      * @param gameLifecycleService helps manage the state of active games
@@ -113,12 +113,11 @@ public class PersistenceConfiguration {
      * @return the background autosaving mechanism
      */
     @Bean
-    @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
-    DurableMutationAspect durableMutationAspect(EncryptedWalStore store, AggregateSnapshotMapper snapshotMapper,
+    DurableMutationAspect durableMutationAspect(ObjectProvider<EncryptedWalStore> store, AggregateSnapshotMapper snapshotMapper,
             ObjectProvider<com.pokergame.service.RoomService> roomService,
             ObjectProvider<com.pokergame.service.GameLifecycleService> gameLifecycleService,
             PersistenceProperties properties) {
-        return new DurableMutationAspect(store, snapshotMapper, roomService, gameLifecycleService, properties);
+        return new DurableMutationAspect(store.getIfAvailable(), snapshotMapper, roomService, gameLifecycleService, properties);
     }
 
     /**

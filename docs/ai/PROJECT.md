@@ -65,7 +65,7 @@ Lifecycle work is scheduled explicitly through services and durable task metadat
 
 Rooms have UUID identities and user-visible names; joining resolves the room name. Create-room validation permits 2–10 players. Games reuse the room ID, making room/game paths and token binding refer to the same aggregate identity.
 
-`RoomService` and `GameLifecycleService` maintain concurrent registries, but registry concurrency does not make the mutable aggregates thread-safe. Room/game mutations use their existing synchronization boundaries, and enabled durable mutations add per-room serialization. Preserve lock ordering and route scheduled mutations through the Spring proxy so AOP advice executes.
+`RoomService` and `GameLifecycleService` maintain concurrent registries, but registry concurrency does not make the mutable aggregates thread-safe. Room/game mutations use their existing synchronization boundaries, and `@DurableMutation` advice adds per-room serialization in every mode. Without a storage bean it only acquires the room lease; snapshots, WAL access, and transaction buffering remain disabled. Secured controller operations acquire that same lease before validating membership and retain it through their read or mutation, preventing a queued request from acting on a replacement membership. Preserve lock ordering and route scheduled mutations through the Spring proxy so AOP advice executes.
 
 `Game` owns the deck, players, betting state, phase, pot/side-pot bookkeeping, showdown outcomes, and durable scheduled-task metadata. Phases are `PRE_FLOP`, `FLOP`, `TURN`, `RIVER`, and `SHOWDOWN`. Preserve legal-action checks, heads-up blind rules, all-in eligibility, uncalled refunds, split payouts, and total chip conservation.
 

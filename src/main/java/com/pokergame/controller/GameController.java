@@ -31,6 +31,7 @@ import java.util.List;
  * REST controller for active poker game operations.
  * Manages player actions and game departures using WebSocket for real-time
  * updates.
+ * Secured operations hold the room lease from membership validation through completion.
  */
 @RestController
 @RequestMapping("/api/game")
@@ -82,9 +83,8 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
-
         try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             Game game = getAuthorisedGame(gameId, playerName);
             return ResponseEntity.ok(gameStateService.getPublicGameStateSnapshot(gameId, game));
         }
@@ -110,9 +110,8 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
-
         try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             Game game = getAuthorisedGame(gameId, playerName);
             return ResponseEntity.ok(gameStateService.getPrivatePlayerStateSnapshot(game, playerName));
         }
@@ -165,10 +164,11 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
-
-        playerActionService.processPlayerAction(gameId, actionRequest, playerName);
-        logger.debug("Player action processed successfully for game {}", gameId);
+        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
+            playerActionService.processPlayerAction(gameId, actionRequest, playerName);
+            logger.debug("Player action processed successfully for game {}", gameId);
+        }
     }
 
     /**
@@ -189,9 +189,10 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
-
-        gameLifecycleService.markPlayerReadyForNextHand(gameId, playerName);
+        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
+            gameLifecycleService.markPlayerReadyForNextHand(gameId, playerName);
+        }
     }
 
     /**
@@ -212,9 +213,10 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
-
-        gameLifecycleService.unmarkPlayerReadyForNextHand(gameId, playerName);
+        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
+            gameLifecycleService.unmarkPlayerReadyForNextHand(gameId, playerName);
+        }
     }
 
     /**
@@ -238,11 +240,12 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
-
-        gameLifecycleService.departParticipants(gameId, List.of(playerName));
-        logger.info("Player {} successfully left game {}", playerName, gameId);
-        return ResponseEntity.ok(ApiResponse.success("Successfully left game"));
+        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
+            gameLifecycleService.departParticipants(gameId, List.of(playerName));
+            logger.info("Player {} successfully left game {}", playerName, gameId);
+            return ResponseEntity.ok(ApiResponse.success("Successfully left game"));
+        }
     }
 
     /**
@@ -276,9 +279,8 @@ public class GameController {
             throw new UnauthorisedActionException("Query player name does not match authenticated player.");
         }
 
-        gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
-
         try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             return ResponseEntity.ok(gameLifecycleService.getGameReview(gameId, playerName));
         }
     }
@@ -308,9 +310,8 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
-
         try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             GameEndResponse result = gameLifecycleService.claimWin(gameId, playerName);
             logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
             return ResponseEntity.ok(ApiResponse.success("Win claimed successfully", result));

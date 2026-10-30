@@ -41,6 +41,7 @@ import org.springframework.scheduling.annotation.Scheduled;
  * If one saved method calls another, it groups them into a single save operation at
  * the end. It also makes sure we only modify one room at a time, preventing corrupted saves.
  * Storage failures retain the accepted in-memory state and its queued effects for a later save retry.
+ * Without a storage bean, the same room locks serialize operations without snapshot or disk work.
  * </p>
  */
 @Aspect
@@ -60,7 +61,7 @@ public final class DurableMutationAspect {
     /**
      * Creates this aspect using lazy services to avoid circular dependency issues when setting up the app.
      *
-     * @param store                storage for saving game data
+     * @param store                storage for saving game data, or null for room locking only
      * @param snapshotMapper       helper to convert the game into a format we can save
      * @param roomService          lazy provider for the room service
      * @param gameLifecycleService lazy provider for the game service
@@ -106,8 +107,9 @@ public final class DurableMutationAspect {
     }
 
     /**
-     * Runs the method, saves the final game result, and only lets players see the changes
-     * once accepted, even if persistence is temporarily unavailable.
+     * Serializes the method with other operations on the room. When storage is configured,
+     * saves accepted state and releases effects even if persistence is temporarily unavailable.
+     * Without storage, executes under the same lease without snapshots or transaction buffering.
      *
      * @param joinPoint the intercepted method
      * @param mutation details about the method
@@ -117,6 +119,11 @@ public final class DurableMutationAspect {
     @Around("@annotation(mutation)")
     public Object persist(ProceedingJoinPoint joinPoint, DurableMutation mutation) throws Throwable {
         String roomId = resolveRoomId(joinPoint, mutation.roomId());
+        if (store == null) {
+            try (LockLease ignored = roomLocks.acquire(roomId)) {
+                return joinPoint.proceed();
+            }
+        }
         String previousRoom = MDC.get(MdcKeys.ROOM_ID);
         MDC.put(MdcKeys.ROOM_ID, roomId);
         try {
