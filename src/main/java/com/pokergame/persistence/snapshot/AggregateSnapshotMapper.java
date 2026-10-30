@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.Objects;
 import java.time.LocalDateTime;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
@@ -230,11 +231,21 @@ public final class AggregateSnapshotMapper {
      * @param game the running game
      * @return a simple snapshot of the game
      */
-    private AggregateStateImage.GameState toState(Game game) {
+    AggregateStateImage.GameState toState(Game game) {
+        if (game == null) {
+            return null;
+        }
         synchronized (game) {
+            List<Player> playerList = game.getPlayers();
+            List<AggregateStateImage.PlayerState> playerStates = playerList != null
+                    ? playerList.stream().filter(Objects::nonNull).map(this::toState).toList()
+                    : List.of();
+            List<Player> activeList = game.getActivePlayers();
+            List<String> activePlayerIds = activeList != null
+                    ? activeList.stream().filter(Objects::nonNull).map(Player::getPlayerId).toList()
+                    : List.of();
             return new AggregateStateImage.GameState(
-                game.getGameId(), game.getPlayers().stream().map(this::toState).toList(),
-                game.getActivePlayers().stream().map(Player::getPlayerId).toList(),
+                game.getGameId(), playerStates, activePlayerIds,
                 cards(game.getRemainingDeckSnapshot()), cards(game.getCommunityCards()), game.getPot(),
                 game.getDealerPosition(), game.getSmallBlindPosition(), game.getBigBlindPosition(),
                 game.getCurrentPlayerPosition(), game.getCurrentHighestBet(), game.getCurrentPhase(),
@@ -258,7 +269,10 @@ public final class AggregateSnapshotMapper {
      * @param player the player to save
      * @return a simple snapshot of the player
      */
-    private AggregateStateImage.PlayerState toState(Player player) {
+    AggregateStateImage.PlayerState toState(Player player) {
+        if (player == null) {
+            return null;
+        }
         return new AggregateStateImage.PlayerState(
                 player.getName(), player.getPlayerId(), cards(player.getHoleCards()), cards(player.getBestHand()),
                 player.getHandRank(), player.getChips(), player.getCurrentBet(), player.getHasFolded(),
@@ -684,7 +698,7 @@ public final class AggregateSnapshotMapper {
      */
     private static List<AggregateStateImage.CardState> cards(List<Card> cards) {
         if (cards == null) return null;
-        return cards.stream().map(AggregateSnapshotMapper::toCardState).toList();
+        return cards.stream().filter(Objects::nonNull).map(AggregateSnapshotMapper::toCardState).toList();
     }
 
     /**

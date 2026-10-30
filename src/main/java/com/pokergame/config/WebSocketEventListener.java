@@ -191,9 +191,22 @@ public class WebSocketEventListener {
                     return;
                 }
 
-                boolean gameActive = gameLifecycleService.gameExists(roomId);
                 long disconnectDeadlineEpochMs = System.currentTimeMillis() + disconnectGracePeriodMs;
                 Instant scheduleInstant = Instant.ofEpochMilli(disconnectDeadlineEpochMs);
+
+                Room room = roomService.getRoom(roomId);
+                String membershipId = null;
+                if (room != null) {
+                    synchronized (room) {
+                        if (room.hasPlayer(playerName)) {
+                            room.setPlayerConnected(playerName, false);
+                            room.setAbsenceDeadline(playerName, disconnectDeadlineEpochMs);
+                        }
+                        membershipId = room.getMembershipId(playerName);
+                    }
+                }
+
+                boolean gameActive = gameLifecycleService.gameExists(roomId);
                 try {
                     if (gameActive && gameLifecycleService.playerExistsInGame(roomId, playerName)) {
                         gameLifecycleService.markPlayerDisconnected(roomId, playerName, disconnectDeadlineEpochMs);
@@ -210,8 +223,6 @@ public class WebSocketEventListener {
                 logger.info("WebSocket disconnected for user {}. Scheduling delayed cleanup ({} ms)",
                         compositeName, disconnectGracePeriodMs);
 
-                Room room = roomService.getRoom(roomId);
-                String membershipId = room != null ? room.getMembershipId(playerName) : null;
                 long token = registrationSequence.incrementAndGet();
                 PendingDisconnect registration = new PendingDisconnect(roomId, membershipId, disconnectDeadlineEpochMs, token);
                 pendingDisconnects.put(compositeName, registration);
@@ -247,7 +258,12 @@ public class WebSocketEventListener {
             rateLimitService.cleanUpWs(compositeName);
 
             Room room = roomService.getRoom(roomId);
-            boolean playerInRoom = room != null && room.hasPlayer(playerName);
+            boolean playerInRoom = false;
+            if (room != null) {
+                synchronized (room) {
+                    playerInRoom = room.hasPlayer(playerName);
+                }
+            }
             boolean playerInGame = gameLifecycleService.gameExists(roomId)
                     && gameLifecycleService.playerExistsInGame(roomId, playerName);
             if (!playerInRoom && !playerInGame) {
@@ -291,14 +307,23 @@ public class WebSocketEventListener {
         MdcUtils.runWithMdc(roomId, playerName, () -> {
             try (LockLease ignored = sessionLocks.acquire(compositeName)) {
                 Room room = roomService.getRoom(roomId);
-                if (room == null || !room.hasPlayer(playerName)) {
+                if (room == null) {
                     return;
                 }
-                if (!Objects.equals(membershipId, room.getMembershipId(playerName))) {
+                String currentMemId;
+                boolean playerConnected;
+                synchronized (room) {
+                    if (!room.hasPlayer(playerName)) {
+                        return;
+                    }
+                    currentMemId = room.getMembershipId(playerName);
+                    playerConnected = room.isPlayerConnected(playerName);
+                }
+                if (!Objects.equals(membershipId, currentMemId)) {
                     return;
                 }
 
-                if (hasActiveSession(compositeName) || room.isPlayerConnected(playerName)) {
+                if (hasActiveSession(compositeName) || playerConnected) {
                     logger.debug("Player {} in room {} already connected; skipping initial disconnect registration",
                             playerName, roomId);
                     return;
@@ -340,15 +365,16 @@ public class WebSocketEventListener {
                     }
                     return;
                 }
+                String restoredMembershipId = null;
                 if (restoredRoom != null) {
                     synchronized (restoredRoom) {
                         if (restoredRoom.hasPlayer(playerName)) {
                             restoredRoom.setPlayerConnected(playerName, false);
                             restoredRoom.setAbsenceDeadline(playerName, deadlineEpochMs);
                         }
+                        restoredMembershipId = restoredRoom.getMembershipId(playerName);
                     }
                 }
-                String restoredMembershipId = restoredRoom != null ? restoredRoom.getMembershipId(playerName) : null;
                 long token = registrationSequence.incrementAndGet();
                 PendingDisconnect registration = new PendingDisconnect(roomId, restoredMembershipId, deadlineEpochMs, token);
                 pendingDisconnects.put(compositeName, registration);

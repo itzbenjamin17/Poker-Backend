@@ -17,7 +17,7 @@ import org.springframework.web.socket.messaging.SessionDisconnectEvent;
 import java.time.Instant;
 import java.util.concurrent.ScheduledFuture;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -303,5 +303,68 @@ class WebSocketEventListenerTest {
         listener.registerInitialConnection("room", "Alice", membershipId, deadline);
 
         verifyNoInteractions(scheduler);
+    }
+
+    @Test
+    void disconnectSetsRoomPlayerConnectedFalseAndAbsenceDeadlineUnderRoomLock() {
+        RoomService roomService = mock(RoomService.class);
+        GameLifecycleService lifecycle = mock(GameLifecycleService.class);
+        RateLimitService rateLimit = mock(RateLimitService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        org.mockito.ArgumentCaptor<Instant> instantCaptor = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
+
+        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        room.setPlayerConnected("Alice", true);
+        when(roomService.getRoom("room")).thenReturn(room);
+
+        PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
+
+        // Alice connects
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-1", principal))));
+        assertTrue(room.isPlayerConnected("Alice"));
+
+        // Alice disconnects
+        listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
+                message(StompCommand.DISCONNECT, "session-1", principal), "session-1", null)));
+
+        // Verify room connection state and absence deadline updated under room monitor
+        assertFalse(room.isPlayerConnected("Alice"), "Player connection flag in room aggregate must be cleared on disconnect");
+        assertNotNull(room.getAbsenceDeadline("Alice"), "Room absence deadline must be recorded on disconnect");
+        assertEquals(instantCaptor.getValue().toEpochMilli(), room.getAbsenceDeadline("Alice"),
+                "Room absence deadline must match the scheduled grace expiry instant");
+    }
+
+    @Test
+    void cleanupDisconnectedUser_WhenPlayerNotInRoomNorGame_SkipsRemoval() {
+        RoomService roomService = mock(RoomService.class);
+        GameLifecycleService lifecycle = mock(GameLifecycleService.class);
+        RateLimitService rateLimit = mock(RateLimitService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        org.mockito.ArgumentCaptor<Runnable> callback = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+        doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
+
+        PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "session-1", principal))));
+        listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
+                message(StompCommand.DISCONNECT, "session-1", principal), "session-1", null)));
+
+        Runnable cleanup = callback.getValue();
+        assertNotNull(cleanup);
+
+        // Neither in room nor in game when timer fires
+        when(roomService.getRoom("room")).thenReturn(null);
+        when(lifecycle.gameExists("room")).thenReturn(false);
+
+        cleanup.run();
+
+        verify(lifecycle, never()).removeDisconnectedPlayer(anyString(), anyString(), any(), anyLong());
     }
 }

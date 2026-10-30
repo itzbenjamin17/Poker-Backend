@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.*;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -431,7 +432,7 @@ class AggregateSnapshotMapperTest {
         // Thread 1: Mutates game state under synchronized (game)
         Thread mutator = new Thread(() -> {
             int round = 0;
-            while (running.get() && round < 500 && error.get() == null) {
+            while (running.get() && (round < 2000 || capturedSnapshots.isEmpty()) && error.get() == null) {
                 synchronized (game) {
                     int c1 = p1.getChips();
                     int c2 = p2.getChips();
@@ -444,6 +445,7 @@ class AggregateSnapshotMapperTest {
                     }
                 }
                 round++;
+                Thread.yield();
             }
             running.set(false);
         });
@@ -486,5 +488,98 @@ class AggregateSnapshotMapperTest {
             int totalChips = restoredGame.getPot() + restoredGame.getPlayers().stream().mapToInt(Player::getChips).sum();
             assertEquals(2000, totalChips, "Total chip accounting must be strictly conserved across concurrent capture");
         }
+    }
+
+    @Test
+    @DisplayName("toState handles null game, null player, and null player elements safely")
+    void toState_NullAndEdgeCases_HandledSafely() {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+
+        assertNull(mapper.toState((Game) null));
+        assertNull(mapper.toState((Player) null));
+
+        Player normalPlayer = new Player("PlayerOne", "p-one", 100);
+        AggregateStateImage.PlayerState playerState = mapper.toState(normalPlayer);
+        assertNotNull(playerState);
+        assertEquals("PlayerOne", playerState.name());
+        assertEquals("p-one", playerState.playerId());
+        assertEquals(List.of(), playerState.holeCards());
+        assertEquals(List.of(), playerState.bestHand());
+    }
+
+    @Test
+    @DisplayName("toState under concurrent player additions and removals executes safely without ConcurrentModificationException")
+    void toState_UnderConcurrentPlayerAddRemove_ExecutesSafelyWithoutConcurrentModificationException() throws Exception {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+
+        String roomId = "cme-stress-room";
+        Player p1 = new Player("Alice", "p1", 1000);
+        Player p2 = new Player("Bob", "p2", 1000);
+        Game game = new Game(roomId, new java.util.ArrayList<>(List.of(p1, p2)), 10, 20, evaluator);
+
+        int readerCount = 4;
+        int mutatorCount = 2;
+        int operationsPerMutator = 1000;
+        java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
+        java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicInteger snapshotsExtracted = new java.util.concurrent.atomic.AtomicInteger();
+        CountDownLatch startLatch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(mutatorCount);
+
+        ExecutorService executor = Executors.newFixedThreadPool(readerCount + mutatorCount);
+
+        for (int i = 0; i < readerCount; i++) {
+            executor.submit(() -> {
+                try {
+                    startLatch.await();
+                    while (running.get() && error.get() == null) {
+                        AggregateStateImage.GameState state = mapper.toState(game);
+                        if (state != null) {
+                            snapshotsExtracted.incrementAndGet();
+                            assertNotNull(state.players());
+                            assertTrue(state.players().size() >= 2);
+                        }
+                    }
+                } catch (Throwable t) {
+                    error.compareAndSet(null, t);
+                }
+            });
+        }
+
+        for (int i = 0; i < mutatorCount; i++) {
+            final int mutatorId = i;
+            executor.submit(() -> {
+                try {
+                    startLatch.await();
+                    for (int op = 0; op < operationsPerMutator && running.get() && error.get() == null; op++) {
+                        Player extra = new Player("Temp_" + mutatorId + "_" + op, "temp_" + mutatorId + "_" + op, 100);
+                        synchronized (game) {
+                            game.getPlayers().add(extra);
+                            game.getPlayers().remove(extra);
+                        }
+                        if (op % 100 == 0) {
+                            Thread.yield();
+                        }
+                    }
+                } catch (Throwable t) {
+                    error.compareAndSet(null, t);
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+        }
+
+        startLatch.countDown();
+        assertTrue(doneLatch.await(10, TimeUnit.SECONDS), "Mutators did not complete in time");
+        running.set(false);
+        executor.shutdown();
+        assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "Executor did not terminate in time");
+
+        assertNull(error.get(), "Concurrent toState execution threw an exception: " + error.get());
+        assertTrue(snapshotsExtracted.get() > 0, "At least one snapshot state must have been extracted");
     }
 }
