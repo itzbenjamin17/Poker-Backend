@@ -382,7 +382,7 @@ class DurableMutationAspectTest {
         String roomId = "room-uncommitted-fail";
         Room dirtyRoom = new Room(roomId, "Uncommitted", "Alice", 6, 10, 20, 1000, null);
         when(roomService.getRoom(roomId)).thenReturn(dirtyRoom);
-        when(gameLifecycleService.getGame(roomId)).thenReturn(null);
+        lenient().when(gameLifecycleService.getGame(roomId)).thenReturn(null);
 
         ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
             throw new IllegalStateException("Creation failure inside joinPoint.proceed()");
@@ -391,6 +391,7 @@ class DurableMutationAspectTest {
         assertThrows(IllegalStateException.class, () -> aspect.persist(joinPoint, validMutation()));
 
         // Since no committed state exists, dirty aggregate must be evicted from active registry
+        verify(gameLifecycleService).evictGame(roomId);
         verify(roomService).destroyRoom(roomId);
         verify(gameLifecycleService, never()).restoreGame(any());
         verify(snapshotMapper, never()).deserialize(any());
@@ -510,6 +511,79 @@ class DurableMutationAspectTest {
         assertEquals(2, moves.get());
         assertEquals(List.of("effect-1", "effect-2"), effects);
         verify(roomService, never()).destroyRoom("room-serialize-safe");
+    }
+
+    /**
+     * Finding B9-1 / Ticket 32: When mutation fails on lobby room without active game,
+     * room is restored and game is evicted without destroying the room.
+     */
+    @Test
+    @DisplayName("When lobby room mutation fails, room is restored and game is evicted without destroying room")
+    void lobbyMutationFailureEvictsGameAndPreservesLobbyRoom() throws Throwable {
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+
+        when(roomServiceProvider.getObject()).thenReturn(roomService);
+        when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
+
+        String roomId = "room-lobby-rollback";
+        byte[] snapshotBytes = new byte[]{10, 20, 30};
+        store.checkpoint(roomId, snapshotBytes);
+
+        Room lobbyRoom = new Room(roomId, "Lobby Room", "Alice", 6, 10, 20, 1000, null);
+        lobbyRoom.addPlayer("Alice");
+        RecoveredAggregate lobbyAggregate = new RecoveredAggregate(lobbyRoom, "Alice", null, false);
+        when(snapshotMapper.deserialize(snapshotBytes)).thenReturn(lobbyAggregate);
+
+        ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
+            throw new RuntimeException("Lobby mutation failure");
+        });
+
+        assertThrows(RuntimeException.class, () -> aspect.persist(joinPoint, validMutation()));
+
+        verify(roomService).restoreRoom(lobbyRoom, "Alice");
+        verify(gameLifecycleService).evictGame(roomId);
+        verify(roomService, never()).destroyRoom(roomId);
+    }
+
+    /**
+     * Finding B9-1 / Ticket 32: RoomService.restoreRoom reconciles inconsistent host mappings
+     * and preserves legitimate player state under lock.
+     */
+    @Test
+    @DisplayName("RoomService.restoreRoom reconciles inconsistent host mappings and preserves connected players")
+    void roomServiceRestoreRoomReconcilesInconsistentHostAndPreservesConnectedPlayers() {
+        RoomService realRoomService = new RoomService(null);
+        String roomId = "room-restore-test";
+        Room originalRoom = new Room(roomId, "Restore Test", "Alice", 6, 10, 20, 1000, null);
+        originalRoom.addPlayer("Alice");
+        originalRoom.addPlayer("Bob");
+        originalRoom.setPlayerConnected("Alice", true);
+        originalRoom.setAbsenceDeadline("Bob", 123456789L);
+
+        realRoomService.restoreRoom(originalRoom, "Alice");
+        assertEquals("Alice", realRoomService.getCurrentHost(roomId));
+        assertTrue(realRoomService.isRoomHost(roomId, "Alice"));
+
+        // Now restore with a host that does not exist in the room
+        Room restoredRoom = new Room(roomId, "Restore Test", "Alice", 6, 10, 20, 1000, null);
+        restoredRoom.addPlayer("Alice");
+        restoredRoom.addPlayer("Bob");
+
+        realRoomService.restoreRoom(restoredRoom, "NonExistentStranger");
+        // Must reconcile to valid room host/player, not leak NonExistentStranger
+        assertEquals("Alice", realRoomService.getCurrentHost(roomId));
+        assertFalse(realRoomService.isRoomHost(roomId, "NonExistentStranger"));
+        assertTrue(restoredRoom.isPlayerConnected("Alice"));
+        assertEquals(123456789L, restoredRoom.getAbsenceDeadline("Bob"));
+
+        // Host succession to Bob
+        realRoomService.restoreRoom(restoredRoom, "Bob");
+        assertEquals("Bob", realRoomService.getCurrentHost(roomId));
+        assertTrue(realRoomService.isRoomHost(roomId, "Bob"));
     }
 
     private EncryptedWalStore failingStore(AtomicBoolean unavailable) {

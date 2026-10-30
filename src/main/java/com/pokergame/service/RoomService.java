@@ -570,15 +570,59 @@ public class RoomService {
 
     /**
      * Registers an explicitly rehydrated room without publishing creation events or
-     * revalidating historical lobby choices.
+     * revalidating historical lobby choices. Restores in-memory state under the room
+     * lock without dropping existing locks or leaking inconsistent player mapping.
      *
      * @param room        restored room
      * @param currentHost restored current host
      */
     public void restoreRoom(Room room, String currentHost) {
-        rooms.put(room.getRoomId(), room);
-        String host = (currentHost != null && !currentHost.trim().isEmpty()) ? currentHost : room.getHostName();
-        roomHosts.put(room.getRoomId(), host);
+        if (room == null) {
+            return;
+        }
+        String roomId = room.getRoomId();
+        Room existing = rooms.get(roomId);
+        Room lockTarget = existing != null ? existing : room;
+        synchronized (lockTarget) {
+            if (existing != null && existing != room) {
+                synchronized (room) {
+                    applyRestoreRoom(room, currentHost, existing);
+                }
+            } else {
+                applyRestoreRoom(room, currentHost, existing);
+            }
+        }
+    }
+
+    private void applyRestoreRoom(Room room, String currentHost, Room existing) {
+        String roomId = room.getRoomId();
+        if (existing != null && existing != room) {
+            for (String playerName : room.getPlayers()) {
+                if (existing.hasPlayer(playerName)) {
+                    Long deadline = existing.getAbsenceDeadline(playerName);
+                    if (deadline != null && room.getAbsenceDeadline(playerName) == null) {
+                        room.setAbsenceDeadline(playerName, deadline);
+                    }
+                    if (existing.isPlayerConnected(playerName)) {
+                        room.setPlayerConnected(playerName, true);
+                    }
+                }
+            }
+        }
+        rooms.put(roomId, room);
+        String host = null;
+        if (currentHost != null && !currentHost.trim().isEmpty() && room.hasPlayer(currentHost)) {
+            host = currentHost;
+        } else if (room.getHostName() != null && room.hasPlayer(room.getHostName())) {
+            host = room.getHostName();
+        } else if (!room.getPlayers().isEmpty()) {
+            host = room.getPlayers().getFirst();
+        }
+        if (host != null) {
+            roomHosts.put(roomId, host);
+        } else {
+            roomHosts.remove(roomId);
+        }
     }
 
     /**
@@ -592,7 +636,9 @@ public class RoomService {
         Room room = rooms.remove(roomId);
         roomHosts.remove(roomId);
         if (room != null) {
-            logger.info("Room destroyed: {} (ID: {})", room.getRoomName(), roomId);
+            synchronized (room) {
+                logger.info("Room destroyed: {} (ID: {})", room.getRoomName(), roomId);
+            }
         }
         if (webSocketEventListener != null) {
             DurableTransactionContext.afterCommit(() -> webSocketEventListener.publishRoomDestroyed(roomId));

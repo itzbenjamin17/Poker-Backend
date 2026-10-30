@@ -20,6 +20,7 @@ import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
 import com.pokergame.service.RoomService;
 import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.persistence.transaction.DurableMutation;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.WebApplicationType;
@@ -355,6 +356,116 @@ class PersistenceRestartIntegrationTest {
     }
 
     /**
+     * Finding B9-1 / Ticket 32: When a mutation in RoomService fails midway, in-memory state is
+     * rolled back to its pre-failure snapshot and subsequent mutations succeed.
+     */
+    @Test
+    void midwayMutationFailureInRoomServiceRollsBackToSnapshotAndSubsequentMutationSucceeds() throws Exception {
+        String roomId;
+        try (ConfigurableApplicationContext first = startApplication()) {
+            RoomService rooms = first.getBean(RoomService.class);
+            roomId = rooms.createRoom(new CreateRoomRequest("Midway Fail Room", "Alice", 6, 5, 10, 1000, null));
+            rooms.joinRoom(new JoinRoomRequest("Midway Fail Room", "Bob", null));
+
+            TestMutationHelper helper = first.getBean(TestMutationHelper.class);
+            assertThrows(IllegalStateException.class, () ->
+                    helper.mutateRoomAndThrow(roomId, "DirtyCharlie"));
+
+            // Read operation returns uncorrupted pre-failure state
+            Room room = rooms.getRoom(roomId);
+            assertNotNull(room);
+            assertEquals(List.of("Alice", "Bob"), room.getPlayers());
+            assertFalse(room.hasPlayer("DirtyCharlie"));
+
+            // Subsequent valid mutation succeeds and commits
+            rooms.joinRoom(new JoinRoomRequest("Midway Fail Room", "David", null));
+            assertEquals(List.of("Alice", "Bob", "David"), rooms.getRoom(roomId).getPlayers());
+        }
+
+        // Restart application and verify uncorrupted state persisted
+        try (ConfigurableApplicationContext second = startApplication()) {
+            RoomService rooms = second.getBean(RoomService.class);
+            Room restored = rooms.getRoom(roomId);
+            assertNotNull(restored);
+            assertEquals(List.of("Alice", "Bob", "David"), restored.getPlayers());
+            assertFalse(restored.hasPlayer("DirtyCharlie"));
+        }
+    }
+
+    /**
+     * Finding B9-1 / Ticket 32: When a mutation in GameLifecycleService fails midway,
+     * the aggregate is restored to its pre-failure snapshot and subsequent valid mutations succeed.
+     */
+    @Test
+    void midwayMutationFailureInGameLifecycleServiceRollsBackToSnapshotAndSubsequentMutationSucceeds() throws Exception {
+        String roomId;
+        String currentPlayerName;
+        PlayerAction nextAction;
+        int aliceInitialChips;
+
+        try (ConfigurableApplicationContext first = startApplication()) {
+            RoomService rooms = first.getBean(RoomService.class);
+            roomId = rooms.createRoom(new CreateRoomRequest("Game Rollback Room", "Alice", 6, 5, 10, 1000, null));
+            rooms.joinRoom(new JoinRoomRequest("Game Rollback Room", "Bob", null));
+
+            GameLifecycleService games = first.getBean(GameLifecycleService.class);
+            games.createGameFromRoom(roomId);
+            Game game = games.getGame(roomId);
+            aliceInitialChips = game.getPlayers().getFirst().getChips();
+            currentPlayerName = game.getCurrentPlayer().getName();
+            nextAction = game.getCurrentPlayer().getCurrentBet() < game.getCurrentHighestBet()
+                    ? PlayerAction.CALL : PlayerAction.CHECK;
+
+            games.markPlayerReconnected(roomId, "Alice");
+            games.markPlayerReconnected(roomId, "Bob");
+
+            TestMutationHelper helper = first.getBean(TestMutationHelper.class);
+            assertThrows(IllegalStateException.class, () ->
+                    helper.mutateGameAndThrow(roomId));
+
+            // Verify chips rolled back to pre-mutation snapshot
+            Game rolledBackGame = games.getGame(roomId);
+            assertNotNull(rolledBackGame);
+            assertEquals(aliceInitialChips, rolledBackGame.getPlayers().getFirst().getChips());
+
+            // Subsequent valid mutation succeeds
+            first.getBean(PlayerActionService.class).processPlayerAction(
+                    roomId, new PlayerActionRequest(nextAction, null), currentPlayerName);
+        }
+
+        // Restart application and verify uncorrupted game persisted
+        try (ConfigurableApplicationContext second = startApplication()) {
+            GameLifecycleService games = second.getBean(GameLifecycleService.class);
+            Game restored = games.getGame(roomId);
+            assertNotNull(restored);
+            assertNotEquals(888888, restored.getPlayers().getFirst().getChips());
+        }
+    }
+
+    /**
+     * Finding B9-1 / Ticket 32: Failed room creation cleans up rooms, activeGames, and pending timers.
+     */
+    @Test
+    void failedRoomCreationCleansUpRoomsActiveGamesAndTimers() throws Exception {
+        String failedRoomId = java.util.UUID.randomUUID().toString();
+        try (ConfigurableApplicationContext context = startApplication()) {
+            TestMutationHelper helper = context.getBean(TestMutationHelper.class);
+            assertThrows(IllegalStateException.class, () ->
+                    helper.createRoomAndThrow(failedRoomId,
+                            new CreateRoomRequest("Aborted Room", "Alice", 6, 5, 10, 1000, null)));
+
+            RoomService rooms = context.getBean(RoomService.class);
+            GameLifecycleService games = context.getBean(GameLifecycleService.class);
+
+            assertNull(rooms.getRoom(failedRoomId));
+            assertNull(rooms.getCurrentHost(failedRoomId));
+            assertNull(games.getGame(failedRoomId));
+            assertEquals(0, games.getRuntimeTaskCount(failedRoomId));
+            assertFalse(Files.exists(walDirectory.resolve(failedRoomId + ".wal")));
+        }
+    }
+
+    /**
      * Starts a persistence-enabled application with the default disconnect grace.
      *
      * @return running application context
@@ -376,7 +487,7 @@ class PersistenceRestartIntegrationTest {
      */
     private ConfigurableApplicationContext startApplication(long disconnectGracePeriodMs, long gameEndDisplayDelayMs) {
         String key = Base64.getEncoder().encodeToString(new byte[32]);
-        return new SpringApplicationBuilder(PokerApplication.class)
+        return new SpringApplicationBuilder(PokerApplication.class, TestMutationHelper.class)
                 .profiles("test")
                 .web(WebApplicationType.NONE)
                 .properties(
@@ -408,5 +519,34 @@ class PersistenceRestartIntegrationTest {
         accessor.setUser(new PlayerPrincipal(playerName, roomId));
         Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
         return new SessionConnectEvent(this, message);
+    }
+
+    @org.springframework.stereotype.Component
+    public static class TestMutationHelper {
+        @org.springframework.beans.factory.annotation.Autowired
+        private RoomService roomService;
+
+        @org.springframework.beans.factory.annotation.Autowired
+        private GameLifecycleService gameLifecycleService;
+
+        @DurableMutation(roomId = "#roomId")
+        public void mutateRoomAndThrow(String roomId, String dirtyPlayer) {
+            Room room = roomService.getRoom(roomId);
+            room.addPlayer(dirtyPlayer);
+            throw new IllegalStateException("Simulated midway mutation failure in room");
+        }
+
+        @DurableMutation(roomId = "#roomId")
+        public void mutateGameAndThrow(String roomId) {
+            Game game = gameLifecycleService.getGame(roomId);
+            game.getPlayers().getFirst().setChips(888888);
+            throw new IllegalStateException("Simulated midway mutation failure in game");
+        }
+
+        @DurableMutation(roomId = "#roomId")
+        public void createRoomAndThrow(String roomId, CreateRoomRequest request) {
+            roomService.createRoom(roomId, request);
+            throw new IllegalStateException("Simulated failure during room creation");
+        }
     }
 }

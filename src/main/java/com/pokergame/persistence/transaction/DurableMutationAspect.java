@@ -280,11 +280,9 @@ public final class DurableMutationAspect {
             gameLifecycleService.getObject().restoreGame(restoredGame);
         } else {
             try {
-                if (gameLifecycleService.getObject().getGame(roomId) != null) {
-                    gameLifecycleService.getObject().performGameCleanup(roomId);
-                    if (restoredRoom != null) {
-                        roomService.getObject().restoreRoom(restoredRoom, aggregate.currentHost());
-                    }
+                GameLifecycleService games = gameLifecycleService.getObject();
+                if (games != null) {
+                    games.evictGame(roomId);
                 }
             } catch (Exception e) {
                 logger.warn("Error evicting game for room {} during aggregate restoration", roomId, e);
@@ -295,8 +293,9 @@ public final class DurableMutationAspect {
     private void evictAggregate(String roomId) {
         try {
             GameLifecycleService games = gameLifecycleService.getObject();
-            if (games != null && games.getGame(roomId) != null) {
-                games.performGameCleanup(roomId);
+            if (games != null) {
+                games.cancelRuntimeTasks(roomId, false);
+                games.evictGame(roomId);
             }
         } catch (Exception e) {
             logger.warn("Error cleaning up game for room {} during eviction", roomId, e);
@@ -314,7 +313,8 @@ public final class DurableMutationAspect {
     private void cleanupAbortedCreation(String roomId) {
         try {
             recordsSinceCompaction.remove(roomId);
-            if (roomService.getObject().getRoom(roomId) == null && store.recoverLatest(roomId).isEmpty()) {
+            RoomService rooms = roomService.getObject();
+            if ((rooms == null || rooms.getRoom(roomId) == null) && store.recoverLatest(roomId).isEmpty()) {
                 store.delete(roomId);
             }
         } catch (Exception cleanupError) {

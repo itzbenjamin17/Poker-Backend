@@ -736,16 +736,75 @@ public class GameLifecycleService {
 
     /**
      * Registers an already rehydrated game without executing normal creation logic,
-     * which would start a replacement hand.
+     * which would start a replacement hand. Restores in-memory state under the room
+     * lock without dropping existing locks or leaking inconsistent player mapping.
      *
      * @param game exact game restored from a committed state image
      */
     public void restoreGame(Game game) {
-        activeGames.put(game.getGameId(), game);
-        if (game.isGameOver()) {
-            Room room = roomService.getRoom(game.getGameId());
-            if (room != null) {
+        if (game == null) {
+            return;
+        }
+        String gameId = game.getGameId();
+        Room room = roomService.getRoom(gameId);
+        Object roomLock = room != null ? room : this;
+        synchronized (roomLock) {
+            Game existing = activeGames.get(gameId);
+            Object gameLock = existing != null ? existing : game;
+            synchronized (gameLock) {
+                if (existing != null && existing != game) {
+                    synchronized (game) {
+                        applyRestoreGame(game, room, existing);
+                    }
+                } else {
+                    applyRestoreGame(game, room, existing);
+                }
+            }
+        }
+    }
+
+    private void applyRestoreGame(Game game, Room room, Game existing) {
+        String gameId = game.getGameId();
+        if (existing != null && existing != game) {
+            cancelRuntimeTasks(gameId, false);
+        }
+        activeGames.put(gameId, game);
+        if (room != null) {
+            if (game.isGameOver()) {
                 room.setTerminal(true);
+            } else {
+                room.setTerminal(false);
+            }
+            room.setGameStarted(true);
+        }
+    }
+
+    /**
+     * Evicts active game state and cancels pending timers for the specified game
+     * without destroying the associated room container.
+     *
+     * @param gameId identifier of the game to evict
+     */
+    public void evictGame(String gameId) {
+        if (gameId == null) {
+            return;
+        }
+        Room room = roomService.getRoom(gameId);
+        Object roomLock = room != null ? room : this;
+        synchronized (roomLock) {
+            Game game = activeGames.get(gameId);
+            if (game != null) {
+                synchronized (game) {
+                    cancelRuntimeTasks(gameId, false);
+                    activeGames.remove(gameId);
+                }
+            } else {
+                cancelRuntimeTasks(gameId, false);
+                activeGames.remove(gameId);
+            }
+            if (room != null) {
+                room.setGameStarted(false);
+                room.setTerminal(false);
             }
         }
     }
