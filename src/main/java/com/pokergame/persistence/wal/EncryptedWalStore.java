@@ -184,7 +184,8 @@ public final class EncryptedWalStore {
      * This ensures the server starts up fully before players can join.
      *
      * @return a map of room IDs to their saved game data
-     * @throws PersistenceException if store-level directory enumeration fails or the store is unhealthy;
+     * @throws PersistenceException if store-level directory enumeration fails, a required decryption key
+     *                              is missing, or the store is unhealthy;
      *                              per-room corrupted WAL files or unsupported schemas are quarantined
      *                              ({@code <roomId>.wal.corrupted}) so remaining rooms can recover
      */
@@ -200,6 +201,10 @@ public final class EncryptedWalStore {
                 Optional<byte[]> latest;
                 try {
                     latest = recoverLatest(roomId);
+                } catch (MissingPersistenceKeyException missingKey) {
+                    recoveryFailed.set(true);
+                    lastError = missingKey.getClass().getSimpleName();
+                    throw missingKey;
                 } catch (RuntimeException e) {
                     logger.error("Corrupted WAL file detected during recoverAll for room {}: {}", roomId, e.getMessage());
                     quarantine(roomId, e.getMessage());

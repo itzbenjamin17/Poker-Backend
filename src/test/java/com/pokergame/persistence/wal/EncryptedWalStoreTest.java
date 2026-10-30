@@ -147,6 +147,28 @@ class EncryptedWalStoreTest {
     }
 
     /**
+     * A missing historical key is an operator configuration error: preserve the WAL,
+     * fail startup, and allow recovery once the operator restores the keyring.
+     */
+    @Test
+    void recoverAllFailsClosedWithoutQuarantiningWalWhenHistoricalKeyIsMissing() throws Exception {
+        EncryptedWalStore writer = new EncryptedWalStore(directory, keyring("old", (byte) 2));
+        writer.commit(writer.prepare("room-old-key"), "accepted-state".getBytes(StandardCharsets.UTF_8));
+        Path wal = directory.resolve("room-old-key.wal");
+        byte[] original = Files.readAllBytes(wal);
+
+        EncryptedWalStore missingKey = new EncryptedWalStore(directory, keyring("current", (byte) 3));
+        assertThrows(PersistenceException.class, missingKey::recoverAll);
+        assertFalse(missingKey.isHealthy());
+        assertArrayEquals(original, Files.readAllBytes(wal));
+        assertFalse(Files.exists(directory.resolve("room-old-key.wal.corrupted")));
+
+        EncryptedWalStore corrected = new EncryptedWalStore(directory, keyring("old", (byte) 2));
+        assertArrayEquals("accepted-state".getBytes(StandardCharsets.UTF_8),
+                corrected.recoverAll().get("room-old-key"));
+    }
+
+    /**
      * Protects the contract that rotation compacts under current key so old key can be retired.
      */
     @Test

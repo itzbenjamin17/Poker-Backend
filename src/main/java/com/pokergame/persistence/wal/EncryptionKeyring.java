@@ -65,7 +65,7 @@ public final class EncryptionKeyring {
     public SecretKey key(String keyId) {
         SecretKey key = keys.get(keyId);
         if (key == null) {
-            throw new PersistenceException("Required persistence key is unavailable: " + keyId);
+            throw new MissingPersistenceKeyException(keyId);
         }
         return key;
     }
