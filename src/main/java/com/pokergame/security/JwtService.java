@@ -56,14 +56,30 @@ public class JwtService {
      * @return signed token with the configured expiry
      */
     public String generateToken(String playerName, String roomId) {
+        return generateToken(playerName, roomId, null);
+    }
+
+    /**
+     * Generates a signed JWT for the given player, room, and membership ID.
+     *
+     * @param playerName player identity stored as the token subject
+     * @param roomId room identity stored as a required claim
+     * @param membershipId unique membership identity stored as a claim
+     * @return signed token with the configured expiry
+     */
+    public String generateToken(String playerName, String roomId, String membershipId) {
         long now = System.currentTimeMillis();
-        return Jwts.builder()
+        var builder = Jwts.builder()
                 .subject(playerName)
                 .claim("roomId", roomId)
                 .issuedAt(new Date(now))
-                .expiration(new Date(now + expirationMillis))
-                .signWith(secretKey)
-                .compact();
+                .expiration(new Date(now + expirationMillis));
+
+        if (membershipId != null && !membershipId.isBlank()) {
+            builder.claim("membershipId", membershipId);
+        }
+
+        return builder.signWith(secretKey).compact();
     }
 
     /**
@@ -105,7 +121,54 @@ public class JwtService {
             throw new IllegalArgumentException("Token is missing required player or room identification claims.");
         }
         
-        return new PlayerPrincipal(subject, roomId);
+        String membershipId = claims.get("membershipId", String.class);
+        if (membershipId == null) {
+            membershipId = claims.get("mid", String.class);
+        }
+        if (membershipId != null && membershipId.isBlank()) {
+            membershipId = null;
+        }
+
+        return new PlayerPrincipal(subject, roomId, membershipId);
+    }
+
+    /**
+     * Alias for {@link #extractPrincipal(String)}.
+     *
+     * @param token encoded, valid JWT
+     * @return principal containing player, room, and membership identities
+     */
+    public PlayerPrincipal extractPlayerPrincipal(String token) {
+        return extractPrincipal(token);
+    }
+
+    /**
+     * Alias for {@link #extractPrincipal(String)}.
+     *
+     * @param token encoded, valid JWT
+     * @return principal containing player, room, and membership identities
+     */
+    public PlayerPrincipal parseToken(String token) {
+        return extractPrincipal(token);
+    }
+
+    /**
+     * Extracts the membership ID from a valid token.
+     *
+     * @param token encoded, valid JWT
+     * @return membership ID, or an empty string when absent
+     */
+    public String extractMembershipId(String token) {
+        var claims = Jwts.parser()
+                .verifyWith(secretKey)
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+        String membershipId = claims.get("membershipId", String.class);
+        if (membershipId == null) {
+            membershipId = claims.get("mid", String.class);
+        }
+        return membershipId == null ? "" : membershipId;
     }
 
     /**

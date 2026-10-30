@@ -116,6 +116,56 @@ class JwtServiceTest {
             assertThatThrownBy(() -> jwtService.extractPrincipal(token))
                     .isInstanceOf(IllegalArgumentException.class);
         }
+
+        /**
+         * Protects the contract that token generation with membership ID includes the claim in the JWT.
+         */
+        @Test
+        @DisplayName("should include membershipId claim when provided in token generation")
+        void givenMembershipId_whenGenerateToken_thenTokenIncludesMembershipIdClaim() {
+            String membershipId = "mem-session-12345";
+            String token = jwtService.generateToken("TestPlayer", TEST_ROOM, membershipId);
+
+            assertThat(token).isNotBlank();
+            assertThat(jwtService.isTokenValid(token)).isTrue();
+
+            var claims = io.jsonwebtoken.Jwts.parser()
+                    .verifyWith((javax.crypto.SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .build()
+                    .parseSignedClaims(token)
+                    .getPayload();
+
+            assertThat(claims.get("membershipId", String.class)).isEqualTo(membershipId);
+        }
+
+        /**
+         * Protects the contract that two tokens for the same (playerName, roomId) with different membership IDs produce distinct tokens.
+         */
+        @Test
+        @DisplayName("should produce distinct tokens for different membership IDs")
+        void givenDifferentMembershipIds_whenGenerateToken_thenReturnDifferentTokens() {
+            String firstToken = jwtService.generateToken("Player1", TEST_ROOM, "membership-A");
+            String secondToken = jwtService.generateToken("Player1", TEST_ROOM, "membership-B");
+
+            assertThat(firstToken).isNotEqualTo(secondToken);
+        }
+
+        /**
+         * Protects the contract that blank membership ID does not embed a membershipId claim.
+         */
+        @Test
+        @DisplayName("should omit membership claim when membership ID is blank or null")
+        void givenBlankMembershipId_whenGenerateToken_thenOmitMembershipClaim() {
+            String token = jwtService.generateToken("Player1", TEST_ROOM, "   ");
+
+            var claims = io.jsonwebtoken.Jwts.parser()
+                    .verifyWith((javax.crypto.SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .build()
+                    .parseSignedClaims(token)
+                    .getPayload();
+
+            assertThat(claims.get("membershipId", String.class)).isNull();
+        }
     }
 
     /** Groups test scenarios for token validation. */
@@ -267,6 +317,117 @@ class JwtServiceTest {
             assertThatThrownBy(() -> jwtService.extractPlayerName(tamperedToken))
                     .isInstanceOf(SignatureException.class);
         }
+
+        /**
+         * Protects the contract that extracting principal from a token with membership ID recovers the exact membership ID.
+         */
+        @Test
+        @DisplayName("should extract principal recovering exact membership ID")
+        void givenTokenWithMembershipId_whenExtractPrincipal_thenReturnPrincipalWithMembershipId() {
+            String membershipId = "session-nonce-789";
+            String token = jwtService.generateToken("Alice", TEST_ROOM, membershipId);
+
+            PlayerPrincipal principal = jwtService.extractPrincipal(token);
+
+            assertThat(principal.playerName()).isEqualTo("Alice");
+            assertThat(principal.roomId()).isEqualTo(TEST_ROOM);
+            assertThat(principal.membershipId()).isEqualTo(membershipId);
+            assertThat(principal.getMembershipId()).isEqualTo(membershipId);
+            assertThat(principal.getPlayerName()).isEqualTo("Alice");
+            assertThat(principal.getRoomId()).isEqualTo(TEST_ROOM);
+            assertThat(principal.getName()).isEqualTo("Alice:" + TEST_ROOM);
+        }
+
+        /**
+         * Protects the contract that two tokens with different membership IDs produce distinct principals.
+         */
+        @Test
+        @DisplayName("should produce distinct principals for distinct membership IDs")
+        void givenDifferentMembershipIds_whenExtractPrincipal_thenReturnDistinctPrincipals() {
+            String tokenA = jwtService.generateToken("Alice", TEST_ROOM, "session-1");
+            String tokenB = jwtService.generateToken("Alice", TEST_ROOM, "session-2");
+
+            PlayerPrincipal principalA = jwtService.extractPrincipal(tokenA);
+            PlayerPrincipal principalB = jwtService.extractPrincipal(tokenB);
+
+            assertThat(principalA).isNotEqualTo(principalB);
+            assertThat(principalA.hashCode()).isNotEqualTo(principalB.hashCode());
+            assertThat(principalA.membershipId()).isEqualTo("session-1");
+            assertThat(principalB.membershipId()).isEqualTo("session-2");
+        }
+
+        /**
+         * Protects backwards compatibility when extracting from a token without membershipId claim.
+         */
+        @Test
+        @DisplayName("should extract principal with null membership ID when token lacks claim")
+        void givenTokenWithoutMembershipId_whenExtractPrincipal_thenReturnPrincipalWithNullMembershipId() {
+            String token = jwtService.generateToken("Alice", TEST_ROOM);
+
+            PlayerPrincipal principal = jwtService.extractPrincipal(token);
+
+            assertThat(principal.playerName()).isEqualTo("Alice");
+            assertThat(principal.roomId()).isEqualTo(TEST_ROOM);
+            assertThat(principal.membershipId()).isNull();
+            assertThat(principal.getMembershipId()).isNull();
+        }
+
+        /**
+         * Protects the mid claim alias extraction when token uses alternative claim key.
+         */
+        @Test
+        @DisplayName("should extract membership ID when token uses mid claim key")
+        void givenTokenWithMidClaim_whenExtractPrincipal_thenExtractMidAsMembershipId() {
+            String token = io.jsonwebtoken.Jwts.builder()
+                    .subject("Alice")
+                    .claim("roomId", TEST_ROOM)
+                    .claim("mid", "legacy-mid-123")
+                    .signWith((javax.crypto.SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .compact();
+
+            PlayerPrincipal principal = jwtService.extractPrincipal(token);
+
+            assertThat(principal.membershipId()).isEqualTo("legacy-mid-123");
+            assertThat(principal.getMembershipId()).isEqualTo("legacy-mid-123");
+        }
+
+        /**
+         * Protects the contract for extractMembershipId helper method.
+         */
+        @Test
+        @DisplayName("should extract membershipId directly via extractMembershipId")
+        void givenTokenWithMembershipId_whenExtractMembershipId_thenReturnMembershipId() {
+            String token = jwtService.generateToken("Alice", TEST_ROOM, "direct-mem-id");
+
+            assertThat(jwtService.extractMembershipId(token)).isEqualTo("direct-mem-id");
+        }
+
+        /**
+         * Protects extractMembershipId returning empty string when token lacks membership claim.
+         */
+        @Test
+        @DisplayName("should return empty string from extractMembershipId when claim absent")
+        void givenTokenWithoutMembershipId_whenExtractMembershipId_thenReturnEmptyString() {
+            String token = jwtService.generateToken("Alice", TEST_ROOM);
+
+            assertThat(jwtService.extractMembershipId(token)).isEmpty();
+        }
+
+        /**
+         * Protects the contract that extractPlayerPrincipal and parseToken aliases behave identically to extractPrincipal.
+         */
+        @Test
+        @DisplayName("should return identical principal via extractPlayerPrincipal and parseToken aliases")
+        void givenToken_whenExtractPlayerPrincipalOrParseToken_thenReturnIdenticalPrincipal() {
+            String token = jwtService.generateToken("Alice", TEST_ROOM, "alias-mem-id");
+
+            PlayerPrincipal principal1 = jwtService.extractPrincipal(token);
+            PlayerPrincipal principal2 = jwtService.extractPlayerPrincipal(token);
+            PlayerPrincipal principal3 = jwtService.parseToken(token);
+
+            assertThat(principal1).isEqualTo(principal2);
+            assertThat(principal1).isEqualTo(principal3);
+        }
     }
 
     /** Groups test scenarios for initialization. */
@@ -323,6 +484,60 @@ class JwtServiceTest {
             assertThatThrownBy(service::init)
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("missing");
+        }
+    }
+
+    /** Groups test scenarios for PlayerPrincipal contract and equality. */
+    @Nested
+    @DisplayName("player principal contract")
+    class PlayerPrincipalContract {
+
+        @Test
+        @DisplayName("should initialize with two arguments and set membershipId to null")
+        void givenTwoArgConstructor_whenInstantiated_thenMembershipIdIsNull() {
+            PlayerPrincipal principal = new PlayerPrincipal("Alice", "room-1");
+
+            assertThat(principal.playerName()).isEqualTo("Alice");
+            assertThat(principal.roomId()).isEqualTo("room-1");
+            assertThat(principal.membershipId()).isNull();
+            assertThat(principal.getPlayerName()).isEqualTo("Alice");
+            assertThat(principal.getRoomId()).isEqualTo("room-1");
+            assertThat(principal.getMembershipId()).isNull();
+            assertThat(principal.getName()).isEqualTo("Alice:room-1");
+        }
+
+        @Test
+        @DisplayName("should initialize with three arguments and set all fields")
+        void givenThreeArgConstructor_whenInstantiated_thenAllFieldsSet() {
+            PlayerPrincipal principal = new PlayerPrincipal("Alice", "room-1", "mem-1");
+
+            assertThat(principal.playerName()).isEqualTo("Alice");
+            assertThat(principal.roomId()).isEqualTo("room-1");
+            assertThat(principal.membershipId()).isEqualTo("mem-1");
+            assertThat(principal.getPlayerName()).isEqualTo("Alice");
+            assertThat(principal.getRoomId()).isEqualTo("room-1");
+            assertThat(principal.getMembershipId()).isEqualTo("mem-1");
+            assertThat(principal.getName()).isEqualTo("Alice:room-1");
+        }
+
+        @Test
+        @DisplayName("should be equal when all fields match")
+        void givenIdenticalPrincipals_whenEqualsAndHashCode_thenAreEqual() {
+            PlayerPrincipal p1 = new PlayerPrincipal("Alice", "room-1", "mem-1");
+            PlayerPrincipal p2 = new PlayerPrincipal("Alice", "room-1", "mem-1");
+
+            assertThat(p1).isEqualTo(p2);
+            assertThat(p1.hashCode()).isEqualTo(p2.hashCode());
+            assertThat(p1.toString()).contains("Alice", "room-1", "mem-1");
+        }
+
+        @Test
+        @DisplayName("should not be equal when membershipId differs")
+        void givenDifferentMembershipId_whenEquals_thenNotEqual() {
+            PlayerPrincipal p1 = new PlayerPrincipal("Alice", "room-1", "mem-1");
+            PlayerPrincipal p2 = new PlayerPrincipal("Alice", "room-1", "mem-2");
+
+            assertThat(p1).isNotEqualTo(p2);
         }
     }
 
