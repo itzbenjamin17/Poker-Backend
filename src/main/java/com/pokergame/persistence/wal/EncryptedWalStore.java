@@ -184,7 +184,9 @@ public final class EncryptedWalStore {
      * This ensures the server starts up fully before players can join.
      *
      * @return a map of room IDs to their saved game data
-     * @throws PersistenceException if we can't read the files or restore a room
+     * @throws PersistenceException if store-level directory enumeration fails or the store is unhealthy;
+     *                              per-room corrupted WAL files or unsupported schemas are quarantined
+     *                              ({@code <roomId>.wal.corrupted}) so remaining rooms can recover
      */
     public Map<String, byte[]> recoverAll() {
         requireHealthy();
@@ -347,17 +349,7 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Overload for {@link #quarantine(String, String)} with a default reason.
-     *
-     * @param roomId the room whose corrupted WAL should be quarantined
-     * @return the path of the quarantined file
-     */
-    public Path quarantine(String roomId) {
-        return quarantine(roomId, "Unspecified corruption");
-    }
-
-    /**
-     * Alias for {@link #quarantine(String, String)}.
+     * Convenience alias for {@link #quarantine(String, String)}.
      *
      * @param roomId the room whose corrupted WAL should be quarantined
      * @param reason diagnostic explanation for the quarantine
@@ -547,10 +539,7 @@ public final class EncryptedWalStore {
                     incompleteTail = true;
                     long validLength = (long) bytes.position();
                     int partialHeaderLength = bytes.remaining();
-                    try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
-                        channel.truncate(validLength);
-                        channel.force(true);
-                    }
+                    truncateWalAt(path, validLength);
                     logger.warn("Truncated partial frame header of length {} at EOF for room {} to validLength {}",
                             partialHeaderLength, expectedRoomId, validLength);
                     break;
@@ -563,10 +552,7 @@ public final class EncryptedWalStore {
                 if (bytes.remaining() < frameLength) {
                     incompleteTail = true;
                     long validLength = (long) bytes.position() - 8;
-                    try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
-                        channel.truncate(validLength);
-                        channel.force(true);
-                    }
+                    truncateWalAt(path, validLength);
                     logger.warn("Truncated torn trailing WAL frame for room {} to validLength {}", expectedRoomId, validLength);
                     break; // The save file was cut off right at the end (like from a power outage), which is okay. We just ignore this last partial save.
                 }
@@ -597,6 +583,20 @@ public final class EncryptedWalStore {
             return new Recovery(latest, previousSequence + 1, incompleteTail);
         } catch (IOException e) {
             throw new PersistenceException("Cannot read WAL for room " + expectedRoomId, e);
+        }
+    }
+
+    /**
+     * Truncates a WAL file at the given valid byte offset and flushes the truncation to disk.
+     *
+     * @param path        the WAL file path to truncate
+     * @param validLength the byte offset of the last complete frame
+     * @throws IOException if truncating or flushing the file fails
+     */
+    private static void truncateWalAt(Path path, long validLength) throws IOException {
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
+            channel.truncate(validLength);
+            channel.force(true);
         }
     }
 

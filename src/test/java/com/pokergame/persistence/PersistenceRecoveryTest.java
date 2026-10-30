@@ -388,4 +388,63 @@ class PersistenceRecoveryTest {
         verifyNoInteractions(gameLifecycleService);
         assertTrue(recovery.isComplete());
     }
+
+    /**
+     * Protects the contract that when an exception is thrown during post-registration timer resumption,
+     * PersistenceRecovery evicts the already-registered room and game from memory, quarantines the room's WAL,
+     * and allows all remaining valid rooms to recover cleanly.
+     */
+    @Test
+    void postRestorationTimerResumptionExceptionEvictsRoomAndGameAndQuarantinesWal() {
+        Room brokenRoom = new Room("room-timer-fail", "Timer Fail Room", "Bob", 6, 10, 20, 1000, null);
+        brokenRoom.addPlayer("Bob");
+        Player bob = new Player("Bob", "bob-id", 1000);
+        Game brokenGame = mock(Game.class);
+        when(brokenGame.getGameId()).thenReturn("room-timer-fail");
+        when(brokenGame.getPlayers()).thenReturn(List.of(bob));
+        RecoveredAggregate brokenAggregate = new RecoveredAggregate(brokenRoom, "Bob", brokenGame, false);
+
+        Room validRoom = new Room("room-valid", "Valid Room", "Alice", 6, 10, 20, 1000, null);
+        validRoom.addPlayer("Alice");
+        Player alice = new Player("Alice", "alice-id", 1000);
+        Game validGame = mock(Game.class);
+        when(validGame.getGameId()).thenReturn("room-valid");
+        when(validGame.getPlayers()).thenReturn(List.of(alice));
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", validGame, false);
+
+        byte[] brokenBytes = new byte[]{4, 5, 6};
+        byte[] validBytes = new byte[]{1, 2, 3};
+
+        when(store.recoverAll()).thenReturn(Map.of(
+                "room-timer-fail", brokenBytes,
+                "room-valid", validBytes));
+        when(mapper.deserialize(brokenBytes)).thenReturn(brokenAggregate);
+        when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
+
+        doThrow(new IllegalStateException("Failed to resume recovered timers"))
+                .when(gameLifecycleService).resumeRecoveredTimers("room-timer-fail");
+        doNothing().when(gameLifecycleService).resumeRecoveredTimers("room-valid");
+
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                store, mapper, roomService, gameLifecycleService,
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+
+        assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
+
+        // Broken room and game were restored first, then evicted and quarantined after timer failure
+        verify(roomService).restoreRoom(brokenRoom, "Bob");
+        verify(gameLifecycleService).restoreGame(brokenGame);
+        verify(gameLifecycleService).evictGame("room-timer-fail");
+        verify(roomService).evictRoom("room-timer-fail");
+        verify(store).quarantine("room-timer-fail", "Failed to resume recovered timers");
+
+        // Valid room and game restored cleanly and not evicted
+        verify(roomService).restoreRoom(validRoom, "Alice");
+        verify(gameLifecycleService).restoreGame(validGame);
+        verify(gameLifecycleService).resumeRecoveredTimers("room-valid");
+        verify(gameLifecycleService, never()).evictGame("room-valid");
+        verify(roomService, never()).evictRoom("room-valid");
+
+        assertTrue(recovery.isComplete());
+    }
 }

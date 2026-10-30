@@ -78,7 +78,9 @@ public final class PersistenceRecovery implements ApplicationRunner {
      * </p>
      *
      * @param args application startup arguments
-     * @throws PersistenceException if the saved data is corrupted or doesn't match
+     * @throws PersistenceException if store-level WAL enumeration or I/O fails; per-room
+     *                              corrupted WAL files or unsupported schemas are quarantined
+     *                              ({@code <roomId>.wal.corrupted}) so remaining rooms can recover
      */
     @Override
     public void run(ApplicationArguments args) {
@@ -153,10 +155,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
                 roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
                 if (game != null) {
                     gameLifecycleService.restoreGame(game);
-                    gamesRestored++;
                 }
-                roomsRestored++;
-                logger.debug("Recovered room: roomId={}, hasGame={}", roomId, game != null);
                 for (String playerName : aggregate.room().getPlayers()) {
                     // Tell the system to kick the player if they don't reconnect by the deadline
                     webSocketEventListener.scheduleRecoveredDisconnect(
@@ -167,9 +166,14 @@ public final class PersistenceRecovery implements ApplicationRunner {
                 // Restart the game timers (like the countdown for player turns) so the game can continue
                 if (game != null) {
                     gameLifecycleService.resumeRecoveredTimers(game.getGameId());
+                    gamesRestored++;
                 }
+                roomsRestored++;
+                logger.debug("Recovered room: roomId={}, hasGame={}", roomId, game != null);
             } catch (Exception e) {
                 logger.error("Failed to recover room {}; quarantining corrupted WAL", roomId, e);
+                gameLifecycleService.evictGame(roomId);
+                roomService.evictRoom(roomId);
                 store.quarantine(roomId, e.getMessage());
             }
         }
