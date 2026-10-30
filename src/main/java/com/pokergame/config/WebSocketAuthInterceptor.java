@@ -89,10 +89,10 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
     /**
      * Restricts SEND frames to valid application destinations (/app/**) and verifies
-     * room authorization for room-targeted destinations.
+     * caller authentication and room authorization for room-targeted destinations.
      *
      * @param accessor headers for the SEND frame
-     * @throws AccessDeniedException if destination prefix is unauthorized or if caller room does not match
+     * @throws AccessDeniedException if destination prefix is unauthorized, caller is unauthenticated, or room does not match
      */
     private void handleSend(StompHeaderAccessor accessor) {
         String destination = accessor.getDestination();
@@ -101,11 +101,22 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
             throw new AccessDeniedException("Access denied: SEND destination must start with /app/");
         }
 
+        String sub = destination.length() > 5 ? destination.substring(5).replaceAll("^/+", "") : "";
+        if (sub.isBlank()) {
+            logger.warn("Blocked SEND to blank application destination: {}", destination);
+            throw new AccessDeniedException("Access denied: SEND destination must start with /app/");
+        }
+
+        PlayerPrincipal principal = resolvePlayerPrincipal(accessor);
+        if (principal == null) {
+            logger.warn("Forbidden unauthenticated SEND attempt to destination {}", destination);
+            throw new AccessDeniedException("User not authorized for this room destination");
+        }
+
         String destinationRoomId = extractRoomIdFromSendDestination(destination);
         if (destinationRoomId != null) {
-            PlayerPrincipal principal = resolvePlayerPrincipal(accessor);
             if (!isRoomAuthorized(principal, destinationRoomId)) {
-                String callerRoom = principal != null ? principal.roomId() : "unauthenticated";
+                String callerRoom = principal.roomId() != null ? principal.roomId() : "unauthenticated";
                 logger.warn("Forbidden SEND attempt: player in room {} tried to send to room destination {}", callerRoom, destination);
                 throw new AccessDeniedException("User not authorized for this room destination");
             }
