@@ -41,11 +41,12 @@ public final class DurableTransactionContext {
     }
 
     /**
-     * Queues an effect to run only after the current mutation commits successfully to the durable WAL.
+     * Queues an effect after the current domain mutation is accepted and its save attempt finishes.
+     * Accepted gameplay releases effects once even when saving must be retried in memory-only mode.
      * If the domain mutation fails, queued callbacks are discarded without execution.
      * If no durable transaction context is active on the current thread, the effect runs immediately.
      *
-     * @param action effect to run after successful durable commit
+     * @param action effect to run after acceptance and the save attempt
      */
     public static void afterCommit(Runnable action) {
         Context context = CURRENT.get();
@@ -57,7 +58,7 @@ public final class DurableTransactionContext {
     }
 
     /**
-     * Executes all queued post-commit effects independently after a successful durable commit.
+     * Executes accepted effects independently after the save attempt, including a failed save.
      * A failure in one callback is logged and does not prevent subsequent callbacks from executing.
      */
     static void complete() {

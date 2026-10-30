@@ -8,12 +8,13 @@ Service methods annotated with `@DurableMutation` execute in-memory state change
 
 ## Decision
 
-1. **Pre-Mutation Snapshot Capture**: `DurableMutationAspect` retains the latest accepted serialized snapshot image before executing domain mutations.
-2. **Rollback / Eviction on Failure**: If the intercepted join point throws any `Throwable`, the aspect catches it and restores the in-memory aggregate from the snapshot using `snapshotMapper.deserialize()` and `restoreRoom`/`restoreGame`. If no valid prior snapshot exists (such as a failed room creation), the aggregate is completely evicted from memory.
+1. **Pre-Mutation Snapshot Capture**: `DurableMutationAspect` captures an independent immutable state image before executing each top-level domain mutation. This image is separate from JSON serialization and WAL saving, so a storage or serialization outage cannot make rollback discard newer accepted in-memory gameplay.
+2. **Rollback / Eviction on Failure**: If the intercepted join point throws any `Throwable`, discard its queued effects and restore the pre-mutation room, game, and connection metadata. Rebuild runtime callbacks from the restored absolute deadlines without replaying broadcasts or applying startup reconnect policy. If no safe pre-mutation image is available, evict the aggregate rather than restoring an older disk image over accepted state. Failed room creation restores absence.
 3. **Transparent Error Propagation**: After restoring in-memory consistency, the original exception is rethrown to standard Spring `@RestControllerAdvice` and `@MessageExceptionHandler` handlers so users receive the appropriate error status and message.
 
 ## Consequences
 
 - Failed mutations never leave dirty, half-applied state in server memory.
-- In-memory aggregates always match the authoritative state stored on disk.
+- In-memory aggregates retain the latest accepted gameplay; disk may lag during the continue-in-memory policy of ADR-0001. Rollback does not require successful serialization or storage access.
+- A rejected command preserves lifecycle progression, and obsolete callbacks remain guarded against duplicate dealing or payouts.
 - Does not require complex distributed two-phase commit or transactional database rollback infrastructure.

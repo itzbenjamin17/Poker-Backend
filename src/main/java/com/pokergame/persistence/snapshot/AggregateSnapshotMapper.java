@@ -46,16 +46,6 @@ public final class AggregateSnapshotMapper {
     }
 
     /**
-     * Takes a room and its game and turns it into a snapshot that can be saved.
-     * A room without a game is also supported, so we can save a room even if it's just a lobby.
-     *
-     * @param room        the room being saved
-     * @param currentHost the current host, which could be different from the original creator
-     * @param game        the active game, or {@code null} if the room is still a lobby
-     * @return the bytes of the saved snapshot
-     * @throws PersistenceException if the snapshot cannot be created
-     */
-    /**
      * Captures an immutable state image from live Room and Game aggregates under their respective monitors.
      * Room monitor is acquired before Game monitor.
      * All live domain fields, players, and cards are converted into independent immutable records.
@@ -160,58 +150,73 @@ public final class AggregateSnapshotMapper {
                 throw new PersistenceException("Unsupported aggregate snapshot schema: " + schemaVersion);
             }
             AggregateStateImage image = objectMapper.treeToValue(root, AggregateStateImage.class);
-            // If this snapshot marks a deleted room, just return a deleted result
-            if (image.deleted()) {
-                return new RecoveredAggregate(null, null, null, true);
-            }
-            AggregateStateImage.RoomState state = image.room();
-            if (state == null || state.roomId() == null || state.roomId().trim().isEmpty()) {
-                throw new PersistenceException("Missing required room state in aggregate snapshot");
-            }
-            if (state.maxPlayers() < 2 || state.maxPlayers() > 10 || state.smallBlind() < 1
-                    || state.bigBlind() < 2 * state.smallBlind() || state.buyIn() < state.bigBlind()) {
-                throw new PersistenceException("Invalid room parameters in snapshot");
-            }
-
-            // If there was an active game, rebuild and strictly validate it
-            Game game = null;
-            if (image.game() != null) {
-                if (image.game().gameId() == null || !image.game().gameId().equals(state.roomId())) {
-                    throw new PersistenceException("Game identity does not match room identity in snapshot");
-                }
-                if (image.game().pot() < 0) {
-                    throw new PersistenceException("Invalid negative pot in snapshot");
-                }
-                game = restoreGame(image.game());
-            }
-
-            // Room membership is authoritative independently of retained final Game rows.
-            Map<String, LocalDateTime> joinTimes = state.playersWithJoinTime() == null
-                    ? java.util.Map.of() : state.playersWithJoinTime();
-            List<String> roomMembers = List.copyOf(joinTimes.keySet());
-            String host = image.currentHost();
-            String reconciledHost = host != null && roomMembers.contains(host) ? host
-                    : state.originalHost() != null && roomMembers.contains(state.originalHost()) ? state.originalHost()
-                    : roomMembers.stream().findFirst().orElse(null);
-            Room room = Room.restoreBuilder()
-                    .roomId(state.roomId())
-                    .roomName(state.roomName())
-                    .hostName(state.originalHost())
-                    .maxPlayers(state.maxPlayers())
-                    .smallBlind(state.smallBlind())
-                    .bigBlind(state.bigBlind())
-                    .buyIn(state.buyIn())
-                    .passwordHash(state.password())
-                    .createdAt(state.createdAt())
-                    .playersWithJoinTime(joinTimes)
-                    .playerMembershipIds(state.playerMembershipIds())
-                    .gameStarted(state.gameStarted())
-                    .build();
-
-            return new RecoveredAggregate(room, reconciledHost, game, false);
+            return restoreStateImage(image);
         } catch (JacksonException | IllegalArgumentException e) {
             throw new PersistenceException("Cannot decode aggregate snapshot", e);
         }
+    }
+
+    /**
+     * Reconstructs independent aggregates from an immutable image without JSON or disk access.
+     * Used for live rollback so a serialization outage cannot discard accepted gameplay.
+     *
+     * @param image captured aggregate data
+     * @return independently reconstructed room and game
+     * @throws PersistenceException if the image is invalid or unsupported
+     */
+    public RecoveredAggregate restoreStateImage(AggregateStateImage image) {
+        if (image == null || image.schemaVersion() != AggregateStateImage.CURRENT_SCHEMA_VERSION) {
+            throw new PersistenceException("Unsupported in-memory aggregate image");
+        }
+        // If this snapshot marks a deleted room, just return a deleted result
+        if (image.deleted()) {
+            return new RecoveredAggregate(null, null, null, true);
+        }
+        AggregateStateImage.RoomState state = image.room();
+        if (state == null || state.roomId() == null || state.roomId().trim().isEmpty()) {
+            throw new PersistenceException("Missing required room state in aggregate snapshot");
+        }
+        if (state.maxPlayers() < 2 || state.maxPlayers() > 10 || state.smallBlind() < 1
+                || state.bigBlind() < 2 * state.smallBlind() || state.buyIn() < state.bigBlind()) {
+            throw new PersistenceException("Invalid room parameters in snapshot");
+        }
+
+        // If there was an active game, rebuild and strictly validate it
+        Game game = null;
+        if (image.game() != null) {
+            if (image.game().gameId() == null || !image.game().gameId().equals(state.roomId())) {
+                throw new PersistenceException("Game identity does not match room identity in snapshot");
+            }
+            if (image.game().pot() < 0) {
+                throw new PersistenceException("Invalid negative pot in snapshot");
+            }
+            game = restoreGame(image.game());
+        }
+
+        // Room membership is authoritative independently of retained final Game rows.
+        Map<String, LocalDateTime> joinTimes = state.playersWithJoinTime() == null
+                ? java.util.Map.of() : state.playersWithJoinTime();
+        List<String> roomMembers = List.copyOf(joinTimes.keySet());
+        String host = image.currentHost();
+        String reconciledHost = host != null && roomMembers.contains(host) ? host
+                : state.originalHost() != null && roomMembers.contains(state.originalHost()) ? state.originalHost()
+                : roomMembers.stream().findFirst().orElse(null);
+        Room room = Room.restoreBuilder()
+                .roomId(state.roomId())
+                .roomName(state.roomName())
+                .hostName(state.originalHost())
+                .maxPlayers(state.maxPlayers())
+                .smallBlind(state.smallBlind())
+                .bigBlind(state.bigBlind())
+                .buyIn(state.buyIn())
+                .passwordHash(state.password())
+                .createdAt(state.createdAt())
+                .playersWithJoinTime(joinTimes)
+                .playerMembershipIds(state.playerMembershipIds())
+                .gameStarted(state.gameStarted())
+                .build();
+
+        return new RecoveredAggregate(room, reconciledHost, game, false);
     }
 
     /**

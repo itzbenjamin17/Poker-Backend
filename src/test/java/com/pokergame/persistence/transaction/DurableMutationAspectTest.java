@@ -298,7 +298,7 @@ class DurableMutationAspectTest {
         ProceedingJoinPoint joinPoint = mutationPoint("room-capture", () -> "done");
         aspect.persist(joinPoint, validMutation());
 
-        verify(realMapper).captureStateImage(room, "Host", game);
+        verify(realMapper, times(2)).captureStateImage(room, "Host", game);
         verify(realMapper).serialize(any(AggregateStateImage.class));
     }
 
@@ -322,11 +322,11 @@ class DurableMutationAspectTest {
     }
 
     /**
-     * Finding B9-1: Mutation failure rolls back in-memory aggregate to last committed state.
+     * Mutation failure restores the independent pre-mutation image, without reading the WAL.
      */
     @Test
-    @DisplayName("When a mutation throws inside proceed, in-memory aggregate is rolled back to committed WAL state")
-    void failedMutationRollsBackInMemoryAggregateToCommittedState() throws Throwable {
+    @DisplayName("When a mutation throws, in-memory aggregate is restored from its pre-mutation image")
+    void failedMutationRestoresPreMutationImage() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
@@ -348,7 +348,7 @@ class DurableMutationAspectTest {
         byte[] committedPayload = new byte[]{42, 43, 44};
         store.checkpoint(roomId, committedPayload);
 
-        when(snapshotMapper.deserialize(committedPayload))
+        when(snapshotMapper.restoreStateImage(any(AggregateStateImage.class)))
                 .thenReturn(new RecoveredAggregate(originalRoom, "Alice", originalGame, false));
 
         lenient().when(roomService.getRoom(roomId)).thenReturn(originalRoom);
@@ -369,11 +369,11 @@ class DurableMutationAspectTest {
     }
 
     /**
-     * Finding B9-1: Mutation failure evicts uncommitted aggregate when no committed state exists.
+     * Mutation failure evicts a room that did not exist before the attempted creation.
      */
     @Test
-    @DisplayName("When a mutation throws inside proceed and no committed state exists, aggregate is evicted")
-    void failedMutationEvictsAggregateWhenNoCommittedStateExists() throws Throwable {
+    @DisplayName("When creation fails and no pre-mutation room existed, aggregate is evicted")
+    void failedCreationEvictsAggregateWhenNoPreMutationRoomExists() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
@@ -384,8 +384,7 @@ class DurableMutationAspectTest {
         when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
 
         String roomId = "room-uncommitted-fail";
-        Room dirtyRoom = new Room(roomId, "Uncommitted", "Alice", 6, 10, 20, 1000, null);
-        when(roomService.getRoom(roomId)).thenReturn(dirtyRoom);
+        when(roomService.getRoom(roomId)).thenReturn(null);
         lenient().when(gameLifecycleService.getGame(roomId)).thenReturn(null);
 
         ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
@@ -394,7 +393,7 @@ class DurableMutationAspectTest {
 
         assertThrows(IllegalStateException.class, () -> aspect.persist(joinPoint, validMutation()));
 
-        // Since no committed state exists, dirty aggregate must be evicted from active registry
+        // A failed creation must not leave an uncommitted aggregate in the active registry
         verify(gameLifecycleService).evictGame(roomId);
         verify(roomService).destroyRoom(roomId);
         verify(gameLifecycleService, never()).restoreGame(any());
@@ -402,11 +401,11 @@ class DurableMutationAspectTest {
     }
 
     /**
-     * Finding B9-1: When WAL recovery fails during rollback, aggregate is evicted to prevent dirty commits.
+     * Absent pre-mutation state must not resurrect an obsolete WAL room.
      */
     @Test
-    @DisplayName("When recovery fails during rollback, aggregate is evicted and write failure recorded")
-    void failedMutationEvictsAggregateWhenWalRecoveryFails() throws Throwable {
+    @DisplayName("When no pre-mutation room exists, old WAL records are not restored")
+    void failedMutationDoesNotResurrectOldWalWithoutPreMutationRoom() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
@@ -420,8 +419,7 @@ class DurableMutationAspectTest {
         byte[] payload = new byte[]{1, 2, 3};
         store.checkpoint(roomId, payload);
 
-        // Make deserialize throw to simulate snapshot corruption
-        when(snapshotMapper.deserialize(payload)).thenThrow(new PersistenceException("corrupted snapshot"));
+        // No pre-mutation room exists; stale WAL must not resurrect an old membership.
 
         ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
             throw new RuntimeException("Domain error");
@@ -429,7 +427,7 @@ class DurableMutationAspectTest {
 
         assertThrows(RuntimeException.class, () -> aspect.persist(joinPoint, validMutation()));
 
-        // Verify aggregate evicted because restore failed
+        // Verify no old WAL room is resurrected into the live registry
         verify(roomService).destroyRoom(roomId);
     }
 
@@ -457,7 +455,7 @@ class DurableMutationAspectTest {
         AggregateStateImage capturedImage = mock(AggregateStateImage.class);
         when(snapshotMapper.captureStateImage(any(), any(), any())).thenReturn(capturedImage);
         when(snapshotMapper.serialize(capturedImage)).thenReturn(acceptedBytes);
-        when(snapshotMapper.deserialize(acceptedBytes)).thenReturn(new RecoveredAggregate(room, "Host", game, false));
+        when(snapshotMapper.restoreStateImage(capturedImage)).thenReturn(new RecoveredAggregate(room, "Host", game, false));
 
         // First mutation: domain succeeds, but storage fails (saving pendingSave with acceptedBytes)
         storageOutage.set(true);
@@ -540,7 +538,8 @@ class DurableMutationAspectTest {
         Room lobbyRoom = new Room(roomId, "Lobby Room", "Alice", 6, 10, 20, 1000, null);
         lobbyRoom.addPlayer("Alice");
         RecoveredAggregate lobbyAggregate = new RecoveredAggregate(lobbyRoom, "Alice", null, false);
-        when(snapshotMapper.deserialize(snapshotBytes)).thenReturn(lobbyAggregate);
+        when(roomService.getRoom(roomId)).thenReturn(lobbyRoom);
+        when(snapshotMapper.restoreStateImage(any(AggregateStateImage.class))).thenReturn(lobbyAggregate);
 
         ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
             throw new RuntimeException("Lobby mutation failure");

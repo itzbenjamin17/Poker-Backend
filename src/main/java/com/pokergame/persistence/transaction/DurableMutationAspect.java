@@ -27,8 +27,8 @@ import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.expression.spel.support.StandardEvaluationContext;
 
 import java.lang.reflect.Method;
-import java.util.Optional;
-import java.util.Set;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.pokergame.util.KeyedLockRegistry;
@@ -54,7 +54,6 @@ public final class DurableMutationAspect {
     private final KeyedLockRegistry<String> roomLocks = new KeyedLockRegistry<>();
     private final ConcurrentHashMap<String, AtomicInteger> recordsSinceCompaction = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, PendingSave> pendingSaves = new ConcurrentHashMap<>();
-    private final Set<String> blockedSnapshotRooms = ConcurrentHashMap.newKeySet();
     private final ExpressionParser expressionParser = new SpelExpressionParser();
     private final DefaultParameterNameDiscoverer parameterNames = new DefaultParameterNameDiscoverer();
 
@@ -133,6 +132,13 @@ public final class DurableMutationAspect {
 
             try (LockLease lease = roomLocks.acquire(roomId)) {
                 DurableTransactionContext.begin(roomId);
+                RollbackState beforeMutation = null;
+                try {
+                    beforeMutation = captureRollbackState(roomId);
+                } catch (RuntimeException captureFailure) {
+                    // Snapshot trouble must not refuse an otherwise valid in-memory command.
+                    recordStorageFailure(roomId, captureFailure);
+                }
                 WalTransaction transaction = null;
                 if (store.isHealthy() && !store.requiresCheckpoint(roomId)) {
                     try {
@@ -145,16 +151,13 @@ public final class DurableMutationAspect {
                 try {
                     result = joinPoint.proceed();
                 } catch (Throwable failure) {
-                    PendingSave pending = pendingSaves.get(roomId);
-                    if (pending != null && pending.image() == null) blockedSnapshotRooms.add(roomId);
                     logger.debug("Durable mutation discarded due to failure: class={} roomId={}", failure.getClass().getSimpleName(), roomId);
-                    rollbackOrEvictAggregate(roomId);
                     DurableTransactionContext.discard();
+                    rollbackOrEvictAggregate(roomId, beforeMutation);
                     throw failure;
                 }
 
                 // An accepted newer mutation supersedes any old retry image before serialization starts.
-                blockedSnapshotRooms.remove(roomId);
                 pendingSaves.put(roomId, new PendingSave(null, false));
                 try {
                     PendingSave pending = captureState(roomId);
@@ -189,7 +192,6 @@ public final class DurableMutationAspect {
                 PendingSave pending = pendingSaves.get(roomId);
                 if (pending == null) continue;
                 if (pending.image() == null) {
-                    if (blockedSnapshotRooms.contains(roomId)) continue;
                     pending = captureState(roomId);
                     pendingSaves.put(roomId, pending);
                 }
@@ -200,6 +202,7 @@ public final class DurableMutationAspect {
         }
     }
 
+    /** Captures and encodes the latest accepted room state for a save attempt. */
     private PendingSave captureState(String roomId) {
         Room room = roomService.getObject().getRoom(roomId);
         if (room == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
@@ -210,6 +213,7 @@ public final class DurableMutationAspect {
         return new PendingSave(snapshotMapper.serialize(stateImage), false);
     }
 
+    /** Saves accepted bytes without replaying the domain command or its effects. */
     private void saveState(String roomId, PendingSave pending, WalTransaction transaction) {
         boolean checkpoint = transaction == null || !store.isHealthy() || store.requiresCheckpoint(roomId);
         if (checkpoint) {
@@ -229,6 +233,7 @@ public final class DurableMutationAspect {
         pendingSaves.remove(roomId, pending);
     }
 
+    /** Reports storage degradation while keeping accepted gameplay available. */
     private void recordStorageFailure(String roomId, RuntimeException failure) {
         store.recordWriteFailure(roomId, failure);
         logger.warn("Persistence unavailable for room {}; continuing in memory ({})",
@@ -239,43 +244,61 @@ public final class DurableMutationAspect {
         private PendingSave { image = image == null ? null : image.clone(); }
     }
 
+    /** Captures live rollback data independently of serialization and WAL availability. */
+    private RollbackState captureRollbackState(String roomId) {
+        Room room = roomService.getObject().getRoom(roomId);
+        if (room == null) return new RollbackState(null, Map.of());
+        synchronized (room) {
+            AggregateStateImage image = snapshotMapper.captureStateImage(room,
+                    roomService.getObject().getCurrentHost(roomId), gameLifecycleService.getObject().getGame(roomId));
+            Map<String, ConnectionState> connections = new HashMap<>();
+            for (String player : room.getPlayers()) {
+                connections.put(player, new ConnectionState(room.isPlayerConnected(player), room.getAbsenceDeadline(player)));
+            }
+            return new RollbackState(image, Map.copyOf(connections));
+        }
+    }
+
+    /** Process-local connectivity is intentionally separate from the persisted image. */
+    private record ConnectionState(boolean connected, Long absenceDeadline) { }
+
+    /** A null image denotes a room that did not exist before the rejected command. */
+    private record RollbackState(AggregateStateImage image, Map<String, ConnectionState> connections) { }
+
     /**
-     * Rolls back the in-memory room and game aggregates to their last accepted state
-     * (from a pending save image or the latest committed WAL record) after a domain
-     * mutation fails, or evicts them completely if no committed state exists.
+     * Restores the independent pre-mutation RAM image after a rejection. Disk may lag
+     * accepted gameplay, so WAL bytes are never a safe rollback source.
      *
      * @param roomId identifier of the room whose failed mutation must be rolled back
+     * @param beforeMutation immutable state captured before the rejected command, or null if capture failed
      */
-    private void rollbackOrEvictAggregate(String roomId) {
+    private void rollbackOrEvictAggregate(String roomId, RollbackState beforeMutation) {
         try {
-            PendingSave pending = pendingSaves.get(roomId);
-            byte[] snapshotBytes = (pending != null && pending.image() != null) ? pending.image() : null;
-            if (snapshotBytes == null) {
-                try {
-                    Optional<byte[]> latest = store.recoverLatest(roomId);
-                    if (latest.isPresent()) {
-                        snapshotBytes = latest.get();
-                    }
-                } catch (RuntimeException walError) {
-                    logger.warn("Could not read WAL for room {} during rollback", roomId, walError);
-                    throw walError;
-                }
-            }
-
-            if (snapshotBytes != null) {
-                RecoveredAggregate aggregate = snapshotMapper.deserialize(snapshotBytes);
+            if (beforeMutation != null && beforeMutation.image() != null) {
+                RecoveredAggregate aggregate = snapshotMapper.restoreStateImage(beforeMutation.image());
                 if (aggregate.deleted() || aggregate.room() == null) {
                     evictAggregate(roomId);
                 } else {
                     restoreAggregate(roomId, aggregate);
+                    synchronized (aggregate.room()) {
+                        beforeMutation.connections().forEach((player, state) -> {
+                            aggregate.room().setPlayerConnected(player, state.connected());
+                            aggregate.room().setAbsenceDeadline(player, state.absenceDeadline());
+                        });
+                    }
+                    if (aggregate.game() != null) gameLifecycleService.getObject().resumeRollbackTimers(roomId);
                 }
             } else {
+                // A captured absence is itself accepted state: retain its pending tombstone.
+                // Only an unavailable preimage makes a retry unsafe after rejection.
+                if (beforeMutation == null) pendingSaves.remove(roomId);
                 evictAggregate(roomId);
             }
         } catch (Exception restoreFailure) {
             logger.error("Failed to restore aggregate for room {} after mutation failure; evicting to prevent dirty commits",
                     roomId, restoreFailure);
             evictAggregate(roomId);
+            pendingSaves.remove(roomId);
             recordStorageFailure(roomId, restoreFailure instanceof RuntimeException re ? re
                     : new PersistenceException("Failed to restore aggregate for room " + roomId, restoreFailure));
         } finally {
@@ -336,6 +359,7 @@ public final class DurableMutationAspect {
         }
     }
 
+    /** Removes an uncommitted creation WAL only when no accepted room remains. */
     private void cleanupAbortedCreation(String roomId) {
         try {
             recordsSinceCompaction.remove(roomId);
@@ -348,6 +372,7 @@ public final class DurableMutationAspect {
         }
     }
 
+    /** Determines whether the accepted WAL prefix is large enough to compact. */
     private boolean shouldCompact(String roomId) {
         int records = recordsSinceCompaction.computeIfAbsent(roomId, ignored -> new AtomicInteger())
                 .addAndGet(2);
@@ -355,6 +380,7 @@ public final class DurableMutationAspect {
                 || store.walSize(roomId) >= properties.getCompactAfterBytes();
     }
 
+    /** Resolves the annotated aggregate identity before any mutation is executed. */
     private String resolveRoomId(ProceedingJoinPoint joinPoint, String expression) {
         Method method = ((MethodSignature) joinPoint.getSignature()).getMethod();
         String[] names = parameterNames.getParameterNames(method);

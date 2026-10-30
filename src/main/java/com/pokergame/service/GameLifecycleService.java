@@ -878,6 +878,24 @@ public class GameLifecycleService {
     }
 
     /**
+     * Restores only runtime registrations after live rollback, preserving the accepted
+     * deadlines and generations exactly. Unlike startup recovery, it does not normalize
+     * ready state, publish snapshots, or queue work in the failed transaction context.
+     *
+     * @param gameId restored game whose accepted task intents must run
+     */
+    public void resumeRollbackTimers(String gameId) {
+        Game game = getGame(gameId);
+        if (game == null) return;
+        List<TaskIntent> intents;
+        synchronized (game) {
+            intents = game.getScheduledTaskDeadlinesSnapshot().entrySet().stream()
+                    .map(entry -> taskIntent(gameId, game, entry.getKey(), entry.getValue())).toList();
+        }
+        intents.forEach(this::scheduleRuntimeTask);
+    }
+
+    /**
      * Persists the next-hand deadline in the same room transaction that requested
      * it, preventing a crash from leaving a completed countdown with no next hand.
      *
