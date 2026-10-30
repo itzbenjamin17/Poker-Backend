@@ -116,9 +116,10 @@ public final class PersistenceRecovery implements ApplicationRunner {
             }
             
             // Make sure the file name matches the actual room ID inside the file to prevent loading corrupt data
-            if (!roomId.equals(aggregate.room().getRoomId())) {
+            if (aggregate.room() == null || !roomId.equals(aggregate.room().getRoomId())) {
                 logger.error("Snapshot room identity does not match WAL file identity for room {}", roomId);
-                throw new PersistenceException("Snapshot room identity does not match WAL file identity");
+                store.quarantine(roomId, "Snapshot room identity does not match WAL file identity");
+                continue;
             }
             
             // Apply restart disconnect state before either aggregate becomes visible

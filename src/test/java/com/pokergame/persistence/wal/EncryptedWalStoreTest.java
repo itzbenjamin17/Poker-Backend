@@ -476,6 +476,48 @@ class EncryptedWalStoreTest {
     }
 
     /**
+     * Protects the contract that recoverAll() quarantines corrupted WAL files on disk
+     * and returns valid rooms without throwing.
+     */
+    @Test
+    void recoverAllQuarantinesCorruptedWalFilesAndRecoversRemainingValidRooms() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 46);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+
+        // 1. Prepare and commit a valid room
+        WalTransaction txValid = store.prepare("room-valid");
+        byte[] validPayload = "valid-room-data".getBytes(StandardCharsets.UTF_8);
+        store.commit(txValid, validPayload);
+
+        // 2. Prepare and commit a room, then corrupt its WAL file on disk
+        WalTransaction txCorrupt = store.prepare("room-corrupt");
+        byte[] corruptPayload = "corrupt-room-data".getBytes(StandardCharsets.UTF_8);
+        store.commit(txCorrupt, corruptPayload);
+
+        Path corruptWalPath = directory.resolve("room-corrupt.wal");
+        byte[] walBytes = Files.readAllBytes(corruptWalPath);
+        walBytes[walBytes.length / 2] ^= 0x5A; // tamper ciphertext
+        Files.write(corruptWalPath, walBytes);
+
+        // 3. recoverAll() should not throw, should quarantine room-corrupt, and should recover room-valid
+        Map<String, byte[]> recovered = assertDoesNotThrow(store::recoverAll);
+
+        assertEquals(1, recovered.size());
+        assertTrue(recovered.containsKey("room-valid"));
+        assertArrayEquals(validPayload, recovered.get("room-valid"));
+        assertFalse(recovered.containsKey("room-corrupt"));
+
+        // Verify corrupted file was moved to .wal.corrupted
+        Path expectedQuarantinePath = directory.resolve("room-corrupt.wal.corrupted");
+        assertTrue(Files.exists(expectedQuarantinePath), "Corrupted WAL must be moved to .wal.corrupted");
+        assertFalse(Files.exists(corruptWalPath), "Original corrupted .wal must no longer exist");
+
+        // Verify store remains healthy
+        assertTrue(store.isHealthy(), "Store should be healthy after recoverAll isolates corrupted WAL");
+        assertNull(store.lastError(), "Store lastError should be null");
+    }
+
+    /**
      * Supports the test scenario for keyring.
      * @param id id supplied to the fixture
      * @param value value supplied to the fixture

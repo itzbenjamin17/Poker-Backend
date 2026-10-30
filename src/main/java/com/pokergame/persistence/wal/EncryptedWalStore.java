@@ -195,7 +195,14 @@ public final class EncryptedWalStore {
                     .sorted(Comparator.comparing(Path::toString)).toList()) {
                 String fileName = path.getFileName().toString();
                 String roomId = fileName.substring(0, fileName.length() - 4);
-                Optional<byte[]> latest = recoverLatest(roomId);
+                Optional<byte[]> latest;
+                try {
+                    latest = recoverLatest(roomId);
+                } catch (RuntimeException e) {
+                    logger.error("Corrupted WAL file detected during recoverAll for room {}: {}", roomId, e.getMessage());
+                    quarantine(roomId, e.getMessage());
+                    continue;
+                }
                 if (latest.isPresent()) {
                     recovered.put(roomId, latest.get());
                 } else {

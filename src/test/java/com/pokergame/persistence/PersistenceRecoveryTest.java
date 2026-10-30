@@ -57,7 +57,7 @@ class PersistenceRecoveryTest {
     }
 
     /**
-     * Protects the contract that recovery rejects snapshots whose room identity does not match the WAL file identity.
+     * Protects the contract that recovery quarantines snapshots whose room identity does not match the WAL file identity.
      */
     @Test
     void mismatchedRoomIdentityThrowsPersistenceException() {
@@ -65,18 +65,25 @@ class PersistenceRecoveryTest {
         when(roomY.getRoomId()).thenReturn("room-Y");
         RecoveredAggregate aggregate = new RecoveredAggregate(roomY, "host", null, false);
 
-        when(store.recoverAll()).thenReturn(Map.of("room-X", new byte[]{1, 2, 3}));
-        when(mapper.deserialize(any())).thenReturn(aggregate);
+        Room roomValid = new Room("room-valid", "Valid Room", "Alice", 6, 10, 20, 1000, null);
+        roomValid.addPlayer("Alice");
+        RecoveredAggregate validAggregate = new RecoveredAggregate(roomValid, "Alice", null, false);
+
+        when(store.recoverAll()).thenReturn(Map.of(
+                "room-X", new byte[]{1, 2, 3},
+                "room-valid", new byte[]{4, 5, 6}));
+        when(mapper.deserialize(new byte[]{1, 2, 3})).thenReturn(aggregate);
+        when(mapper.deserialize(new byte[]{4, 5, 6})).thenReturn(validAggregate);
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
                 webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
 
-        PersistenceException ex = assertThrows(PersistenceException.class,
-                () -> recovery.run(new DefaultApplicationArguments()));
+        assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
-        assertEquals("Snapshot room identity does not match WAL file identity", ex.getMessage());
-        assertFalse(recovery.isComplete());
+        verify(store).quarantine("room-X", "Snapshot room identity does not match WAL file identity");
+        verify(roomService).restoreRoom(roomValid, "Alice");
+        assertTrue(recovery.isComplete());
     }
 
     /**
