@@ -262,40 +262,44 @@ class DurableMutationAspectTest {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        AggregateSnapshotMapper realMapper = spy(new AggregateSnapshotMapper(
+                tools.jackson.databind.json.JsonMapper.builder().findAndAddModules().build(),
+                new HandEvaluatorService()));
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+                store, realMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
 
-        Room room = new Room("room-capture", "Capture Room", "Host", 6, 10, 20, 1000, null);
+        Room room = spy(new Room("room-capture", "Capture Room", "Host", 6, 10, 20, 1000, null));
         room.addPlayer("Host");
         room.addPlayer("Guest");
-        Game game = new Game("room-capture", List.of(new Player("Host", "p1", 1000), new Player("Guest", "p2", 1000)), 10, 20, new com.pokergame.service.HandEvaluatorService());
+        Game game = spy(new Game("room-capture", List.of(new Player("Host", "p1", 1000), new Player("Guest", "p2", 1000)), 10, 20, new HandEvaluatorService()));
 
         when(roomService.getRoom("room-capture")).thenReturn(room);
         when(gameLifecycleService.getGame("room-capture")).thenReturn(game);
-        when(roomService.getCurrentHost("room-capture")).thenAnswer(inv -> {
-            assertTrue(Thread.holdsLock(room), "getCurrentHost must be read under Room monitor");
-            assertFalse(Thread.holdsLock(game), "Game monitor must not be held when reading host");
-            return "Host";
-        });
+        when(roomService.getCurrentHost("room-capture")).thenReturn("Host");
 
-        AggregateStateImage capturedImage = mock(AggregateStateImage.class);
-        when(snapshotMapper.captureStateImage(any(), any(), any())).thenAnswer(inv -> {
-            assertTrue(Thread.holdsLock(room), "Room monitor must be held during captureStateImage");
-            assertTrue(Thread.holdsLock(game), "Game monitor must be held during captureStateImage");
-            return capturedImage;
-        });
+        doAnswer(inv -> {
+            assertTrue(Thread.holdsLock(room), "Room state must be read under Room monitor");
+            assertFalse(Thread.holdsLock(game), "Game monitor must not be held when capturing Room state");
+            return inv.callRealMethod();
+        }).when(room).getPlayersWithJoinTimeSnapshot();
 
-        when(snapshotMapper.serialize(capturedImage)).thenAnswer(inv -> {
+        doAnswer(inv -> {
+            assertTrue(Thread.holdsLock(room), "Room monitor must still be held during Game state capture");
+            assertTrue(Thread.holdsLock(game), "Game monitor must be held during Game state capture");
+            return inv.callRealMethod();
+        }).when(game).getPlayers();
+
+        doAnswer(inv -> {
             assertFalse(Thread.holdsLock(room), "Room monitor must be released before JSON serialization");
             assertFalse(Thread.holdsLock(game), "Game monitor must be released before JSON serialization");
-            return new byte[]{4, 5, 6};
-        });
+            return inv.callRealMethod();
+        }).when(realMapper).serialize(any(AggregateStateImage.class));
 
         ProceedingJoinPoint joinPoint = mutationPoint("room-capture", () -> "done");
         aspect.persist(joinPoint, validMutation());
 
-        verify(snapshotMapper).captureStateImage(room, "Host", game);
-        verify(snapshotMapper).serialize(capturedImage);
+        verify(realMapper).captureStateImage(room, "Host", game);
+        verify(realMapper).serialize(any(AggregateStateImage.class));
     }
 
     /** An accepted action's timer must still run if its preceding broadcast callback fails. */

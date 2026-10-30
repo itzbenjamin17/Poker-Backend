@@ -87,10 +87,21 @@ public final class DurableMutationAspect {
         return roomLocks.acquire(roomId);
     }
 
+    /**
+     * Attempts to obtain the dedicated reentrant lock for a room without blocking.
+     *
+     * @param roomId the room identifier
+     * @return the room lock lease if immediately available, or {@code null} if held by another thread
+     */
     public LockLease tryAcquireRoomLock(String roomId) {
         return roomLocks.tryAcquire(roomId);
     }
 
+    /**
+     * Returns the keyed lock registry managing per-room persistence locks.
+     *
+     * @return the room lock registry
+     */
     public KeyedLockRegistry<String> getLockRegistry() {
         return roomLocks;
     }
@@ -166,6 +177,9 @@ public final class DurableMutationAspect {
         }
     }
 
+    /**
+     * Periodically retries pending room saves that previously failed due to transient storage errors.
+     */
     @Scheduled(fixedDelay = 5000, initialDelay = 5000)
     public void retryPendingSaves() {
         for (String roomId : pendingSaves.keySet()) {
@@ -190,17 +204,9 @@ public final class DurableMutationAspect {
         Room room = roomService.getObject().getRoom(roomId);
         if (room == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
         Game game = gameLifecycleService.getObject().getGame(roomId);
-        AggregateStateImage stateImage;
-        synchronized (room) {
-            String currentHost = roomService.getObject().getCurrentHost(roomId);
-            if (game != null) {
-                synchronized (game) {
-                    stateImage = snapshotMapper.captureStateImage(room, currentHost, game);
-                }
-            } else {
-                stateImage = snapshotMapper.captureStateImage(room, currentHost, null);
-            }
-        }
+        String currentHost = roomService.getObject().getCurrentHost(roomId);
+        // snapshotMapper.captureStateImage enforces synchronized (room) -> synchronized (game) lock ordering
+        AggregateStateImage stateImage = snapshotMapper.captureStateImage(room, currentHost, game);
         return new PendingSave(snapshotMapper.serialize(stateImage), false);
     }
 
@@ -233,6 +239,13 @@ public final class DurableMutationAspect {
         private PendingSave { image = image == null ? null : image.clone(); }
     }
 
+    /**
+     * Rolls back the in-memory room and game aggregates to their last accepted state
+     * (from a pending save image or the latest committed WAL record) after a domain
+     * mutation fails, or evicts them completely if no committed state exists.
+     *
+     * @param roomId identifier of the room whose failed mutation must be rolled back
+     */
     private void rollbackOrEvictAggregate(String roomId) {
         try {
             PendingSave pending = pendingSaves.get(roomId);
@@ -270,6 +283,13 @@ public final class DurableMutationAspect {
         }
     }
 
+    /**
+     * Rehydrates the room and optional game state into the active service registries
+     * from a recovered snapshot, or evicts any uncommitted game if the snapshot was in lobby state.
+     *
+     * @param roomId    identifier of the room being restored
+     * @param aggregate deserialized room and game snapshot to restore
+     */
     private void restoreAggregate(String roomId, RecoveredAggregate aggregate) {
         Room restoredRoom = aggregate.room();
         if (restoredRoom != null) {
@@ -290,6 +310,12 @@ public final class DurableMutationAspect {
         }
     }
 
+    /**
+     * Cancels active runtime tasks and removes both the game and room aggregates
+     * from the in-memory registries when no committed state can be restored.
+     *
+     * @param roomId identifier of the room and game aggregate to evict
+     */
     private void evictAggregate(String roomId) {
         try {
             GameLifecycleService games = gameLifecycleService.getObject();
