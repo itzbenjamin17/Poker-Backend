@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
 import org.springframework.test.context.ActiveProfiles;
@@ -638,5 +639,73 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.message").value("Only the room host can start the game. Please ask the host to start."));
 
         verify(gameLifecycleService, never()).createGameFromRoom(anyString());
+    }
+
+    @Test
+    @DisplayName("POST /api/room/create - Issues token with membershipId when room exists")
+    void createRoom_WithActiveMembership_ShouldIssueTokenWithMembershipId() throws Exception {
+        CreateRoomRequest request = new CreateRoomRequest("RoomMem", "HostAlice", 6, 10, 20, 1000, null);
+        String roomId = "room-mem-123";
+        com.pokergame.model.Room room = new com.pokergame.model.Room(roomId, "RoomMem", "HostAlice", 6, 10, 20, 1000, null);
+        String expectedMembershipId = room.addPlayer("HostAlice");
+
+        when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn(roomId);
+        when(roomService.getRoom(roomId)).thenReturn(room);
+        when(jwtService.generateToken("HostAlice", roomId, expectedMembershipId)).thenReturn("token-with-mid");
+
+        mockMvc.perform(post("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.token").value("token-with-mid"))
+                .andExpect(jsonPath("$.data.roomId").value(roomId))
+                .andExpect(jsonPath("$.data.playerName").value("HostAlice"));
+
+        verify(jwtService).generateToken("HostAlice", roomId, expectedMembershipId);
+    }
+
+    @Test
+    @DisplayName("POST /api/room/join - Issues token with membershipId when joined")
+    void joinRoom_WithActiveMembership_ShouldIssueTokenWithMembershipId() throws Exception {
+        JoinRoomRequest request = new JoinRoomRequest("RoomMem", "Bob", null);
+        String roomId = "room-mem-456";
+        com.pokergame.model.Room room = new com.pokergame.model.Room(roomId, "RoomMem", "HostAlice", 6, 10, 20, 1000, null);
+        room.addPlayer("HostAlice");
+        String expectedMembershipId = room.addPlayer("Bob");
+
+        when(roomService.joinRoom(any(JoinRoomRequest.class))).thenReturn(roomId);
+        when(roomService.getRoom(roomId)).thenReturn(room);
+        when(jwtService.generateToken("Bob", roomId, expectedMembershipId)).thenReturn("token-with-mid-bob");
+
+        mockMvc.perform(post("/api/room/join")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.token").value("token-with-mid-bob"))
+                .andExpect(jsonPath("$.data.roomId").value(roomId))
+                .andExpect(jsonPath("$.data.playerName").value("Bob"));
+
+        verify(jwtService).generateToken("Bob", roomId, expectedMembershipId);
+    }
+
+    @Test
+    @DisplayName("GET /api/room/{roomId} - Unauthorized when membership token is stale (401)")
+    void getRoomInfo_StaleMembershipToken_ShouldReturnUnauthorized401() throws Exception {
+        String roomId = "room-123";
+        String playerName = "Player1";
+        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId, "stale-mid");
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
+
+        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
+                .when(gameLifecycleService).validatePlayerMembership(roomId, playerName, "stale-mid");
+
+        mockMvc.perform(get("/api/room/{roomId}", roomId)
+                .principal(auth))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.error").value("Unauthorized"))
+                .andExpect(jsonPath("$.message").value("Token membership is stale or invalid."));
+
+        verify(roomService, never()).getRoomData(anyString());
     }
 }

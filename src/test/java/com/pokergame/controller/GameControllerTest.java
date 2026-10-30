@@ -32,6 +32,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.Collections;
 import java.util.List;
 
+import org.springframework.security.access.AccessDeniedException;
+
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -438,6 +441,92 @@ class GameControllerTest {
         gameController.markReady(gameId, principal);
 
         verify(gameLifecycleService).markPlayerReadyForNextHand(gameId, playerName);
+    }
+
+    @Test
+    @DisplayName("GET /api/game/{gameId}/state - Unauthorized when membership token is stale (401)")
+    void getGameState_StaleMembershipToken_ShouldReturnUnauthorized401() throws Exception {
+        PlayerPrincipal stalePrincipal = new PlayerPrincipal(playerName, gameId, "stale-mid-1");
+        Authentication staleAuth = new PreAuthenticatedAuthenticationToken(stalePrincipal, "token", Collections.emptyList());
+
+        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
+                .when(gameLifecycleService).validatePlayerMembership(gameId, playerName, "stale-mid-1");
+
+        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
+                .principal(staleAuth))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.error").value("Unauthorized"))
+                .andExpect(jsonPath("$.message").value("Token membership is stale or invalid."));
+    }
+
+    @Test
+    @DisplayName("GET /api/game/{gameId}/private-state - Unauthorized when membership token is stale (401)")
+    void getPrivateState_StaleMembershipToken_ShouldReturnUnauthorized401() throws Exception {
+        PlayerPrincipal stalePrincipal = new PlayerPrincipal(playerName, gameId, "stale-mid-2");
+        Authentication staleAuth = new PreAuthenticatedAuthenticationToken(stalePrincipal, "token", Collections.emptyList());
+
+        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
+                .when(gameLifecycleService).validatePlayerMembership(gameId, playerName, "stale-mid-2");
+
+        mockMvc.perform(get("/api/game/{gameId}/private-state", gameId)
+                .principal(staleAuth))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.error").value("Unauthorized"))
+                .andExpect(jsonPath("$.message").value("Token membership is stale or invalid."));
+    }
+
+    @Test
+    @DisplayName("POST /api/game/{gameId}/leave - Unauthorized when membership token is stale (401)")
+    void leaveGame_StaleMembershipToken_ShouldReturnUnauthorized401() throws Exception {
+        PlayerPrincipal stalePrincipal = new PlayerPrincipal(playerName, gameId, "stale-mid-3");
+        Authentication staleAuth = new PreAuthenticatedAuthenticationToken(stalePrincipal, "token", Collections.emptyList());
+
+        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
+                .when(gameLifecycleService).validatePlayerMembership(gameId, playerName, "stale-mid-3");
+
+        mockMvc.perform(post("/api/game/{gameId}/leave", gameId)
+                .principal(staleAuth))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.error").value("Unauthorized"));
+
+        verify(gameLifecycleService, never()).departParticipants(anyString(), anyList());
+    }
+
+    @Test
+    @DisplayName("POST /api/game/{gameId}/claim-win - Unauthorized when membership token is stale (401)")
+    void claimWin_StaleMembershipToken_ShouldReturnUnauthorized401() throws Exception {
+        PlayerPrincipal stalePrincipal = new PlayerPrincipal(playerName, gameId, "stale-mid-4");
+        Authentication staleAuth = new PreAuthenticatedAuthenticationToken(stalePrincipal, "token", Collections.emptyList());
+
+        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
+                .when(gameLifecycleService).validatePlayerMembership(gameId, playerName, "stale-mid-4");
+
+        mockMvc.perform(post("/api/game/{gameId}/claim-win", gameId)
+                .principal(staleAuth))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.error").value("Unauthorized"));
+
+        verify(gameLifecycleService, never()).claimWin(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("WS performAction - Throws AccessDeniedException when membership token is stale")
+    void performAction_StaleMembershipToken_ShouldThrowAccessDenied() {
+        PlayerPrincipal stalePrincipal = new PlayerPrincipal(playerName, gameId, "stale-mid-ws");
+        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, 0);
+
+        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
+                .when(gameLifecycleService).validatePlayerMembership(gameId, playerName, "stale-mid-ws");
+
+        assertThatThrownBy(() -> gameController.performAction(gameId, request, stalePrincipal))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("Token membership is stale or invalid.");
+
+        verify(playerActionService, never()).processPlayerAction(anyString(), any(), anyString());
     }
 }
 

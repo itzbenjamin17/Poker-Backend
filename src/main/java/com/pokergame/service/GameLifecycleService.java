@@ -25,6 +25,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -1075,6 +1076,52 @@ public class GameLifecycleService {
             return players.stream()
                     .filter(Objects::nonNull)
                     .anyMatch(player -> playerName.equals(player.getName()) && !player.getIsOut());
+        }
+    }
+
+    /**
+     * Checks whether a player currently exists in an active game and matches the expected membership ID.
+     *
+     * @param gameId       the unique identifier of the game
+     * @param playerName   the player name to check
+     * @param membershipId the expected membership identity from token
+     * @return true if player exists and membership matches, false otherwise
+     */
+    public boolean playerExistsInGame(String gameId, String playerName, String membershipId) {
+        if (!playerExistsInGame(gameId, playerName)) {
+            return false;
+        }
+        if (membershipId == null || membershipId.isBlank()) {
+            return true;
+        }
+        Room room = roomService != null ? roomService.getRoom(gameId) : null;
+        if (room == null) {
+            return true;
+        }
+        return Objects.equals(membershipId, room.getMembershipId(playerName));
+    }
+
+    /**
+     * Validates that the provided membership ID matches the active membership for the player in the room.
+     * If the player presents a token with a stale or mismatched membership ID, the request is rejected.
+     *
+     * @param gameId       game/room identifier
+     * @param playerName   player name
+     * @param membershipId claimed membership ID from token
+     * @throws AccessDeniedException if token membership is stale or mismatched
+     */
+    public void validatePlayerMembership(String gameId, String playerName, String membershipId) {
+        if (membershipId == null || membershipId.isBlank() || playerName == null || playerName.isBlank() || gameId == null) {
+            return;
+        }
+        Room room = roomService != null ? roomService.getRoom(gameId) : null;
+        if (room != null) {
+            String activeMembershipId = room.getMembershipId(playerName);
+            if (activeMembershipId == null || !activeMembershipId.equals(membershipId)) {
+                logger.warn("Rejecting request: stale or mismatched membership for player {} in game {} (token: {}, active: {})",
+                        playerName, gameId, membershipId, activeMembershipId);
+                throw new AccessDeniedException("Token membership is stale or invalid.");
+            }
         }
     }
 

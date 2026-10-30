@@ -78,8 +78,13 @@ public class RoomController {
         
         String roomId = roomService.createRoom(createRequest);
 
-        // Generate JWT token for this player, bound to this room
-        String token = jwtService.generateToken(sanitizedPlayerName, roomId);
+        Room room = roomService.getRoom(roomId);
+        String membershipId = room != null ? room.getMembershipId(sanitizedPlayerName) : null;
+
+        // Generate JWT token for this player, bound to this room and membership
+        String token = membershipId != null
+                ? jwtService.generateToken(sanitizedPlayerName, roomId, membershipId)
+                : jwtService.generateToken(sanitizedPlayerName, roomId);
 
         logger.info("Room created successfully with ID: {}", roomId);
         TokenResponse tokenResponse = new TokenResponse(token, roomId, sanitizedPlayerName);
@@ -106,8 +111,13 @@ public class RoomController {
         
         String roomId = roomService.joinRoom(joinRequest);
 
-        // Generate JWT token for this player, bound to this room
-        String token = jwtService.generateToken(sanitizedPlayerName, roomId);
+        Room room = roomService.getRoom(roomId);
+        String membershipId = room != null ? room.getMembershipId(sanitizedPlayerName) : null;
+
+        // Generate JWT token for this player, bound to this room and membership
+        String token = membershipId != null
+                ? jwtService.generateToken(sanitizedPlayerName, roomId, membershipId)
+                : jwtService.generateToken(sanitizedPlayerName, roomId);
 
         logger.info("Player {} successfully joined room: {}", sanitizedPlayerName, joinRequest.roomName());
         TokenResponse tokenResponse = new TokenResponse(token, roomId, sanitizedPlayerName);
@@ -133,6 +143,8 @@ public class RoomController {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
 
+        gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
+
         gameLifecycleService.departParticipants(roomId, List.of(playerName));
 
         logger.info("Player {} successfully left room {}", playerName, roomId);
@@ -155,6 +167,8 @@ public class RoomController {
         if (!playerPrincipal.roomId().equals(roomId)) {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
+
+        gameLifecycleService.validatePlayerMembership(roomId, playerPrincipal.playerName(), playerPrincipal.membershipId());
 
         try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(roomId) : LockLease.none()) {
             logger.debug("Fetching room info for room: {}", roomId);
@@ -194,6 +208,8 @@ public class RoomController {
         if (!playerPrincipal.roomId().equals(roomId)) {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
+
+        gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
 
         if (!roomService.isRoomHost(roomId, playerName)) {
             logger.warn("Non-host player {} attempted to start game for room {}", playerName, roomId);

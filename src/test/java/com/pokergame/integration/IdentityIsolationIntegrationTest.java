@@ -105,6 +105,102 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
     }
 
     /**
+     * Protects against B7-10: Stale session JWT token reuse after leaving and rejoining a room.
+     * The old token must be rejected with HTTP 401 Unauthorized.
+     */
+    @Test
+    @DisplayName("should reject stale session token with 401 when player leaves and rejoins")
+    void givenPlayerLeftAndRejoined_whenAccessingWithStaleToken_thenUnauthorized401() throws Exception {
+        JsonNode hostData = createRoom("StaleSessionRoom", "HostPlayer", 6);
+        String roomId = hostData.path("roomId").asText();
+
+        JsonNode aliceData1 = joinRoom("StaleSessionRoom", "Alice");
+        String staleToken = aliceData1.path("token").asText();
+
+        // Alice leaves the room
+        restClient.post()
+                .uri("/api/room/" + roomId + "/leave")
+                .header("Authorization", "Bearer " + staleToken)
+                .retrieve()
+                .toBodilessEntity();
+
+        // Alice rejoins the room and receives a new token with fresh membershipId
+        JsonNode aliceData2 = joinRoom("StaleSessionRoom", "Alice");
+        String activeToken = aliceData2.path("token").asText();
+        assertThat(activeToken).isNotEqualTo(staleToken);
+
+        // Accessing room info with stale token must be rejected with 401
+        try {
+            restClient.get()
+                    .uri("/api/room/" + roomId)
+                    .header("Authorization", "Bearer " + staleToken)
+                    .retrieve()
+                    .toBodilessEntity();
+            org.junit.jupiter.api.Assertions.fail("Expected 401 Unauthorized for stale token");
+        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            assertThat(e.getStatusCode().value()).isEqualTo(401);
+            assertThat(e.getResponseBodyAsString()).contains("Unauthorized");
+        }
+
+        // Accessing room info with active token must succeed (200 OK)
+        String activeResponse = restClient.get()
+                .uri("/api/room/" + roomId)
+                .header("Authorization", "Bearer " + activeToken)
+                .retrieve()
+                .body(String.class);
+        assertThat(activeResponse).contains(roomId);
+    }
+
+    /**
+     * Protects against B7-10: Stale session JWT token reuse on game endpoints.
+     */
+    @Test
+    @DisplayName("should reject stale session token on game endpoints with 401")
+    void givenGameStartedAndPlayerRejoined_whenAccessingGameWithStaleToken_thenUnauthorized401() throws Exception {
+        JsonNode hostData = createRoom("StaleGameRoom", "HostPlayer2", 6);
+        String roomId = hostData.path("roomId").asText();
+        String hostToken = hostData.path("token").asText();
+
+        JsonNode aliceData1 = joinRoom("StaleGameRoom", "Alice2");
+        String staleToken = aliceData1.path("token").asText();
+
+        // Alice leaves the room
+        restClient.post()
+                .uri("/api/room/" + roomId + "/leave")
+                .header("Authorization", "Bearer " + staleToken)
+                .retrieve()
+                .toBodilessEntity();
+
+        // Alice rejoins
+        JsonNode aliceData2 = joinRoom("StaleGameRoom", "Alice2");
+        String activeToken = aliceData2.path("token").asText();
+
+        // Host starts the game
+        startGame(roomId, hostToken);
+
+        // Accessing game state with stale token must be rejected with 401
+        try {
+            restClient.get()
+                    .uri("/api/game/" + roomId + "/state")
+                    .header("Authorization", "Bearer " + staleToken)
+                    .retrieve()
+                    .toBodilessEntity();
+            org.junit.jupiter.api.Assertions.fail("Expected 401 Unauthorized for stale token on game endpoint");
+        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            assertThat(e.getStatusCode().value()).isEqualTo(401);
+            assertThat(e.getResponseBodyAsString()).contains("Unauthorized");
+        }
+
+        // Accessing game state with active token must succeed
+        String activeState = restClient.get()
+                .uri("/api/game/" + roomId + "/state")
+                .header("Authorization", "Bearer " + activeToken)
+                .retrieve()
+                .body(String.class);
+        assertThat(activeState).contains("Alice2");
+    }
+
+    /**
      * Sends action for the test.
      * @param session session supplied to the fixture
      * @param roomId room ID supplied to the fixture

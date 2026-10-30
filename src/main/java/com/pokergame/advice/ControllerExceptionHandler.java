@@ -115,6 +115,20 @@ public class ControllerExceptionHandler {
     }
 
     /**
+     * Maps access-denied security failures (including stale or mismatched session tokens)
+     * to HTTP 401 Unauthorized.
+     *
+     * @param ex access-denied failure
+     * @return structured unauthorized response
+     */
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleAccessDeniedException(org.springframework.security.access.AccessDeniedException ex) {
+        logger.warn("Access denied: {}", ex.getMessage());
+        ErrorResponse error = new ErrorResponse(HttpStatus.UNAUTHORIZED.value(), "Unauthorized", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+    }
+
+    /**
      * Maps application rate-limit failures to HTTP 429.
      *
      * @param ex rate-limit failure
