@@ -1,11 +1,16 @@
 package com.pokergame.config;
 
+import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.security.JwtService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.BeanCreationException;
+import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 
 import java.io.InputStream;
@@ -90,7 +95,7 @@ class ConfigContractTest {
         }
 
         for (String key : props.stringPropertyNames()) {
-            if (key.startsWith("logging.")) {
+            if (key.startsWith("logging.") || "poker.persistence.enabled".equals(key)) {
                 continue;
             }
             String value = props.getProperty(key);
@@ -100,6 +105,59 @@ class ConfigContractTest {
                         .doesNotContain(":");
             }
         }
+    }
+
+    /**
+     * Protects the contract that poker.persistence.enabled has a safe fallback default of false.
+     */
+    @Test
+    @DisplayName("should ensure poker.persistence.enabled has safe fallback default of false")
+    void givenApplicationProperties_whenChecked_thenPersistenceHasSafeDefaultFalse() throws Exception {
+        Properties props = new Properties();
+        try (InputStream is = new ClassPathResource("application.properties").getInputStream()) {
+            props.load(is);
+        }
+
+        String value = props.getProperty("poker.persistence.enabled");
+        assertThat(value)
+                .withFailMessage("poker.persistence.enabled must provide safe fallback default of false (${POKER_PERSISTENCE_ENABLED:false})")
+                .isEqualTo("${POKER_PERSISTENCE_ENABLED:false}");
+    }
+
+    /**
+     * Protects the contract that when environment variables are unset, poker.persistence.enabled defaults to false.
+     */
+    @Test
+    @DisplayName("should default poker.persistence.enabled to false when environment variable is unset")
+    void givenUnsetEnvironmentVariable_whenResolvingPersistenceProperty_thenDefaultsToFalse() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(org.springframework.context.support.PropertySourcesPlaceholderConfigurer.class, com.pokergame.persistence.config.PersistenceProperties.class)
+                .withPropertyValues("poker.persistence.enabled=${POKER_PERSISTENCE_ENABLED:false}")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    com.pokergame.persistence.config.PersistenceProperties properties = context.getBean(com.pokergame.persistence.config.PersistenceProperties.class);
+                    assertThat(properties.isEnabled()).isFalse();
+                    assertThat(context.getEnvironment().getProperty("poker.persistence.enabled", Boolean.class)).isFalse();
+                });
+    }
+
+    /**
+     * Protects the contract that application-e2e.properties explicitly disables persistence and rate limiting.
+     */
+    @Test
+    @DisplayName("should ensure application-e2e.properties explicitly disables persistence and rate limiting")
+    void givenE2eProperties_whenChecked_thenPersistenceAndRateLimitingAreDisabled() throws Exception {
+        Properties props = new Properties();
+        try (InputStream is = new ClassPathResource("application-e2e.properties").getInputStream()) {
+            props.load(is);
+        }
+
+        assertThat(props.getProperty("poker.persistence.enabled"))
+                .withFailMessage("application-e2e.properties must explicitly declare poker.persistence.enabled=false")
+                .isEqualTo("false");
+        assertThat(props.getProperty("poker.rate-limiting.enabled"))
+                .withFailMessage("application-e2e.properties must explicitly declare poker.rate-limiting.enabled=false")
+                .isEqualTo("false");
     }
 
     /**
@@ -119,4 +177,36 @@ class ConfigContractTest {
                             .hasStackTraceContaining("Could not resolve placeholder 'UNRESOLVED_MANDATORY_ENV_VAR'");
                 });
     }
+
+    /**
+     * Protects the contract that when the e2e profile is active, poker.persistence.enabled evaluates to false.
+     */
+    @Test
+    @DisplayName("should evaluate poker.persistence.enabled to false when e2e profile is active")
+    void givenE2eProfile_whenActive_thenPersistenceIsEnabledFalse() {
+        try (ConfigurableApplicationContext context = new SpringApplicationBuilder(E2eTestConfig.class)
+                .web(WebApplicationType.NONE)
+                .profiles("e2e")
+                .run("--springdotenv.enabled=false")) {
+            assertThat(context.getEnvironment().getProperty("poker.persistence.enabled", Boolean.class)).isFalse();
+        }
+    }
+
+    /**
+     * Protects the contract that even if an environment/dotenv source defines POKER_PERSISTENCE_ENABLED=true,
+     * the e2e command line override (--poker.persistence.enabled=false) ensures persistence remains disabled.
+     */
+    @Test
+    @DisplayName("should evaluate poker.persistence.enabled to false when e2e command line argument is provided")
+    void givenE2eProfileWithCliOverride_whenActive_thenPersistenceIsEnabledFalse() {
+        try (ConfigurableApplicationContext context = new SpringApplicationBuilder(E2eTestConfig.class)
+                .web(WebApplicationType.NONE)
+                .profiles("e2e")
+                .run("--poker.persistence.enabled=false", "--poker.rate-limiting.enabled=false")) {
+            assertThat(context.getEnvironment().getProperty("poker.persistence.enabled", Boolean.class)).isFalse();
+        }
+    }
+
+    @Configuration
+    static class E2eTestConfig {}
 }
