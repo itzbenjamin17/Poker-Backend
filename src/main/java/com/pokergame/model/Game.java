@@ -785,14 +785,34 @@ public class Game {
                 && !p.getIsAllIn() && p.getChips() > 0);
     }
 
+    /**
+     * Returns the current hand phase's last full raise increment, using the nominal
+     * big blind until a full wager establishes another increment.
+     *
+     * @return minimum full raise increment in chips
+     */
     public int getLastFullRaise() {
         return lastFullRaiseByStreet.getOrDefault(currentPhase.name(), bigBlind);
     }
 
+    /**
+     * Calculates chips still owed against the current wager for a seated player.
+     *
+     * @param player non-null player whose current bet belongs to this hand phase
+     * @return nonnegative call amount before applying the player's available stack
+     */
     public int getCallDifference(Player player) {
         return Math.max(0, currentHighestBet - player.getCurrentBet());
     }
 
+    /**
+     * Calculates the additional chips a player must commit for a full raise,
+     * including both the outstanding call and the last full raise increment.
+     * Short all-ins are authorized separately rather than reducing this amount.
+     *
+     * @param player non-null seated player
+     * @return additional chips required, rather than the resulting total wager
+     */
     public int getMinimumRaiseAmount(Player player) {
         return getCallDifference(player) + getLastFullRaise();
     }
@@ -804,11 +824,26 @@ public class Game {
         return actionable <= 1 && !owedCall;
     }
 
+    /**
+     * Checks reopening history for a non-null seated player. An unacted player may
+     * raise; a prior actor needs a cumulative increase of at least one full raise.
+     * Turn ownership, available chips, and opponent eligibility are checked separately.
+     *
+     * @param player player whose acted-wager history is queried
+     * @return whether wager history permits raising
+     */
     public boolean isRaiseOpenTo(Player player) {
         Integer actedAt = lastActedWagerByPlayer.get(player.getPlayerId());
         return actedAt == null || currentHighestBet - actedAt >= getLastFullRaise();
     }
 
+    /**
+     * Projects allowed actions for the current eligible actor, accounting for call
+     * amount, reopening, stack size, and a contestable opponent.
+     *
+     * @param player proposed actor, or null when no player is selected
+     * @return immutable actions, empty for an ineligible or non-current player
+     */
     public List<PlayerAction> getLegalActionsFor(Player player) {
         if (player == null || !players.contains(player) || player.getHasFolded() || player.getIsOut() || player.getIsAllIn()
                 || currentPhase == GamePhase.SHOWDOWN || getCurrentPlayer() == null
