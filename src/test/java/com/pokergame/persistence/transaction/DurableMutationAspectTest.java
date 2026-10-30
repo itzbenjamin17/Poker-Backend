@@ -32,6 +32,8 @@ import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.persistence.wal.WalFaultPoint;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.AggregateStateImage;
+import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.service.HandEvaluatorService;
 import org.junit.jupiter.api.DisplayName;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
@@ -313,6 +315,201 @@ class DurableMutationAspectTest {
         assertEquals("accepted", aspect.persist(joinPoint, validMutation()));
         assertEquals(List.of("scheduled"), effects);
         assertTrue(store.isHealthy());
+    }
+
+    /**
+     * Finding B9-1: Mutation failure rolls back in-memory aggregate to last committed state.
+     */
+    @Test
+    @DisplayName("When a mutation throws inside proceed, in-memory aggregate is rolled back to committed WAL state")
+    void failedMutationRollsBackInMemoryAggregateToCommittedState() throws Throwable {
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+
+        when(roomServiceProvider.getObject()).thenReturn(roomService);
+        when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
+
+        String roomId = "room-rollback-test";
+        Room originalRoom = new Room(roomId, "Rollback Room", "Alice", 6, 10, 20, 1000, null);
+        originalRoom.addPlayer("Alice");
+        originalRoom.addPlayer("Bob");
+
+        Player alice = new Player("Alice", "p1", 1000);
+        Player bob = new Player("Bob", "p2", 1000);
+        Game originalGame = new Game(roomId, List.of(alice, bob), 10, 20, new HandEvaluatorService());
+
+        byte[] committedPayload = new byte[]{42, 43, 44};
+        store.checkpoint(roomId, committedPayload);
+
+        when(snapshotMapper.deserialize(committedPayload))
+                .thenReturn(new RecoveredAggregate(originalRoom, "Alice", originalGame, false));
+
+        lenient().when(roomService.getRoom(roomId)).thenReturn(originalRoom);
+        lenient().when(gameLifecycleService.getGame(roomId)).thenReturn(originalGame);
+
+        ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
+            // Simulate dirty uncommitted mutation before throwing
+            bob.setChips(500);
+            throw new RuntimeException("Simulated domain action failure");
+        });
+
+        assertThrows(RuntimeException.class, () -> aspect.persist(joinPoint, validMutation()));
+
+        // Verify that the dirty mutation was rolled back via restoreRoom and restoreGame
+        verify(roomService).restoreRoom(originalRoom, "Alice");
+        verify(gameLifecycleService).restoreGame(originalGame);
+        verify(roomService, never()).destroyRoom(roomId);
+    }
+
+    /**
+     * Finding B9-1: Mutation failure evicts uncommitted aggregate when no committed state exists.
+     */
+    @Test
+    @DisplayName("When a mutation throws inside proceed and no committed state exists, aggregate is evicted")
+    void failedMutationEvictsAggregateWhenNoCommittedStateExists() throws Throwable {
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+
+        when(roomServiceProvider.getObject()).thenReturn(roomService);
+        when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
+
+        String roomId = "room-uncommitted-fail";
+        Room dirtyRoom = new Room(roomId, "Uncommitted", "Alice", 6, 10, 20, 1000, null);
+        when(roomService.getRoom(roomId)).thenReturn(dirtyRoom);
+        when(gameLifecycleService.getGame(roomId)).thenReturn(null);
+
+        ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
+            throw new IllegalStateException("Creation failure inside joinPoint.proceed()");
+        });
+
+        assertThrows(IllegalStateException.class, () -> aspect.persist(joinPoint, validMutation()));
+
+        // Since no committed state exists, dirty aggregate must be evicted from active registry
+        verify(roomService).destroyRoom(roomId);
+        verify(gameLifecycleService, never()).restoreGame(any());
+        verify(snapshotMapper, never()).deserialize(any());
+    }
+
+    /**
+     * Finding B9-1: When WAL recovery fails during rollback, aggregate is evicted to prevent dirty commits.
+     */
+    @Test
+    @DisplayName("When recovery fails during rollback, aggregate is evicted and write failure recorded")
+    void failedMutationEvictsAggregateWhenWalRecoveryFails() throws Throwable {
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+
+        when(roomServiceProvider.getObject()).thenReturn(roomService);
+        when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
+
+        String roomId = "room-recovery-fail";
+        byte[] payload = new byte[]{1, 2, 3};
+        store.checkpoint(roomId, payload);
+
+        // Make deserialize throw to simulate snapshot corruption
+        when(snapshotMapper.deserialize(payload)).thenThrow(new PersistenceException("corrupted snapshot"));
+
+        ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
+            throw new RuntimeException("Domain error");
+        });
+
+        assertThrows(RuntimeException.class, () -> aspect.persist(joinPoint, validMutation()));
+
+        // Verify aggregate evicted because restore failed
+        verify(roomService).destroyRoom(roomId);
+    }
+
+    /**
+     * Finding B9-1: Subsequent mutation failure restores accepted in-memory pending save state.
+     */
+    @Test
+    @DisplayName("Subsequent mutation failure rolls back to accepted pending save image")
+    void failedMutationRollsBackToAcceptedPendingSaveState() throws Throwable {
+        AtomicBoolean storageOutage = new AtomicBoolean(false);
+        EncryptedWalStore store = failingStore(storageOutage);
+        DurableMutationAspect aspect = aspectForRoom(store, "room-pending-rollback");
+
+        Room room = new Room("room-pending-rollback", "Room", "Host", 6, 10, 20, 1000, null);
+        room.addPlayer("Host");
+        room.addPlayer("Guest");
+        Player host = new Player("Host", "p1", 1000);
+        Player guest = new Player("Guest", "p2", 1000);
+        Game game = new Game("room-pending-rollback", List.of(host, guest), 10, 20, new HandEvaluatorService());
+
+        when(roomService.getRoom("room-pending-rollback")).thenReturn(room);
+        when(gameLifecycleService.getGame("room-pending-rollback")).thenReturn(game);
+
+        byte[] acceptedBytes = new byte[]{50, 51, 52};
+        AggregateStateImage capturedImage = mock(AggregateStateImage.class);
+        when(snapshotMapper.captureStateImage(any(), any(), any())).thenReturn(capturedImage);
+        when(snapshotMapper.serialize(capturedImage)).thenReturn(acceptedBytes);
+        when(snapshotMapper.deserialize(acceptedBytes)).thenReturn(new RecoveredAggregate(room, "Host", game, false));
+
+        // First mutation: domain succeeds, but storage fails (saving pendingSave with acceptedBytes)
+        storageOutage.set(true);
+        ProceedingJoinPoint joinPoint1 = mutationPoint("room-pending-rollback", () -> "accepted-move");
+        assertEquals("accepted-move", aspect.persist(joinPoint1, validMutation()));
+
+        // Second mutation: domain throws
+        ProceedingJoinPoint joinPoint2 = mutationPoint("room-pending-rollback", () -> {
+            throw new RuntimeException("Second move failed");
+        });
+
+        assertThrows(RuntimeException.class, () -> aspect.persist(joinPoint2, validMutation()));
+
+        // Rolled back to accepted pending save state
+        verify(roomService).restoreRoom(room, "Host");
+        verify(gameLifecycleService).restoreGame(game);
+        verify(roomService, never()).destroyRoom("room-pending-rollback");
+    }
+
+    /**
+     * Finding B9-1: Storage and serialization failures do not leave in-memory aggregate corrupted.
+     */
+    @Test
+    @DisplayName("When serialization fails on accepted mutation, aggregate is preserved and subsequent mutation succeeds")
+    void serializationFailurePreservesAcceptedStateWithoutCorruption() throws Throwable {
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        DurableMutationAspect aspect = aspectForRoom(store, "room-serialize-safe");
+
+        AtomicInteger moves = new AtomicInteger();
+        List<String> effects = new ArrayList<>();
+        ProceedingJoinPoint joinPoint1 = mutationPoint("room-serialize-safe", () -> {
+            int move = moves.incrementAndGet();
+            DurableTransactionContext.afterCommit(() -> effects.add("effect-" + move));
+            return move;
+        });
+
+        // Serialization fails on first mutation
+        when(snapshotMapper.serialize(any(AggregateStateImage.class)))
+                .thenThrow(new PersistenceException("transient serialization failure"))
+                .thenReturn(new byte[]{7, 8, 9});
+
+        assertEquals(1, aspect.persist(joinPoint1, validMutation()));
+        assertEquals(List.of("effect-1"), effects, "Accepted mutation effects are executed");
+
+        // Second mutation succeeds and serializes cleanly without corruption
+        ProceedingJoinPoint joinPoint2 = mutationPoint("room-serialize-safe", () -> {
+            int move = moves.incrementAndGet();
+            DurableTransactionContext.afterCommit(() -> effects.add("effect-" + move));
+            return move;
+        });
+
+        assertEquals(2, aspect.persist(joinPoint2, validMutation()));
+        assertEquals(2, moves.get());
+        assertEquals(List.of("effect-1", "effect-2"), effects);
+        verify(roomService, never()).destroyRoom("room-serialize-safe");
     }
 
     private EncryptedWalStore failingStore(AtomicBoolean unavailable) {

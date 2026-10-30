@@ -6,6 +6,7 @@ import com.pokergame.persistence.config.PersistenceException;
 import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.AggregateStateImage;
+import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.WalTransaction;
 import com.pokergame.service.GameLifecycleService;
@@ -26,6 +27,7 @@ import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.expression.spel.support.StandardEvaluationContext;
 
 import java.lang.reflect.Method;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -132,11 +134,11 @@ public final class DurableMutationAspect {
                 try {
                     result = joinPoint.proceed();
                 } catch (Throwable failure) {
-                    DurableTransactionContext.discard();
                     PendingSave pending = pendingSaves.get(roomId);
                     if (pending != null && pending.image() == null) blockedSnapshotRooms.add(roomId);
                     logger.debug("Durable mutation discarded due to failure: class={} roomId={}", failure.getClass().getSimpleName(), roomId);
-                    cleanupAbortedCreation(roomId);
+                    rollbackOrEvictAggregate(roomId);
+                    DurableTransactionContext.discard();
                     throw failure;
                 }
 
@@ -229,6 +231,84 @@ public final class DurableMutationAspect {
 
     private record PendingSave(byte[] image, boolean deleted) {
         private PendingSave { image = image == null ? null : image.clone(); }
+    }
+
+    private void rollbackOrEvictAggregate(String roomId) {
+        try {
+            PendingSave pending = pendingSaves.get(roomId);
+            byte[] snapshotBytes = (pending != null && pending.image() != null) ? pending.image() : null;
+            if (snapshotBytes == null) {
+                try {
+                    Optional<byte[]> latest = store.recoverLatest(roomId);
+                    if (latest.isPresent()) {
+                        snapshotBytes = latest.get();
+                    }
+                } catch (RuntimeException walError) {
+                    logger.warn("Could not read WAL for room {} during rollback", roomId, walError);
+                    throw walError;
+                }
+            }
+
+            if (snapshotBytes != null) {
+                RecoveredAggregate aggregate = snapshotMapper.deserialize(snapshotBytes);
+                if (aggregate.deleted() || aggregate.room() == null) {
+                    evictAggregate(roomId);
+                } else {
+                    restoreAggregate(roomId, aggregate);
+                }
+            } else {
+                evictAggregate(roomId);
+            }
+        } catch (Exception restoreFailure) {
+            logger.error("Failed to restore aggregate for room {} after mutation failure; evicting to prevent dirty commits",
+                    roomId, restoreFailure);
+            evictAggregate(roomId);
+            recordStorageFailure(roomId, restoreFailure instanceof RuntimeException re ? re
+                    : new PersistenceException("Failed to restore aggregate for room " + roomId, restoreFailure));
+        } finally {
+            cleanupAbortedCreation(roomId);
+        }
+    }
+
+    private void restoreAggregate(String roomId, RecoveredAggregate aggregate) {
+        Room restoredRoom = aggregate.room();
+        if (restoredRoom != null) {
+            roomService.getObject().restoreRoom(restoredRoom, aggregate.currentHost());
+        }
+        Game restoredGame = aggregate.game();
+        if (restoredGame != null) {
+            gameLifecycleService.getObject().restoreGame(restoredGame);
+        } else {
+            try {
+                if (gameLifecycleService.getObject().getGame(roomId) != null) {
+                    gameLifecycleService.getObject().performGameCleanup(roomId);
+                    if (restoredRoom != null) {
+                        roomService.getObject().restoreRoom(restoredRoom, aggregate.currentHost());
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("Error evicting game for room {} during aggregate restoration", roomId, e);
+            }
+        }
+    }
+
+    private void evictAggregate(String roomId) {
+        try {
+            GameLifecycleService games = gameLifecycleService.getObject();
+            if (games != null && games.getGame(roomId) != null) {
+                games.performGameCleanup(roomId);
+            }
+        } catch (Exception e) {
+            logger.warn("Error cleaning up game for room {} during eviction", roomId, e);
+        }
+        try {
+            RoomService rooms = roomService.getObject();
+            if (rooms != null) {
+                rooms.destroyRoom(roomId);
+            }
+        } catch (Exception e) {
+            logger.warn("Error destroying room {} during eviction", roomId, e);
+        }
     }
 
     private void cleanupAbortedCreation(String roomId) {
