@@ -1,5 +1,8 @@
 package com.pokergame.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.pokergame.util.RoomPasswordPolicy;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -34,5 +37,16 @@ public record JoinRoomRequest(
 ) {
     public JoinRoomRequest {
         password = (password != null && password.trim().isEmpty()) ? null : password;
+    }
+
+    /**
+     * Reports whether verifying the password would preserve all of its UTF-8 bytes.
+     *
+     * @return whether the password fits BCrypt's byte limit
+     */
+    @JsonIgnore
+    @AssertTrue(message = RoomPasswordPolicy.BYTE_LIMIT_MESSAGE)
+    public boolean isPasswordWithinByteLimit() {
+        return RoomPasswordPolicy.isWithinByteLimit(password);
     }
 }

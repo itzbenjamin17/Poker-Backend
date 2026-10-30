@@ -72,6 +72,30 @@ class RoomServiceTest {
     @DisplayName("room creation")
     class CreateRoom {
 
+        /** Rejects unsupported BCrypt inputs before creating an aggregate. */
+        @Test
+        void rejectsPasswordAboveUtf8ByteLimitWithoutCreatingRoom() {
+            assertThatThrownBy(() -> roomService.createRoom(new CreateRoomRequest(
+                    "Unicode Room", "Host", 4, 5, 10, 100, "漢".repeat(25))))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Password must be at most 72 UTF-8 bytes.");
+            assertThat(roomService.getRooms()).isEmpty();
+        }
+
+        /** Preserves exact nonblank passwords at BCrypt's byte boundary. */
+        @Test
+        void supportsUtf8BoundaryAndRejectsOverlongJoinWithoutAddingPlayer() {
+            String password = " " + "漢".repeat(23) + "ab";
+            String roomId = roomService.createRoom(new CreateRoomRequest(
+                    "Boundary Room", "Host", 4, 5, 10, 100, password));
+            roomService.joinRoom(new JoinRoomRequest("Boundary Room", "Guest", password));
+            assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest(
+                    "Boundary Room", "Rejected", password + " ")))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Password must be at most 72 UTF-8 bytes.");
+            assertThat(roomService.getRoom(roomId).getPlayers()).containsExactly("Host", "Guest");
+        }
+
         /**
          * Protects the contract that the system should create a room and add the host as the first player.
          */

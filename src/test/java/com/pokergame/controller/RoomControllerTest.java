@@ -49,6 +49,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 })
 class RoomControllerTest {
 
+    /** Unsupported password bytes produce client validation errors on both public commands. */
+    @Test
+    void oversizedUnicodePasswordsReturnBadRequestBeforeServiceInvocation() throws Exception {
+        String password = "漢".repeat(25);
+        mockMvc.perform(post("/api/room/create").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateRoomRequest(
+                                "Room", "Host", 4, 5, 10, 100, password))))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new JoinRoomRequest("Room", "Guest", password))))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(roomService);
+    }
+
     @Autowired
     private MockMvc mockMvc;
 

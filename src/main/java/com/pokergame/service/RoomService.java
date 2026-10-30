@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.util.RoomPasswordPolicy;
 import com.pokergame.dto.internal.PlayerJoinInfo;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.dto.request.CreateRoomRequest;
@@ -134,6 +135,7 @@ public class RoomService {
      */
     @DurableMutation(roomId = "#roomId")
     public String createRoom(String roomId, CreateRoomRequest request) {
+        RoomPasswordPolicy.validateLength(request.getPassword());
         String sanitizedRoomName = InputSanitizer.sanitize(request.getRoomName());
         String sanitizedPlayerName = InputSanitizer.sanitize(request.getPlayerName());
 
@@ -245,6 +247,7 @@ public class RoomService {
      */
     @DurableMutation(roomId = "#roomId")
     public String joinRoom(String roomId, JoinRoomRequest joinRequest) {
+        RoomPasswordPolicy.validateLength(joinRequest.password());
         String sanitizedPlayerName = InputSanitizer.sanitize(joinRequest.playerName());
         Room room = rooms.get(roomId);
         if (room == null) {
