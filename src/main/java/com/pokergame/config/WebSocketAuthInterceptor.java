@@ -280,11 +280,13 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         }
     }
 
+    /** Rejects absent membership claims before checking the active room membership. */
     private void validateMembership(PlayerPrincipal principal) {
-        if (roomService == null || principal == null || principal.roomId() == null
+        if (principal == null || principal.roomId() == null
                 || principal.membershipId() == null || principal.membershipId().isBlank()) {
-            return;
+            throw new AccessDeniedException("Token membership is stale or invalid.");
         }
+        if (roomService == null) return;
         Room room = roomService.getRoom(principal.roomId());
         if (room != null) {
             synchronized (room) {

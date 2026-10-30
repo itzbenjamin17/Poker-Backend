@@ -37,7 +37,7 @@ class WebSocketAuthInterceptorTest {
     private static final String VALID_TOKEN = "valid.jwt.token";
     private static final String ROOM_ID = "room-123";
     private static final String PLAYER_NAME = "Alice";
-    private static final PlayerPrincipal PRINCIPAL = new PlayerPrincipal(PLAYER_NAME, ROOM_ID);
+    private static final PlayerPrincipal PRINCIPAL = new PlayerPrincipal(PLAYER_NAME, ROOM_ID, "active-membership");
 
     /**
      * Protects the contract that the system should allow CONNECT with valid token.
@@ -537,11 +537,4 @@ class WebSocketAuthInterceptorTest {
         assertThat(interceptorWithRoom.preSend(validSendMsg, null)).isNotNull();
     }
 
-    private void unusedHelper() {
-        accessor.setUser(PRINCIPAL);
-        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
-
-        Message<?> result = interceptor.preSend(message, null);
-        assertThat(result).isNotNull();
-    }
 }

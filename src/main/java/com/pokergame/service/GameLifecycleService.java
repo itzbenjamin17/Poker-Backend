@@ -1212,7 +1212,7 @@ public class GameLifecycleService {
      */
     public void validatePlayerMembership(String gameId, String playerName, String membershipId) {
         if (membershipId == null || membershipId.isBlank() || playerName == null || playerName.isBlank() || gameId == null) {
-            return;
+            throw new AccessDeniedException("Token membership is stale or invalid.");
         }
         Room room = roomService != null ? roomService.getRoom(gameId) : null;
         if (room != null) {

@@ -58,7 +58,7 @@ public class JwtService {
      * @return signed token with the configured expiry
      */
     public String generateToken(String playerName, String roomId) {
-        return generateToken(playerName, roomId, null);
+        return generateToken(playerName, roomId, java.util.UUID.randomUUID().toString());
     }
 
     /**
@@ -95,7 +95,9 @@ public class JwtService {
             Claims claims = parseClaims(token);
             String subject = claims.getSubject();
             String roomId = claims.get("roomId", String.class);
-            return subject != null && !subject.isBlank() && roomId != null && !roomId.isBlank();
+            String membershipId = resolveMembershipId(claims);
+            return subject != null && !subject.isBlank() && roomId != null && !roomId.isBlank()
+                    && membershipId != null && !membershipId.isBlank();
         } catch (Exception e) {
             logger.debug("JWT validation failed: {}", e.getClass().getSimpleName());
             return false;
@@ -119,8 +121,8 @@ public class JwtService {
         }
 
         String membershipId = resolveMembershipId(claims);
-        if (membershipId != null && membershipId.isBlank()) {
-            membershipId = null;
+        if (membershipId == null || membershipId.isBlank()) {
+            throw new IllegalArgumentException("Token is missing required membership identification claim.");
         }
 
         return new PlayerPrincipal(subject, roomId, membershipId);
@@ -168,6 +170,7 @@ public class JwtService {
         return subject == null ? "" : subject;
     }
 
+    /** Verifies the signature and expiry before exposing token claims. */
     private Claims parseClaims(String token) {
         return Jwts.parser()
                 .verifyWith(secretKey)
@@ -176,6 +179,7 @@ public class JwtService {
                 .getPayload();
     }
 
+    /** Reads the current membership claim, accepting the older claim spelling when present. */
     private static String resolveMembershipId(Claims claims) {
         String membershipId = claims.get("membershipId", String.class);
         if (membershipId == null) {

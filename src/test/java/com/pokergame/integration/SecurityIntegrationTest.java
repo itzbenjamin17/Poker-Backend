@@ -124,7 +124,7 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         void givenValidToken_whenLeaveRoom_thenReturnSuccessResponse() {
             String roomName = uniqueName("SecureLeaveRoomValid");
             String roomId = roomService.createRoom(new CreateRoomRequest(roomName, "TestHost", 6, 10, 20, 1000, null));
-            String validToken = jwtService.generateToken("TestHost", roomId);
+            String validToken = jwtService.generateToken("TestHost", roomId, roomService.getRoom(roomId).getMembershipId("TestHost"));
 
             String response = restClient.post()
                     .uri("/api/room/" + roomId + "/leave")
@@ -207,7 +207,7 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             String roomId = createData.path("roomId").asText();
             joinRoom(roomName, "NonHostPlayer");
 
-            String nonHostToken = jwtService.generateToken("NonHostPlayer", roomId);
+            String nonHostToken = jwtService.generateToken("NonHostPlayer", roomId, roomService.getRoom(roomId).getMembershipId("NonHostPlayer"));
 
             HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
                     .uri("/api/room/" + roomId + "/start-game")

@@ -276,7 +276,7 @@ class JwtServiceTest {
 
             assertThat(principal.playerName()).isEqualTo(playerName);
             assertThat(principal.roomId()).isEqualTo(TEST_ROOM);
-            assertThat(principal.getName()).isEqualTo(playerName + ":" + TEST_ROOM);
+            assertThat(principal.getName()).isEqualTo(playerName + ":" + TEST_ROOM + ":" + principal.membershipId());
         }
 
         /**
@@ -335,7 +335,7 @@ class JwtServiceTest {
             assertThat(principal.getMembershipId()).isEqualTo(membershipId);
             assertThat(principal.getPlayerName()).isEqualTo("Alice");
             assertThat(principal.getRoomId()).isEqualTo(TEST_ROOM);
-            assertThat(principal.getName()).isEqualTo("Alice:" + TEST_ROOM);
+            assertThat(principal.getName()).isEqualTo("Alice:" + TEST_ROOM + ":" + membershipId);
         }
 
         /**
@@ -357,19 +357,14 @@ class JwtServiceTest {
         }
 
         /**
-         * Protects backwards compatibility when extracting from a token without membershipId claim.
+         * Rejects legacy signed tokens without a membership claim.
          */
         @Test
-        @DisplayName("should extract principal with null membership ID when token lacks claim")
-        void givenTokenWithoutMembershipId_whenExtractPrincipal_thenReturnPrincipalWithNullMembershipId() {
-            String token = jwtService.generateToken("Alice", TEST_ROOM);
-
-            PlayerPrincipal principal = jwtService.extractPrincipal(token);
-
-            assertThat(principal.playerName()).isEqualTo("Alice");
-            assertThat(principal.roomId()).isEqualTo(TEST_ROOM);
-            assertThat(principal.membershipId()).isNull();
-            assertThat(principal.getMembershipId()).isNull();
+        @DisplayName("should reject principal extraction when token lacks membership claim")
+        void givenTokenWithoutMembershipId_whenExtractPrincipal_thenReject() {
+            String token = jwtService.generateToken("Alice", TEST_ROOM, null);
+            assertThat(jwtService.isTokenValid(token)).isFalse();
+            assertThatThrownBy(() -> jwtService.extractPrincipal(token)).isInstanceOf(IllegalArgumentException.class);
         }
 
         /**
@@ -408,7 +403,7 @@ class JwtServiceTest {
         @Test
         @DisplayName("should return empty string from extractMembershipId when claim absent")
         void givenTokenWithoutMembershipId_whenExtractMembershipId_thenReturnEmptyString() {
-            String token = jwtService.generateToken("Alice", TEST_ROOM);
+            String token = jwtService.generateToken("Alice", TEST_ROOM, null);
 
             assertThat(jwtService.extractMembershipId(token)).isEmpty();
         }
@@ -503,7 +498,7 @@ class JwtServiceTest {
             assertThat(principal.getPlayerName()).isEqualTo("Alice");
             assertThat(principal.getRoomId()).isEqualTo("room-1");
             assertThat(principal.getMembershipId()).isNull();
-            assertThat(principal.getName()).isEqualTo("Alice:room-1");
+            assertThat(principal.getName()).isEqualTo("Alice:room-1:" + principal.membershipId());
         }
 
         @Test
@@ -517,7 +512,7 @@ class JwtServiceTest {
             assertThat(principal.getPlayerName()).isEqualTo("Alice");
             assertThat(principal.getRoomId()).isEqualTo("room-1");
             assertThat(principal.getMembershipId()).isEqualTo("mem-1");
-            assertThat(principal.getName()).isEqualTo("Alice:room-1");
+            assertThat(principal.getName()).isEqualTo("Alice:room-1:" + principal.membershipId());
         }
 
         @Test
