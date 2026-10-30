@@ -89,6 +89,7 @@ public final class EncryptedWalStore {
             if (!Files.isDirectory(this.directory) || !Files.isWritable(this.directory)) {
                 throw new PersistenceException("Persistence directory is not writable");
             }
+            cleanOrphanedCompactingFiles();
         } catch (IOException e) {
             throw new PersistenceException("Cannot initialize persistence directory", e);
         }
@@ -162,6 +163,7 @@ public final class EncryptedWalStore {
      */
     public Optional<byte[]> recoverLatest(String roomId) {
         validateRoomId(roomId);
+        deleteCompactingFileQuietly(roomId);
         Path path = walPath(roomId);
         if (!Files.exists(path)) {
             return Optional.empty();
@@ -186,6 +188,7 @@ public final class EncryptedWalStore {
      */
     public Map<String, byte[]> recoverAll() {
         requireHealthy();
+        cleanOrphanedCompactingFiles();
         Map<String, byte[]> recovered = new HashMap<>();
         try (var paths = Files.list(directory)) {
             for (Path path : paths.filter(p -> p.getFileName().toString().endsWith(".wal"))
@@ -249,10 +252,12 @@ public final class EncryptedWalStore {
             long durationMs = System.currentTimeMillis() - startMs;
             logger.info("WAL compacted room={} bytesBefore={} bytesAfter={} ms={}", roomId, bytesBefore, bytesAfter, durationMs);
         } catch (IOException e) {
+            deleteCompactingFileQuietly(roomId);
             PersistenceException failure = new PersistenceException("Cannot compact WAL for room " + roomId, e);
             recordWriteFailure(roomId, failure);
             throw failure;
         } catch (RuntimeException e) {
+            deleteCompactingFileQuietly(roomId);
             recordWriteFailure(roomId, e);
             throw e;
         } finally {
@@ -458,6 +463,7 @@ public final class EncryptedWalStore {
      * @throws PersistenceException if the file is out of order or tampered with
      */
     private Recovery readWal(Path path, String expectedRoomId) {
+        deleteCompactingFileQuietly(expectedRoomId);
         try {
             byte[] file = Files.readAllBytes(path);
             ByteBuffer bytes = ByteBuffer.wrap(file);
@@ -466,7 +472,16 @@ public final class EncryptedWalStore {
             boolean incompleteTail = false;
             while (bytes.hasRemaining()) {
                 if (bytes.remaining() < 8) {
-                    throw new PersistenceException("Unverifiable trailing bytes in WAL for room " + expectedRoomId);
+                    incompleteTail = true;
+                    long validLength = (long) bytes.position();
+                    int partialHeaderLength = bytes.remaining();
+                    try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
+                        channel.truncate(validLength);
+                        channel.force(true);
+                    }
+                    logger.warn("Truncated partial frame header of length {} at EOF for room {} to validLength {}",
+                            partialHeaderLength, expectedRoomId, validLength);
+                    break;
                 }
                 int magic = bytes.getInt();
                 int frameLength = bytes.getInt();
@@ -678,6 +693,39 @@ public final class EncryptedWalStore {
      */
     private Path walPath(String roomId) {
         return directory.resolve(roomId + ".wal");
+    }
+
+    /**
+     * Cleans up orphaned .compacting files left behind by prior crashes during compaction.
+     */
+    private void cleanOrphanedCompactingFiles() {
+        try (var paths = Files.list(directory)) {
+            for (Path path : paths.filter(p -> p.getFileName().toString().endsWith(".compacting")).toList()) {
+                try {
+                    Files.deleteIfExists(path);
+                    logger.info("Cleaned up orphaned compaction file: {}", path.getFileName());
+                } catch (IOException e) {
+                    logger.warn("Could not delete orphaned compaction file: {}", path, e);
+                }
+            }
+        } catch (IOException e) {
+            logger.warn("Could not enumerate persistence directory to clean compaction files", e);
+        }
+    }
+
+    /**
+     * Deletes the compaction temporary file for a specific room if it exists.
+     *
+     * @param roomId the room whose temporary compaction file should be removed
+     */
+    private void deleteCompactingFileQuietly(String roomId) {
+        try {
+            Path compacting = directory.resolve(roomId + ".wal.compacting");
+            if (Files.deleteIfExists(compacting)) {
+                logger.info("Cleaned up compaction file for room {}", roomId);
+            }
+        } catch (IOException ignored) {
+        }
     }
 
     /**

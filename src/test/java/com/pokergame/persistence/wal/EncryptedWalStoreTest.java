@@ -84,19 +84,50 @@ class EncryptedWalStoreTest {
     }
 
     /**
-     * Protects the contract that arbitrary short tail is corruption rather than a provable torn frame.
+     * Protects the contract that when a WAL file ends with 1 to 7 bytes of a partial header,
+     * readWal / recoverLatest truncates the partial header to the valid offset and recovers the last committed state,
+     * subsequent prepare() and commit() writes succeed, and a fresh store recovers the new commit.
      */
     @Test
-    void arbitraryShortTailIsCorruptionRatherThanAProvableTornFrame() throws Exception {
-        EncryptionKeyring keyring = keyring("current", (byte) 7);
-        EncryptedWalStore store = new EncryptedWalStore(directory, keyring);
-        WalTransaction transaction = store.prepare("room-tail");
-        store.commit(transaction, "safe".getBytes(StandardCharsets.UTF_8));
-        Files.write(directory.resolve("room-tail.wal"), new byte[] { 1, 2, 3 },
-                java.nio.file.StandardOpenOption.APPEND);
+    void partialFrameHeaderIsTruncatedSoSubsequentWritesDoNotCorruptWal() throws Exception {
+        for (int headerBytes = 1; headerBytes < 8; headerBytes++) {
+            String roomId = "room-partial-hdr-" + headerBytes;
+            EncryptionKeyring keys = keyring("current", (byte) (10 + headerBytes));
+            EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+            WalTransaction tx1 = store.prepare(roomId);
+            byte[] payload1 = ("payload-init-" + headerBytes).getBytes(StandardCharsets.UTF_8);
+            store.commit(tx1, payload1);
 
-        assertThrows(PersistenceException.class, () -> store.recoverLatest("room-tail"));
-        assertFalse(store.isHealthy());
+            Path walPath = directory.resolve(roomId + ".wal");
+            long validLength = Files.size(walPath);
+
+            // Append headerBytes (1 to 7 bytes) simulating crash during header write
+            byte[] partialHeader = new byte[headerBytes];
+            for (int i = 0; i < headerBytes; i++) {
+                partialHeader[i] = (byte) (0x50 + i);
+            }
+            Files.write(walPath, partialHeader, StandardOpenOption.APPEND);
+            assertEquals(validLength + headerBytes, Files.size(walPath));
+
+            // recoverLatest discovers partial header and truncates file back to validLength
+            EncryptedWalStore recoveringStore = new EncryptedWalStore(directory, keys);
+            Optional<byte[]> recovered = recoveringStore.recoverLatest(roomId);
+            assertTrue(recovered.isPresent());
+            assertArrayEquals(payload1, recovered.get());
+            assertEquals(validLength, Files.size(walPath), "Partial header must be truncated on disk to validLength");
+
+            // Subsequent prepare() and commit() writes succeed
+            EncryptedWalStore writerStore = new EncryptedWalStore(directory, keys);
+            WalTransaction tx2 = writerStore.prepare(roomId);
+            byte[] payload2 = ("payload-subsequent-" + headerBytes).getBytes(StandardCharsets.UTF_8);
+            writerStore.commit(tx2, payload2);
+
+            // Fresh store recovers new commit with zero corruption or exceptions
+            EncryptedWalStore freshStore = new EncryptedWalStore(directory, keys);
+            Optional<byte[]> latest = freshStore.recoverLatest(roomId);
+            assertTrue(latest.isPresent());
+            assertArrayEquals(payload2, latest.get());
+        }
     }
 
     /**
@@ -274,6 +305,46 @@ class EncryptedWalStoreTest {
         Optional<byte[]> latest = freshStore.recoverLatest("room-b10-2");
         assertTrue(latest.isPresent());
         assertArrayEquals(payload2, latest.get());
+    }
+
+    /**
+     * Protects the contract that orphaned .compacting files left from prior crashes
+     * are cleaned up when opening and recovering WAL files.
+     */
+    @Test
+    void orphanedCompactingFilesAreCleanedUpOnStoreInitializationAndRecovery() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 30);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+        WalTransaction tx = store.prepare("room-orphan");
+        byte[] payload = "orphan-payload".getBytes(StandardCharsets.UTF_8);
+        store.commit(tx, payload);
+
+        Path orphanedCompacting = directory.resolve("room-orphan.wal.compacting");
+        Path otherCompacting = directory.resolve("other.wal.compacting");
+        Files.write(orphanedCompacting, new byte[]{1, 2, 3, 4, 5});
+        Files.write(otherCompacting, new byte[]{6, 7, 8, 9, 10});
+
+        assertTrue(Files.exists(orphanedCompacting));
+        assertTrue(Files.exists(otherCompacting));
+
+        // Initializing a new store cleans up orphaned .compacting files
+        EncryptedWalStore newStore = new EncryptedWalStore(directory, keys);
+        assertFalse(Files.exists(orphanedCompacting));
+        assertFalse(Files.exists(otherCompacting));
+
+        // Compacting files created before recoverAll are cleaned up
+        Files.write(orphanedCompacting, new byte[]{1, 2, 3});
+        Map<String, byte[]> all = newStore.recoverAll();
+        assertTrue(all.containsKey("room-orphan"));
+        assertArrayEquals(payload, all.get("room-orphan"));
+        assertFalse(Files.exists(orphanedCompacting));
+
+        // Compacting files created before recoverLatest are cleaned up
+        Files.write(orphanedCompacting, new byte[]{4, 5, 6});
+        Optional<byte[]> latest = newStore.recoverLatest("room-orphan");
+        assertTrue(latest.isPresent());
+        assertArrayEquals(payload, latest.get());
+        assertFalse(Files.exists(orphanedCompacting));
     }
 
     /**
