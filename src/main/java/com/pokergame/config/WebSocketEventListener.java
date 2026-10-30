@@ -134,6 +134,20 @@ public class WebSocketEventListener {
         String compositeName = playerPrincipal.getName();
 
         try (LockLease ignored = sessionLocks.acquire(compositeName)) {
+            if (playerPrincipal.membershipId() != null && !playerPrincipal.membershipId().isBlank()
+                    && roomService != null) {
+                Room room = roomService.getRoom(roomId);
+                if (room != null) {
+                    synchronized (room) {
+                        if (!room.hasPlayer(playerName)
+                                || !playerPrincipal.membershipId().equals(room.getMembershipId(playerName))) {
+                            logger.debug("Ignoring WebSocket connect for stale membership of player {} in room {}",
+                                    playerName, roomId);
+                            return;
+                        }
+                    }
+                }
+            }
             // Registration and cleanup are linearized per player: a reconnect that wins
             // this lock cannot be evicted by an already-running grace timer.
             registerActiveSession(playerPrincipal, sessionId);
@@ -178,6 +192,21 @@ public class WebSocketEventListener {
             String compositeName = playerPrincipal.getName();
             
             try (LockLease ignored = sessionLocks.acquire(compositeName)) {
+                if (playerPrincipal.membershipId() != null && !playerPrincipal.membershipId().isBlank()
+                        && roomService != null) {
+                    Room currentRoom = roomService.getRoom(roomId);
+                    if (currentRoom != null) {
+                        synchronized (currentRoom) {
+                            if (!currentRoom.hasPlayer(playerName)
+                                    || !playerPrincipal.membershipId().equals(currentRoom.getMembershipId(playerName))) {
+                                unregisterActiveSession(playerPrincipal, sessionId);
+                                logger.debug("Ignoring WebSocket disconnect for stale membership of player {} in room {}",
+                                        playerName, roomId);
+                                return;
+                            }
+                        }
+                    }
+                }
                 // Users may have multiple sessions (e.g. multiple browser tabs),
                 // So we only schedule a clean-up if there are no active sessions left
                 boolean removed = unregisterActiveSession(playerPrincipal, sessionId);

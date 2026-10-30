@@ -1,5 +1,6 @@
 package com.pokergame.security;
 
+import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
@@ -45,7 +46,8 @@ public class JwtService {
             byte[] keyBytes = Decoders.BASE64.decode(secretKeyString);
             this.secretKey = Keys.hmacShaKeyFor(keyBytes);
         } catch (Exception e) {
-            throw new IllegalStateException("JWT secret key parsing failed. Ensure it is a valid Base64 string and provides at least 512 bits of key material.", e);        }
+            throw new IllegalStateException("JWT secret key parsing failed. Ensure it is a valid Base64 string and provides at least 512 bits of key material.", e);
+        }
     }
 
     /**
@@ -90,7 +92,7 @@ public class JwtService {
      */
     public boolean isTokenValid(String token) {
         try {
-            var claims = Jwts.parser().verifyWith(secretKey).build().parseSignedClaims(token).getPayload();
+            Claims claims = parseClaims(token);
             String subject = claims.getSubject();
             String roomId = claims.get("roomId", String.class);
             return subject != null && !subject.isBlank() && roomId != null && !roomId.isBlank();
@@ -108,23 +110,15 @@ public class JwtService {
      * @throws IllegalArgumentException if required claims are missing
      */
     public PlayerPrincipal extractPrincipal(String token) {
-        var claims = Jwts.parser()
-                .verifyWith(secretKey)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
-        
+        Claims claims = parseClaims(token);
         String subject = claims.getSubject();
         String roomId = claims.get("roomId", String.class);
-        
+
         if (subject == null || subject.isBlank() || roomId == null || roomId.isBlank()) {
             throw new IllegalArgumentException("Token is missing required player or room identification claims.");
         }
-        
-        String membershipId = claims.get("membershipId", String.class);
-        if (membershipId == null) {
-            membershipId = claims.get("mid", String.class);
-        }
+
+        String membershipId = resolveMembershipId(claims);
         if (membershipId != null && membershipId.isBlank()) {
             membershipId = null;
         }
@@ -159,15 +153,7 @@ public class JwtService {
      * @return membership ID, or an empty string when absent
      */
     public String extractMembershipId(String token) {
-        var claims = Jwts.parser()
-                .verifyWith(secretKey)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
-        String membershipId = claims.get("membershipId", String.class);
-        if (membershipId == null) {
-            membershipId = claims.get("mid", String.class);
-        }
+        String membershipId = resolveMembershipId(parseClaims(token));
         return membershipId == null ? "" : membershipId;
     }
 
@@ -178,12 +164,23 @@ public class JwtService {
      * @return token subject, or an empty string when the subject is absent
      */
     public String extractPlayerName(String token) {
-        String subject = Jwts.parser()
+        String subject = parseClaims(token).getSubject();
+        return subject == null ? "" : subject;
+    }
+
+    private Claims parseClaims(String token) {
+        return Jwts.parser()
                 .verifyWith(secretKey)
                 .build()
                 .parseSignedClaims(token)
-                .getPayload()
-                .getSubject();
-        return subject == null ? "" : subject;
+                .getPayload();
+    }
+
+    private static String resolveMembershipId(Claims claims) {
+        String membershipId = claims.get("membershipId", String.class);
+        if (membershipId == null) {
+            membershipId = claims.get("mid", String.class);
+        }
+        return membershipId;
     }
 }

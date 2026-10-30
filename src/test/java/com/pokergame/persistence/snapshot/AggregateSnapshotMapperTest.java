@@ -638,4 +638,48 @@ class AggregateSnapshotMapperTest {
         assertTrue(restored.checkPassword("any"));
         assertTrue(restored.checkPassword(null));
     }
+
+    @Test
+    @DisplayName("Snapshot and restoreRoom preserve playerMembershipIds so original JWT membership remains valid")
+    void snapshotAndRestoreRoom_PreservesPlayerMembershipIds() {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+
+        Room room = new Room("mem-room", "Membership Room", "Alice", 4, 10, 20, 500, null);
+        String aliceMemId = room.addPlayer("Alice");
+        String bobMemId = room.addPlayer("Bob");
+
+        byte[] snapshot = mapper.serialize(room, "Alice", null);
+        RecoveredAggregate recovered = mapper.deserialize(snapshot);
+
+        assertNotNull(recovered.room());
+        assertEquals(aliceMemId, recovered.room().getMembershipId("Alice"),
+                "Alice membershipId must survive WAL snapshot round-trip");
+        assertEquals(bobMemId, recovered.room().getMembershipId("Bob"),
+                "Bob membershipId must survive WAL snapshot round-trip");
+
+        com.pokergame.service.RoomService roomService = new com.pokergame.service.RoomService(
+                org.mockito.Mockito.mock(org.springframework.messaging.simp.SimpMessagingTemplate.class));
+        roomService.restoreRoom(recovered.room(), recovered.currentHost());
+
+        assertEquals(aliceMemId, roomService.getRoom("mem-room").getMembershipId("Alice"));
+        assertEquals(bobMemId, roomService.getRoom("mem-room").getMembershipId("Bob"));
+
+        // Verify fallback preservation when a restored room lacks persisted membershipIds for an existing player
+        Room legacyRestored = Room.restoreBuilder()
+                .roomId("mem-room")
+                .roomName("Membership Room")
+                .hostName("Alice")
+                .maxPlayers(4)
+                .smallBlind(10)
+                .bigBlind(20)
+                .buyIn(500)
+                .playersWithJoinTime(room.getPlayersWithJoinTimeSnapshot())
+                .build();
+        roomService.restoreRoom(legacyRestored, "Alice");
+        assertEquals(aliceMemId, roomService.getRoom("mem-room").getMembershipId("Alice"),
+                "Existing in-memory membershipId must be preserved if restored room lacks persisted membershipIds");
+        assertEquals(bobMemId, roomService.getRoom("mem-room").getMembershipId("Bob"));
+    }
 }

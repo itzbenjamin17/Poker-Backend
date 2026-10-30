@@ -3,7 +3,7 @@ package com.pokergame.model;
 import com.pokergame.exception.BadRequestException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.security.crypto.bcrypt.BCrypt;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.nio.charset.StandardCharsets;
@@ -38,10 +38,12 @@ public class Room {
      */
     private final LinkedHashMap<String, LocalDateTime> playersWithJoinTime;
     /**
-     * Process-local membership identities created per addPlayer.
-     * Guarded by this Room instance monitor. Excluded from WAL serialization.
+     * Session membership identities created per addPlayer and preserved across WAL snapshots.
+     * Guarded by this Room instance monitor.
      */
     private final Map<String, String> playerMembershipIds = new LinkedHashMap<>();
+    private final java.util.Set<String> persistedMembershipPlayers = new java.util.HashSet<>();
+    private static final PasswordEncoder DEFAULT_PASSWORD_ENCODER = new BCryptPasswordEncoder();
 
     /**
      * Process-local absence deadlines for players awaiting first connection or reconnect grace.
@@ -150,7 +152,7 @@ public class Room {
         } else if (isBcryptHash(password)) {
             this.passwordHash = password;
         } else {
-            this.passwordHash = BCrypt.hashpw(password, BCrypt.gensalt());
+            this.passwordHash = DEFAULT_PASSWORD_ENCODER.encode(password);
         }
         this.playersWithJoinTime = new LinkedHashMap<>();
         this.createdAt = createdAt != null ? createdAt : LocalDateTime.now();
@@ -180,6 +182,7 @@ public class Room {
         private String password;
         private LocalDateTime createdAt;
         private Map<String, LocalDateTime> playersWithJoinTime;
+        private Map<String, String> playerMembershipIds;
         private boolean gameStarted;
 
         public RoomRestoreBuilder roomId(String roomId) {
@@ -237,6 +240,11 @@ public class Room {
             return this;
         }
 
+        public RoomRestoreBuilder playerMembershipIds(Map<String, String> playerMembershipIds) {
+            this.playerMembershipIds = playerMembershipIds;
+            return this;
+        }
+
         public RoomRestoreBuilder gameStarted(boolean gameStarted) {
             this.gameStarted = gameStarted;
             return this;
@@ -265,7 +273,13 @@ public class Room {
                     }
                     room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
                     for (String playerName : room.playersWithJoinTime.keySet()) {
-                        room.playerMembershipIds.put(playerName, java.util.UUID.randomUUID().toString());
+                        String persistedId = playerMembershipIds != null ? playerMembershipIds.get(playerName) : null;
+                        if (persistedId != null && !persistedId.isBlank()) {
+                            room.playerMembershipIds.put(playerName, persistedId);
+                            room.persistedMembershipPlayers.add(playerName);
+                        } else {
+                            room.playerMembershipIds.put(playerName, java.util.UUID.randomUUID().toString());
+                        }
                     }
                 }
                 room.isGameStarted = gameStarted;
@@ -314,6 +328,7 @@ public class Room {
         if (playersWithJoinTime.containsKey(playerName)) {
             playersWithJoinTime.remove(playerName);
             playerMembershipIds.remove(playerName);
+            persistedMembershipPlayers.remove(playerName);
             playerAbsenceDeadlines.remove(playerName);
             connectedPlayers.remove(playerName);
         } else {
@@ -359,22 +374,7 @@ public class Room {
      * @return true if the password matches or room is public, false otherwise
      */
     public boolean checkPassword(String inputPassword) {
-        if (!hasPassword()) {
-            return true;
-        }
-        if (inputPassword == null) {
-            return false;
-        }
-        if (isBcryptHash(passwordHash)) {
-            try {
-                return BCrypt.checkpw(inputPassword, passwordHash);
-            } catch (Exception e) {
-                return false;
-            }
-        }
-        return MessageDigest.isEqual(
-                inputPassword.getBytes(StandardCharsets.UTF_8),
-                passwordHash.getBytes(StandardCharsets.UTF_8));
+        return checkPassword(inputPassword, DEFAULT_PASSWORD_ENCODER);
     }
 
     /**
@@ -393,10 +393,17 @@ public class Room {
         if (rawPassword == null) {
             return false;
         }
-        if (passwordEncoder != null) {
-            return passwordEncoder.matches(rawPassword, passwordHash);
+        PasswordEncoder encoder = passwordEncoder != null ? passwordEncoder : DEFAULT_PASSWORD_ENCODER;
+        if (encoder != DEFAULT_PASSWORD_ENCODER || isBcryptHash(passwordHash)) {
+            try {
+                return encoder.matches(rawPassword, passwordHash);
+            } catch (Exception e) {
+                return false;
+            }
         }
-        return checkPassword(rawPassword);
+        return MessageDigest.isEqual(
+                rawPassword.getBytes(StandardCharsets.UTF_8),
+                passwordHash.getBytes(StandardCharsets.UTF_8));
     }
 
     /**
@@ -512,6 +519,38 @@ public class Room {
      */
     public synchronized Map<String, LocalDateTime> getPlayersWithJoinTimeSnapshot() {
         return new LinkedHashMap<>(playersWithJoinTime);
+    }
+
+    /**
+     * Captures player membership IDs without exposing the synchronized live map
+     * to persistence serialization.
+     *
+     * @return independent ordered player-to-membership-ID snapshot
+     */
+    public synchronized Map<String, String> getPlayerMembershipIdsSnapshot() {
+        return new LinkedHashMap<>(playerMembershipIds);
+    }
+
+    /**
+     * Checks whether the player's membership ID was explicitly populated from a persisted snapshot.
+     *
+     * @param playerName the name of the player
+     * @return true if restored from a persisted membership ID, false otherwise
+     */
+    public synchronized boolean hasPersistedMembershipId(String playerName) {
+        return persistedMembershipPlayers.contains(playerName);
+    }
+
+    /**
+     * Updates the membership ID for an existing player in the room.
+     *
+     * @param playerName the name of the player
+     * @param membershipId the membership ID to assign
+     */
+    public synchronized void setMembershipId(String playerName, String membershipId) {
+        if (hasPlayer(playerName) && membershipId != null && !membershipId.isBlank()) {
+            playerMembershipIds.put(playerName, membershipId);
+        }
     }
 
     /**

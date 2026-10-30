@@ -74,13 +74,8 @@ public final class AggregateSnapshotMapper {
         AggregateStateImage.GameState gameState;
         synchronized (room) {
             roomState = toRoomState(room);
-            if (game != null) {
-                synchronized (game) {
-                    gameState = toState(game);
-                }
-            } else {
-                gameState = null;
-            }
+            // toState(game) acquires synchronized (game) while holding synchronized (room)
+            gameState = toState(game);
         }
         return new AggregateStateImage(AggregateStateImage.CURRENT_SCHEMA_VERSION, false, roomState,
                 currentHost, gameState);
@@ -90,7 +85,16 @@ public final class AggregateSnapshotMapper {
         return new AggregateStateImage.RoomState(
                 room.getRoomId(), room.getRoomName(), room.getHostName(), room.getMaxPlayers(), room.getSmallBlind(),
                 room.getBigBlind(), room.getBuyIn(), room.getPasswordHash(), room.getCreatedAt(),
-                room.getPlayersWithJoinTimeSnapshot(), room.isGameStarted());
+                room.getPlayersWithJoinTimeSnapshot(), room.getPlayerMembershipIdsSnapshot(), room.isGameStarted());
+    }
+
+    AggregateStateImage.RoomState toState(Room room, String currentHost) {
+        if (room == null) {
+            return null;
+        }
+        synchronized (room) {
+            return toRoomState(room);
+        }
     }
 
     /**
@@ -200,6 +204,7 @@ public final class AggregateSnapshotMapper {
                     .passwordHash(state.password())
                     .createdAt(state.createdAt())
                     .playersWithJoinTime(joinTimes)
+                    .playerMembershipIds(state.playerMembershipIds())
                     .gameStarted(state.gameStarted())
                     .build();
 
@@ -287,6 +292,34 @@ public final class AggregateSnapshotMapper {
      * @param state the saved game snapshot
      * @return a recreated game, ready to continue playing
      */
+    /**
+     * Restores a Room from a persisted room snapshot.
+     *
+     * @param state the saved room snapshot
+     * @return reconstructed room instance
+     */
+    Room restoreRoom(AggregateStateImage.RoomState state) {
+        if (state == null) {
+            return null;
+        }
+        Map<String, LocalDateTime> joinTimes = state.playersWithJoinTime() == null
+                ? java.util.Map.of() : state.playersWithJoinTime();
+        return Room.restoreBuilder()
+                .roomId(state.roomId())
+                .roomName(state.roomName())
+                .hostName(state.originalHost())
+                .maxPlayers(state.maxPlayers())
+                .smallBlind(state.smallBlind())
+                .bigBlind(state.bigBlind())
+                .buyIn(state.buyIn())
+                .passwordHash(state.password())
+                .createdAt(state.createdAt())
+                .playersWithJoinTime(joinTimes)
+                .playerMembershipIds(state.playerMembershipIds())
+                .gameStarted(state.gameStarted())
+                .build();
+    }
+
     private Game restoreGame(AggregateStateImage.GameState state) {
         if (state.stateRevision() < 0) {
             throw new PersistenceException("Invalid negative public state revision in snapshot");

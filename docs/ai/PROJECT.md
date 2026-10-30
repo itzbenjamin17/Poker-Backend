@@ -94,9 +94,9 @@ Public game DTOs contain chips, players, board cards, turn/phase/pot information
 
 HTTP is stateless JWT authentication. Room create/join, the WebSocket handshake, and health/info endpoints are public; remaining HTTP paths require authentication under [SecurityConfig](../../src/main/java/com/pokergame/config/SecurityConfig.java).
 
-JWTs contain player-name subject and room claim. [PlayerPrincipal](../../src/main/java/com/pokergame/security/PlayerPrincipal.java) exposes the composite `playerName:roomId` identity for user-destination routing. Derive actions from the authenticated principal, verify room/game binding, and apply membership/host checks where required.
+JWTs contain player-name subject, room claim, and a unique session `membershipId` claim ([ADR-0004](../adr/0004-stateless-jwt-session-membership-validation.md)). [PlayerPrincipal](../../src/main/java/com/pokergame/security/PlayerPrincipal.java) exposes the composite `playerName:roomId` identity for user-destination routing alongside `membershipId`. Derive actions from the authenticated principal, verify room/game and active membership binding, and apply membership/host checks where required.
 
-`WebSocketAuthInterceptor` authenticates CONNECT and checks room/game subscription binding. Controller/service checks protect actions. Private messages use user destinations rather than predictable private room topics.
+`WebSocketAuthInterceptor` authenticates CONNECT, checks room/game subscription binding, and enforces `/app/` destination prefix whitelisting, room-targeted destination authorization ([ADR-0005](../adr/0005-stomp-send-prefix-whitelisting-and-authorization.md)), and active `membershipId` validation on STOMP frames. Controller/service checks protect actions. Private messages use user destinations rather than predictable private room topics.
 
 Preserve payload-size rejection, endpoint and STOMP throttling, validation, name sanitization, configured CORS, and trusted-proxy handling. Exact bounds live in DTOs/filters/services; disabling these controls in test profiles does not establish production protection.
 

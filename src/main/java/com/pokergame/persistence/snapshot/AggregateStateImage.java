@@ -8,7 +8,10 @@ import com.pokergame.enums.Suit;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.ReadyGateState;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -47,7 +50,21 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
      */
     public record RoomState(String roomId, String roomName, String originalHost, int maxPlayers, int smallBlind,
             int bigBlind, int buyIn, String password, LocalDateTime createdAt,
-            Map<String, LocalDateTime> playersWithJoinTime, boolean gameStarted) {
+            Map<String, LocalDateTime> playersWithJoinTime, Map<String, String> playerMembershipIds,
+            boolean gameStarted) {
+        @JsonCreator
+        public RoomState {
+            playerMembershipIds = playerMembershipIds == null
+                    ? Map.of()
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(playerMembershipIds));
+        }
+
+        public RoomState(String roomId, String roomName, String originalHost, int maxPlayers, int smallBlind,
+                int bigBlind, int buyIn, String password, LocalDateTime createdAt,
+                Map<String, LocalDateTime> playersWithJoinTime, boolean gameStarted) {
+            this(roomId, roomName, originalHost, maxPlayers, smallBlind, bigBlind, buyIn, password, createdAt,
+                    playersWithJoinTime, Map.of(), gameStarted);
+        }
     }
 
     /**

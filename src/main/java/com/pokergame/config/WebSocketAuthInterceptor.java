@@ -1,12 +1,16 @@
 package com.pokergame.config;
 
+import com.pokergame.model.Room;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.service.RoomService;
 import com.pokergame.util.MdcKeys;
 import com.pokergame.util.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.MessagingException;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
@@ -34,6 +38,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
     private static final Logger logger = LoggerFactory.getLogger(WebSocketAuthInterceptor.class);
 
     private final JwtService jwtService;
+    private final RoomService roomService;
 
     /**
      * Creates an interceptor backed by the application's JWT service.
@@ -41,7 +46,19 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
      * @param jwtService token validator and principal extractor
      */
     public WebSocketAuthInterceptor(JwtService jwtService) {
+        this(jwtService, null);
+    }
+
+    /**
+     * Creates an interceptor backed by the application's JWT service and room registry.
+     *
+     * @param jwtService token validator and principal extractor
+     * @param roomService room registry for active membership validation
+     */
+    @Autowired
+    public WebSocketAuthInterceptor(JwtService jwtService, @Autowired(required = false) @Lazy RoomService roomService) {
         this.jwtService = jwtService;
+        this.roomService = roomService;
     }
 
     /**
@@ -121,6 +138,8 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
                 throw new AccessDeniedException("User not authorized for this room destination");
             }
         }
+
+        validateMembership(principal);
     }
 
     /**
@@ -217,6 +236,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
             if (jwtService.isTokenValid(token)) {
                 PlayerPrincipal principal = jwtService.extractPrincipal(token);
+                validateMembership(principal);
                 accessor.setUser(principal);
                 MDC.put(MdcKeys.ROOM_ID, principal.roomId());
                 MDC.put(MdcKeys.PLAYER_NAME, principal.playerName());
@@ -242,6 +262,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         if (principal == null) {
             throw new MessagingException("Unauthorized: No principal found for subscription");
         }
+        validateMembership(principal);
 
         String destination = accessor.getDestination();
         if (destination == null) return;
@@ -252,10 +273,27 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         if (destination.startsWith("/room/") || destination.startsWith("/game/")) {
             String resourceId = destination.substring(destination.lastIndexOf("/") + 1);
 
-
             if (!principal.roomId().equals(resourceId)) {
                 logger.warn("Player {} tried to subscribe to unauthorized destination {}", principal.playerName(), destination);
                 throw new MessagingException("Forbidden: You are not authorized to subscribe to this destination.");
+            }
+        }
+    }
+
+    private void validateMembership(PlayerPrincipal principal) {
+        if (roomService == null || principal == null || principal.roomId() == null
+                || principal.membershipId() == null || principal.membershipId().isBlank()) {
+            return;
+        }
+        Room room = roomService.getRoom(principal.roomId());
+        if (room != null) {
+            synchronized (room) {
+                if (!room.hasPlayer(principal.playerName())
+                        || !principal.membershipId().equals(room.getMembershipId(principal.playerName()))) {
+                    logger.warn("Rejecting STOMP frame: stale or invalid membership for player {} in room {}",
+                            principal.playerName(), principal.roomId());
+                    throw new AccessDeniedException("Token membership is stale or invalid.");
+                }
             }
         }
     }

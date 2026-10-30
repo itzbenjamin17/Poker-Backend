@@ -164,7 +164,7 @@ public class RoomService {
             room.addPlayer(sanitizedPlayerName);
             long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
             room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
-            String membershipId = room.getMembershipId(sanitizedPlayerName);
+
 
             rooms.put(roomId, room);
             roomHosts.put(roomId, sanitizedPlayerName);
@@ -270,7 +270,7 @@ public class RoomService {
             }
 
             // Check if the room is full
-            if (room.isFull() || room.getPlayers().size() >= room.getMaxPlayers()) {
+            if (room.isFull()) {
                 logger.warn("Join attempt failed: room {} is full (player: {})", room.getRoomName(),
                         sanitizedPlayerName);
                 throw new BadRequestException("Room is full");
@@ -294,7 +294,7 @@ public class RoomService {
             }
             long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
             room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
-            String membershipId = room.getMembershipId(sanitizedPlayerName);
+
         }
 
         DurableTransactionContext.afterCommit(() -> {
@@ -527,7 +527,7 @@ public class RoomService {
      */
     public boolean isPlayerInRoom(String roomId, String playerName) {
         Room room = rooms.get(roomId);
-        return room != null && room.getPlayers().contains(playerName);
+        return room != null && room.hasPlayer(playerName);
     }
 
     /**
@@ -599,6 +599,12 @@ public class RoomService {
         if (existing != null && existing != room) {
             for (String playerName : room.getPlayers()) {
                 if (existing.hasPlayer(playerName)) {
+                    if (!room.hasPersistedMembershipId(playerName)) {
+                        String existingMembershipId = existing.getMembershipId(playerName);
+                        if (existingMembershipId != null && !existingMembershipId.isBlank()) {
+                            room.setMembershipId(playerName, existingMembershipId);
+                        }
+                    }
                     Long deadline = existing.getAbsenceDeadline(playerName);
                     if (deadline != null && room.getAbsenceDeadline(playerName) == null) {
                         room.setAbsenceDeadline(playerName, deadline);
@@ -622,6 +628,25 @@ public class RoomService {
             roomHosts.put(roomId, host);
         } else {
             roomHosts.remove(roomId);
+        }
+    }
+
+    /**
+     * Evicts a room and its host mapping from in-memory registries without
+     * triggering durable deletion or publishing room-closed broadcasts.
+     *
+     * @param roomId the unique identifier of the room to evict
+     */
+    public void evictRoom(String roomId) {
+        if (roomId == null) {
+            return;
+        }
+        Room room = rooms.remove(roomId);
+        roomHosts.remove(roomId);
+        if (room != null) {
+            synchronized (room) {
+                logger.info("Room evicted from memory: {} (ID: {})", room.getRoomName(), roomId);
+            }
         }
     }
 

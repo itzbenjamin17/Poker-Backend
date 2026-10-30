@@ -483,4 +483,65 @@ class WebSocketAuthInterceptorTest {
         Message<?> result = interceptor.preSend(message, null);
         assertThat(result).isNotNull();
     }
+
+    @Test
+    @DisplayName("should reject CONNECT, SUBSCRIBE, and SEND when token membershipId is stale")
+    void givenStaleMembershipId_whenConnectSubscribeOrSend_thenThrowAccessDeniedException() {
+        com.pokergame.service.RoomService roomService = org.mockito.Mockito.mock(com.pokergame.service.RoomService.class);
+        com.pokergame.model.Room room = new com.pokergame.model.Room(ROOM_ID, "Room", PLAYER_NAME, 4, 10, 20, 500, null);
+        String activeMemId = room.addPlayer(PLAYER_NAME);
+        when(roomService.getRoom(ROOM_ID)).thenReturn(room);
+
+        WebSocketAuthInterceptor interceptorWithRoom = new WebSocketAuthInterceptor(jwtService, roomService);
+        PlayerPrincipal stalePrincipal = new PlayerPrincipal(PLAYER_NAME, ROOM_ID, "stale-mem-id");
+        PlayerPrincipal activePrincipal = new PlayerPrincipal(PLAYER_NAME, ROOM_ID, activeMemId);
+
+        // 1. CONNECT with stale membershipId
+        StompHeaderAccessor connectAccessor = StompHeaderAccessor.create(StompCommand.CONNECT);
+        connectAccessor.setNativeHeader("Authorization", "Bearer " + VALID_TOKEN);
+        connectAccessor.setLeaveMutable(true);
+        Message<byte[]> connectMsg = MessageBuilder.createMessage(new byte[0], connectAccessor.getMessageHeaders());
+        when(jwtService.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwtService.extractPrincipal(VALID_TOKEN)).thenReturn(stalePrincipal);
+
+        assertThatThrownBy(() -> interceptorWithRoom.preSend(connectMsg, null))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("Token membership is stale or invalid.");
+
+        // 2. SUBSCRIBE with stale membershipId
+        StompHeaderAccessor subAccessor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        subAccessor.setDestination("/room/" + ROOM_ID);
+        subAccessor.setUser(stalePrincipal);
+        Message<byte[]> subMsg = MessageBuilder.createMessage(new byte[0], subAccessor.getMessageHeaders());
+
+        assertThatThrownBy(() -> interceptorWithRoom.preSend(subMsg, null))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("Token membership is stale or invalid.");
+
+        // 3. SEND with stale membershipId
+        StompHeaderAccessor sendAccessor = StompHeaderAccessor.create(StompCommand.SEND);
+        sendAccessor.setDestination("/app/" + ROOM_ID + "/action");
+        sendAccessor.setUser(stalePrincipal);
+        Message<byte[]> sendMsg = MessageBuilder.createMessage(new byte[0], sendAccessor.getMessageHeaders());
+
+        assertThatThrownBy(() -> interceptorWithRoom.preSend(sendMsg, null))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("Token membership is stale or invalid.");
+
+        // 4. SEND with active membershipId succeeds
+        StompHeaderAccessor validSendAccessor = StompHeaderAccessor.create(StompCommand.SEND);
+        validSendAccessor.setDestination("/app/" + ROOM_ID + "/action");
+        validSendAccessor.setUser(activePrincipal);
+        Message<byte[]> validSendMsg = MessageBuilder.createMessage(new byte[0], validSendAccessor.getMessageHeaders());
+
+        assertThat(interceptorWithRoom.preSend(validSendMsg, null)).isNotNull();
+    }
+
+    private void unusedHelper() {
+        accessor.setUser(PRINCIPAL);
+        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+
+        Message<?> result = interceptor.preSend(message, null);
+        assertThat(result).isNotNull();
+    }
 }

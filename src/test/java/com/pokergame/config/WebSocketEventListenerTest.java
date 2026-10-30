@@ -367,4 +367,39 @@ class WebSocketEventListenerTest {
 
         verify(lifecycle, never()).removeDisconnectedPlayer(anyString(), anyString(), any(), anyLong());
     }
+
+    @Test
+    void staleMembershipConnectAndDisconnectAreIgnoredWithoutPoisoningActivePlayer() {
+        RoomService roomService = mock(RoomService.class);
+        GameLifecycleService lifecycle = mock(GameLifecycleService.class);
+        RateLimitService rateLimit = mock(RateLimitService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+
+        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
+        String activeMemId = room.addPlayer("Alice");
+        room.setPlayerConnected("Alice", true);
+        when(roomService.getRoom("room")).thenReturn(room);
+
+        PlayerPrincipal stalePrincipal = new PlayerPrincipal("Alice", "room", "stale-mem-id");
+
+        // Stale connect is ignored
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "stale-session", stalePrincipal))));
+        verify(lifecycle, never()).markPlayerReconnected("room", "Alice");
+        assertEquals(0, listener.getActiveSessionCount("Alice:room"));
+
+        // Active session connects
+        PlayerPrincipal activePrincipal = new PlayerPrincipal("Alice", "room", activeMemId);
+        listener.handleWebSocketConnectListener(event(new SessionConnectEvent(this,
+                message(StompCommand.CONNECT, "active-session", activePrincipal))));
+        assertEquals(1, listener.getActiveSessionCount("Alice:room"));
+
+        // Stale disconnect is ignored and does not mark Alice disconnected or schedule grace timer
+        listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
+                message(StompCommand.DISCONNECT, "stale-session", stalePrincipal), "stale-session", null)));
+        assertTrue(room.isPlayerConnected("Alice"));
+        verifyNoInteractions(scheduler);
+        verify(lifecycle, never()).markPlayerDisconnected(anyString(), anyString(), anyLong());
+    }
 }
