@@ -475,6 +475,12 @@ public final class EncryptedWalStore {
                 }
                 if (bytes.remaining() < frameLength) {
                     incompleteTail = true;
+                    long validLength = (long) bytes.position() - 8;
+                    try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
+                        channel.truncate(validLength);
+                        channel.force(true);
+                    }
+                    logger.warn("Truncated torn trailing WAL frame for room {} to validLength {}", expectedRoomId, validLength);
                     break; // The save file was cut off right at the end (like from a power outage), which is okay. We just ignore this last partial save.
                 }
                 ByteBuffer frame = bytes.slice(bytes.position(), frameLength);

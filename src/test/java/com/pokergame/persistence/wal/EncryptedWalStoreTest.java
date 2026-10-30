@@ -4,11 +4,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.crypto.spec.SecretKeySpec;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -228,6 +231,49 @@ class EncryptedWalStoreTest {
         store.checkpoint("room-B", new byte[]{2});
         assertTrue(store.isHealthy());
         assertNull(store.lastError());
+    }
+
+    /**
+     * Protects the contract that crash recovery truncates torn trailing frames to valid offset,
+     * preventing subsequent appends from splicing onto corrupt bytes.
+     */
+    @Test
+    void tornTrailingFrameIsTruncatedSoSubsequentWritesDoNotCorruptWal() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 13);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+        WalTransaction tx1 = store.prepare("room-b10-2");
+        byte[] payload1 = "initial-payload".getBytes(StandardCharsets.UTF_8);
+        store.commit(tx1, payload1);
+
+        Path walPath = directory.resolve("room-b10-2.wal");
+        long validLength = Files.size(walPath);
+
+        // Append torn trailing frame: valid header (MAGIC + frameLength) followed by partial body bytes
+        ByteBuffer tornFrame = ByteBuffer.allocate(24);
+        tornFrame.putInt(0x504B574C); // MAGIC
+        tornFrame.putInt(64);         // frameLength (64 bytes expected)
+        tornFrame.put(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}); // only 16 body bytes
+        Files.write(walPath, tornFrame.array(), StandardOpenOption.APPEND);
+        assertEquals(validLength + 24, Files.size(walPath));
+
+        // Call recoverLatest() which discovers the torn trailing frame and truncates the file on disk
+        EncryptedWalStore recoveringStore = new EncryptedWalStore(directory, keys);
+        Optional<byte[]> recovered = recoveringStore.recoverLatest("room-b10-2");
+        assertTrue(recovered.isPresent());
+        assertArrayEquals(payload1, recovered.get());
+        assertEquals(validLength, Files.size(walPath), "Torn trailing frame must be truncated on disk to validLength");
+
+        // Perform a subsequent prepare() and commit() on a writer store
+        EncryptedWalStore writerStore = new EncryptedWalStore(directory, keys);
+        WalTransaction tx2 = writerStore.prepare("room-b10-2");
+        byte[] payload2 = "subsequent-payload".getBytes(StandardCharsets.UTF_8);
+        writerStore.commit(tx2, payload2);
+
+        // In a fresh EncryptedWalStore instance, call recoverLatest() and assert it cleanly decodes the new payload
+        EncryptedWalStore freshStore = new EncryptedWalStore(directory, keys);
+        Optional<byte[]> latest = freshStore.recoverLatest("room-b10-2");
+        assertTrue(latest.isPresent());
+        assertArrayEquals(payload2, latest.get());
     }
 
     /**
