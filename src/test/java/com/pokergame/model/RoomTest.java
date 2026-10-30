@@ -16,6 +16,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -25,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("Room model")
 class RoomTest {
 
+    private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private Room room;
 
     /**
@@ -91,10 +95,15 @@ class RoomTest {
     void testRoomCreationWithPasswordPreservingSpaces() {
         Room roomPreservedPass = new Room("room-spaces-kept", "Kept Pass Room", "Host", 4, 5, 10, 500, "  secret123  ");
         assertTrue(roomPreservedPass.hasPassword());
-        assertEquals("  secret123  ", roomPreservedPass.getPasswordForPersistence());
+        assertNotNull(roomPreservedPass.getPasswordForPersistence());
+        assertNotEquals("  secret123  ", roomPreservedPass.getPasswordForPersistence());
+        assertTrue(passwordEncoder.matches("  secret123  ", roomPreservedPass.getPasswordForPersistence()));
         assertTrue(roomPreservedPass.checkPassword("  secret123  "));
+        assertTrue(roomPreservedPass.checkPassword("  secret123  ", passwordEncoder));
         assertFalse(roomPreservedPass.checkPassword("secret123"));
+        assertFalse(roomPreservedPass.checkPassword("secret123", passwordEncoder));
         assertFalse(roomPreservedPass.checkPassword(null));
+        assertFalse(roomPreservedPass.checkPassword(null, passwordEncoder));
     }
 
     /**
@@ -630,9 +639,12 @@ class RoomTest {
         assertEquals(25, restoredRoom.getSmallBlind());
         assertEquals(50, restoredRoom.getBigBlind());
         assertEquals(2500, restoredRoom.getBuyIn());
-        assertEquals("secret-pass", restoredRoom.getPasswordForPersistence());
+        assertNotNull(restoredRoom.getPasswordForPersistence());
+        assertNotEquals("secret-pass", restoredRoom.getPasswordForPersistence());
+        assertTrue(passwordEncoder.matches("secret-pass", restoredRoom.getPasswordForPersistence()));
         assertTrue(restoredRoom.hasPassword());
         assertTrue(restoredRoom.checkPassword("secret-pass"));
+        assertTrue(restoredRoom.checkPassword("secret-pass", passwordEncoder));
         assertEquals(createdAt, restoredRoom.getCreatedAt());
         assertEquals(playersWithJoinTime, restoredRoom.getPlayersWithJoinTimeSnapshot());
         assertEquals(List.of("Alice", "Bob"), restoredRoom.getPlayers());
@@ -834,5 +846,100 @@ class RoomTest {
                 .buyIn(1000)
                 .playersWithJoinTime(joinTimes)
                 .build());
+    }
+
+    @Test
+    @DisplayName("Room hashes raw passwords with BCrypt and protects cleartext from getPassword")
+    void passwordHashing_ConstructorHashesRawPassword_NeverStoresPlaintext() {
+        String raw = "MySecretPass_42!";
+        Room privateRoom = new Room("priv-1", "Private Room", "Host", 4, 10, 20, 500, raw);
+
+        assertTrue(privateRoom.hasPassword());
+        assertNull(privateRoom.getPassword(), "getPassword must return null to prevent cleartext exposure");
+        assertNotNull(privateRoom.getPasswordHash());
+        assertNotEquals(raw, privateRoom.getPasswordHash());
+        assertTrue(privateRoom.getPasswordHash().startsWith("$2a$") || privateRoom.getPasswordHash().startsWith("$2b$"));
+        assertEquals(privateRoom.getPasswordHash(), privateRoom.getPasswordForPersistence());
+
+        // Constant-time checks with and without PasswordEncoder bean
+        assertTrue(privateRoom.checkPassword(raw, passwordEncoder));
+        assertTrue(privateRoom.matchesPassword(raw, passwordEncoder));
+        assertTrue(privateRoom.checkPassword(raw));
+
+        assertFalse(privateRoom.checkPassword("WrongPassword", passwordEncoder));
+        assertFalse(privateRoom.matchesPassword("WrongPassword", passwordEncoder));
+        assertFalse(privateRoom.checkPassword("WrongPassword"));
+
+        assertFalse(privateRoom.checkPassword(null, passwordEncoder));
+        assertFalse(privateRoom.checkPassword(null));
+        assertFalse(privateRoom.checkPassword("", passwordEncoder));
+        assertFalse(privateRoom.checkPassword(""));
+    }
+
+    @Test
+    @DisplayName("Room preserves pre-computed BCrypt hash without double-hashing")
+    void passwordHashing_PreHashedPasswordPreservedWithoutDoubleHashing() {
+        String raw = "AlreadyHashedSecret";
+        String bcryptHash = passwordEncoder.encode(raw);
+
+        Room preHashedRoom = new Room("pre-1", "PreHashed Room", "Host", 4, 10, 20, 500, bcryptHash);
+        assertEquals(bcryptHash, preHashedRoom.getPasswordHash(), "Pre-computed hash must be preserved as-is");
+        assertTrue(preHashedRoom.checkPassword(raw, passwordEncoder));
+        assertTrue(preHashedRoom.checkPassword(raw));
+        assertFalse(preHashedRoom.checkPassword("invalid", passwordEncoder));
+    }
+
+    @Test
+    @DisplayName("RoomRestoreBuilder preserves password hash and matches raw password with PasswordEncoder")
+    void restoreBuilder_PreservesPasswordHashAndVerifiesRawPassword() {
+        String raw = "RestoredSecretPass";
+        String hash = passwordEncoder.encode(raw);
+
+        Room restored = Room.restoreBuilder()
+                .roomId("restored-pw")
+                .roomName("Restored PW Room")
+                .hostName("Host")
+                .maxPlayers(4)
+                .smallBlind(10)
+                .bigBlind(20)
+                .buyIn(500)
+                .passwordHash(hash)
+                .build();
+
+        assertEquals(hash, restored.getPasswordHash());
+        assertEquals(hash, restored.getPasswordForPersistence());
+        assertTrue(restored.hasPassword());
+        assertTrue(restored.checkPassword(raw, passwordEncoder));
+        assertTrue(restored.matchesPassword(raw, passwordEncoder));
+        assertFalse(restored.checkPassword("wrong-pass", passwordEncoder));
+    }
+
+    @Test
+    @DisplayName("Room.toString() masks password and does not expose cleartext or hash")
+    void toString_ProtectsPasswordAndNeverExposesPlaintextOrHash() {
+        String raw = "SuperSecretPassword123";
+        Room privateRoom = new Room("sec-room", "Secret Room", "HostUser", 4, 10, 20, 500, raw);
+
+        String str = privateRoom.toString();
+        assertTrue(str.contains("[password=[PROTECTED]]"), "toString must mask password with [PROTECTED]");
+        assertFalse(str.contains(raw), "toString must not expose raw password");
+        assertFalse(str.contains(privateRoom.getPasswordHash()), "toString must not expose password hash");
+
+        Room publicRoom = new Room("pub-room", "Public Room", "HostUser", 4, 10, 20, 500, null);
+        assertTrue(publicRoom.toString().contains("[password=none]"), "public room toString displays [password=none]");
+    }
+
+    @Test
+    @DisplayName("Public room checkPassword always returns true regardless of input")
+    void publicRoom_CheckPasswordAlwaysReturnsTrueRegardlessOfInput() {
+        Room publicRoom = new Room("pub-room", "Public Room", "HostUser", 4, 10, 20, 500, null);
+
+        assertFalse(publicRoom.hasPassword());
+        assertNull(publicRoom.getPasswordHash());
+        assertNull(publicRoom.getPassword());
+        assertTrue(publicRoom.checkPassword("any-input", passwordEncoder));
+        assertTrue(publicRoom.matchesPassword("any-input", passwordEncoder));
+        assertTrue(publicRoom.checkPassword(null, passwordEncoder));
+        assertTrue(publicRoom.checkPassword(""));
     }
 }

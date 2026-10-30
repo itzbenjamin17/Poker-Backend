@@ -9,6 +9,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.preauth.AbstractPreAuthenticatedProcessingFilter;
 import org.springframework.web.cors.CorsConfiguration;
@@ -64,6 +66,16 @@ public class SecurityConfig {
                           com.pokergame.security.PayloadSizeFilter payloadSizeFilter,
                           com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter) {
         this(jwtAuthenticationFilter, payloadSizeFilter, endpointRateLimitFilter, new ObjectMapper());
+    }
+
+    /**
+     * Exposes a BCrypt password encoder for hashing and constant-time matching of sensitive secrets.
+     *
+     * @return BCryptPasswordEncoder instance
+     */
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
     }
 
     /**

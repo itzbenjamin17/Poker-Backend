@@ -3,6 +3,11 @@ package com.pokergame.model;
 import com.pokergame.exception.BadRequestException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.crypto.bcrypt.BCrypt;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -53,10 +58,17 @@ public class Room {
     private final int smallBlind;
     private final int bigBlind;
     private final int buyIn;
-    private final String password;
+    private final String passwordHash;
     private final LocalDateTime createdAt;
     private boolean isGameStarted;
     private volatile boolean isTerminal;
+
+    private static boolean isBcryptHash(String value) {
+        if (value == null) {
+            return false;
+        }
+        return value.startsWith("$2a$") || value.startsWith("$2b$") || value.startsWith("$2y$");
+    }
 
 
     /**
@@ -133,7 +145,13 @@ public class Room {
         this.smallBlind = smallBlind;
         this.bigBlind = bigBlind;
         this.buyIn = buyIn;
-        this.password = (password != null && password.trim().isEmpty()) ? null : password;
+        if (password == null || password.trim().isEmpty()) {
+            this.passwordHash = null;
+        } else if (isBcryptHash(password)) {
+            this.passwordHash = password;
+        } else {
+            this.passwordHash = BCrypt.hashpw(password, BCrypt.gensalt());
+        }
         this.playersWithJoinTime = new LinkedHashMap<>();
         this.createdAt = createdAt != null ? createdAt : LocalDateTime.now();
     }
@@ -201,6 +219,11 @@ public class Room {
 
         public RoomRestoreBuilder password(String password) {
             this.password = password;
+            return this;
+        }
+
+        public RoomRestoreBuilder passwordHash(String passwordHash) {
+            this.password = passwordHash;
             return this;
         }
 
@@ -322,34 +345,82 @@ public class Room {
     /**
      * Checks if this room is password-protected.
      *
-     * @return true if the room has a password, false otherwise
+     * @return true if the room has a password hash, false otherwise
      */
     public boolean hasPassword() {
-        return password != null && !password.trim().isEmpty();
+        return passwordHash != null && !passwordHash.trim().isEmpty();
     }
 
     /**
-     * Verifies if the provided password matches the room's password.
+     * Verifies if the provided raw password matches the room's password hash using constant-time verification.
      * Returns true for public rooms (no password required).
      *
-     * @param inputPassword the password to check
+     * @param inputPassword the cleartext password to check
      * @return true if the password matches or room is public, false otherwise
      */
     public boolean checkPassword(String inputPassword) {
-        if (!hasPassword())
+        if (!hasPassword()) {
             return true;
-        return password.equals(inputPassword);
+        }
+        if (inputPassword == null) {
+            return false;
+        }
+        if (isBcryptHash(passwordHash)) {
+            try {
+                return BCrypt.checkpw(inputPassword, passwordHash);
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        return MessageDigest.isEqual(
+                inputPassword.getBytes(StandardCharsets.UTF_8),
+                passwordHash.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Verifies if the provided raw password matches the room's password hash using
+     * constant-time verification provided by PasswordEncoder.
+     * Returns true for public rooms (no password required).
+     *
+     * @param rawPassword the cleartext password to check
+     * @param passwordEncoder the password encoder to use for verification
+     * @return true if password matches or room is public, false otherwise
+     */
+    public boolean checkPassword(String rawPassword, PasswordEncoder passwordEncoder) {
+        if (!hasPassword()) {
+            return true;
+        }
+        if (rawPassword == null) {
+            return false;
+        }
+        if (passwordEncoder != null) {
+            return passwordEncoder.matches(rawPassword, passwordHash);
+        }
+        return checkPassword(rawPassword);
+    }
+
+    /**
+     * Alias for {@link #checkPassword(String, PasswordEncoder)}.
+     *
+     * @param rawPassword cleartext password to check
+     * @param encoder password encoder to verify with
+     * @return true if password matches or room is public, false otherwise
+     */
+    public boolean matchesPassword(String rawPassword, PasswordEncoder encoder) {
+        return checkPassword(rawPassword, encoder);
     }
 
     /**
      * Returns a string representation of this room including name, ID, host, and
-     * player count.
+     * player count, masking any sensitive credentials.
      *
-     * @return formatted string describing the room
+     * @return formatted string describing the room with masked password status
      */
     @Override
     public synchronized String toString() {
-        return roomName + " (" + roomId + ")" + " by " + hostName + " with " + playersWithJoinTime.size() + " players";
+        String protectedPass = hasPassword() ? "[PROTECTED]" : "none";
+        return roomName + " (" + roomId + ")" + " by " + hostName + " with " + playersWithJoinTime.size()
+                + " players [password=" + protectedPass + "]";
     }
 
     /**
@@ -444,13 +515,34 @@ public class Room {
     }
 
     /**
-     * Exposes the password only to the encrypted aggregate mapper. Public room DTOs
+     * Exposes the hashed password for aggregate snapshot persistence. Public room DTOs
      * continue to reveal only whether a password exists.
      *
-     * @return room password, or {@code null} for a public room
+     * @return room password hash, or {@code null} for a public room
      */
     public String getPasswordForPersistence() {
-        return password;
+        return passwordHash;
+    }
+
+    /**
+     * Returns the hashed password for private rooms.
+     *
+     * @return room password hash, or {@code null} for a public room
+     */
+    public String getPasswordHash() {
+        return passwordHash;
+    }
+
+    /**
+     * Deprecated to prevent cleartext password memory exposure.
+     * Use {@link #getPasswordHash()} to inspect the hash or {@link #checkPassword(String, PasswordEncoder)} to verify credentials.
+     *
+     * @return null to prevent exposing raw password in memory or serialization
+     * @deprecated use {@link #getPasswordHash()} or {@link #checkPassword(String, PasswordEncoder)}
+     */
+    @Deprecated
+    public String getPassword() {
+        return null;
     }
 
     /**

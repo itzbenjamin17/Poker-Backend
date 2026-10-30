@@ -3,7 +3,6 @@ package com.pokergame.config;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.util.MdcKeys;
-import com.pokergame.util.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -14,19 +13,12 @@ import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Component;
-
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
-import java.security.Principal;
-import java.util.Map;
 
 /**
  * Intercepts STOMP messages to authenticate and authorize WebSocket actions.
  * - On CONNECT: extracts and validates the JWT to set a PlayerPrincipal.
  * - On SUBSCRIBE: ensures players only subscribe to their allowed topics.
- * - On SEND: validates destination prefix and ensures players only publish to their allowed room destinations.
  */
 @SuppressWarnings("NullableProblems")
 @Component
@@ -73,8 +65,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
             handleConnect(accessor);
         } else if (StompCommand.SUBSCRIBE.equals(command)) {
             handleSubscribe(accessor);
-        } else if (StompCommand.SEND.equals(command)) {
-            handleSend(accessor);
         }
 
         return message;
@@ -85,111 +75,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         MDC.remove(MdcKeys.ROOM_ID);
         MDC.remove(MdcKeys.PLAYER_NAME);
         MDC.remove(MdcKeys.SESSION_ID);
-    }
-
-    /**
-     * Restricts SEND frames to valid application destinations (/app/**) and verifies
-     * room authorization for room-targeted destinations.
-     *
-     * @param accessor headers for the SEND frame
-     * @throws AccessDeniedException if destination prefix is unauthorized or if caller room does not match
-     */
-    private void handleSend(StompHeaderAccessor accessor) {
-        String destination = accessor.getDestination();
-        if (destination == null || !destination.startsWith("/app/")) {
-            logger.warn("Blocked SEND to unauthorized destination: {}", destination);
-            throw new AccessDeniedException("Access denied: SEND destination must start with /app/");
-        }
-
-        String destinationRoomId = extractRoomIdFromSendDestination(destination);
-        if (destinationRoomId != null) {
-            PlayerPrincipal principal = resolvePlayerPrincipal(accessor);
-            if (!isRoomAuthorized(principal, destinationRoomId)) {
-                String callerRoom = principal != null ? principal.roomId() : "unauthenticated";
-                logger.warn("Forbidden SEND attempt: player in room {} tried to send to room destination {}", callerRoom, destination);
-                throw new AccessDeniedException("User not authorized for this room destination");
-            }
-        }
-    }
-
-    /**
-     * Resolves the PlayerPrincipal from user header or session attributes.
-     *
-     * @param accessor STOMP frame headers
-     * @return resolved PlayerPrincipal or null
-     */
-    private PlayerPrincipal resolvePlayerPrincipal(StompHeaderAccessor accessor) {
-        PlayerPrincipal principal = SecurityUtils.getPlayerOrNull(accessor.getUser());
-        if (principal != null) {
-            return principal;
-        }
-        Map<String, Object> sessionAttributes = accessor.getSessionAttributes();
-        if (sessionAttributes != null) {
-            Object userAttr = sessionAttributes.get("user");
-            if (userAttr instanceof Principal p) {
-                principal = SecurityUtils.getPlayerOrNull(p);
-                if (principal != null) {
-                    return principal;
-                }
-            } else if (userAttr instanceof PlayerPrincipal pp) {
-                return pp;
-            }
-            Object playerAttr = sessionAttributes.get("playerPrincipal");
-            if (playerAttr instanceof PlayerPrincipal pp) {
-                return pp;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Checks if the principal is authorized for the given room identifier.
-     *
-     * @param principal caller principal
-     * @param destinationRoomId extracted room identifier
-     * @return true if authorized, false otherwise
-     */
-    private boolean isRoomAuthorized(PlayerPrincipal principal, String destinationRoomId) {
-        if (principal == null || principal.roomId() == null) {
-            return false;
-        }
-        if (principal.roomId().equals(destinationRoomId)) {
-            return true;
-        }
-        try {
-            String decoded = URLDecoder.decode(destinationRoomId, StandardCharsets.UTF_8);
-            return principal.roomId().equals(decoded);
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
-    /**
-     * Extracts a room identifier from a validated /app/ destination path.
-     * Supported patterns:
-     * - /app/game/{roomId}/...
-     * - /app/room/{roomId}/...
-     * - /app/{roomId}/... (when first segment after /app/ is not "game" or "room")
-     *
-     * @param destination STOMP destination
-     * @return extracted roomId or null if destination is not room-scoped
-     */
-    private String extractRoomIdFromSendDestination(String destination) {
-        if (destination == null || !destination.startsWith("/app/")) {
-            return null;
-        }
-        String sub = destination.substring(5).replaceAll("^/+", "");
-        String[] parts = sub.split("/+");
-        if (parts.length == 0 || parts[0].isEmpty()) {
-            return null;
-        }
-        if ("room".equals(parts[0]) || "game".equals(parts[0])) {
-            return parts.length >= 2 && !parts[1].isBlank() ? parts[1] : null;
-        }
-        if (parts.length >= 2 && !parts[0].isBlank()) {
-            return parts[0];
-        }
-        return null;
     }
 
     /**
