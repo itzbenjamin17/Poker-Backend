@@ -20,6 +20,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 import com.pokergame.persistence.wal.EncryptedWalStore;
@@ -213,6 +214,171 @@ class PersistenceRecoveryTest {
         assertTrue(charlieDeadlineCaptor.getValue() >= beforeRun + DISCONNECT_GRACE_PERIOD_MS);
         assertTrue(charlieDeadlineCaptor.getValue() <= afterRun + DISCONNECT_GRACE_PERIOD_MS);
 
+        assertTrue(recovery.isComplete());
+    }
+
+    /**
+     * Finding B10-8 / Ticket 36:
+     * Protects the contract that when a corrupted snapshot causes mapper.deserialize to throw,
+     * PersistenceRecovery catches the exception, calls store.quarantine(roomId, reason),
+     * does not abort startup, and recovers all remaining valid rooms and games.
+     */
+    @Test
+    void corruptedSnapshotDeserializationFailureQuarantinesWalAndRecoversRemainingRooms() {
+        Room validRoom = new Room("room-valid", "Valid Room", "Alice", 6, 10, 20, 1000, null);
+        validRoom.addPlayer("Alice");
+        Player alice = new Player("Alice", "alice-id", 1000);
+        Game validGame = mock(Game.class);
+        when(validGame.getGameId()).thenReturn("room-valid");
+        when(validGame.getPlayers()).thenReturn(List.of(alice));
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", validGame, false);
+
+        byte[] corruptBytes = new byte[]{9, 9, 9};
+        byte[] validBytes = new byte[]{1, 2, 3};
+
+        when(store.recoverAll()).thenReturn(Map.of(
+                "room-corrupt", corruptBytes,
+                "room-valid", validBytes));
+        when(mapper.deserialize(corruptBytes)).thenThrow(new PersistenceException("Corrupted JSON payload in WAL"));
+        when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
+
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                store, mapper, roomService, gameLifecycleService,
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+
+        assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
+
+        // Quarantine called for the corrupt room with error message
+        verify(store).quarantine(eq("room-corrupt"), eq("Corrupted JSON payload in WAL"));
+
+        // Valid room and game are restored into services
+        verify(roomService).restoreRoom(validRoom, "Alice");
+        verify(gameLifecycleService).restoreGame(validGame);
+        verify(gameLifecycleService).resumeRecoveredTimers("room-valid");
+        verify(webSocketEventListener).scheduleRecoveredDisconnect(eq("room-valid"), eq("Alice"), anyLong());
+
+        assertTrue(recovery.isComplete(), "Recovery must be marked complete and accept traffic despite one corrupt room");
+    }
+
+    /**
+     * Finding B10-8 / Ticket 36:
+     * Protects the contract that when aggregate restoration throws (e.g. restoreGame throws runtime exception),
+     * PersistenceRecovery catches the exception, calls store.quarantine(roomId, reason),
+     * does not abort startup, and recovers all remaining valid rooms and games.
+     */
+    @Test
+    void aggregateGameRestorationExceptionQuarantinesWalAndRecoversRemainingRooms() {
+        Room brokenRoom = new Room("room-broken", "Broken Game Room", "Bob", 6, 10, 20, 1000, null);
+        brokenRoom.addPlayer("Bob");
+        Player bob = new Player("Bob", "bob-id", 1000);
+        Game brokenGame = mock(Game.class);
+        when(brokenGame.getPlayers()).thenReturn(List.of(bob));
+        RecoveredAggregate brokenAggregate = new RecoveredAggregate(brokenRoom, "Bob", brokenGame, false);
+
+        Room validRoom = new Room("room-valid", "Valid Room", "Alice", 6, 10, 20, 1000, null);
+        validRoom.addPlayer("Alice");
+        Player alice = new Player("Alice", "alice-id", 1000);
+        Game validGame = mock(Game.class);
+        when(validGame.getGameId()).thenReturn("room-valid");
+        when(validGame.getPlayers()).thenReturn(List.of(alice));
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", validGame, false);
+
+        byte[] brokenBytes = new byte[]{4, 5, 6};
+        byte[] validBytes = new byte[]{1, 2, 3};
+
+        when(store.recoverAll()).thenReturn(Map.of(
+                "room-broken", brokenBytes,
+                "room-valid", validBytes));
+        when(mapper.deserialize(brokenBytes)).thenReturn(brokenAggregate);
+        when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
+
+        doThrow(new IllegalStateException("Inconsistent aggregate state during restoreGame"))
+                .when(gameLifecycleService).restoreGame(brokenGame);
+        doNothing().when(gameLifecycleService).restoreGame(validGame);
+
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                store, mapper, roomService, gameLifecycleService,
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+
+        assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
+
+        // Quarantine called for the broken room
+        verify(store).quarantine(eq("room-broken"), eq("Inconsistent aggregate state during restoreGame"));
+
+        // Valid room and game restored cleanly
+        verify(roomService).restoreRoom(validRoom, "Alice");
+        verify(gameLifecycleService).restoreGame(validGame);
+        verify(gameLifecycleService).resumeRecoveredTimers("room-valid");
+
+        assertTrue(recovery.isComplete(), "Recovery must complete and accept traffic despite one broken game");
+    }
+
+    /**
+     * Finding B10-8 / Ticket 36:
+     * Protects the contract that when roomService.restoreRoom throws a runtime exception,
+     * PersistenceRecovery catches the exception, calls store.quarantine(roomId, reason),
+     * does not abort startup, and recovers all remaining valid rooms.
+     */
+    @Test
+    void roomServiceRestorationExceptionQuarantinesWalAndRecoversRemainingRooms() {
+        Room brokenRoom = new Room("room-broken", "Broken Room", "Bob", 6, 10, 20, 1000, null);
+        brokenRoom.addPlayer("Bob");
+        RecoveredAggregate brokenAggregate = new RecoveredAggregate(brokenRoom, "Bob", null, false);
+
+        Room validRoom = new Room("room-valid", "Valid Room", "Alice", 6, 10, 20, 1000, null);
+        validRoom.addPlayer("Alice");
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", null, false);
+
+        byte[] brokenBytes = new byte[]{7, 8};
+        byte[] validBytes = new byte[]{1, 2};
+
+        when(store.recoverAll()).thenReturn(Map.of(
+                "room-broken", brokenBytes,
+                "room-valid", validBytes));
+        when(mapper.deserialize(brokenBytes)).thenReturn(brokenAggregate);
+        when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
+
+        doThrow(new RuntimeException("Room host constraint violated"))
+                .when(roomService).restoreRoom(brokenRoom, "Bob");
+        doNothing().when(roomService).restoreRoom(validRoom, "Alice");
+
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                store, mapper, roomService, gameLifecycleService,
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+
+        assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
+
+        verify(store).quarantine(eq("room-broken"), eq("Room host constraint violated"));
+        verify(roomService).restoreRoom(validRoom, "Alice");
+        assertTrue(recovery.isComplete());
+    }
+
+    /**
+     * Finding B10-8 / Ticket 36:
+     * Protects the contract that when all room WAL files are corrupted,
+     * PersistenceRecovery quarantines every corrupt file and still completes startup cleanly.
+     */
+    @Test
+    void allRoomsCorruptedQuarantinesAllAndCompletesStartupWithoutCrash() {
+        byte[] corrupt1 = new byte[]{1};
+        byte[] corrupt2 = new byte[]{2};
+
+        when(store.recoverAll()).thenReturn(Map.of(
+                "room-corrupt-1", corrupt1,
+                "room-corrupt-2", corrupt2));
+        when(mapper.deserialize(corrupt1)).thenThrow(new PersistenceException("Corrupt 1"));
+        when(mapper.deserialize(corrupt2)).thenThrow(new PersistenceException("Corrupt 2"));
+
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                store, mapper, roomService, gameLifecycleService,
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+
+        assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
+
+        verify(store).quarantine("room-corrupt-1", "Corrupt 1");
+        verify(store).quarantine("room-corrupt-2", "Corrupt 2");
+        verifyNoInteractions(roomService);
+        verifyNoInteractions(gameLifecycleService);
         assertTrue(recovery.isComplete());
     }
 }

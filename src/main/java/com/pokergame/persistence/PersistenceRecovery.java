@@ -102,8 +102,9 @@ public final class PersistenceRecovery implements ApplicationRunner {
             try {
                 aggregate = mapper.deserialize(entry.getValue());
             } catch (Exception e) {
-                logger.error("Failed to deserialize snapshot for room {}", roomId, e);
-                throw e;
+                logger.error("Failed to recover room {}; quarantining corrupted WAL", roomId, e);
+                store.quarantine(roomId, e.getMessage());
+                continue;
             }
             
             // If the room was marked for deletion before the crash, permanently delete it now
@@ -130,42 +131,45 @@ public final class PersistenceRecovery implements ApplicationRunner {
         Map<RecoveredPlayerKey, Long> recoveredDeadlines = new java.util.HashMap<>();
 
         for (RecoveredAggregate aggregate : recoveredAggregates) {
-            Game game = aggregate.game();
-            for (String playerName : aggregate.room().getPlayers()) {
-                Player gamePlayer = game == null ? null : game.getPlayers().stream()
-                        .filter(player -> player.getName().equals(playerName))
-                        .findFirst().orElse(null);
-                long storedDeadline = gamePlayer == null || gamePlayer.getDisconnectDeadlineEpochMs() == null
-                        ? 0 : gamePlayer.getDisconnectDeadlineEpochMs();
-                long deadline = Math.max(freshDeadline, storedDeadline);
-                if (gamePlayer != null) {
-                    gamePlayer.setDisconnected(true);
-                    gamePlayer.setReadyForNextHand(false);
-                    gamePlayer.setDisconnectDeadlineEpochMs(deadline);
+            String roomId = aggregate.room().getRoomId();
+            try {
+                Game game = aggregate.game();
+                for (String playerName : aggregate.room().getPlayers()) {
+                    Player gamePlayer = game == null ? null : game.getPlayers().stream()
+                            .filter(player -> player.getName().equals(playerName))
+                            .findFirst().orElse(null);
+                    long storedDeadline = gamePlayer == null || gamePlayer.getDisconnectDeadlineEpochMs() == null
+                            ? 0 : gamePlayer.getDisconnectDeadlineEpochMs();
+                    long deadline = Math.max(freshDeadline, storedDeadline);
+                    if (gamePlayer != null) {
+                        gamePlayer.setDisconnected(true);
+                        gamePlayer.setReadyForNextHand(false);
+                        gamePlayer.setDisconnectDeadlineEpochMs(deadline);
+                    }
+                    recoveredDeadlines.put(new RecoveredPlayerKey(roomId, playerName), deadline);
                 }
-                recoveredDeadlines.put(new RecoveredPlayerKey(aggregate.room().getRoomId(), playerName), deadline);
-            }
-        }
 
-        for (RecoveredAggregate aggregate : recoveredAggregates) {
-            Game game = aggregate.game();
-            roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
-            roomsRestored++;
-            if (game != null) {
-                gameLifecycleService.restoreGame(game);
-                gamesRestored++;
-            }
-            logger.debug("Recovered room: roomId={}, hasGame={}", aggregate.room().getRoomId(), game != null);
-            for (String playerName : aggregate.room().getPlayers()) {
-                // Tell the system to kick the player if they don't reconnect by the deadline
-                webSocketEventListener.scheduleRecoveredDisconnect(
-                        aggregate.room().getRoomId(), playerName,
-                        recoveredDeadlines.get(new RecoveredPlayerKey(aggregate.room().getRoomId(), playerName)));
-            }
-            
-            // Restart the game timers (like the countdown for player turns) so the game can continue
-            if (game != null) {
-                gameLifecycleService.resumeRecoveredTimers(game.getGameId());
+                roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
+                if (game != null) {
+                    gameLifecycleService.restoreGame(game);
+                    gamesRestored++;
+                }
+                roomsRestored++;
+                logger.debug("Recovered room: roomId={}, hasGame={}", roomId, game != null);
+                for (String playerName : aggregate.room().getPlayers()) {
+                    // Tell the system to kick the player if they don't reconnect by the deadline
+                    webSocketEventListener.scheduleRecoveredDisconnect(
+                            roomId, playerName,
+                            recoveredDeadlines.get(new RecoveredPlayerKey(roomId, playerName)));
+                }
+                
+                // Restart the game timers (like the countdown for player turns) so the game can continue
+                if (game != null) {
+                    gameLifecycleService.resumeRecoveredTimers(game.getGameId());
+                }
+            } catch (Exception e) {
+                logger.error("Failed to recover room {}; quarantining corrupted WAL", roomId, e);
+                store.quarantine(roomId, e.getMessage());
             }
         }
         
