@@ -7,6 +7,7 @@ import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.dto.response.PlayerNotificationResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerStatus;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ResponseMessage;
@@ -58,6 +59,22 @@ public class GameStateService {
     public GameStateService(RoomService roomService, SimpMessagingTemplate messagingTemplate) {
         this.roomService = roomService;
         this.messagingTemplate = messagingTemplate;
+    }
+
+    /**
+     * Evicts any process-local retained settlement for the specified game when the
+     * game is cleaned up, evicted, or replaced.
+     *
+     * @param gameId game identifier
+     */
+    public void clearRetainedSettlement(String gameId) {
+        if (gameId != null) {
+            retainedSettlements.remove(gameId);
+        }
+    }
+
+    boolean hasRetainedSettlement(String gameId) {
+        return gameId != null && retainedSettlements.containsKey(gameId);
     }
 
     /**
@@ -178,15 +195,11 @@ public class GameStateService {
             List<Player> projectedWinners = game.getPlayers().stream()
                     .filter(player -> winnerIds.contains(player.getPlayerId())).toList();
             winnerNames = projectedWinners.stream().map(Player::getName).toList();
-            Integer legacyWinnings = null;
-            if (!winnerIds.isEmpty()) {
-                List<Integer> awards = winnerIds.stream().map(id -> contestedAwards.getOrDefault(id, 0)).toList();
-                if (awards.stream().distinct().count() == 1) legacyWinnings = awards.getFirst();
-            }
+            Integer legacyWinnings = computeEqualWinnerAward(winnerIds, contestedAwards);
 
             // Check if this is an actual showdown (i.e. not a win by fold)
             boolean isActualShowdown = projectedWinners.stream()
-                    .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != com.pokergame.enums.HandRank.NO_HAND);
+                    .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != HandRank.NO_HAND);
             String smallBlindPlayerId = game.getSmallBlindPlayerId();
             String bigBlindPlayerId = game.getBigBlindPlayerId();
 
@@ -194,25 +207,16 @@ public class GameStateService {
             List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
                 boolean isWinner = winnerIds.contains(player.getPlayerId());
                 boolean isActive = !player.getHasFolded() && !player.getIsOut();
-                String status = resolvePlayerStatus(player);
-                return new PublicPlayerState(
-                        player.getPlayerId(),
-                        player.getName(),
-                        player.getChips(),
-                        player.getCurrentBet(),
-                        status,
-                        player.getIsAllIn(),
-                        false, // isCurrentPlayer not relevant during showdown
-                        player.getHasFolded(),
-                        player.getPlayerId().equals(smallBlindPlayerId),
-                        player.getPlayerId().equals(bigBlindPlayerId),
+                return toPublicPlayerState(
+                        player,
+                        false,
+                        smallBlindPlayerId,
+                        bigBlindPlayerId,
                         isActive ? player.getHandRank() : null,
                         isActive ? player.getBestHand() : List.of(),
                         isWinner,
                         contestedAwards.getOrDefault(player.getPlayerId(), 0),
-                        (isActive && isActualShowdown) ? player.getHoleCards() : null,
-                        player.getDisconnectDeadlineEpochMs(),
-                        player.getIsReadyForNextHand());
+                        (isActive && isActualShowdown) ? player.getHoleCards() : null);
             }).toList();
 
             // Create PublicGameStateResponse DTO with showdown information
@@ -276,35 +280,24 @@ public class GameStateService {
             int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
             // Get current player information
-            Player currentPlayer = null;
             String currentPlayerName = null;
             String currentPlayerId = null;
             String smallBlindPlayerId = game.getSmallBlindPlayerId();
             String bigBlindPlayerId = game.getBigBlindPlayerId();
 
             // Convert players to PlayerState DTOs
-            List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
-                String status = resolvePlayerStatus(player);
-                boolean isCurrentPlayer = false;
-                return new PublicPlayerState(
-                        player.getPlayerId(),
-                        player.getName(),
-                        player.getChips(),
-                        player.getCurrentBet(),
-                        status,
-                        player.getIsAllIn(),
-                        isCurrentPlayer,
-                        player.getHasFolded(),
-                        player.getPlayerId().equals(smallBlindPlayerId),
-                        player.getPlayerId().equals(bigBlindPlayerId),
-                        player.getHandRank(),
-                        List.of(),
-                        null,
-                        null,
-                        null,
-                        player.getDisconnectDeadlineEpochMs(),
-                        player.getIsReadyForNextHand());
-            }).toList();
+            List<PublicPlayerState> playersList = game.getPlayers().stream()
+                    .map(player -> toPublicPlayerState(
+                            player,
+                            false,
+                            smallBlindPlayerId,
+                            bigBlindPlayerId,
+                            player.getHandRank(),
+                            List.of(),
+                            null,
+                            null,
+                            null))
+                    .toList();
 
             // Create PublicGameStateResponse DTO with auto-advance fields
             autoAdvanceResponse = new PublicGameStateResponse(
@@ -519,25 +512,16 @@ public class GameStateService {
         List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
             boolean isWinner = winner != null && winner.equals(player);
             boolean isActive = !player.getHasFolded() && !player.getIsOut();
-            String status = resolvePlayerStatus(player);
-            return new PublicPlayerState(
-                    player.getPlayerId(),
-                    player.getName(),
-                    player.getChips(),
-                    player.getCurrentBet(),
-                    status,
-                    player.getIsAllIn(),
+            return toPublicPlayerState(
+                    player,
                     false,
-                    player.getHasFolded(),
-                    player.getPlayerId().equals(smallBlindPlayerId),
-                    player.getPlayerId().equals(bigBlindPlayerId),
+                    smallBlindPlayerId,
+                    bigBlindPlayerId,
                     isActive ? player.getHandRank() : null,
                     isActive ? player.getBestHand() : List.of(),
                     isWinner,
                     null,
-                    (revealHoleCards && isActive) ? player.getHoleCards() : null,
-                    player.getDisconnectDeadlineEpochMs(),
-                    player.getIsReadyForNextHand());
+                    (revealHoleCards && isActive) ? player.getHoleCards() : null);
         }).toList();
 
         List<String> winnerNames = winner != null ? List.of(winner.getName()) : List.of();

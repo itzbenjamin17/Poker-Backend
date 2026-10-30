@@ -60,6 +60,8 @@ Desktop.ini
 ### Agent task artifacts ###
 .agents/
 node_modules/
+/docs/reviews/bug-audit/
+bug-audit/
 .codex/config.toml
 .codex/config.local.toml
 .codex/sessions/

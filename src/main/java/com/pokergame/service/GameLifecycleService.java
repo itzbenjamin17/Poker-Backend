@@ -233,6 +233,9 @@ public class GameLifecycleService {
         if (room == null) {
             logger.info("Room {} not found while removing players from game. Cleaning up game without broadcast.", roomId);
             activeGames.remove(roomId);
+            if (gameStateService != null) {
+                gameStateService.clearRetainedSettlement(roomId);
+            }
             return;
         }
 
@@ -368,11 +371,17 @@ public class GameLifecycleService {
         if (roomService.getRoom(roomId) == null) {
             logger.info("Room {} was destroyed during leave flow. Cleaning up active game state.", roomId);
             activeGames.remove(roomId);
+            if (gameStateService != null) {
+                gameStateService.clearRetainedSettlement(roomId);
+            }
             return;
         }
 
         if (game.getPlayers().isEmpty()) {
             activeGames.remove(roomId);
+            if (gameStateService != null) {
+                gameStateService.clearRetainedSettlement(roomId);
+            }
             roomService.destroyRoom(roomId);
             return;
         }
@@ -406,6 +415,9 @@ public class GameLifecycleService {
         for (ScheduledGameTask task : ScheduledGameTask.values()) game.clearScheduledTask(task);
         cancelRuntimeTasks(gameId, false);
         activeGames.remove(gameId, game);
+        if (gameStateService != null) {
+            gameStateService.clearRetainedSettlement(gameId);
+        }
     }
 
     /**
@@ -720,6 +732,9 @@ public class GameLifecycleService {
     public void performGameCleanup(String gameId) {
         cancelRuntimeTasks(gameId, false);
         activeGames.remove(gameId);
+        if (gameStateService != null) {
+            gameStateService.clearRetainedSettlement(gameId);
+        }
         roomService.destroyRoom(gameId);
         logger.info("Game {} and associated room cleaned up", gameId);
     }
@@ -797,10 +812,16 @@ public class GameLifecycleService {
                 synchronized (game) {
                     cancelRuntimeTasks(gameId, false);
                     activeGames.remove(gameId);
+                    if (gameStateService != null) {
+                        gameStateService.clearRetainedSettlement(gameId);
+                    }
                 }
             } else {
                 cancelRuntimeTasks(gameId, false);
                 activeGames.remove(gameId);
+                if (gameStateService != null) {
+                    gameStateService.clearRetainedSettlement(gameId);
+                }
             }
             if (room != null) {
                 room.setGameStarted(false);
@@ -1652,13 +1673,6 @@ public class GameLifecycleService {
                 && TournamentEligibility.isContender(game, player));
     }
 
-    /**
-     * Removes a grace-expired player from room and game under one room transaction,
-     * avoiding a recoverable snapshot where only one registry was updated.
-     *
-     * @param gameId    room/game identity
-     * @param playerName player whose reconnect grace expired
-     */
     /**
      * Removes a grace-expired player from room and game under one room transaction
      * when the expected membership identity and expected deadline match current domain state.

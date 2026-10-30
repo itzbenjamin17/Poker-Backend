@@ -408,6 +408,7 @@ public class Game {
         currentPhase = GamePhase.PRE_FLOP;
         everyoneHasHadInitialTurn = false;
         handContributions.clear();
+        actedPlayersInRound.clear();
         lastFullRaiseByStreet.clear();
         lastActedWagerByPlayer.clear();
         lastSettlementResult = null;
@@ -799,8 +800,7 @@ public class Game {
     /** True when no remaining actionable player owes chips before a forced runout. */
     public boolean shouldAutoRunout() {
         long actionable = activePlayers.stream().filter(p -> !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn()).count();
-        boolean owedCall = activePlayers.stream().anyMatch(p -> !p.getHasFolded() && !p.getIsOut()
-                && !p.getIsAllIn() && p.getCurrentBet() < currentHighestBet);
+        boolean owedCall = hasActionablePlayerOwingCall();
         return actionable <= 1 && !owedCall;
     }
 
@@ -872,10 +872,7 @@ public class Game {
      * @return true if the betting round is complete, false otherwise
      */
     public boolean isBettingRoundComplete() {
-        boolean hasPlayerWhoNeedsToAct = activePlayers.stream()
-                .anyMatch(p -> p.getCurrentBet() < currentHighestBet &&
-                        !p.getHasFolded() && !p.getIsOut() &&
-                        !p.getIsAllIn());
+        boolean hasPlayerWhoNeedsToAct = hasActionablePlayerOwingCall();
 
         long playersAbleToAct = activePlayers.stream()
                 .filter(p -> !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn())
@@ -1321,9 +1318,7 @@ public class Game {
         // Live money above an all-in cap remains pending until the owing players
         // respond. Do not present it as a finalized refund or expose temporary
         // side-pot boundaries while the street is still open.
-        boolean pendingResponse = activePlayers.stream()
-                .anyMatch(player -> !player.getHasFolded() && !player.getIsOut() && !player.getIsAllIn()
-                        && currentHighestBet > player.getCurrentBet());
+        boolean pendingResponse = hasActionablePlayerOwingCall();
         if (pendingResponse) {
             int maxAllInCap = handContributions.entrySet().stream()
                     .filter(entry -> activePlayers.stream().anyMatch(player -> player.getPlayerId().equals(entry.getKey())
@@ -1392,9 +1387,7 @@ public class Game {
         boolean hasAllIn = activePlayers.stream()
                 .anyMatch(player -> player.getIsAllIn() && !player.getHasFolded());
 
-        boolean pendingResponse = activePlayers.stream()
-                .anyMatch(player -> !player.getHasFolded() && !player.getIsOut() && !player.getIsAllIn()
-                        && currentHighestBet > player.getCurrentBet());
+        boolean pendingResponse = hasActionablePlayerOwingCall();
         if (pendingResponse) return 0;
 
         if (!hasAllIn) {
@@ -1471,36 +1464,6 @@ public class Game {
             }
         }
         return winners;
-    }
-
-    /**
-     * Distributes the pot evenly among the winning players.
-     * Any remainder from integer division stays in the pot for the next hand.
-     *
-     * @param winners list of players who won the hand
-     */
-    private void distributePot(List<Player> winners) {
-        logger.info("Distributing pot for game {}", gameId);
-        if (winners.isEmpty()) {
-            logger.warn("No winners to distribute pot to!");
-            return;
-        }
-
-        logger.info("Pot to distribute: {}, Number of winners: {}", pot, winners.size());
-
-        int potShare = pot / winners.size();
-        logger.info("Each winner gets: {} chips", potShare);
-
-        for (Player winner : winners) {
-            int chipsBefore = winner.getChips();
-            winner.addChips(potShare);
-            logger.debug("Player {}: {} -> {} chips", winner.getName(), chipsBefore, winner.getChips());
-        }
-
-        pot = pot % winners.size(); // Any remainder stays for the next hand
-
-        logger.debug("Pot remainder for next hand: {}", pot);
-        logger.info("Pot distribution complete");
     }
 
     /**
