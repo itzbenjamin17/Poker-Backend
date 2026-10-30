@@ -66,12 +66,12 @@ public class WebSocketExceptionHandler {
 
         if (destination != null && (destination.endsWith("/ready") || destination.endsWith("/unready"))) {
             RejectedAction readinessAction = destination.endsWith("/ready") ? RejectedAction.READY : RejectedAction.UNREADY;
-            gameStateService.sendActionError(gameId, playerName, "ACTION_REJECTED", readinessAction, technicalMessage(exception));
+            gameStateService.sendActionError(playerPrincipal, "ACTION_REJECTED", readinessAction, technicalMessage(exception));
             return;
         }
 
         if (destination == null || !destination.endsWith("/action")) {
-            gameStateService.sendPrivatePlayerNotification(gameId, playerName,
+            gameStateService.sendPrivatePlayerNotification(playerPrincipal,
                     technicalMessage(exception), ResponseMessage.PLAYER_NOTIFICATION);
             return;
         }
@@ -79,7 +79,7 @@ public class WebSocketExceptionHandler {
         PlayerAction action = rejectedAction(message);
         if (action == null) {
             logger.warn("Cannot publish ACTION_ERROR without a supported rejected action");
-            gameStateService.sendPrivatePlayerNotification(gameId, playerName,
+            gameStateService.sendPrivatePlayerNotification(playerPrincipal,
                     technicalMessage(exception), ResponseMessage.PLAYER_NOTIFICATION);
             return;
         }
@@ -123,7 +123,7 @@ public class WebSocketExceptionHandler {
                     : "Enter a valid action amount";
         }
 
-        gameStateService.sendActionError(gameId, playerName, code, action, displayMessage);
+        gameStateService.sendActionError(playerPrincipal, code, action, displayMessage);
     }
 
     private boolean isValidationOrConversionFailure(Throwable throwable) {

@@ -28,11 +28,36 @@ import static org.mockito.Mockito.verify;
 @Tag("unit")
 @DisplayName("WebSocket action errors")
 class WebSocketExceptionHandlerTest {
+    /** Delayed failures remain owned by their original membership across every feedback branch. */
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"action", "ready", "unready", "malformed", "other"})
+    void delayedRetiredFrameCannotNotifyReplacementMembership(String kind) {
+        var rooms = mock(RoomService.class);
+        var room = new com.pokergame.model.Room(gameId, "Room", "Host", 6, 5, 10, 100, null);
+        room.addPlayer(playerName);
+        PlayerPrincipal original = new PlayerPrincipal(playerName, gameId, room.getMembershipId(playerName));
+        room.removePlayer(playerName);
+        room.addPlayer(playerName);
+        PlayerPrincipal replacement = new PlayerPrincipal(playerName, gameId, room.getMembershipId(playerName));
+        org.mockito.Mockito.when(rooms.getRoom(gameId)).thenReturn(room);
+        var realHandler = new WebSocketExceptionHandler(new GameStateService(rooms, messagingTemplate));
+        String suffix = kind.equals("malformed") ? "action" : kind;
+        String payload = kind.equals("malformed") ? "{\"action\":\"INVALID\"}" : "{\"action\":\"CHECK\"}";
+        Message<String> frame = MessageBuilder.withPayload(payload)
+                .setHeader("simpDestination", "/app/" + gameId + "/" + suffix).build();
+        realHandler.handleMessageException(new RuntimeException("Delayed failure"), original, frame);
+        verify(messagingTemplate).convertAndSendToUser(org.mockito.ArgumentMatchers.eq(original.getName()),
+                org.mockito.ArgumentMatchers.eq("/queue/private"), org.mockito.ArgumentMatchers.any(Object.class));
+        org.mockito.Mockito.verify(messagingTemplate, org.mockito.Mockito.never()).convertAndSendToUser(
+                org.mockito.ArgumentMatchers.eq(replacement.getName()), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(Object.class));
+    }
+
     private SimpMessagingTemplate messagingTemplate;
     private WebSocketExceptionHandler handler;
     private final String gameId = "game-123";
     private final String playerName = "Player1";
-    private final PlayerPrincipal principal = new PlayerPrincipal(playerName, gameId);
+    private final PlayerPrincipal principal = new PlayerPrincipal(playerName, gameId, "original-membership");
 
     @BeforeEach
     void setUp() {
@@ -47,7 +72,7 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(
                 new UnauthorisedActionException("old detail", "NOT_YOUR_TURN", "Wait for your turn"),
                 principal, actionFrame(action));
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("NOT_YOUR_TURN", action, "Wait for your turn"));
     }
 
@@ -57,13 +82,13 @@ class WebSocketExceptionHandlerTest {
         String copy = "Min raise: 50; yours: 25";
         handler.handleMessageException(new BadRequestException("old detail", "MIN_RAISE", copy),
                 principal, actionFrame(PlayerAction.RAISE));
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("MIN_RAISE", PlayerAction.RAISE, copy));
 
         String longCopy = "A deliberately long rule description with relevant values 123456789 and 987654321 that exceeds eighty characters";
         handler.handleMessageException(new BadRequestException("old detail", "FUTURE_RULE", longCopy),
                 principal, actionFrame(PlayerAction.BET));
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("FUTURE_RULE", PlayerAction.BET, longCopy));
     }
 
@@ -73,7 +98,7 @@ class WebSocketExceptionHandlerTest {
         Message<String> frame = MessageBuilder.withPayload("{\"action\":\"PUSH\"}")
                 .setHeader("simpDestination", "/app/" + gameId + "/action").build();
         handler.handleMessageException(new RuntimeException("malformed"), principal, frame);
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "malformed", playerName, gameId));
     }
 
@@ -84,7 +109,7 @@ class WebSocketExceptionHandlerTest {
                 .setHeader("simpDestination", "/app/" + gameId + "/ready").build();
         handler.handleMessageException(new UnauthorisedActionException("Ready countdown is not active."),
                 principal, frame);
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("ACTION_REJECTED", RejectedAction.READY, "Ready countdown is not active."));
     }
 
@@ -114,7 +139,7 @@ class WebSocketExceptionHandlerTest {
                 new UnauthorisedActionException("old detail", "NOT_YOUR_TURN", "Wait for your turn"),
                 principal, spoofedFrame);
 
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("NOT_YOUR_TURN", PlayerAction.BET, "Wait for your turn"));
         verify(messagingTemplate, org.mockito.Mockito.never()).convertAndSendToUser(
                 org.mockito.ArgumentMatchers.contains("spoofed-game-999"),
@@ -134,7 +159,7 @@ class WebSocketExceptionHandlerTest {
 
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.BET));
 
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("NEGATIVE_AMOUNT", PlayerAction.BET, "Amount must be positive; yours: -10"));
     }
 
@@ -149,7 +174,7 @@ class WebSocketExceptionHandlerTest {
 
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.BET));
 
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("AMOUNT_REQUIRED", PlayerAction.BET, "Enter a positive amount"));
     }
 
@@ -164,7 +189,7 @@ class WebSocketExceptionHandlerTest {
 
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.CALL));
 
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("UNEXPECTED_AMOUNT", PlayerAction.CALL, "No amount needed; yours: 50"));
     }
 
@@ -179,7 +204,7 @@ class WebSocketExceptionHandlerTest {
 
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.CHECK));
 
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("GAME_NOT_FOUND", PlayerAction.CHECK, "Game unavailable"));
     }
 
@@ -203,7 +228,7 @@ class WebSocketExceptionHandlerTest {
 
         handler.handleMessageException(validationException, principal, frame);
 
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("INVALID_ACTION_FORMAT", PlayerAction.RAISE, "Amount cannot exceed 10,000,000"));
     }
 
@@ -219,7 +244,7 @@ class WebSocketExceptionHandlerTest {
 
         handler.handleMessageException(new RuntimeException("processing failed"), principal, frame);
 
-        verify(messagingTemplate).convertAndSendToUser(playerName + ":" + gameId, "/queue/private",
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("ACTION_REJECTED", PlayerAction.FOLD, "Action unavailable"));
     }
 }

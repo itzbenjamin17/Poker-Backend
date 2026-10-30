@@ -10,7 +10,8 @@ Texas Hold'em relies on imperfect information: each player's hole cards must rem
 
 1. **Public Projection**: `GameStateService.buildPublicGameState()` constructs `GameStateResponse` containing community cards, pot/side-pot totals, current turn, player chip stacks, and action histories. Non-hero hole cards are set to `null` unless the hand has reached a contested showdown. This payload is broadcast to `/game/{roomId}` and served via `GET /api/game/{roomId}/state`.
 2. **Private Projection**: `GameStateService.buildPrivatePlayerState()` extracts only the authenticated player's own seat ID and secret hole cards into `PrivatePlayerResponse`. This payload is delivered exclusively over Spring's user-destination queue (`/user/queue/private`) and served via `GET /api/game/{roomId}/private-state`.
-3. **Decoupled Delivery**: Real-time broadcasts defer until accepted durable mutations complete, ensuring neither channel receives speculative or uncommitted state.
+3. **Membership-Bound Routing**: Spring user identities include player, room, and `membershipId`. The publisher captures the active membership when the mutation is accepted. A socket retained after REST departure can remain subscribed to its old queue but cannot receive a replacement membership’s private projection. All sockets in the same current membership still receive private state. The client subscribes to the unchanged `/user/queue/private` destination.
+4. **Decoupled Delivery**: Real-time broadcasts defer until accepted durable mutations complete, ensuring neither channel receives speculative or uncommitted state.
 
 ## Consequences
 

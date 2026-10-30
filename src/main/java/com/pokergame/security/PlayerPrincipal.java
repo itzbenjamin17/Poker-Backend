@@ -51,12 +51,12 @@ public record PlayerPrincipal(String playerName, String roomId, String membershi
     }
 
     /**
-     * Returns the composite name used by Spring's user-destination routing.
+     * Returns the membership-bound name used by Spring's user-destination routing.
      *
-     * @return player and room identities separated by a colon
+     * @return player, room, and membership identities separated by colons
      */
     @Override
     public String getName() {
-        return playerName + ":" + roomId;
+        return playerName + ":" + roomId + ":" + membershipId;
     }
 }

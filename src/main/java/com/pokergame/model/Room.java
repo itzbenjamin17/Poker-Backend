@@ -39,9 +39,10 @@ public class Room {
     private final LinkedHashMap<String, LocalDateTime> playersWithJoinTime;
     /**
      * Session membership identities created per addPlayer and preserved across WAL snapshots.
-     * Guarded by this Room instance monitor.
+     * Writes remain guarded by this Room instance monitor. Atomic membership reads
+     * also support private projection while a caller already holds the Game monitor.
      */
-    private final Map<String, String> playerMembershipIds = new LinkedHashMap<>();
+    private final Map<String, String> playerMembershipIds = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Set<String> persistedMembershipPlayers = new java.util.HashSet<>();
     private static final PasswordEncoder DEFAULT_PASSWORD_ENCODER = new BCryptPasswordEncoder();
 
@@ -65,6 +66,12 @@ public class Room {
     private boolean isGameStarted;
     private volatile boolean isTerminal;
 
+    /**
+     * Recognizes an existing BCrypt hash so restored room credentials are not hashed again.
+     *
+     * @param value stored hash or legacy constructor password
+     * @return whether the value has a supported BCrypt version prefix
+     */
     private static boolean isBcryptHash(String value) {
         if (value == null) {
             return false;
@@ -626,8 +633,8 @@ public class Room {
      * @param playerName the name of the player
      * @return membership ID, or null if player is not in room
      */
-    public synchronized String getMembershipId(String playerName) {
-        return playerMembershipIds.get(playerName);
+    public String getMembershipId(String playerName) {
+        return playerName == null ? null : playerMembershipIds.get(playerName);
     }
 
     /**

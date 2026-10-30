@@ -24,6 +24,49 @@ import static org.mockito.Mockito.*;
 
 class WebSocketEventListenerTest {
     @Test
+    void reconnectAndRoomDestructionCompleteWithoutOppositeLockAcquisition() throws Exception {
+        RoomService rooms = mock(RoomService.class);
+        GameLifecycleService games = mock(GameLifecycleService.class);
+        var scheduler = mock(TaskScheduler.class);
+        var listener = new WebSocketEventListener(rooms, games, mock(RateLimitService.class), scheduler, 60_000);
+        PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
+        listener.registerSession(principal, "original-session");
+        var aspect = mock(com.pokergame.persistence.transaction.DurableMutationAspect.class);
+        var locks = new com.pokergame.util.KeyedLockRegistry<String>();
+        var waiting = new java.util.concurrent.CountDownLatch(1);
+        var cleanupOwnsRoom = new java.util.concurrent.CountDownLatch(1);
+        when(aspect.acquireRoomLock("room")).thenAnswer(invocation -> {
+            if (Thread.currentThread().getName().equals("reconnect-regression")) {
+                waiting.countDown();
+                assertTrue(cleanupOwnsRoom.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            }
+            return locks.acquire("room");
+        });
+        org.springframework.test.util.ReflectionTestUtils.setField(listener, "durableMutationAspect", aspect);
+        doAnswer(invocation -> {
+            // Models the room lease normally acquired by the durable service proxy.
+            try (var ignored = aspect.acquireRoomLock("room")) { return null; }
+        }).when(games).markPlayerReconnected("room", "Alice");
+        doAnswer(invocation -> { cleanupOwnsRoom.countDown(); return null; })
+                .when(games).cancelRuntimeTasks("room", false);
+        var reconnect = new java.util.concurrent.FutureTask<Void>(() -> {
+            listener.registerSession(principal, "replacement-session"); return null;
+        });
+        var reconnectThread = new Thread(reconnect, "reconnect-regression");
+        reconnectThread.setDaemon(true);
+        reconnectThread.start();
+        assertTrue(waiting.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        listener.publishRoomDestroyed("room");
+        var cleanup = new java.util.concurrent.FutureTask<Void>(() -> { listener.drainAll(); return null; });
+        var cleanupThread = new Thread(cleanup, "cleanup-regression");
+        cleanupThread.setDaemon(true);
+        cleanupThread.start();
+        cleanup.get(3, java.util.concurrent.TimeUnit.SECONDS);
+        reconnect.get(3, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals(0, listener.getActiveSessionLockCount());
+    }
+
+    @Test
     void connectReconcilesRecoveredDisconnectedPlayerEvenWithoutPendingRuntimeFuture() {
         RoomService roomService = mock(RoomService.class);
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);

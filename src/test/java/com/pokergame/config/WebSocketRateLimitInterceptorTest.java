@@ -46,11 +46,11 @@ class WebSocketRateLimitInterceptorTest {
         accessor.setUser(PRINCIPAL);
         Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
 
-        when(rateLimitService.tryConsumeWs(PRINCIPAL.getName())).thenReturn(true);
+        when(rateLimitService.tryConsumeWs(PRINCIPAL.playerName() + ":" + PRINCIPAL.roomId())).thenReturn(true);
 
         Message<?> result = interceptor.preSend(message, null);
 
-        verify(rateLimitService).tryConsumeWs(PRINCIPAL.getName());
+        verify(rateLimitService).tryConsumeWs(PRINCIPAL.playerName() + ":" + PRINCIPAL.roomId());
         assertThat(result).isSameAs(message);
     }
 
@@ -61,13 +61,13 @@ class WebSocketRateLimitInterceptorTest {
         accessor.setUser(PRINCIPAL);
         Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
 
-        when(rateLimitService.tryConsumeWs(PRINCIPAL.getName())).thenReturn(false);
+        when(rateLimitService.tryConsumeWs(PRINCIPAL.playerName() + ":" + PRINCIPAL.roomId())).thenReturn(false);
 
         assertThatThrownBy(() -> interceptor.preSend(message, null))
                 .isInstanceOf(MessageDeliveryException.class)
                 .hasMessageContaining("Message rate limit exceeded");
 
-        verify(rateLimitService).tryConsumeWs(PRINCIPAL.getName());
+        verify(rateLimitService).tryConsumeWs(PRINCIPAL.playerName() + ":" + PRINCIPAL.roomId());
     }
 
     @Test

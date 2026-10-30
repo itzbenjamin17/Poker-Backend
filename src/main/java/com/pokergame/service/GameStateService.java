@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import com.pokergame.model.HandSettlementResult;
+import com.pokergame.security.PlayerPrincipal;
 
 /**
  * Service class responsible for managing and broadcasting game state.
@@ -139,10 +140,8 @@ public class GameStateService {
 
         // Sending a personalised game state to each player using secure user destinations
         playerPrivateStates.forEach((playerName, privateState) -> {
-            // Principal name is playerName:roomId
-            String compositeName = playerName + ":" + gameId;
-            sendToUserAfterCommit(
-                    compositeName,
+            sendToPlayerAfterCommit(
+                    gameId, playerName,
                     "/queue/private",
                     privateState);
         });
@@ -406,13 +405,26 @@ public class GameStateService {
                 playerName,
                 gameId);
 
-        // Principal name is playerName:roomId
-        String compositeName = playerName + ":" + gameId;
-        
-        sendToUserAfterCommit(
-                compositeName,
+        sendToPlayerAfterCommit(
+                gameId, playerName,
                 "/queue/private",
                 notification);
+    }
+
+    /** Replies to the originating membership, even if that player name has since been reused. */
+    public void sendPrivatePlayerNotification(PlayerPrincipal origin, String message, ResponseMessage type) {
+        sendToPrincipalAfterCommit(origin, "/queue/private", new PlayerNotificationResponse(
+                type, message, origin.playerName(), origin.roomId()));
+    }
+
+    /** Replies to a failed gameplay frame using its originating membership identity. */
+    public void sendActionError(PlayerPrincipal origin, String code, PlayerAction action, String message) {
+        sendActionError(origin, code, RejectedAction.from(action), message);
+    }
+
+    /** Replies to failed gameplay or readiness frames without resolving a replacement membership. */
+    public void sendActionError(PlayerPrincipal origin, String code, RejectedAction action, String message) {
+        sendToPrincipalAfterCommit(origin, "/queue/private", new ActionErrorResponse(code, action, message));
     }
 
     /** Publishes a rejected action to its player's private WebSocket queue. */
@@ -420,8 +432,9 @@ public class GameStateService {
         sendActionError(gameId, playerName, code, RejectedAction.from(action), message);
     }
 
+    /** Publishes gameplay or readiness rejection to the current membership private queue. */
     public void sendActionError(String gameId, String playerName, String code, RejectedAction action, String message) {
-        sendToUserAfterCommit(playerName + ":" + gameId, "/queue/private",
+        sendToPlayerAfterCommit(gameId, playerName, "/queue/private",
                 new ActionErrorResponse(code, action, message));
     }
 
@@ -483,6 +496,7 @@ public class GameStateService {
                 winner.getChips(), isForfeit, message, finalState);
     }
 
+    /** Publishes the frozen terminal result after the accepted mutation completes. */
     public void sendGameEnd(GameEndResponse response) {
         if (response != null) sendAfterCommit("/game/" + response.gameId(), response);
     }
@@ -490,7 +504,7 @@ public class GameStateService {
     /**
      * Builds a revealed final-state projection for the game-end review screen. Unlike
      * the live-game projection, this reveals hole cards, hand ranks, and best hands
-     * for all non-folded, non-out players when {@code revealHoleCards} is true, and
+     * for all non-folded, non-out players, and
      * marks the winner explicitly.
      *
      * @param gameId          the unique identifier of the game
@@ -667,6 +681,7 @@ public class GameStateService {
 
     }
 
+    /** Returns the shared contested award when every winner received the same amount. */
     private Integer computeEqualWinnerAward(Set<String> winnerIds, Map<String, Integer> contestedAwards) {
         if (winnerIds == null || winnerIds.isEmpty()) {
             return null;
@@ -677,6 +692,7 @@ public class GameStateService {
         return awards.stream().distinct().count() == 1 ? awards.getFirst() : null;
     }
 
+    /** Maps a player and explicitly selected reveal/award metadata into the public projection. */
     private PublicPlayerState toPublicPlayerState(
             Player player,
             boolean isCurrentPlayer,
@@ -761,25 +777,39 @@ public class GameStateService {
     }
 
     /**
-     * Defers shared game-state visibility until recovery can reproduce the same
-     * snapshot after a crash.
+     * Releases shared state after the mutation is accepted and its save attempt
+     * finishes, including accepted gameplay that continues in memory after a save failure.
      *
      * @param destination shared STOMP destination
-     * @param payload     committed public payload
+     * @param payload     accepted public payload
      */
     private void sendAfterCommit(String destination, Object payload) {
         DurableTransactionContext.afterCommit(() -> messagingTemplate.convertAndSend(destination, payload));
     }
 
     /**
-     * Applies the same commit barrier to private player data so a player never sees
-     * hole cards or action results that exist only in memory.
+     * Captures the active membership before deferring delivery, so a queued message
+     * can never be redirected to a replacement player with the same display name.
+     * Delivery follows acceptance even when saving fails and gameplay continues in memory.
      *
-     * @param user        composite WebSocket principal name
+     * @param gameId room/game containing the current membership
+     * @param playerName player receiving this accepted private projection
      * @param destination private user destination
-     * @param payload     committed private payload
+     * @param payload accepted private payload
      */
-    private void sendToUserAfterCommit(String user, String destination, Object payload) {
+    private void sendToPlayerAfterCommit(String gameId, String playerName, String destination, Object payload) {
+        Room room = roomService.getRoom(gameId);
+        if (room == null) return;
+        // This atomic lookup must not acquire Room: some publishers hold Game.
+        String membershipId = room.getMembershipId(playerName);
+        if (membershipId == null || membershipId.isBlank()) return;
+        sendToPrincipalAfterCommit(new PlayerPrincipal(playerName, gameId, membershipId), destination, payload);
+    }
+
+    /** Captures a frame's original private destination without consulting mutable room membership. */
+    private void sendToPrincipalAfterCommit(PlayerPrincipal origin, String destination, Object payload) {
+        if (origin.membershipId() == null || origin.membershipId().isBlank()) return;
+        String user = origin.getName();
         DurableTransactionContext.afterCommit(
                 () -> messagingTemplate.convertAndSendToUser(user, destination, payload));
     }

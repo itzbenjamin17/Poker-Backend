@@ -113,7 +113,7 @@ class GameStateServiceTest {
 
         // Should send private messages to each player using convertAndSendToUser
         for (Player player : testGame.getPlayers()) {
-            String compositeName = player.getName() + ":" + GAME_ID;
+            String compositeName = player.getName() + ":" + GAME_ID + ":" + testRoom.getMembershipId(player.getName());
 
             verify(messagingTemplate).convertAndSendToUser(
                     eq(compositeName),
@@ -1446,7 +1446,7 @@ class GameStateServiceTest {
 
         ArgumentCaptor<PrivatePlayerState> captor = ArgumentCaptor.forClass(PrivatePlayerState.class);
         for (Player player : testGame.getPlayers()) {
-            String compositeName = player.getName() + ":" + GAME_ID;
+            String compositeName = player.getName() + ":" + GAME_ID + ":" + testRoom.getMembershipId(player.getName());
             verify(messagingTemplate).convertAndSendToUser(
                     eq(compositeName),
                     eq("/queue/private"),

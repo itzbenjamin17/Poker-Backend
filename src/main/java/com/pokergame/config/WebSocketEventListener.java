@@ -131,9 +131,10 @@ public class WebSocketEventListener {
         }
         String roomId = playerPrincipal.roomId();
         String playerName = playerPrincipal.playerName();
-        String compositeName = playerPrincipal.getName();
+        String compositeName = playerKey(playerPrincipal);
 
-        try (LockLease ignored = sessionLocks.acquire(compositeName)) {
+        try (LockLease roomLease = acquireRoomLease(roomId);
+                 LockLease ignored = sessionLocks.acquire(compositeName)) {
             if (playerPrincipal.membershipId() != null && !playerPrincipal.membershipId().isBlank()
                     && roomService != null) {
                 Room room = roomService.getRoom(roomId);
@@ -189,9 +190,10 @@ public class WebSocketEventListener {
             }
 
             final PlayerPrincipal playerPrincipal = recoveredPrincipal;
-            String compositeName = playerPrincipal.getName();
+            String compositeName = playerKey(playerPrincipal);
             
-            try (LockLease ignored = sessionLocks.acquire(compositeName)) {
+            try (LockLease roomLease = acquireRoomLease(roomId);
+                 LockLease ignored = sessionLocks.acquire(compositeName)) {
                 if (playerPrincipal.membershipId() != null && !playerPrincipal.membershipId().isBlank()
                         && roomService != null) {
                     Room currentRoom = roomService.getRoom(roomId);
@@ -269,11 +271,12 @@ public class WebSocketEventListener {
      * @param principal The PlayerPrincipal of the disconnected user.
      */
     private void cleanupDisconnectedUser(PlayerPrincipal principal, PendingDisconnect expected) {
-        String compositeName = principal.getName();
+        String compositeName = playerKey(principal);
         String playerName = principal.playerName();
         String roomId = principal.roomId();
         
-        try (LockLease ignored = sessionLocks.acquire(compositeName)) {
+        try (LockLease roomLease = acquireRoomLease(roomId);
+                 LockLease ignored = sessionLocks.acquire(compositeName)) {
             if (pendingDisconnects.get(compositeName) != expected || expected.isCancelled()) return;
 
             if (hasActiveSession(compositeName)) {
@@ -332,9 +335,10 @@ public class WebSocketEventListener {
      */
     public void registerInitialConnection(String roomId, String playerName, String membershipId, long deadlineEpochMs) {
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
-        String compositeName = principal.getName();
+        String compositeName = playerKey(principal);
         MdcUtils.runWithMdc(roomId, playerName, () -> {
-            try (LockLease ignored = sessionLocks.acquire(compositeName)) {
+            try (LockLease roomLease = acquireRoomLease(roomId);
+                 LockLease ignored = sessionLocks.acquire(compositeName)) {
                 Room room = roomService.getRoom(roomId);
                 if (room == null) {
                     return;
@@ -378,11 +382,12 @@ public class WebSocketEventListener {
 
     public void scheduleRecoveredDisconnect(String roomId, String playerName, long deadlineEpochMs) {
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
-        String compositeName = principal.getName();
+        String compositeName = playerKey(principal);
         long delay = Math.max(0, deadlineEpochMs - System.currentTimeMillis());
         logger.info("Scheduling recovered disconnect for player {} in room {} with delayMs={}", playerName, roomId, delay);
         MdcUtils.runWithMdc(roomId, playerName, () -> {
-            try (LockLease ignored = sessionLocks.acquire(compositeName)) {
+            try (LockLease roomLease = acquireRoomLease(roomId);
+                 LockLease ignored = sessionLocks.acquire(compositeName)) {
                 PendingDisconnect existing = pendingDisconnects.remove(compositeName);
                 if (existing != null) existing.cancel();
                 Room restoredRoom = roomService.getRoom(roomId);
@@ -456,11 +461,18 @@ public class WebSocketEventListener {
      * @param sessionId The session ID of the user.
      */
     private void registerActiveSession(PlayerPrincipal principal, String sessionId) {
-        String compositeName = principal.getName();
+        String compositeName = playerKey(principal);
         // Get the set of active sessions for the user or create a new one if it
         // doesn't exist
         Set<String> sessions = activeSessionsByUser.computeIfAbsent(compositeName, k -> ConcurrentHashMap.newKeySet());
-        // Add the new session ID to the user's set of sessions
+        // A delayed retirement intent must not let sockets from an older membership
+        // keep the replacement connected after its own last socket closes.
+        sessions.removeIf(existingSession -> {
+            PlayerPrincipal existing = sessionToPrincipal.get(existingSession);
+            boolean obsolete = existing == null || !Objects.equals(existing.membershipId(), principal.membershipId());
+            if (obsolete && existing != null) sessionToPrincipal.remove(existingSession, existing);
+            return obsolete;
+        });
         sessions.add(sessionId);
 
         // Map the session ID back to the principal for recovery on disconnect
@@ -477,7 +489,7 @@ public class WebSocketEventListener {
         if (principal == null || sessionId == null) { return false; }
         PlayerPrincipal registeredPrincipal = sessionToPrincipal.get(sessionId);
         if (registeredPrincipal == null || !principal.equals(registeredPrincipal)) { return false; }
-        String compositeName = principal.getName();
+        String compositeName = playerKey(principal);
         Set<String> sessions = activeSessionsByUser.get(compositeName);
         boolean removed = sessions != null && sessions.remove(sessionId);
         if (removed) { sessionToPrincipal.remove(sessionId); }
@@ -537,12 +549,36 @@ public class WebSocketEventListener {
         }
     }
 
+    /**
+     * Acquires the outer durable room lease before any player lease or aggregate monitor.
+     * This ordering also applies to reconnects, grace callbacks, and cleanup intents.
+     *
+     * @param roomId room whose session state is changing
+     * @return room lease, or a no-op lease when persistence is disabled
+     */
+    private LockLease acquireRoomLease(String roomId) {
+        return durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(roomId) : LockLease.none();
+    }
+
+    /**
+     * Returns the room/player key used only for runtime connection tracking.
+     * Spring private routing uses the separate membership-bound principal name.
+     *
+     * @param principal player being tracked
+     * @return stable room/player connection key
+     */
+    private static String playerKey(PlayerPrincipal principal) {
+        return principal.playerName() + ":" + principal.roomId();
+    }
+
+    /** Queues cleanup scoped to the retired membership, preserving any replacement. */
     public void publishMembershipRetired(String roomId, String playerName, String membershipId) {
         if (roomId == null || playerName == null) return;
         drainQueue.add(new MembershipRetiredIntent(roomId, playerName, membershipId));
         triggerDrain();
     }
 
+    /** Queues removal of all transient sessions and deadlines for a destroyed room. */
     public void publishRoomDestroyed(String roomId) {
         if (roomId == null) return;
         drainQueue.add(new RoomDestroyedIntent(roomId));
@@ -558,6 +594,7 @@ public class WebSocketEventListener {
         }
     }
 
+    /** Drains queued cleanup intents, waiting up to five seconds for another drain worker. */
     public void drainAll() {
         long start = System.currentTimeMillis();
         while ((!drainQueue.isEmpty() || isDraining.get()) && (System.currentTimeMillis() - start < 5000)) {
@@ -600,11 +637,11 @@ public class WebSocketEventListener {
         }
     }
 
+    /** Retires matching membership state under room lease, player lease, then Room/Game monitors. */
     private void processMembershipRetired(String roomId, String playerName, String membershipId) {
         String compositeName = playerName + ":" + roomId;
-        try (LockLease playerLease = sessionLocks.acquire(compositeName)) {
-            LockLease roomLease = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(roomId) : LockLease.none();
-            try (roomLease) {
+        try (LockLease roomLease = acquireRoomLease(roomId)) {
+            try (LockLease playerLease = sessionLocks.acquire(compositeName)) {
                 Room room = roomService.getRoom(roomId);
                 if (room != null) {
                     synchronized (room) {
@@ -637,6 +674,7 @@ public class WebSocketEventListener {
         }
     }
 
+    /** Removes transient room state under the same room-before-player lease order as reconnects. */
     private void processRoomDestroyed(String roomId) {
         LockLease roomLease = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(roomId) : LockLease.none();
         try (roomLease) {

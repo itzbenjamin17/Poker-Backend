@@ -51,16 +51,16 @@ class LifecycleRegistrationCleanupTest {
         roomService.joinRoom(roomId, new JoinRoomRequest("Cleanup Room 1", guest, null));
 
         // 2. Connect WebSocket sessions
-        PlayerPrincipal hostPrincipal = new PlayerPrincipal(host, roomId);
-        PlayerPrincipal guestPrincipal = new PlayerPrincipal(guest, roomId);
+        PlayerPrincipal hostPrincipal = new PlayerPrincipal(host, roomId, roomService.getRoom(roomId).getMembershipId(host));
+        PlayerPrincipal guestPrincipal = new PlayerPrincipal(guest, roomId, roomService.getRoom(roomId).getMembershipId(guest));
         webSocketEventListener.registerSession(hostPrincipal, "session-host-1");
         webSocketEventListener.registerSession(guestPrincipal, "session-guest-1");
 
         // Consume some WS rate limits
-        rateLimitService.tryConsumeWs(hostPrincipal.getName());
-        rateLimitService.tryConsumeWs(guestPrincipal.getName());
-        assertThat(rateLimitService.hasWsBucket(hostPrincipal.getName())).isTrue();
-        assertThat(rateLimitService.hasWsBucket(guestPrincipal.getName())).isTrue();
+        rateLimitService.tryConsumeWs(hostPrincipal.playerName() + ":" + hostPrincipal.roomId());
+        rateLimitService.tryConsumeWs(guestPrincipal.playerName() + ":" + guestPrincipal.roomId());
+        assertThat(rateLimitService.hasWsBucket(hostPrincipal.playerName() + ":" + hostPrincipal.roomId())).isTrue();
+        assertThat(rateLimitService.hasWsBucket(guestPrincipal.playerName() + ":" + guestPrincipal.roomId())).isTrue();
 
         // 3. Start game
         gameLifecycleService.createGameFromRoom(roomId);
@@ -72,18 +72,18 @@ class LifecycleRegistrationCleanupTest {
         webSocketEventListener.drainAll();
 
         // Guest WS bucket and sessions should be retired
-        assertThat(rateLimitService.hasWsBucket(guestPrincipal.getName())).isFalse();
-        assertThat(webSocketEventListener.getActiveSessionCount(guestPrincipal.getName())).isEqualTo(0);
-        assertThat(webSocketEventListener.hasPendingDisconnect(guestPrincipal.getName())).isFalse();
+        assertThat(rateLimitService.hasWsBucket(guestPrincipal.playerName() + ":" + guestPrincipal.roomId())).isFalse();
+        assertThat(webSocketEventListener.getActiveSessionCount(guestPrincipal.playerName() + ":" + guestPrincipal.roomId())).isEqualTo(0);
+        assertThat(webSocketEventListener.hasPendingDisconnect(guestPrincipal.playerName() + ":" + guestPrincipal.roomId())).isFalse();
 
         // 5. Host leaves during retained review: terminal cleanup task is preserved
         gameLifecycleService.departParticipants(roomId, List.of(host));
         webSocketEventListener.drainAll();
 
         // Host membership is retired from WebSocket registrations
-        assertThat(webSocketEventListener.getActiveSessionCount(hostPrincipal.getName())).isEqualTo(0);
-        assertThat(webSocketEventListener.hasPendingDisconnect(hostPrincipal.getName())).isFalse();
-        assertThat(rateLimitService.hasWsBucket(hostPrincipal.getName())).isFalse();
+        assertThat(webSocketEventListener.getActiveSessionCount(hostPrincipal.playerName() + ":" + hostPrincipal.roomId())).isEqualTo(0);
+        assertThat(webSocketEventListener.hasPendingDisconnect(hostPrincipal.playerName() + ":" + hostPrincipal.roomId())).isFalse();
+        assertThat(rateLimitService.hasWsBucket(hostPrincipal.playerName() + ":" + hostPrincipal.roomId())).isFalse();
         assertThat(webSocketEventListener.getActiveSessionLockCount()).isEqualTo(0);
         assertThat(webSocketEventListener.getPendingDisconnectCount()).isEqualTo(0);
         assertThat(webSocketEventListener.getSessionToPrincipalCount()).isEqualTo(0);
@@ -114,10 +114,10 @@ class LifecycleRegistrationCleanupTest {
         String roomId = roomService.createRoom(new CreateRoomRequest("Cleanup Room 2", player, 6, 10, 20, 1000, null));
         Room room = roomService.getRoom(roomId);
         String memId1 = room.getMembershipId(player);
-        PlayerPrincipal principal = new PlayerPrincipal(player, roomId);
+        PlayerPrincipal principal = new PlayerPrincipal(player, roomId, memId1);
 
         webSocketEventListener.registerSession(principal, "bob-session-1");
-        assertThat(webSocketEventListener.getActiveSessionCount(principal.getName())).isEqualTo(1);
+        assertThat(webSocketEventListener.getActiveSessionCount(principal.playerName() + ":" + principal.roomId())).isEqualTo(1);
 
         // Queue retirement for memId1 directly to the drain (simulating delayed drain processing)
         webSocketEventListener.publishMembershipRetired(roomId, player, memId1);
@@ -129,13 +129,13 @@ class LifecycleRegistrationCleanupTest {
         assertThat(memId2).isNotEqualTo(memId1);
 
         // Register session for membership 2
-        webSocketEventListener.registerSession(principal, "bob-session-2");
+        webSocketEventListener.registerSession(new PlayerPrincipal(player, roomId, memId2), "bob-session-2");
 
         // Now drain runs the queued intent for membership 1
         webSocketEventListener.drainAll();
 
         // Bob's membership 2 session MUST NOT have been evicted!
-        assertThat(webSocketEventListener.getActiveSessionCount(principal.getName())).isGreaterThan(0);
+        assertThat(webSocketEventListener.getActiveSessionCount(principal.playerName() + ":" + principal.roomId())).isGreaterThan(0);
         assertThat(room.hasPlayer(player)).isTrue();
         assertThat(room.getMembershipId(player)).isEqualTo(memId2);
 
