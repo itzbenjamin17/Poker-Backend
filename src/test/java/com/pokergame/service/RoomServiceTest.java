@@ -12,7 +12,6 @@ import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
-import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Room;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -356,12 +355,96 @@ class RoomServiceTest {
                     .hasMessage("Room not found");
 
             assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest("Small Room", "Player3", null)))
-                    .isInstanceOf(UnauthorisedActionException.class)
+                    .isInstanceOf(BadRequestException.class)
                     .hasMessage("Room is full");
 
             assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest("Test Room", "HostPlayer", null)))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessage("Player name already taken");
+        }
+
+        /**
+         * Protects the contract that joining a full room via joinRoom results in BadRequestException ("Room is full").
+         */
+        @Test
+        @DisplayName("should reject join with BadRequestException when room is full")
+        void joinRoom_WhenRoomFull_ThrowsBadRequestException() {
+            String roomId = roomService.createRoom(new CreateRoomRequest("Full Capacity Room", "Host", 2, 5, 10, 100, null));
+            roomService.joinRoom(new JoinRoomRequest("Full Capacity Room", "Player2", null));
+
+            // Test join by request
+            assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest("Full Capacity Room", "Player3", null)))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Room is full");
+
+            // Test join by roomId overload
+            assertThatThrownBy(() -> roomService.joinRoom(roomId, "Player3", null))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Room is full");
+
+            Room room = roomService.getRoom(roomId);
+            assertThat(room.getPlayers()).containsExactly("Host", "Player2");
+        }
+
+        /**
+         * Protects the contract that multi-threaded concurrent joins to joinRoom strictly admit exactly maxPlayers
+         * and reject the rest with BadRequestException.
+         */
+        @Test
+        @DisplayName("concurrent joins strictly admit exactly maxPlayers and reject excess with BadRequestException")
+        void joinRoom_ConcurrentJoins_StrictlyEnforcesMaxPlayersCapacity() throws Exception {
+            int capacity = 4;
+            String roomId = roomService.createRoom(new CreateRoomRequest(
+                    "Concurrent Join Room", "Host", capacity, 5, 10, 100, null));
+
+            int totalJoiningThreads = 12;
+            ExecutorService executor = Executors.newFixedThreadPool(totalJoiningThreads);
+            CountDownLatch readyLatch = new CountDownLatch(totalJoiningThreads);
+            CountDownLatch startLatch = new CountDownLatch(1);
+            CountDownLatch doneLatch = new CountDownLatch(totalJoiningThreads);
+
+            AtomicInteger successCount = new AtomicInteger(0);
+            AtomicInteger fullExceptionCount = new AtomicInteger(0);
+            Queue<Throwable> unexpectedErrors = new ConcurrentLinkedQueue<>();
+
+            for (int i = 1; i <= totalJoiningThreads; i++) {
+                final String playerName = "JoiningPlayer" + i;
+                executor.submit(() -> {
+                    readyLatch.countDown();
+                    try {
+                        startLatch.await();
+                        if (playerName.hashCode() % 2 == 0) {
+                            roomService.joinRoom(new JoinRoomRequest("Concurrent Join Room", playerName, null));
+                        } else {
+                            roomService.joinRoom(roomId, playerName, null);
+                        }
+                        successCount.incrementAndGet();
+                    } catch (BadRequestException e) {
+                        if ("Room is full".equals(e.getMessage())) {
+                            fullExceptionCount.incrementAndGet();
+                        } else {
+                            unexpectedErrors.add(e);
+                        }
+                    } catch (Throwable t) {
+                        unexpectedErrors.add(t);
+                    } finally {
+                        doneLatch.countDown();
+                    }
+                });
+            }
+
+            assertThat(readyLatch.await(5, TimeUnit.SECONDS)).isTrue();
+            startLatch.countDown();
+            assertThat(doneLatch.await(5, TimeUnit.SECONDS)).isTrue();
+            executor.shutdown();
+
+            assertThat(unexpectedErrors).isEmpty();
+            assertThat(successCount.get()).isEqualTo(capacity - 1);
+            assertThat(fullExceptionCount.get()).isEqualTo(totalJoiningThreads - (capacity - 1));
+
+            Room room = roomService.getRoom(roomId);
+            assertThat(room.getPlayers().size()).isEqualTo(capacity);
+            assertThat(room.isFull()).isTrue();
         }
     }
 

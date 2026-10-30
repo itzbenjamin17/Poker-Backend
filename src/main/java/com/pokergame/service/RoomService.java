@@ -10,7 +10,6 @@ import com.pokergame.config.WebSocketEventListener;
 import org.springframework.beans.factory.annotation.Value;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
-import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.util.InputSanitizer;
@@ -164,9 +163,8 @@ public class RoomService {
      *                    password
      * @return the room ID of the joined room
      * @throws ResourceNotFoundException   if the room isn't found
-     * @throws BadRequestException         if the password is invalid or the player
-     *                                     name is taken
-     * @throws UnauthorisedActionException if the room is full
+     * @throws BadRequestException         if the password is invalid, the player
+     *                                     name is taken, or the room is full
      */
     public String joinRoom(JoinRoomRequest joinRequest) {
         String sanitizedRoomName = InputSanitizer.sanitize(joinRequest.roomName());
@@ -179,6 +177,24 @@ public class RoomService {
         }
 
         return (self == null ? this : self).joinRoom(room.getRoomId(), joinRequest);
+    }
+
+    /**
+     * Convenience method for joining a room by ID with player name and optional password.
+     *
+     * @param roomId     stable target room identity
+     * @param playerName player name joining the room
+     * @param password   optional room password
+     * @return joined room identity
+     * @throws ResourceNotFoundException if the room disappeared after name resolution
+     * @throws BadRequestException       if capacity, password, or name rules reject the join
+     */
+    public String joinRoom(String roomId, String playerName, String password) {
+        Room room = rooms.get(roomId);
+        if (room == null) {
+            throw new ResourceNotFoundException("Room not found");
+        }
+        return (self == null ? this : self).joinRoom(roomId, new JoinRoomRequest(room.getRoomName(), playerName, password));
     }
 
     /**
@@ -201,6 +217,11 @@ public class RoomService {
         }
 
         synchronized (room) {
+            if (rooms.get(roomId) != room) {
+                logger.warn("Join attempt failed: room not found for id {} (player: {})", roomId, sanitizedPlayerName);
+                throw new ResourceNotFoundException("Room not found");
+            }
+
             if (room.isGameStarted()) {
                 logger.warn("Attempted to join room {} after game started", room.getRoomName());
                 throw new BadRequestException("Cannot join room. The game has already started.");
@@ -214,10 +235,10 @@ public class RoomService {
             }
 
             // Check if the room is full
-            if (room.getPlayers().size() >= room.getMaxPlayers()) {
+            if (room.isFull() || room.getPlayers().size() >= room.getMaxPlayers()) {
                 logger.warn("Join attempt failed: room {} is full (player: {})", room.getRoomName(),
                         sanitizedPlayerName);
-                throw new com.pokergame.exception.UnauthorisedActionException("Room is full");
+                throw new BadRequestException("Room is full");
             }
 
             // Check if the player name already exists
@@ -227,7 +248,15 @@ public class RoomService {
                 throw new BadRequestException("Player name already taken");
             }
 
-            room.addPlayer(sanitizedPlayerName);
+            try {
+                room.addPlayer(sanitizedPlayerName);
+            } catch (IllegalStateException e) {
+                if ("Room is full".equals(e.getMessage()) || (e.getMessage() != null && e.getMessage().contains("full"))) {
+                    logger.warn("Join attempt failed: room {} capacity exceeded: {}", room.getRoomName(), e.getMessage());
+                    throw new BadRequestException("Room is full");
+                }
+                throw e;
+            }
             long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
             room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
             String membershipId = room.getMembershipId(sanitizedPlayerName);
