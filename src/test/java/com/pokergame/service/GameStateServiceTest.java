@@ -1544,4 +1544,24 @@ class GameStateServiceTest {
 
         assertFalse(gameStateService.hasRetainedSettlement(GAME_ID));
     }
+
+    @Test
+    @DisplayName("projectGameEnd does not increment stateRevision while captureGameEnd increments and clears retainedSettlements")
+    void projectGameEnd_DoesNotIncrementStateRevision_AndCaptureClearsRetainedSettlements() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player winner = testPlayers.getFirst();
+        gameStateService.broadcastShowdownResults(GAME_ID, testGame, List.of(winner), 100);
+        assertTrue(gameStateService.hasRetainedSettlement(GAME_ID));
+
+        long revisionBefore = testGame.getStateRevision();
+        GameEndResponse projected = gameStateService.projectGameEnd(GAME_ID, testGame, winner, false, 6);
+        assertNotNull(projected);
+        assertEquals(revisionBefore, testGame.getStateRevision(), "projectGameEnd must not increment stateRevision");
+        assertEquals(revisionBefore, projected.finalState().stateRevision());
+
+        GameEndResponse captured = gameStateService.captureGameEnd(GAME_ID, testGame, winner, false, 6);
+        assertNotNull(captured);
+        assertEquals(revisionBefore + 1, testGame.getStateRevision(), "captureGameEnd must increment stateRevision");
+        assertFalse(gameStateService.hasRetainedSettlement(GAME_ID), "captureGameEnd must clear retainedSettlements");
+    }
 }

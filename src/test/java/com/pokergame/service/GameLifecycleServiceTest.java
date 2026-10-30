@@ -102,23 +102,27 @@ class GameLifecycleServiceTest {
     }
 
     private void stubGameEndCapture() {
+        org.mockito.stubbing.Answer<GameEndResponse> buildResponse = invocation -> {
+            String id = invocation.getArgument(0);
+            Game game = invocation.getArgument(1);
+            Player winner = invocation.getArgument(2);
+            boolean forfeit = invocation.getArgument(3);
+            int maxPlayers = invocation.getArgument(4);
+            PublicGameStateResponse finalState = new PublicGameStateResponse(
+                    maxPlayers, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(),
+                    game != null && game.getPlayers() != null ? game.getPlayers().stream().map(p -> new PublicPlayerState(
+                            p.getPlayerId(), p.getName(), p.getChips(), 0, "status", false, false, false,
+                            false, false, null, List.of(), p.equals(winner), null, null, null, false)).toList() : List.of(),
+                    null, null, List.of(winner.getName()), null, false, null, false, null, false, null,
+                    true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, System.currentTimeMillis(),
+                    game != null ? game.getStateRevision() : 1);
+            return new GameEndResponse("GAME_END", id, winner.getName(), winner.getChips(), forfeit,
+                    winner.getName() + " wins", finalState);
+        };
         lenient().when(gameStateService.captureGameEnd(anyString(), any(Game.class), any(Player.class), anyBoolean(), anyInt()))
-                .thenAnswer(invocation -> {
-                    String id = invocation.getArgument(0);
-                    Game game = invocation.getArgument(1);
-                    Player winner = invocation.getArgument(2);
-                    boolean forfeit = invocation.getArgument(3);
-                    int maxPlayers = invocation.getArgument(4);
-                    PublicGameStateResponse finalState = new PublicGameStateResponse(
-                            maxPlayers, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(),
-                            game != null && game.getPlayers() != null ? game.getPlayers().stream().map(p -> new PublicPlayerState(
-                                    p.getPlayerId(), p.getName(), p.getChips(), 0, "status", false, false, false,
-                                    false, false, null, List.of(), p.equals(winner), null, null, null, false)).toList() : List.of(),
-                            null, null, List.of(winner.getName()), null, false, null, false, null, false, null,
-                            true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, System.currentTimeMillis(), 1);
-                    return new GameEndResponse("GAME_END", id, winner.getName(), winner.getChips(), forfeit,
-                            winner.getName() + " wins", finalState);
-                });
+                .thenAnswer(buildResponse);
+        lenient().when(gameStateService.projectGameEnd(anyString(), any(Game.class), any(Player.class), anyBoolean(), anyInt()))
+                .thenAnswer(buildResponse);
     }
 
     // ==================== createGameFromRoom Tests ====================
@@ -1970,27 +1974,42 @@ class GameLifecycleServiceTest {
     }
 
     @Test
-    @DisplayName("getGameReview recovers terminal GameEndResponse after game is over without 404")
+    @DisplayName("getGameReview recovers terminal GameEndResponse after game is over without 404 or mutating stateRevision")
     void getGameReview_WhenGameOverAndRetainedResultNull_RecoversWithout404() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
         Game game = gameLifecycleService.getGame(ROOM_ID);
         assertNotNull(game);
 
-        // Mark game over with null retainedTerminalResult
+        // Mark game over with null retainedTerminalResult (during PRE_FLOP -> forfeit)
         game.markGameOver();
         game.setRetainedTerminalResult(null);
+        long revisionBefore = game.getStateRevision();
 
         reset(gameStateService);
         stubGameEndCapture();
 
-        // getGameReview should synthesize the retained terminal result instead of throwing 404 ResourceNotFoundException
+        // getGameReview should project the terminal result without mutating durable state or incrementing stateRevision
         GameEndResponse review = gameLifecycleService.getGameReview(ROOM_ID, "Host");
         assertNotNull(review, "getGameReview must return non-null GameEndResponse");
         assertEquals("GAME_END", review.type());
         assertNotNull(review.winner(), "Winner must be resolved");
+        assertTrue(review.isForfeit(), "Pre-showdown game over must synthesize isForfeit = true");
         assertNotNull(review.finalState(), "finalState must be synthesized");
-        assertSame(review, game.getRetainedTerminalResult(), "Synthesized result must be retained on the game");
+        assertEquals(revisionBefore, game.getStateRevision(), "Read-only getGameReview must not increment stateRevision");
+        assertNull(game.getRetainedTerminalResult(), "Read-only getGameReview must not mutate retainedTerminalResult");
+        verify(gameStateService, never()).captureGameEnd(anyString(), any(), any(), anyBoolean(), anyInt());
+        verify(gameStateService).projectGameEnd(eq(ROOM_ID), eq(game), any(Player.class), eq(true), eq(testRoom.getMaxPlayers()));
+
+        // When game ended via settled SHOWDOWN, both getGameReview and claimWin derive isForfeit = false
+        game.conductShowdown();
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+        GameEndResponse showdownReview = gameLifecycleService.getGameReview(ROOM_ID, "Host");
+        assertFalse(showdownReview.isForfeit(), "Settled SHOWDOWN game over must synthesize isForfeit = false in getGameReview");
+
+        GameEndResponse showdownClaim = gameLifecycleService.claimWin(ROOM_ID, "Host");
+        assertFalse(showdownClaim.isForfeit(), "Settled SHOWDOWN game over must synthesize isForfeit = false in claimWin");
+        assertSame(showdownClaim, game.getRetainedTerminalResult(), "Durable claimWin retains synthesized terminal result");
     }
 
     @Test

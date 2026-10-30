@@ -191,7 +191,11 @@ public class GameStateService {
             HandSettlementResult effectiveSettlement = retainedSettlement
                     ? settlement
                     : new HandSettlementResult(contestedAwards, Map.of(), winnerIds, 0, true);
-            retainedSettlements.put(gameId, effectiveSettlement);
+            if (!game.isGameOver()) {
+                retainedSettlements.put(gameId, effectiveSettlement);
+            } else {
+                retainedSettlements.remove(gameId);
+            }
             List<Player> projectedWinners = game.getPlayers().stream()
                     .filter(player -> winnerIds.contains(player.getPlayerId())).toList();
             winnerNames = projectedWinners.stream().map(Player::getName).toList();
@@ -442,6 +446,7 @@ public class GameStateService {
         int maxPlayers = room == null ? 0 : room.getMaxPlayers();
         GameEndResponse event;
         synchronized (game) {
+            clearRetainedSettlement(gameId);
             if (game.getRetainedTerminalResult() != null) {
                 event = game.getRetainedTerminalResult();
             } else {
@@ -458,9 +463,19 @@ public class GameStateService {
     /** Captures the immutable terminal event while the caller holds the game lock. */
     public GameEndResponse captureGameEnd(String gameId, Game game, Player winner, boolean isForfeit, int maxPlayers) {
         if (winner == null) return null;
+        clearRetainedSettlement(gameId);
         if (game != null) {
             game.incrementStateRevision();
         }
+        return projectGameEnd(gameId, game, winner, isForfeit, maxPlayers);
+    }
+
+    /**
+     * Projects a terminal event snapshot without mutating the game's stateRevision
+     * or process-local state, suitable for read-only review queries.
+     */
+    public GameEndResponse projectGameEnd(String gameId, Game game, Player winner, boolean isForfeit, int maxPlayers) {
+        if (winner == null) return null;
         String message = "🏆 " + winner.getName() + " wins the game with " + winner.getChips() + " chips!";
         PublicGameStateResponse finalState = game == null ? null
                 : buildFinalStateResponse(gameId, game, winner, isForfeit, maxPlayers);
@@ -576,14 +591,12 @@ public class GameStateService {
         boolean autoAdvancing = game.getScheduledTaskDeadline(com.pokergame.enums.ScheduledGameTask.AUTO_ADVANCE) != null;
         HandSettlementResult rawSettlement = game.getLastSettlementResult();
         boolean isShowdown = game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive();
-        if (rawSettlement != null && rawSettlement.settled()) {
-            retainedSettlements.put(gameId, rawSettlement);
-        } else if (!isShowdown && !game.isGameOver()) {
+        if (!isShowdown || game.isGameOver()) {
             retainedSettlements.remove(gameId);
         }
         final HandSettlementResult settlement = (rawSettlement != null && rawSettlement.settled())
                 ? rawSettlement
-                : (isShowdown ? retainedSettlements.get(gameId) : null);
+                : (!game.isGameOver() && isShowdown ? retainedSettlements.get(gameId) : null);
         boolean handSettled = settlement != null && settlement.settled();
         boolean revealSettledHands = handSettled && game.getPlayers().stream()
                 .filter(player -> settlement.winnerIds().contains(player.getPlayerId()))
