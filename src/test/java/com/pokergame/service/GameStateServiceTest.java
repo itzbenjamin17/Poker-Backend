@@ -1532,4 +1532,16 @@ class GameStateServiceTest {
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         assertEquals(maxPlayers, captor.getValue().finalState().maxPlayers());
     }
+
+    @Test
+    @DisplayName("clearRetainedSettlement evicts cached settlement entry for gameId")
+    void clearRetainedSettlement_EvictsCachedSettlementEntry() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        gameStateService.broadcastShowdownResults(GAME_ID, testGame, List.of(testPlayers.getFirst()), 100);
+        assertTrue(gameStateService.hasRetainedSettlement(GAME_ID));
+
+        gameStateService.clearRetainedSettlement(GAME_ID);
+
+        assertFalse(gameStateService.hasRetainedSettlement(GAME_ID));
+    }
 }

@@ -2639,4 +2639,30 @@ class GameLifecycleServiceTest {
 
         verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host", "Player2"), null);
     }
+
+    @Test
+    @DisplayName("performGameCleanup and evictGame clear retained settlement in GameStateService")
+    void performGameCleanupAndEvictGame_ClearRetainedSettlementInGameStateService() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        GameStateService realStateService = new GameStateService(roomService, messagingTemplate);
+        GameLifecycleService lifecycle = new GameLifecycleService(roomService, handEvaluator, realStateService,
+                messagingTemplate, taskScheduler);
+
+        lifecycle.createGameFromRoom(ROOM_ID);
+        Game game = lifecycle.getGame(ROOM_ID);
+        realStateService.broadcastShowdownResults(ROOM_ID, game, List.of(game.getPlayers().getFirst()), 50);
+        assertTrue(realStateService.hasRetainedSettlement(ROOM_ID));
+
+        lifecycle.performGameCleanup(ROOM_ID);
+        assertFalse(realStateService.hasRetainedSettlement(ROOM_ID),
+                "performGameCleanup must evict retained settlement for cleaned-up game");
+
+        lifecycle.restoreGame(game);
+        realStateService.broadcastShowdownResults(ROOM_ID, game, List.of(game.getPlayers().getFirst()), 50);
+        assertTrue(realStateService.hasRetainedSettlement(ROOM_ID));
+
+        lifecycle.evictGame(ROOM_ID);
+        assertFalse(realStateService.hasRetainedSettlement(ROOM_ID),
+                "evictGame must evict retained settlement for evicted game");
+    }
 }

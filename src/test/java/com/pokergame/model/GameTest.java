@@ -2415,6 +2415,22 @@ class GameTest {
                 assertEquals(20, restored.getBigBlind());
         }
 
+        @Test
+        @DisplayName("resetForNewHand clears actedPlayersInRound")
+        void resetForNewHand_ClearsActedPlayersInRound() {
+                game.postBlinds();
+                Player actor = game.getCurrentPlayer();
+                game.processPlayerDecision(actor, new PlayerDecision(PlayerAction.CALL, 0, actor.getPlayerId()));
+                assertFalse(game.getActedPlayerIdsSnapshot().isEmpty(),
+                                "actedPlayersInRound should contain the player who acted before reset");
+
+                boolean gameEnded = game.resetForNewHand();
+
+                assertFalse(gameEnded);
+                assertTrue(game.getActedPlayerIdsSnapshot().isEmpty(),
+                                "resetForNewHand must clear actedPlayersInRound");
+        }
+
         private Player restoredPlayer(String name, String id, int chips, int currentBet, boolean allIn) {
                 return Player.restoreBuilder().name(name).playerId(id).chips(chips).currentBet(currentBet)
                                 .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)

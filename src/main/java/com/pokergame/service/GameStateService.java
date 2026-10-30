@@ -600,28 +600,19 @@ public class GameStateService {
             logger.debug("Building game state - no active players found");
         }
         for (Player player : game.getPlayers()) {
-            String status = resolvePlayerStatus(player);
             boolean isActive = !player.getHasFolded() && !player.getIsOut();
             Boolean isWinner = handSettled ? settlement.winnerIds().contains(player.getPlayerId()) : null;
             Integer chipsWon = handSettled ? settlement.contestedAwards().getOrDefault(player.getPlayerId(), 0) : null;
-            playerStateList.add(new PublicPlayerState(
-                    player.getPlayerId(),
-                    player.getName(),
-                    player.getChips(),
-                    player.getCurrentBet(),
-                    status,
-                    player.getIsAllIn(),
+            playerStateList.add(toPublicPlayerState(
+                    player,
                     player.equals(currentPlayer),
-                    player.getHasFolded(),
-                    player.getPlayerId().equals(smallBlindPlayerId),
-                    player.getPlayerId().equals(bigBlindPlayerId),
+                    smallBlindPlayerId,
+                    bigBlindPlayerId,
                     handSettled && !settlement.winnerIds().isEmpty() && isActive ? player.getHandRank() : null,
                     handSettled && !settlement.winnerIds().isEmpty() && isActive ? player.getBestHand() : null,
                     isWinner,
                     chipsWon,
-                    revealSettledHands && isActive ? player.getHoleCards() : null,
-                    player.getDisconnectDeadlineEpochMs(),
-                    player.getIsReadyForNextHand()));
+                    revealSettledHands && isActive ? player.getHoleCards() : null));
         }
 
         String claimWinPlayerName = computeClaimWinPlayerName(game);
@@ -630,12 +621,9 @@ public class GameStateService {
                 ? game.getPlayers().stream().filter(player -> settlement.winnerIds().contains(player.getPlayerId()))
                         .map(Player::getName).toList()
                 : null;
-        Integer winningsPerPlayer = null;
-        if (handSettled && !settlement.winnerIds().isEmpty()) {
-            List<Integer> awards = settlement.winnerIds().stream()
-                    .map(id -> settlement.contestedAwards().getOrDefault(id, 0)).toList();
-            if (awards.stream().distinct().count() == 1) winningsPerPlayer = awards.getFirst();
-        }
+        Integer winningsPerPlayer = handSettled
+                ? computeEqualWinnerAward(settlement.winnerIds(), settlement.contestedAwards())
+                : null;
 
         return new PublicGameStateResponse(
                 room.getMaxPlayers(),
@@ -664,6 +652,46 @@ public class GameStateService {
                 game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
                 game.getStateRevision());
 
+    }
+
+    private Integer computeEqualWinnerAward(Set<String> winnerIds, Map<String, Integer> contestedAwards) {
+        if (winnerIds == null || winnerIds.isEmpty()) {
+            return null;
+        }
+        List<Integer> awards = winnerIds.stream()
+                .map(id -> contestedAwards.getOrDefault(id, 0))
+                .toList();
+        return awards.stream().distinct().count() == 1 ? awards.getFirst() : null;
+    }
+
+    private PublicPlayerState toPublicPlayerState(
+            Player player,
+            boolean isCurrentPlayer,
+            String smallBlindPlayerId,
+            String bigBlindPlayerId,
+            HandRank handRank,
+            List<Card> bestHand,
+            Boolean isWinner,
+            Integer chipsWon,
+            List<Card> holeCards) {
+        return new PublicPlayerState(
+                player.getPlayerId(),
+                player.getName(),
+                player.getChips(),
+                player.getCurrentBet(),
+                resolvePlayerStatus(player),
+                player.getIsAllIn(),
+                isCurrentPlayer,
+                player.getHasFolded(),
+                player.getPlayerId().equals(smallBlindPlayerId),
+                player.getPlayerId().equals(bigBlindPlayerId),
+                handRank,
+                bestHand,
+                isWinner,
+                chipsWon,
+                holeCards,
+                player.getDisconnectDeadlineEpochMs(),
+                player.getIsReadyForNextHand());
     }
 
     /**
