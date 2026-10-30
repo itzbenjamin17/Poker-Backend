@@ -2,8 +2,12 @@ package com.pokergame.service;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 import com.pokergame.config.WebSocketEventListener;
 
@@ -105,6 +109,8 @@ class RoomServiceTest {
 
             assertThat(room).isNotNull();
             assertThat(room.hasPassword()).isTrue();
+            assertThat(room.getPassword()).isNull();
+            assertThat(room.getPasswordHash()).startsWith("$2");
             assertThat(room.checkPassword("secret123")).isTrue();
             assertThat(room.checkPassword("wrongpassword")).isFalse();
         }
@@ -196,7 +202,10 @@ class RoomServiceTest {
                     "Spaced Pass Room", "Host", 4, 10, 20, 200, "  secret123  "));
             Room room = roomService.getRoom(roomId);
             assertThat(room.hasPassword()).isTrue();
-            assertThat(room.getPasswordForPersistence()).isEqualTo("  secret123  ");
+            assertThat(room.getPassword()).isNull();
+            assertThat(room.getPasswordHash()).startsWith("$2");
+            assertThat(room.checkPassword("  secret123  ")).isTrue();
+            assertThat(room.checkPassword("secret123")).isFalse();
 
             // Joining with exact password succeeds
             roomService.joinRoom(new JoinRoomRequest("Spaced Pass Room", "NewPlayer", "  secret123  "));
@@ -792,6 +801,69 @@ class RoomServiceTest {
         assertNotNull(p2MembershipId);
 
         verify(listener).registerInitialConnection(eq(roomId), eq("Player2"), eq(p2MembershipId), eq(room.getAbsenceDeadline("Player2")));
+    }
+
+    @Test
+    @DisplayName("createRoom delegates raw password hashing to injected PasswordEncoder and joinRoom verifies using matches")
+    void passwordSecurity_UsesInjectedPasswordEncoderForHashingAndValidation() {
+        PasswordEncoder mockEncoder = mock(PasswordEncoder.class);
+        when(mockEncoder.encode("secretPass42")).thenReturn("$2a$10$customMockHashForSecretPass42");
+        when(mockEncoder.matches("secretPass42", "$2a$10$customMockHashForSecretPass42")).thenReturn(true);
+        when(mockEncoder.matches("wrongPass", "$2a$10$customMockHashForSecretPass42")).thenReturn(false);
+
+        RoomService customService = new RoomService(messagingTemplate, mockEncoder);
+
+        String roomId = customService.createRoom(new CreateRoomRequest(
+                "Secure Room", "Host", 4, 10, 20, 200, "secretPass42"));
+
+        verify(mockEncoder).encode("secretPass42");
+
+        Room room = customService.getRoom(roomId);
+        assertThat(room).isNotNull();
+        assertThat(room.hasPassword()).isTrue();
+        assertThat(room.getPassword()).isNull();
+        assertThat(room.getPasswordHash()).isEqualTo("$2a$10$customMockHashForSecretPass42");
+
+        // Join with correct password
+        String joinedId = customService.joinRoom(new JoinRoomRequest("Secure Room", "Guest", "secretPass42"));
+        assertThat(joinedId).isEqualTo(roomId);
+        assertThat(room.getPlayers()).contains("Guest");
+        verify(mockEncoder).matches("secretPass42", "$2a$10$customMockHashForSecretPass42");
+
+        // Join with wrong password fails
+        assertThatThrownBy(() -> customService.joinRoom(new JoinRoomRequest("Secure Room", "Intruder", "wrongPass")))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessage("Invalid password");
+    }
+
+    @Test
+    @DisplayName("createRoom does not invoke PasswordEncoder for public rooms with null or empty passwords")
+    void passwordSecurity_PublicRoomDoesNotInvokePasswordEncoder() {
+        PasswordEncoder mockEncoder = mock(PasswordEncoder.class);
+        RoomService customService = new RoomService(messagingTemplate, mockEncoder);
+
+        String roomId1 = customService.createRoom(new CreateRoomRequest(
+                "Public Room 1", "Host", 4, 10, 20, 200, null));
+        String roomId2 = customService.createRoom(new CreateRoomRequest(
+                "Public Room 2", "Host", 4, 10, 20, 200, "   "));
+
+        verify(mockEncoder, never()).encode(any());
+
+        Room r1 = customService.getRoom(roomId1);
+        Room r2 = customService.getRoom(roomId2);
+        assertThat(r1.hasPassword()).isFalse();
+        assertThat(r1.getPasswordHash()).isNull();
+        assertThat(r1.getPassword()).isNull();
+        assertThat(r2.hasPassword()).isFalse();
+        assertThat(r2.getPasswordHash()).isNull();
+        assertThat(r2.getPassword()).isNull();
+
+        // Any password or null password allows joining public room
+        customService.joinRoom(new JoinRoomRequest("Public Room 1", "P2", null));
+        customService.joinRoom(new JoinRoomRequest("Public Room 2", "P3", "anything"));
+        assertThat(r1.getPlayers()).contains("P2");
+        assertThat(r2.getPlayers()).contains("P3");
+        verify(mockEncoder, never()).matches(any(), any());
     }
 
 }

@@ -19,6 +19,8 @@ import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -38,6 +40,7 @@ public class RoomService {
     private final SimpMessagingTemplate messagingTemplate;
     private final WebSocketEventListener webSocketEventListener;
     private final long disconnectGracePeriodMs;
+    private final PasswordEncoder passwordEncoder;
     private RoomService self;
 
     /**
@@ -46,7 +49,17 @@ public class RoomService {
      * @param messagingTemplate WebSocket messaging collaborator
      */
     public RoomService(SimpMessagingTemplate messagingTemplate) {
-        this(messagingTemplate, null, 120_000L);
+        this(messagingTemplate, null, 120_000L, new BCryptPasswordEncoder());
+    }
+
+    /**
+     * Creates the room registry with WebSocket messaging collaborator and password encoder.
+     *
+     * @param messagingTemplate WebSocket messaging collaborator
+     * @param passwordEncoder   password encoder for hashing and validating credentials
+     */
+    public RoomService(SimpMessagingTemplate messagingTemplate, PasswordEncoder passwordEncoder) {
+        this(messagingTemplate, null, 120_000L, passwordEncoder);
     }
 
     /**
@@ -56,13 +69,29 @@ public class RoomService {
      * @param webSocketEventListener process-local connection listener
      * @param disconnectGracePeriodMs reconnect grace interval in ms
      */
+    public RoomService(SimpMessagingTemplate messagingTemplate,
+            WebSocketEventListener webSocketEventListener,
+            long disconnectGracePeriodMs) {
+        this(messagingTemplate, webSocketEventListener, disconnectGracePeriodMs, new BCryptPasswordEncoder());
+    }
+
+    /**
+     * Creates the room registry with WebSocket event listener and password encoder.
+     *
+     * @param messagingTemplate       WebSocket messaging collaborator
+     * @param webSocketEventListener process-local connection listener
+     * @param disconnectGracePeriodMs reconnect grace interval in ms
+     * @param passwordEncoder         password encoder for hashing and verifying room passwords
+     */
     @Autowired
     public RoomService(SimpMessagingTemplate messagingTemplate,
             @Lazy WebSocketEventListener webSocketEventListener,
-            @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
+            @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs,
+            PasswordEncoder passwordEncoder) {
         this.messagingTemplate = messagingTemplate;
         this.webSocketEventListener = webSocketEventListener;
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
+        this.passwordEncoder = passwordEncoder != null ? passwordEncoder : new BCryptPasswordEncoder();
     }
 
     /**
@@ -115,6 +144,12 @@ public class RoomService {
                         "Room name '" + sanitizedRoomName + "' is already taken. Please choose a different name.");
             }
 
+            String rawPassword = request.getPassword();
+            String passwordToStore = null;
+            if (rawPassword != null && !rawPassword.trim().isEmpty()) {
+                passwordToStore = passwordEncoder.encode(rawPassword);
+            }
+
             Room room = new Room(
                     roomId,
                     sanitizedRoomName,
@@ -123,7 +158,7 @@ public class RoomService {
                     request.getSmallBlind(),
                     request.getBigBlind(),
                     request.getBuyIn(),
-                    request.getPassword());
+                    passwordToStore);
 
             // Add the host as the first player
             room.addPlayer(sanitizedPlayerName);
@@ -228,7 +263,7 @@ public class RoomService {
             }
 
             // Check password if the room is private
-            if (room.hasPassword() && !room.checkPassword(joinRequest.password())) {
+            if (room.hasPassword() && !room.checkPassword(joinRequest.password(), passwordEncoder)) {
                 logger.warn("Invalid password attempt for room {} by player {}", room.getRoomName(),
                         sanitizedPlayerName);
                 throw new BadRequestException("Invalid password");

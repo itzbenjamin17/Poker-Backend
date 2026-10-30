@@ -89,7 +89,7 @@ public final class AggregateSnapshotMapper {
     private AggregateStateImage.RoomState toRoomState(Room room) {
         return new AggregateStateImage.RoomState(
                 room.getRoomId(), room.getRoomName(), room.getHostName(), room.getMaxPlayers(), room.getSmallBlind(),
-                room.getBigBlind(), room.getBuyIn(), room.getPasswordForPersistence(), room.getCreatedAt(),
+                room.getBigBlind(), room.getBuyIn(), room.getPasswordHash(), room.getCreatedAt(),
                 room.getPlayersWithJoinTimeSnapshot(), room.isGameStarted());
     }
 
@@ -197,7 +197,7 @@ public final class AggregateSnapshotMapper {
                     .smallBlind(state.smallBlind())
                     .bigBlind(state.bigBlind())
                     .buyIn(state.buyIn())
-                    .password(state.password())
+                    .passwordHash(state.password())
                     .createdAt(state.createdAt())
                     .playersWithJoinTime(joinTimes)
                     .gameStarted(state.gameStarted())

@@ -582,4 +582,60 @@ class AggregateSnapshotMapperTest {
         assertNull(error.get(), "Concurrent toState execution threw an exception: " + error.get());
         assertTrue(snapshotsExtracted.get() > 0, "At least one snapshot state must have been extracted");
     }
+
+    @Test
+    @DisplayName("Snapshot serializes passwordHash and never cleartext, and deserialization restores passwordHash")
+    void passwordSecurity_SnapshotSerializesPasswordHashAndNeverPlaintext() {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+
+        String rawSecret = "VerySecretPassphrase123!";
+        Room room = new Room("pw-room", "Protected Room", "Host", 4, 10, 20, 500, rawSecret);
+        room.addPlayer("Host");
+
+        byte[] snapshot = mapper.serialize(room, "Host", null);
+        String json = new String(snapshot, StandardCharsets.UTF_8);
+
+        // Security check: raw password MUST NOT appear anywhere in the snapshot JSON
+        assertFalse(json.contains(rawSecret), "Cleartext password must NEVER appear in serialized snapshot JSON");
+
+        // Security check: passwordHash MUST appear in the snapshot JSON
+        assertNotNull(room.getPasswordHash());
+        assertTrue(json.contains(room.getPasswordHash()), "Snapshot must serialize the BCrypt passwordHash");
+
+        // Reconstruct room from snapshot bytes
+        RecoveredAggregate recovered = mapper.deserialize(snapshot);
+        assertNotNull(recovered.room());
+        Room restoredRoom = recovered.room();
+
+        // Verifications on restored room
+        assertTrue(restoredRoom.hasPassword());
+        assertNull(restoredRoom.getPassword(), "restored Room getPassword must return null");
+        assertEquals(room.getPasswordHash(), restoredRoom.getPasswordHash(), "restored Room must have exact passwordHash preserved");
+        assertTrue(restoredRoom.checkPassword(rawSecret), "restored Room must match raw password against restored passwordHash");
+        assertFalse(restoredRoom.checkPassword("WrongPass"), "restored Room must reject invalid password");
+    }
+
+    @Test
+    @DisplayName("Public room snapshot serializes null password and deserialization restores room with no password")
+    void passwordSecurity_PublicRoomSnapshotSerializesNullPassword() {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+
+        Room publicRoom = new Room("pub-room", "Public Room", "Host", 4, 10, 20, 500, null);
+        publicRoom.addPlayer("Host");
+
+        byte[] snapshot = mapper.serialize(publicRoom, "Host", null);
+        RecoveredAggregate recovered = mapper.deserialize(snapshot);
+
+        assertNotNull(recovered.room());
+        Room restored = recovered.room();
+        assertFalse(restored.hasPassword());
+        assertNull(restored.getPasswordHash());
+        assertNull(restored.getPassword());
+        assertTrue(restored.checkPassword("any"));
+        assertTrue(restored.checkPassword(null));
+    }
 }
