@@ -348,6 +348,134 @@ class EncryptedWalStoreTest {
     }
 
     /**
+     * Protects the contract that quarantining a corrupted WAL file moves the file to .wal.corrupted,
+     * clears room tracking, ensures recoverLatest() returns Optional.empty(), and restores store health
+     * so that other rooms can continue committing transactions without interruption.
+     */
+    @Test
+    void quarantineCorruptedWalMovesFileAndPreservesStoreHealthForOtherRooms() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 42);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+
+        // 1. Setup healthy room and corrupted room
+        WalTransaction txHealthy = store.prepare("room-healthy");
+        byte[] healthyPayload1 = "healthy-1".getBytes(StandardCharsets.UTF_8);
+        store.commit(txHealthy, healthyPayload1);
+
+        WalTransaction txCorrupted = store.prepare("room-corrupt");
+        byte[] corruptPayload = "corrupt-payload".getBytes(StandardCharsets.UTF_8);
+        store.commit(txCorrupted, corruptPayload);
+
+        // 2. Corrupt the WAL bytes of room-corrupt
+        Path corruptWalPath = directory.resolve("room-corrupt.wal");
+        byte[] walBytes = Files.readAllBytes(corruptWalPath);
+        walBytes[walBytes.length / 2] ^= 0x5A; // tamper with ciphertext
+        Files.write(corruptWalPath, walBytes);
+
+        // 3. Attempting to recover room-corrupt fails with PersistenceException
+        assertThrows(PersistenceException.class, () -> store.recoverLatest("room-corrupt"));
+        assertFalse(store.isHealthy(), "Store should be degraded while room-corrupt is in failedRooms");
+
+        // Attempting to append to healthy room fails while persistence is degraded
+        assertThrows(PersistenceException.class, () -> store.prepare("room-healthy"));
+
+        // 4. Quarantine the corrupted room
+        Path expectedQuarantinePath = directory.resolve("room-corrupt.wal.corrupted");
+        assertFalse(Files.exists(expectedQuarantinePath));
+
+        Path actualQuarantinePath = store.quarantine("room-corrupt", "Ciphertext tamper detected during recovery");
+        assertEquals(expectedQuarantinePath, actualQuarantinePath);
+        assertTrue(Files.exists(expectedQuarantinePath), "Quarantined file must exist on disk with .wal.corrupted suffix");
+        assertFalse(Files.exists(corruptWalPath), "Original .wal file must no longer exist at active WAL path");
+
+        // 5. Verify store health is restored and internal tracking cleaned up
+        assertTrue(store.isHealthy(), "Quarantining corrupted room must restore store health for remaining rooms");
+        assertFalse(store.requiresCheckpoint("room-corrupt"), "Quarantined room must not require checkpoint");
+        assertNull(store.lastError(), "Last error must be cleared when no other rooms are failed");
+
+        // 6. recoverLatest for quarantined room returns Optional.empty()
+        Optional<byte[]> recoveredCorrupt = store.recoverLatest("room-corrupt");
+        assertTrue(recoveredCorrupt.isEmpty(), "recoverLatest on quarantined room must return Optional.empty()");
+
+        // 7. Other rooms can continue committing transactions
+        WalTransaction txHealthy2 = store.prepare("room-healthy");
+        byte[] healthyPayload2 = "healthy-2".getBytes(StandardCharsets.UTF_8);
+        store.commit(txHealthy2, healthyPayload2);
+
+        Optional<byte[]> recoveredHealthy = store.recoverLatest("room-healthy");
+        assertTrue(recoveredHealthy.isPresent());
+        assertArrayEquals(healthyPayload2, recoveredHealthy.get());
+    }
+
+    /**
+     * Protects the contract that quarantining when the WAL file does not exist on disk
+     * cleans up internal tracking maps without throwing or creating ghost files.
+     */
+    @Test
+    void quarantineWhenWalDoesNotExistCleansUpRoomTrackingSafely() {
+        EncryptionKeyring keys = keyring("current", (byte) 43);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+
+        // Record a failure for a room that has no file on disk
+        store.recordWriteFailure("room-missing", new PersistenceException("Simulated write glitch"));
+        assertFalse(store.isHealthy());
+        assertTrue(store.requiresCheckpoint("room-missing"));
+
+        Path quarantinePath = store.quarantine("room-missing", "Clean up non-existent WAL error");
+        assertEquals(directory.resolve("room-missing.wal.corrupted"), quarantinePath);
+        assertFalse(Files.exists(quarantinePath), "No corrupted file should be created if original did not exist");
+        assertTrue(store.isHealthy(), "Store should be healthy after quarantine cleans up tracking");
+        assertFalse(store.requiresCheckpoint("room-missing"));
+        assertTrue(store.recoverLatest("room-missing").isEmpty());
+    }
+
+    /**
+     * Protects the contract that quarantine validates room IDs and rejects path traversal.
+     */
+    @Test
+    void quarantineRejectsInvalidRoomIdWithPersistenceException() {
+        EncryptionKeyring keys = keyring("current", (byte) 44);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+
+        assertThrows(PersistenceException.class, () -> store.quarantine("../../evil-path", "traversal"));
+        assertThrows(PersistenceException.class, () -> store.quarantine(null, "null"));
+        assertThrows(PersistenceException.class, () -> store.quarantine("bad room spaces", "spaces"));
+    }
+
+    /**
+     * Protects the contract that quarantined files are excluded from active WAL count and recoverAll().
+     */
+    @Test
+    void quarantineExcludesQuarantinedFileFromWalCountAndRecoverAll() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 45);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+
+        WalTransaction tx1 = store.prepare("room-active");
+        byte[] payloadActive = "active-data".getBytes(StandardCharsets.UTF_8);
+        store.commit(tx1, payloadActive);
+
+        WalTransaction tx2 = store.prepare("room-to-quarantine");
+        byte[] payloadQuarantine = "quarantine-data".getBytes(StandardCharsets.UTF_8);
+        store.commit(tx2, payloadQuarantine);
+
+        assertEquals(2, store.walCount());
+
+        // Quarantine room-to-quarantine using alias method
+        Path quarantined = store.quarantineCorruptedWal("room-to-quarantine", "Administrative isolation");
+        assertTrue(Files.exists(quarantined));
+
+        // walCount only counts active .wal files
+        assertEquals(1, store.walCount());
+
+        // recoverAll only loads active .wal files
+        Map<String, byte[]> all = store.recoverAll();
+        assertEquals(1, all.size());
+        assertTrue(all.containsKey("room-active"));
+        assertArrayEquals(payloadActive, all.get("room-active"));
+        assertFalse(all.containsKey("room-to-quarantine"));
+    }
+
+    /**
      * Supports the test scenario for keyring.
      * @param id id supplied to the fixture
      * @param value value supplied to the fixture

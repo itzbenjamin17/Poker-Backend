@@ -296,6 +296,71 @@ public final class EncryptedWalStore {
     }
 
     /**
+     * Quarantines a corrupted WAL file for a specific room by moving it out of active recovery.
+     * Internal tracking for the room is cleaned up so that the failure of this single room
+     * does not prevent other rooms from operating or recovering.
+     *
+     * @param roomId the room whose corrupted WAL should be quarantined
+     * @param reason diagnostic explanation for the quarantine
+     * @return the path of the quarantined file
+     * @throws PersistenceException if room ID validation fails or file move fails
+     */
+    public Path quarantine(String roomId, String reason) {
+        validateRoomId(roomId);
+        ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
+        lock.lock();
+        try {
+            Path wal = walPath(roomId);
+            Path quarantinePath = directory.resolve(roomId + ".wal.corrupted");
+            deleteCompactingFileQuietly(roomId);
+            if (Files.exists(wal)) {
+                try {
+                    try {
+                        Files.move(wal, quarantinePath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                    } catch (AtomicMoveNotSupportedException e) {
+                        Files.move(wal, quarantinePath, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    forceDirectory();
+                } catch (IOException e) {
+                    logger.error("Failed to move corrupted WAL for room {}: {}", roomId, e.getMessage(), e);
+                    throw new PersistenceException("Cannot quarantine corrupted WAL for room " + roomId, e);
+                }
+            }
+            nextSequences.remove(roomId);
+            checkpointRooms.remove(roomId);
+            failedRooms.remove(roomId);
+            if (failedRooms.isEmpty()) {
+                lastError = null;
+            }
+            logger.error("Quarantined corrupted WAL file for room {}: {}", roomId, reason);
+            return quarantinePath;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Overload for {@link #quarantine(String, String)} with a default reason.
+     *
+     * @param roomId the room whose corrupted WAL should be quarantined
+     * @return the path of the quarantined file
+     */
+    public Path quarantine(String roomId) {
+        return quarantine(roomId, "Unspecified corruption");
+    }
+
+    /**
+     * Alias for {@link #quarantine(String, String)}.
+     *
+     * @param roomId the room whose corrupted WAL should be quarantined
+     * @param reason diagnostic explanation for the quarantine
+     * @return the path of the quarantined file
+     */
+    public Path quarantineCorruptedWal(String roomId, String reason) {
+        return quarantine(roomId, reason);
+    }
+
+    /**
      * Checks if the storage system is working properly.
      *
      * @return true if there are no errors, false if something broke
