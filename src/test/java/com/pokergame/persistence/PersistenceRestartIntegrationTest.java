@@ -10,7 +10,6 @@ import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.exception.BadRequestException;
-import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;

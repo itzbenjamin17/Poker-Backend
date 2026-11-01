@@ -120,8 +120,11 @@ public final class DurableMutationAspect {
     public Object persist(ProceedingJoinPoint joinPoint, DurableMutation mutation) throws Throwable {
         String roomId = resolveRoomId(joinPoint, mutation.roomId());
         if (store == null) {
-            try (LockLease ignored = roomLocks.acquire(roomId)) {
+            LockLease lease = roomLocks.acquire(roomId);
+            try {
                 return joinPoint.proceed();
+            } finally {
+                lease.close();
             }
         }
         String previousRoom = MDC.get(MdcKeys.ROOM_ID);

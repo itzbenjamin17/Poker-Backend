@@ -1,6 +1,5 @@
 package com.pokergame.config;
 
-import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.security.JwtService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;

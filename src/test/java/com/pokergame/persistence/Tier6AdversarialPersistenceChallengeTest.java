@@ -8,7 +8,6 @@ import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.persistence.config.PersistenceException;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.AggregateStateImage;
 import com.pokergame.persistence.transaction.DurableMutation;
@@ -133,7 +132,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
         // Test boundary: Complete PREPARE frame followed by torn COMMIT frame (5 bytes of commit)
         {
             EncryptedWalStore prepareStore = new EncryptedWalStore(tempDir, keyring);
-            WalTransaction uncommittedTx = prepareStore.prepare(roomId);
+            prepareStore.prepare(roomId);
             long sizeAfterPrepare = Files.size(walPath);
             assertTrue(sizeAfterPrepare > lastValidSize);
 
@@ -492,7 +491,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
             games.createGameFromRoom(roomId);
             Game game = games.getGame(roomId);
 
-            int initialBankroll = game.getPlayers().stream().mapToInt(Player::getChips).sum() + game.getPot();
+            int initialBankroll = game.getPlayers().stream().mapToInt(player -> player.getChips()).sum() + game.getPot();
 
             // Run 20 stress cycles: odd cycles mutate chips illegally and fail, even cycles do clean safe operations
             for (int i = 0; i < 20; i++) {
@@ -508,7 +507,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
 
                 // Verify conservation of chips after every single iteration
                 Game currentGame = games.getGame(roomId);
-                int currentTotal = currentGame.getPlayers().stream().mapToInt(Player::getChips).sum() + currentGame.getPot();
+                int currentTotal = currentGame.getPlayers().stream().mapToInt(player -> player.getChips()).sum() + currentGame.getPot();
                 assertEquals(initialBankroll, currentTotal,
                         "Total bankroll must be strictly conserved at iteration " + i);
             }
