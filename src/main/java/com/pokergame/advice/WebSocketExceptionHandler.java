@@ -24,7 +24,28 @@ import java.util.Map;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Global advice for handling exceptions occurring during WebSocket message processing.
+ * Centralized exception handler for STOMP-over-WebSocket messaging traffic.
+ *
+ * <h3>Why this class is needed</h3>
+ * <p>
+ * Unlike REST endpoints (handled by {@code ControllerExceptionHandler}),
+ * WebSocket
+ * connections cannot return HTTP status codes (400, 403, 404) once the
+ * connection is
+ * established. Instead, exceptions occurring during STOMP frame processing must
+ * be caught,
+ * translated into domain-specific payloads, and pushed to the offending
+ * player's private
+ * queue ({@code /queue/private}) so other players at the table are not
+ * disrupted.
+ * </p>
+ *
+ * <h3>Security Guarantee</h3>
+ * <p>
+ * Routing is strictly anchored to the authenticated {@link PlayerPrincipal}
+ * session identity,
+ * completely ignoring any client-spoofed destination headers.
+ * </p>
  */
 @ControllerAdvice
 public class WebSocketExceptionHandler {
@@ -49,7 +70,7 @@ public class WebSocketExceptionHandler {
      *
      * @param exception message-processing failure to translate
      * @param principal player that sent the failed message
-     * @param message original message used to recover the game destination
+     * @param message   original message used to recover the game destination
      */
     @MessageExceptionHandler
     public void handleMessageException(Exception exception, Principal principal,
@@ -62,11 +83,14 @@ public class WebSocketExceptionHandler {
         String destination = accessor.getDestination();
 
         logger.warn("WebSocket failure for player {} in game {}: {}", playerName, gameId, exception.getMessage());
-        if (gameStateService == null) return;
+        if (gameStateService == null)
+            return;
 
         if (destination != null && (destination.endsWith("/ready") || destination.endsWith("/unready"))) {
-            RejectedAction readinessAction = destination.endsWith("/ready") ? RejectedAction.READY : RejectedAction.UNREADY;
-            gameStateService.sendActionError(playerPrincipal, "ACTION_REJECTED", readinessAction, technicalMessage(exception));
+            RejectedAction readinessAction = destination.endsWith("/ready") ? RejectedAction.READY
+                    : RejectedAction.UNREADY;
+            gameStateService.sendActionError(playerPrincipal, "ACTION_REJECTED", readinessAction,
+                    technicalMessage(exception));
             return;
         }
 
@@ -92,7 +116,8 @@ public class WebSocketExceptionHandler {
         java.util.Set<Throwable> visited = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         Throwable cause = exception;
         while (cause != null && visited.add(cause)) {
-            if (actionFeedback == null && cause instanceof ActionFeedbackException afe && afe.actionErrorCode() != null) {
+            if (actionFeedback == null && cause instanceof ActionFeedbackException afe
+                    && afe.actionErrorCode() != null) {
                 actionFeedback = afe;
             }
             if (resourceNotFound == null && cause instanceof ResourceNotFoundException rnfe) {
@@ -112,7 +137,8 @@ public class WebSocketExceptionHandler {
 
         if (actionFeedback != null) {
             code = actionFeedback.actionErrorCode();
-            displayMessage = actionFeedback.actionErrorMessage() != null ? actionFeedback.actionErrorMessage() : actionFeedback.getMessage();
+            displayMessage = actionFeedback.actionErrorMessage() != null ? actionFeedback.actionErrorMessage()
+                    : actionFeedback.getMessage();
         } else if (resourceNotFound != null) {
             code = "GAME_NOT_FOUND";
             displayMessage = "Game unavailable";
@@ -165,13 +191,18 @@ public class WebSocketExceptionHandler {
         return null;
     }
 
-    /** Recovers the requested action from the original frame without guessing from exception text. */
+    /**
+     * Recovers the requested action from the original frame without guessing from
+     * exception text.
+     */
     private PlayerAction rejectedAction(Message<?> message) {
         Object payload = message.getPayload();
-        if (payload instanceof PlayerActionRequest request) return request.action();
+        if (payload instanceof PlayerActionRequest request)
+            return request.action();
         try {
             String json = payload instanceof byte[] bytes
-                    ? new String(bytes, StandardCharsets.UTF_8) : String.valueOf(payload);
+                    ? new String(bytes, StandardCharsets.UTF_8)
+                    : String.valueOf(payload);
             Map<?, ?> fields = objectMapper.readValue(json, Map.class);
             Object value = fields.get("action");
             return value instanceof String action ? PlayerAction.valueOf(action) : null;
@@ -187,7 +218,8 @@ public class WebSocketExceptionHandler {
                 (message != null && message.contains("Cannot deserialize"))) {
             message = "Invalid action request format. Please try again with a valid amount.";
         }
-        if (message == null || message.isBlank()) message = "Request failed";
+        if (message == null || message.isBlank())
+            message = "Request failed";
         return message.length() > 80 ? message.substring(0, 77) + "..." : message;
     }
 }
