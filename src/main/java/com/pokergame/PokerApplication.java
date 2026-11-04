@@ -2,9 +2,10 @@ package com.pokergame;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration;
 
 /** Bootstraps the poker backend and its Spring application context. */
-@SpringBootApplication
+@SpringBootApplication(exclude = { UserDetailsServiceAutoConfiguration.class })
 public class PokerApplication {
 
     /**

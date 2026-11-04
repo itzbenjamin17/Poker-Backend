@@ -79,17 +79,6 @@ public class SecurityConfig {
     }
 
     /**
-     * Provide a dummy UserDetailsService to suppress default password generation.
-     * Authenticated state is managed entirely via JWT principal.
-     */
-    @Bean
-    public org.springframework.security.core.userdetails.UserDetailsService userDetailsService() {
-        return username -> {
-            throw new org.springframework.security.core.userdetails.UsernameNotFoundException("Not used");
-        };
-    }
-
-    /**
      * Builds the stateless HTTP security chain and orders the application filters.
      *
      * @param http Spring Security's chain builder
@@ -161,9 +150,6 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        // Allows cookies, authorisation headers to be sent in CORS requests
-        config.setAllowCredentials(true);
-
         config.setAllowedOriginPatterns(allowedOrigins);
 
         config.setAllowedMethods(List.of("GET", "POST", "OPTIONS"));
