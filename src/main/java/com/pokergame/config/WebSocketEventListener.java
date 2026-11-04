@@ -139,8 +139,7 @@ public class WebSocketEventListener {
 
         try (LockLease _ = acquireRoomLease(roomId);
                  LockLease _ = sessionLocks.acquire(compositeName)) {
-            if (playerPrincipal.membershipId() != null && !playerPrincipal.membershipId().isBlank()
-                    && roomService != null) {
+            if (playerPrincipal.membershipId() != null && !playerPrincipal.membershipId().isBlank()) {
                 Room room = roomService.getRoom(roomId);
                 if (room != null) {
                     synchronized (room) {
@@ -198,8 +197,7 @@ public class WebSocketEventListener {
             
             try (LockLease _ = acquireRoomLease(roomId);
                  LockLease _ = sessionLocks.acquire(compositeName)) {
-                if (playerPrincipal.membershipId() != null && !playerPrincipal.membershipId().isBlank()
-                        && roomService != null) {
+                if (playerPrincipal.membershipId() != null && !playerPrincipal.membershipId().isBlank()) {
                     Room currentRoom = roomService.getRoom(roomId);
                     if (currentRoom != null) {
                         synchronized (currentRoom) {
@@ -318,15 +316,6 @@ public class WebSocketEventListener {
     }
 
     /**
-     * Rebuilds only the runtime cleanup timer for a player restored from durable
-     * state. Session identifiers and rate-limit buckets intentionally remain empty
-     * because they identify the previous process, not durable player state.
-     *
-     * @param roomId         restored room identity
-     * @param playerName     restored player awaiting reconnection
-     * @param deadlineEpochMs absolute cleanup deadline
-     */
-    /**
      * Registers a first-connection grace period for a newly created or joined room membership.
      * Queued after the membership mutation commits, running outside room locks.
      * Validates room instance and membership identity, checks active sockets,
@@ -384,6 +373,15 @@ public class WebSocketEventListener {
         });
     }
 
+    /**
+     * Rebuilds only the runtime cleanup timer for a player restored from durable
+     * state. Session identifiers and rate-limit buckets intentionally remain empty
+     * because they identify the previous process, not durable player state.
+     *
+     * @param roomId          restored room identity
+     * @param playerName      restored player awaiting reconnection
+     * @param deadlineEpochMs absolute cleanup deadline
+     */
     public void scheduleRecoveredDisconnect(String roomId, String playerName, long deadlineEpochMs) {
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
         String compositeName = playerKey(principal);
@@ -514,11 +512,10 @@ public class WebSocketEventListener {
     }
 
     /**
-     * Associates a transient cleanup future with its room so reconnect handling can
-     * cancel only the timer belonging to that player membership.
-     *
-     * @param roomId room awaiting cleanup
-     * @param future process-local cleanup future
+     * A scheduled grace-period cleanup for one player membership in one room.
+     * Reconnect handling cancels it, and the cleanup callback checks the token-bound
+     * registration is still current before removing anyone, so only the timer
+     * belonging to that membership can act.
      */
     private static final class PendingDisconnect {
         private final String roomId;
