@@ -9,7 +9,6 @@ import com.pokergame.util.MdcUtils;
 import com.pokergame.util.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
@@ -62,8 +61,7 @@ public class WebSocketEventListener {
     private final KeyedLockRegistry<String> sessionLocks = new KeyedLockRegistry<>();
     private final AtomicLong registrationSequence = new AtomicLong();
     private final TaskScheduler taskScheduler;
-    @Autowired(required = false)
-    private DurableMutationAspect durableMutationAspect;
+    private final DurableMutationAspect durableMutationAspect;
     private final Queue<CleanupIntent> drainQueue = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean isDraining = new AtomicBoolean(false);
 
@@ -79,18 +77,20 @@ public class WebSocketEventListener {
      * @param gameLifecycleService     durable game and cleanup service
      * @param rateLimitService         transient WebSocket rate-limit registry
      * @param taskScheduler            runtime grace-period scheduler
+     * @param durableMutationAspect    per-room lock shared with durable mutations
      * @param disconnectGracePeriodMs allowed reconnect interval
      */
-    @Autowired
     public WebSocketEventListener(RoomService roomService,
             GameLifecycleService gameLifecycleService,
             com.pokergame.security.RateLimitService rateLimitService,
             @Qualifier("taskScheduler") TaskScheduler taskScheduler,
+            DurableMutationAspect durableMutationAspect,
             @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.rateLimitService = rateLimitService;
         this.taskScheduler = taskScheduler;
+        this.durableMutationAspect = durableMutationAspect;
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
     }
     
@@ -557,7 +557,7 @@ public class WebSocketEventListener {
      * @return room lease, or a no-op lease when persistence is disabled
      */
     private LockLease acquireRoomLease(String roomId) {
-        return durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(roomId) : LockLease.none();
+        return durableMutationAspect.acquireRoomLock(roomId);
     }
 
     /**
@@ -676,7 +676,7 @@ public class WebSocketEventListener {
 
     /** Removes transient room state under the same room-before-player lease order as reconnects. */
     private void processRoomDestroyed(String roomId) {
-        LockLease roomLease = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(roomId) : LockLease.none();
+        LockLease roomLease = durableMutationAspect.acquireRoomLock(roomId);
         try (roomLease) {
             gameLifecycleService.cancelRuntimeTasks(roomId, false);
             java.util.Set<String> usersToClean = new java.util.HashSet<>();

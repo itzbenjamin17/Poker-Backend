@@ -9,7 +9,6 @@ import com.pokergame.util.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.MessagingException;
 import org.springframework.messaging.Message;
@@ -41,22 +40,14 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
     private final RoomService roomService;
 
     /**
-     * Creates an interceptor backed by the application's JWT service.
-     *
-     * @param jwtService token validator and principal extractor
-     */
-    public WebSocketAuthInterceptor(JwtService jwtService) {
-        this(jwtService, null);
-    }
-
-    /**
      * Creates an interceptor backed by the application's JWT service and room registry.
+     * The room registry is injected lazily because it depends on messaging infrastructure
+     * that is itself configured with this interceptor.
      *
      * @param jwtService token validator and principal extractor
      * @param roomService room registry for active membership validation
      */
-    @Autowired
-    public WebSocketAuthInterceptor(JwtService jwtService, @Autowired(required = false) @Lazy RoomService roomService) {
+    public WebSocketAuthInterceptor(JwtService jwtService, @Lazy RoomService roomService) {
         this.jwtService = jwtService;
         this.roomService = roomService;
     }
@@ -286,7 +277,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
                 || principal.membershipId() == null || principal.membershipId().isBlank()) {
             throw new AccessDeniedException("Token membership is stale or invalid.");
         }
-        if (roomService == null) return;
         Room room = roomService.getRoom(principal.roomId());
         if (room != null) {
             synchronized (room) {

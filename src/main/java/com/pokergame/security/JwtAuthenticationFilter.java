@@ -19,7 +19,6 @@ import java.util.Collections;
 
 import com.pokergame.dto.response.ErrorResponse;
 import tools.jackson.databind.ObjectMapper;
-import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Filter that extracts JWT from the Authorisation header and sets up Spring
@@ -40,19 +39,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
      * @param jwtService token validator and principal extractor
      * @param objectMapper object mapper for JSON response writing
      */
-    @Autowired
-    public JwtAuthenticationFilter(JwtService jwtService, @Autowired(required = false) ObjectMapper objectMapper) {
+    public JwtAuthenticationFilter(JwtService jwtService, ObjectMapper objectMapper) {
         this.jwtService = jwtService;
-        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
-    }
-
-    /**
-     * Creates the request filter with the service used to validate bearer tokens.
-     *
-     * @param jwtService token validator and principal extractor
-     */
-    public JwtAuthenticationFilter(JwtService jwtService) {
-        this(jwtService, new ObjectMapper());
+        this.objectMapper = objectMapper;
     }
 
     /**

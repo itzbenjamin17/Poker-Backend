@@ -16,7 +16,6 @@ import com.pokergame.model.Game;
 import com.pokergame.security.PlayerPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
@@ -44,8 +43,7 @@ public class GameController {
 
     private final PlayerActionService playerActionService;
 
-    @Autowired(required = false)
-    private DurableMutationAspect durableMutationAspect;
+    private final DurableMutationAspect durableMutationAspect;
 
     /**
      * Creates the game controller with its action, lifecycle, and projection services.
@@ -53,13 +51,16 @@ public class GameController {
      * @param playerActionService validates and applies player actions
      * @param gameLifecycleService owns active games and lifecycle transitions
      * @param gameStateService creates and publishes client state
+     * @param durableMutationAspect supplies the per-room lock shared with durable mutations
      */
     public GameController(PlayerActionService playerActionService,
             GameLifecycleService gameLifecycleService,
-            GameStateService gameStateService) {
+            GameStateService gameStateService,
+            DurableMutationAspect durableMutationAspect) {
         this.playerActionService = playerActionService;
         this.gameLifecycleService = gameLifecycleService;
         this.gameStateService = gameStateService;
+        this.durableMutationAspect = durableMutationAspect;
     }
 
     /**
@@ -83,7 +84,7 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+        try (LockLease ignored = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             Game game = getAuthorisedGame(gameId, playerName);
             return ResponseEntity.ok(gameStateService.getPublicGameStateSnapshot(gameId, game));
@@ -110,7 +111,7 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+        try (LockLease ignored = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             Game game = getAuthorisedGame(gameId, playerName);
             return ResponseEntity.ok(gameStateService.getPrivatePlayerStateSnapshot(game, playerName));
@@ -164,7 +165,7 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+        try (LockLease ignored = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             playerActionService.processPlayerAction(gameId, actionRequest, playerName);
             logger.debug("Player action processed successfully for game {}", gameId);
@@ -189,7 +190,7 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+        try (LockLease ignored = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             gameLifecycleService.markPlayerReadyForNextHand(gameId, playerName);
         }
@@ -213,7 +214,7 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+        try (LockLease ignored = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             gameLifecycleService.unmarkPlayerReadyForNextHand(gameId, playerName);
         }
@@ -240,7 +241,7 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+        try (LockLease ignored = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             gameLifecycleService.departParticipants(gameId, List.of(playerName));
             logger.info("Player {} successfully left game {}", playerName, gameId);
@@ -279,7 +280,7 @@ public class GameController {
             throw new UnauthorisedActionException("Query player name does not match authenticated player.");
         }
 
-        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+        try (LockLease ignored = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             return ResponseEntity.ok(gameLifecycleService.getGameReview(gameId, playerName));
         }
@@ -310,7 +311,7 @@ public class GameController {
             throw new UnauthorisedActionException("Token is not valid for this game.");
         }
 
-        try (LockLease ignored = durableMutationAspect != null ? durableMutationAspect.acquireRoomLock(gameId) : LockLease.none()) {
+        try (LockLease ignored = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             GameEndResponse result = gameLifecycleService.claimWin(gameId, playerName);
             logger.info("Player {} successfully claimed win in game {}", playerName, gameId);

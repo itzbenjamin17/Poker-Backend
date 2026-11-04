@@ -37,7 +37,7 @@ class LifecycleRegistrationCleanupTest {
     @Autowired
     private RateLimitService rateLimitService;
 
-    @Autowired(required = false)
+    @Autowired
     private DurableMutationAspect durableMutationAspect;
 
     @Test
@@ -100,9 +100,7 @@ class LifecycleRegistrationCleanupTest {
         assertThat(gameLifecycleService.getGame(roomId)).isNull();
         assertThat(roomService.getRoom(roomId)).isNull();
 
-        if (durableMutationAspect != null) {
-            assertThat(durableMutationAspect.getLockRegistry().reservationCount(roomId)).isEqualTo(0);
-        }
+        assertThat(durableMutationAspect.getLockRegistry().reservationCount(roomId)).isEqualTo(0);
     }
 
     @Test

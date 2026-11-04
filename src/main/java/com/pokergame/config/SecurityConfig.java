@@ -21,7 +21,6 @@ import java.util.List;
 
 import com.pokergame.dto.response.ErrorResponse;
 import tools.jackson.databind.ObjectMapper;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -48,24 +47,14 @@ public class SecurityConfig {
      * @param endpointRateLimitFilter throttles sensitive public endpoints
      * @param objectMapper serializes error responses
      */
-    @Autowired
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
                           com.pokergame.security.PayloadSizeFilter payloadSizeFilter,
                           com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter,
-                          @Autowired(required = false) ObjectMapper objectMapper) {
+                          ObjectMapper objectMapper) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.payloadSizeFilter = payloadSizeFilter;
         this.endpointRateLimitFilter = endpointRateLimitFilter;
-        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
-    }
-
-    /**
-     * Creates the security configuration with the default object mapper.
-     */
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
-                          com.pokergame.security.PayloadSizeFilter payloadSizeFilter,
-                          com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter) {
-        this(jwtAuthenticationFilter, payloadSizeFilter, endpointRateLimitFilter, new ObjectMapper());
+        this.objectMapper = objectMapper;
     }
 
     /**

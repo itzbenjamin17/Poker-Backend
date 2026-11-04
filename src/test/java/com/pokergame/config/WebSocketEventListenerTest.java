@@ -1,6 +1,7 @@
 package com.pokergame.config;
 
 import com.pokergame.model.Room;
+import com.pokergame.persistence.transaction.TestDurableMutationAspects;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.security.RateLimitService;
 import com.pokergame.service.GameLifecycleService;
@@ -28,21 +29,20 @@ class WebSocketEventListenerTest {
         RoomService rooms = mock(RoomService.class);
         GameLifecycleService games = mock(GameLifecycleService.class);
         var scheduler = mock(TaskScheduler.class);
-        var listener = new WebSocketEventListener(rooms, games, mock(RateLimitService.class), scheduler, 60_000);
+        var aspect = spy(TestDurableMutationAspects.lockOnly());
+        var listener = new WebSocketEventListener(rooms, games, mock(RateLimitService.class), scheduler, aspect, 60_000);
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
         listener.registerSession(principal, "original-session");
-        var aspect = mock(com.pokergame.persistence.transaction.DurableMutationAspect.class);
         var locks = new com.pokergame.util.KeyedLockRegistry<String>();
         var waiting = new java.util.concurrent.CountDownLatch(1);
         var cleanupOwnsRoom = new java.util.concurrent.CountDownLatch(1);
-        when(aspect.acquireRoomLock("room")).thenAnswer(invocation -> {
+        doAnswer(invocation -> {
             if (Thread.currentThread().getName().equals("reconnect-regression")) {
                 waiting.countDown();
                 assertTrue(cleanupOwnsRoom.await(2, java.util.concurrent.TimeUnit.SECONDS));
             }
             return locks.acquire("room");
-        });
-        org.springframework.test.util.ReflectionTestUtils.setField(listener, "durableMutationAspect", aspect);
+        }).when(aspect).acquireRoomLock("room");
         doAnswer(invocation -> {
             // Models the room lease normally acquired by the durable service proxy.
             try (var ignored = aspect.acquireRoomLock("room")) { return null; }
@@ -72,7 +72,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         when(lifecycle.gameExists("room")).thenReturn(true);
         when(lifecycle.playerExistsInGame("room", "Alice")).thenReturn(true);
 
@@ -89,7 +90,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
         listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
@@ -105,7 +107,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
         // Connect session-1 and session-2
@@ -128,7 +131,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
         org.mockito.ArgumentCaptor<Instant> instantCaptor = org.mockito.ArgumentCaptor.forClass(Instant.class);
         org.mockito.ArgumentCaptor<Long> deadlineCaptor = org.mockito.ArgumentCaptor.forClass(Long.class);
@@ -157,7 +161,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
@@ -190,7 +195,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         PlayerPrincipal alicePrincipal = new PlayerPrincipal("Alice", "room");
         PlayerPrincipal bobPrincipal = new PlayerPrincipal("Bob", "room");
 
@@ -213,7 +219,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
         org.mockito.ArgumentCaptor<Runnable> callback = org.mockito.ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
@@ -239,7 +246,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
         org.mockito.ArgumentCaptor<Runnable> callback = org.mockito.ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
@@ -273,7 +281,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
@@ -307,7 +316,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
         org.mockito.ArgumentCaptor<Instant> instantCaptor = org.mockito.ArgumentCaptor.forClass(Instant.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
@@ -329,7 +339,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
 
         Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
         room.addPlayer("Alice");
@@ -354,7 +365,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
         org.mockito.ArgumentCaptor<Instant> instantCaptor = org.mockito.ArgumentCaptor.forClass(Instant.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
@@ -388,7 +400,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
         org.mockito.ArgumentCaptor<Runnable> callback = org.mockito.ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
@@ -417,7 +430,8 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
-        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler, 60_000);
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
 
         Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
         String activeMemId = room.addPlayer("Alice");

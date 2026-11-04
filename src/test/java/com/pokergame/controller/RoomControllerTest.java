@@ -86,17 +86,27 @@ class RoomControllerTest {
     @MockitoBean
     private GameLifecycleService gameLifecycleService;
 
+    /** Required by the WebSocket exception advice that the controller slice loads. */
+    @MockitoBean
+    private com.pokergame.service.GameStateService gameStateService;
+
     @MockitoBean
     private JwtService jwtService;
 
     @MockitoBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
+    @MockitoBean
+    private com.pokergame.persistence.transaction.DurableMutationAspect durableMutationAspect;
+
     /**
      * Initializes the test fixtures before each scenario.
      */
     @BeforeEach
     void setup() {
+        org.mockito.Mockito.when(durableMutationAspect.acquireRoomLock(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(com.pokergame.util.LockLease.none());
+
         // Reset rate limit buckets to ensure a fresh start for each test
         rateLimitService.reset();
 

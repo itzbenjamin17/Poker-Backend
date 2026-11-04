@@ -11,7 +11,6 @@ import com.pokergame.service.GameStateService;
 import com.pokergame.util.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.converter.MessageConversionException;
 import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
@@ -59,7 +58,7 @@ public class WebSocketExceptionHandler {
      *
      * @param gameStateService creates and publishes client notifications
      */
-    public WebSocketExceptionHandler(@Autowired(required = false) GameStateService gameStateService) {
+    public WebSocketExceptionHandler(GameStateService gameStateService) {
         this.gameStateService = gameStateService;
     }
 
@@ -83,8 +82,6 @@ public class WebSocketExceptionHandler {
         String destination = accessor.getDestination();
 
         logger.warn("WebSocket failure for player {} in game {}: {}", playerName, gameId, exception.getMessage());
-        if (gameStateService == null)
-            return;
 
         if (destination != null && (destination.endsWith("/ready") || destination.endsWith("/unready"))) {
             RejectedAction readinessAction = destination.endsWith("/ready") ? RejectedAction.READY

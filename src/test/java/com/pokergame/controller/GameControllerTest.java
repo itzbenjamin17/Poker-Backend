@@ -12,11 +12,13 @@ import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
+import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.security.JwtAuthenticationFilter;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
+import com.pokergame.util.LockLease;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -63,6 +65,9 @@ class GameControllerTest {
     private PlayerActionService playerActionService;
 
     @MockitoBean
+    private DurableMutationAspect durableMutationAspect;
+
+    @MockitoBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @MockitoBean
@@ -81,6 +86,7 @@ class GameControllerTest {
      */
     @BeforeEach
     void setUp() {
+        when(durableMutationAspect.acquireRoomLock(anyString())).thenReturn(LockLease.none());
         principal = new PlayerPrincipal(playerName, gameId);
         auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
     }

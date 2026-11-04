@@ -2,6 +2,7 @@ package com.pokergame.config;
 
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.service.RoomService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -30,6 +31,9 @@ class WebSocketAuthInterceptorTest {
 
     @Mock
     private JwtService jwtService;
+
+    @Mock
+    private RoomService roomService;
 
     @InjectMocks
     private WebSocketAuthInterceptor interceptor;
@@ -487,12 +491,10 @@ class WebSocketAuthInterceptorTest {
     @Test
     @DisplayName("should reject CONNECT, SUBSCRIBE, and SEND when token membershipId is stale")
     void givenStaleMembershipId_whenConnectSubscribeOrSend_thenThrowAccessDeniedException() {
-        com.pokergame.service.RoomService roomService = org.mockito.Mockito.mock(com.pokergame.service.RoomService.class);
         com.pokergame.model.Room room = new com.pokergame.model.Room(ROOM_ID, "Room", PLAYER_NAME, 4, 10, 20, 500, null);
         String activeMemId = room.addPlayer(PLAYER_NAME);
         when(roomService.getRoom(ROOM_ID)).thenReturn(room);
 
-        WebSocketAuthInterceptor interceptorWithRoom = new WebSocketAuthInterceptor(jwtService, roomService);
         PlayerPrincipal stalePrincipal = new PlayerPrincipal(PLAYER_NAME, ROOM_ID, "stale-mem-id");
         PlayerPrincipal activePrincipal = new PlayerPrincipal(PLAYER_NAME, ROOM_ID, activeMemId);
 
@@ -504,7 +506,7 @@ class WebSocketAuthInterceptorTest {
         when(jwtService.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwtService.extractPrincipal(VALID_TOKEN)).thenReturn(stalePrincipal);
 
-        assertThatThrownBy(() -> interceptorWithRoom.preSend(connectMsg, null))
+        assertThatThrownBy(() -> interceptor.preSend(connectMsg, null))
                 .isInstanceOf(AccessDeniedException.class)
                 .hasMessageContaining("Token membership is stale or invalid.");
 
@@ -514,7 +516,7 @@ class WebSocketAuthInterceptorTest {
         subAccessor.setUser(stalePrincipal);
         Message<byte[]> subMsg = MessageBuilder.createMessage(new byte[0], subAccessor.getMessageHeaders());
 
-        assertThatThrownBy(() -> interceptorWithRoom.preSend(subMsg, null))
+        assertThatThrownBy(() -> interceptor.preSend(subMsg, null))
                 .isInstanceOf(AccessDeniedException.class)
                 .hasMessageContaining("Token membership is stale or invalid.");
 
@@ -524,7 +526,7 @@ class WebSocketAuthInterceptorTest {
         sendAccessor.setUser(stalePrincipal);
         Message<byte[]> sendMsg = MessageBuilder.createMessage(new byte[0], sendAccessor.getMessageHeaders());
 
-        assertThatThrownBy(() -> interceptorWithRoom.preSend(sendMsg, null))
+        assertThatThrownBy(() -> interceptor.preSend(sendMsg, null))
                 .isInstanceOf(AccessDeniedException.class)
                 .hasMessageContaining("Token membership is stale or invalid.");
 
@@ -534,7 +536,7 @@ class WebSocketAuthInterceptorTest {
         validSendAccessor.setUser(activePrincipal);
         Message<byte[]> validSendMsg = MessageBuilder.createMessage(new byte[0], validSendAccessor.getMessageHeaders());
 
-        assertThat(interceptorWithRoom.preSend(validSendMsg, null)).isNotNull();
+        assertThat(interceptor.preSend(validSendMsg, null)).isNotNull();
     }
 
 }
