@@ -36,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.springframework.test.context.TestPropertySource;
 import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.Assertions;
 
 /** Provides abstract integration test support shared by integration tests. */
 @TestPropertySource(locations = "classpath:application-test.properties")
@@ -195,7 +196,7 @@ public abstract class AbstractIntegrationTestSupport {
                 .atMost(timeout)
                 .pollInterval(Duration.ofMillis(200))
                 .untilAsserted(() -> {
-                    HttpClientErrorException exception = org.junit.jupiter.api.Assertions.assertThrows(
+                    HttpClientErrorException exception = Assertions.assertThrows(
                             HttpClientErrorException.class,
                             () -> restClient.get()
                                     .uri("/api/room/" + roomId)

@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 /** Behavioral regressions for rejected commands after accepted in-memory gameplay. */
 class DurableRollbackProgressionTest {
@@ -55,7 +56,7 @@ class DurableRollbackProgressionTest {
 
     @BeforeEach
     void setUp() {
-        var messaging = mock(org.springframework.messaging.simp.SimpMessagingTemplate.class);
+        var messaging = mock(SimpMessagingTemplate.class);
         rooms = new RoomService(messaging);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         when(scheduler.schedule(any(Runnable.class), any(Instant.class))).thenAnswer(call -> {

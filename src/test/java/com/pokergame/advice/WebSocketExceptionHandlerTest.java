@@ -23,6 +23,18 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.exception.ResourceNotFoundException;
+import java.lang.reflect.Method;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mockito;
+import org.springframework.core.MethodParameter;
+import org.springframework.messaging.converter.MessageConversionException;
+import org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException;
+import org.springframework.validation.BeanPropertyBindingResult;
+import org.springframework.validation.FieldError;
+import com.pokergame.model.Room;
 
 /** Client-observable private action error contract at the WebSocket exception boundary. */
 @Tag("unit")
@@ -30,27 +42,27 @@ import static org.mockito.Mockito.verify;
 class WebSocketExceptionHandlerTest {
     /** Delayed failures remain owned by their original membership across every feedback branch. */
     @ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(strings = {"action", "ready", "unready", "malformed", "other"})
+    @ValueSource(strings = {"action", "ready", "unready", "malformed", "other"})
     void delayedRetiredFrameCannotNotifyReplacementMembership(String kind) {
         var rooms = mock(RoomService.class);
-        var room = new com.pokergame.model.Room(gameId, "Room", "Host", 6, 5, 10, 100, null);
+        var room = new Room(gameId, "Room", "Host", 6, 5, 10, 100, null);
         room.addPlayer(playerName);
         PlayerPrincipal original = new PlayerPrincipal(playerName, gameId, room.getMembershipId(playerName));
         room.removePlayer(playerName);
         room.addPlayer(playerName);
         PlayerPrincipal replacement = new PlayerPrincipal(playerName, gameId, room.getMembershipId(playerName));
-        org.mockito.Mockito.when(rooms.getRoom(gameId)).thenReturn(room);
+        Mockito.when(rooms.getRoom(gameId)).thenReturn(room);
         var realHandler = new WebSocketExceptionHandler(new GameStateService(rooms, messagingTemplate));
         String suffix = kind.equals("malformed") ? "action" : kind;
         String payload = kind.equals("malformed") ? "{\"action\":\"INVALID\"}" : "{\"action\":\"CHECK\"}";
         Message<String> frame = MessageBuilder.withPayload(payload)
                 .setHeader("simpDestination", "/app/" + gameId + "/" + suffix).build();
         realHandler.handleMessageException(new RuntimeException("Delayed failure"), original, frame);
-        verify(messagingTemplate).convertAndSendToUser(org.mockito.ArgumentMatchers.eq(original.getName()),
-                org.mockito.ArgumentMatchers.eq("/queue/private"), org.mockito.ArgumentMatchers.any(Object.class));
-        org.mockito.Mockito.verify(messagingTemplate, org.mockito.Mockito.never()).convertAndSendToUser(
-                org.mockito.ArgumentMatchers.eq(replacement.getName()), org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.any(Object.class));
+        verify(messagingTemplate).convertAndSendToUser(ArgumentMatchers.eq(original.getName()),
+                ArgumentMatchers.eq("/queue/private"), ArgumentMatchers.any(Object.class));
+        Mockito.verify(messagingTemplate, Mockito.never()).convertAndSendToUser(
+                ArgumentMatchers.eq(replacement.getName()), ArgumentMatchers.anyString(),
+                ArgumentMatchers.any(Object.class));
     }
 
     private SimpMessagingTemplate messagingTemplate;
@@ -141,10 +153,10 @@ class WebSocketExceptionHandlerTest {
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("NOT_YOUR_TURN", PlayerAction.BET, "Wait for your turn"));
-        verify(messagingTemplate, org.mockito.Mockito.never()).convertAndSendToUser(
-                org.mockito.ArgumentMatchers.contains("spoofed-game-999"),
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.any());
+        verify(messagingTemplate, Mockito.never()).convertAndSendToUser(
+                ArgumentMatchers.contains("spoofed-game-999"),
+                ArgumentMatchers.anyString(),
+                ArgumentMatchers.any());
     }
 
     /**
@@ -154,8 +166,8 @@ class WebSocketExceptionHandlerTest {
     void nestedActionFeedbackExceptionIsPreferredOverMessageConversion() {
         BadRequestException nested = new BadRequestException("Action amount cannot be negative",
                 "NEGATIVE_AMOUNT", "Amount must be positive; yours: -10");
-        org.springframework.messaging.converter.MessageConversionException wrapped =
-                new org.springframework.messaging.converter.MessageConversionException("conversion failed", nested);
+        MessageConversionException wrapped =
+                new MessageConversionException("conversion failed", nested);
 
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.BET));
 
@@ -198,8 +210,8 @@ class WebSocketExceptionHandlerTest {
      */
     @Test
     void nestedResourceNotFoundExceptionPreservesGameNotFound() {
-        com.pokergame.exception.ResourceNotFoundException nested =
-                new com.pokergame.exception.ResourceNotFoundException("Game not found");
+        ResourceNotFoundException nested =
+                new ResourceNotFoundException("Game not found");
         RuntimeException wrapped = new RuntimeException("outer", nested);
 
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.CHECK));
@@ -216,14 +228,14 @@ class WebSocketExceptionHandlerTest {
         Message<String> frame = MessageBuilder.withPayload("{\"action\":\"RAISE\",\"amount\":10000001}")
                 .setHeader("simpDestination", "/app/" + gameId + "/action").build();
 
-        java.lang.reflect.Method method = WebSocketExceptionHandlerTest.class.getDeclaredMethod("actionFrame", PlayerAction.class);
-        org.springframework.core.MethodParameter methodParameter = new org.springframework.core.MethodParameter(method, 0);
-        org.springframework.validation.BeanPropertyBindingResult bindingResult =
-                new org.springframework.validation.BeanPropertyBindingResult(new Object(), "actionRequest");
-        bindingResult.addError(new org.springframework.validation.FieldError(
+        Method method = WebSocketExceptionHandlerTest.class.getDeclaredMethod("actionFrame", PlayerAction.class);
+        MethodParameter methodParameter = new MethodParameter(method, 0);
+        BeanPropertyBindingResult bindingResult =
+                new BeanPropertyBindingResult(new Object(), "actionRequest");
+        bindingResult.addError(new FieldError(
                 "actionRequest", "amount", "Amount cannot exceed 10,000,000"));
-        org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException validationException =
-                new org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException(
+        MethodArgumentNotValidException validationException =
+                new MethodArgumentNotValidException(
                         frame, methodParameter, bindingResult);
 
         handler.handleMessageException(validationException, principal, frame);
@@ -237,9 +249,9 @@ class WebSocketExceptionHandlerTest {
      */
     @Test
     void typedRequestPayloadRecoversAction() {
-        com.pokergame.dto.request.PlayerActionRequest request =
-                new com.pokergame.dto.request.PlayerActionRequest(PlayerAction.FOLD, null);
-        Message<com.pokergame.dto.request.PlayerActionRequest> frame = MessageBuilder.withPayload(request)
+        PlayerActionRequest request =
+                new PlayerActionRequest(PlayerAction.FOLD, null);
+        Message<PlayerActionRequest> frame = MessageBuilder.withPayload(request)
                 .setHeader("simpDestination", "/app/" + gameId + "/action").build();
 
         handler.handleMessageException(new RuntimeException("processing failed"), principal, frame);

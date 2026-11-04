@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 
 import com.pokergame.dto.internal.TurnOutcome;
+import com.pokergame.enums.ScheduledGameTask;
 
 /**
  * Service class responsible for processing player actions and game progression.
@@ -83,7 +84,7 @@ public class PlayerActionService {
                 throw new BadRequestException("This hand is already complete.", "HAND_COMPLETE", "Hand is complete");
             }
 
-            if (game.getScheduledTaskDeadline(com.pokergame.enums.ScheduledGameTask.AUTO_ADVANCE) != null) {
+            if (game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE) != null) {
                 logger.warn("Player {} attempted to act in game {} while it is auto-advancing", playerName, gameId);
                 throw new BadRequestException("Actions are not allowed while the game is auto-advancing.", "HAND_ADVANCING", "Wait for the next turn");
             }

@@ -22,6 +22,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.enums.PlayerAction;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 /** Tests WebSocket security behavior. */
 @Tag("integration")
@@ -129,7 +133,7 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
 
         // Player 2 subscribes to /game/{roomId}
         StompSession session2 = connectSession(stompClient, player2.path("token").asText());
-        java.util.concurrent.BlockingQueue<String> receivedFrames = new java.util.concurrent.LinkedBlockingQueue<>();
+        BlockingQueue<String> receivedFrames = new LinkedBlockingQueue<>();
         session2.subscribe("/game/" + roomId, new StompFrameHandler() {
             @Override
             public Type getPayloadType(@NonNull StompHeaders headers) {
@@ -215,7 +219,7 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
         AtomicBoolean errorReceived = new AtomicBoolean(false);
         StompSession session1 = connectSessionWithErrorHandler(stompClient, player1.path("token").asText(), errorReceived);
 
-        session1.send("/app/" + room2Id + "/action", new com.pokergame.dto.request.PlayerActionRequest(com.pokergame.enums.PlayerAction.FOLD, null));
+        session1.send("/app/" + room2Id + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
 
         Awaitility.await()
                 .atMost(Duration.ofSeconds(5))

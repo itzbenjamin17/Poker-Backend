@@ -16,6 +16,8 @@ import java.io.InputStream;
 import java.util.Properties;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import com.pokergame.persistence.config.PersistenceProperties;
+import org.springframework.context.support.PropertySourcesPlaceholderConfigurer;
 
 /** Tests config contract behavior. */
 @Tag("unit")
@@ -130,11 +132,11 @@ class ConfigContractTest {
     @DisplayName("should default poker.persistence.enabled to false when environment variable is unset")
     void givenUnsetEnvironmentVariable_whenResolvingPersistenceProperty_thenDefaultsToFalse() {
         new ApplicationContextRunner()
-                .withUserConfiguration(org.springframework.context.support.PropertySourcesPlaceholderConfigurer.class, com.pokergame.persistence.config.PersistenceProperties.class)
+                .withUserConfiguration(PropertySourcesPlaceholderConfigurer.class, PersistenceProperties.class)
                 .withPropertyValues("poker.persistence.enabled=${POKER_PERSISTENCE_ENABLED:false}")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    com.pokergame.persistence.config.PersistenceProperties properties = context.getBean(com.pokergame.persistence.config.PersistenceProperties.class);
+                    PersistenceProperties properties = context.getBean(PersistenceProperties.class);
                     assertThat(properties.isEnabled()).isFalse();
                     assertThat(context.getEnvironment().getProperty("poker.persistence.enabled", Boolean.class)).isFalse();
                 });
@@ -166,7 +168,7 @@ class ConfigContractTest {
     @DisplayName("should fail fast when required placeholder is missing")
     void givenMissingPlaceholder_whenContextStarts_thenFailFast() {
         new ApplicationContextRunner()
-                .withUserConfiguration(org.springframework.context.support.PropertySourcesPlaceholderConfigurer.class, JwtService.class)
+                .withUserConfiguration(PropertySourcesPlaceholderConfigurer.class, JwtService.class)
                 .withPropertyValues("app.jwt.base64-secret=${UNRESOLVED_MANDATORY_ENV_VAR}")
                 .run(context -> {
                     assertThat(context).hasFailed();

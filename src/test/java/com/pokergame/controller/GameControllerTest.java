@@ -41,12 +41,15 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import com.pokergame.security.EndpointRateLimitFilter;
+import com.pokergame.security.PayloadSizeFilter;
+import org.springframework.test.context.TestPropertySource;
 
 /** Tests game controller behavior. */
 @WebMvcTest(GameController.class)
 @AutoConfigureMockMvc(addFilters = false)
 @ActiveProfiles("test")
-@org.springframework.test.context.TestPropertySource(locations = "classpath:application-test.properties")
+@TestPropertySource(locations = "classpath:application-test.properties")
 class GameControllerTest {
 
     @Autowired
@@ -71,10 +74,10 @@ class GameControllerTest {
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @MockitoBean
-    private com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter;
+    private EndpointRateLimitFilter endpointRateLimitFilter;
 
     @MockitoBean
-    private com.pokergame.security.PayloadSizeFilter payloadSizeFilter;
+    private PayloadSizeFilter payloadSizeFilter;
 
     private final String gameId = "game-123";
     private final String playerName = "Player1";

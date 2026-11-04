@@ -16,6 +16,7 @@ import org.springframework.test.context.ActiveProfiles;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import java.time.Duration;
 
 /** Tests resiliency integration behavior. */
 @Tag("integration")
@@ -70,7 +71,7 @@ class ResiliencyIntegrationTest extends AbstractIntegrationTestSupport {
         reconnectedOtherSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CHECK, null));
         
         // 6. Wait for Flop
-        await().atMost(java.time.Duration.ofSeconds(2)).untilAsserted(() -> {
+        await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
             JsonNode flopState = readGameState(gameId, hostToken);
             assertThat(flopState.path("phase").asText()).isEqualTo("FLOP");
         });

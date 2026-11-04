@@ -36,16 +36,28 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import com.pokergame.persistence.transaction.DurableMutationAspect;
+import com.pokergame.security.EndpointRateLimitFilter;
+import com.pokergame.security.RateLimitService;
+import com.pokergame.service.GameStateService;
+import com.pokergame.util.LockLease;
+import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mockito;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.util.ReflectionTestUtils;
+import com.pokergame.model.Room;
 
 /** Tests room controller behavior. */
 @WebMvcTest(RoomController.class)
 @AutoConfigureMockMvc(addFilters = false)
 @ActiveProfiles("test")
-@org.springframework.test.context.TestPropertySource(locations = "classpath:application-test.properties")
-@org.springframework.context.annotation.Import({
-        com.pokergame.security.RateLimitService.class,
-        com.pokergame.security.EndpointRateLimitFilter.class,
-        com.pokergame.security.PayloadSizeFilter.class
+@TestPropertySource(locations = "classpath:application-test.properties")
+@Import({
+        RateLimitService.class,
+        EndpointRateLimitFilter.class,
+        PayloadSizeFilter.class
 })
 class RoomControllerTest {
 
@@ -73,10 +85,10 @@ class RoomControllerTest {
     private PayloadSizeFilter payloadSizeFilter;
 
     @Autowired
-    private com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter;
+    private EndpointRateLimitFilter endpointRateLimitFilter;
 
     @Autowired
-    private com.pokergame.security.RateLimitService rateLimitService;
+    private RateLimitService rateLimitService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -88,7 +100,7 @@ class RoomControllerTest {
 
     /** Required by the WebSocket exception advice that the controller slice loads. */
     @MockitoBean
-    private com.pokergame.service.GameStateService gameStateService;
+    private GameStateService gameStateService;
 
     @MockitoBean
     private JwtService jwtService;
@@ -97,15 +109,15 @@ class RoomControllerTest {
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @MockitoBean
-    private com.pokergame.persistence.transaction.DurableMutationAspect durableMutationAspect;
+    private DurableMutationAspect durableMutationAspect;
 
     /**
      * Initializes the test fixtures before each scenario.
      */
     @BeforeEach
     void setup() {
-        org.mockito.Mockito.when(durableMutationAspect.acquireRoomLock(org.mockito.ArgumentMatchers.anyString()))
-                .thenReturn(com.pokergame.util.LockLease.none());
+        Mockito.when(durableMutationAspect.acquireRoomLock(ArgumentMatchers.anyString()))
+                .thenReturn(LockLease.none());
 
         // Reset rate limit buckets to ensure a fresh start for each test
         rateLimitService.reset();
@@ -234,7 +246,7 @@ class RoomControllerTest {
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
         Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
 
-        com.pokergame.model.Room room = new com.pokergame.model.Room(roomId, "Room1", playerName, 6, 10, 20, 1000, null);
+        Room room = new Room(roomId, "Room1", playerName, 6, 10, 20, 1000, null);
         room.addPlayer(playerName);
         when(roomService.getRoom(roomId)).thenReturn(room);
 
@@ -296,7 +308,7 @@ class RoomControllerTest {
         PlayerPrincipal principal = new PlayerPrincipal("NonMemberPlayer", roomId);
         Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
 
-        com.pokergame.model.Room room = new com.pokergame.model.Room(roomId, "Room1", "HostPlayer", 6, 10, 20, 1000, null);
+        Room room = new Room(roomId, "Room1", "HostPlayer", 6, 10, 20, 1000, null);
         room.addPlayer("HostPlayer");
         when(roomService.getRoom(roomId)).thenReturn(room);
 
@@ -401,7 +413,7 @@ class RoomControllerTest {
     @Test
     @DisplayName("POST /api/room/create - Whitespace-only password treated as absent")
     void createRoom_WhitespaceOnlyPassword_TreatedAsAbsent() throws Exception {
-        org.mockito.ArgumentCaptor<CreateRoomRequest> captor = org.mockito.ArgumentCaptor.forClass(CreateRoomRequest.class);
+        ArgumentCaptor<CreateRoomRequest> captor = ArgumentCaptor.forClass(CreateRoomRequest.class);
         when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn("room-123");
         when(jwtService.generateToken("Player1", "room-123")).thenReturn("mock-token");
 
@@ -421,7 +433,7 @@ class RoomControllerTest {
     @Test
     @DisplayName("POST /api/room/create - Password preserves spaces")
     void createRoom_PasswordPreservesSpaces() throws Exception {
-        org.mockito.ArgumentCaptor<CreateRoomRequest> captor = org.mockito.ArgumentCaptor.forClass(CreateRoomRequest.class);
+        ArgumentCaptor<CreateRoomRequest> captor = ArgumentCaptor.forClass(CreateRoomRequest.class);
         when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn("room-123");
         when(jwtService.generateToken("Player1", "room-123")).thenReturn("mock-token");
 
@@ -527,7 +539,7 @@ class RoomControllerTest {
     @Test
     @DisplayName("POST /api/room/join - Whitespace-only password treated as null")
     void joinRoom_WhitespaceOnlyPassword_TreatedAsNull() throws Exception {
-        org.mockito.ArgumentCaptor<JoinRoomRequest> captor = org.mockito.ArgumentCaptor.forClass(JoinRoomRequest.class);
+        ArgumentCaptor<JoinRoomRequest> captor = ArgumentCaptor.forClass(JoinRoomRequest.class);
         when(roomService.joinRoom(any(JoinRoomRequest.class))).thenReturn("room-123");
         when(jwtService.generateToken("Player2", "room-123")).thenReturn("mock-token");
 
@@ -546,7 +558,7 @@ class RoomControllerTest {
     @Test
     @DisplayName("POST /api/room/join - Password preserves spaces")
     void joinRoom_PasswordPreservesSpaces() throws Exception {
-        org.mockito.ArgumentCaptor<JoinRoomRequest> captor = org.mockito.ArgumentCaptor.forClass(JoinRoomRequest.class);
+        ArgumentCaptor<JoinRoomRequest> captor = ArgumentCaptor.forClass(JoinRoomRequest.class);
         when(roomService.joinRoom(any(JoinRoomRequest.class))).thenReturn("room-123");
         when(jwtService.generateToken("Player2", "room-123")).thenReturn("mock-token");
 
@@ -598,7 +610,7 @@ class RoomControllerTest {
     @Test
     @DisplayName("POST /api/room/create - Rate Limit Exceeded")
     void createRoom_RateLimitExceeded() throws Exception {
-        org.springframework.test.util.ReflectionTestUtils.setField(rateLimitService, "enabled", true);
+        ReflectionTestUtils.setField(rateLimitService, "enabled", true);
 
         CreateRoomRequest request = new CreateRoomRequest("Room", "Player1", 6, 10, 20, 1000, null);
 
@@ -670,7 +682,7 @@ class RoomControllerTest {
     void createRoom_WithActiveMembership_ShouldIssueTokenWithMembershipId() throws Exception {
         CreateRoomRequest request = new CreateRoomRequest("RoomMem", "HostAlice", 6, 10, 20, 1000, null);
         String roomId = "room-mem-123";
-        com.pokergame.model.Room room = new com.pokergame.model.Room(roomId, "RoomMem", "HostAlice", 6, 10, 20, 1000, null);
+        Room room = new Room(roomId, "RoomMem", "HostAlice", 6, 10, 20, 1000, null);
         String expectedMembershipId = room.addPlayer("HostAlice");
 
         when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn(roomId);
@@ -693,7 +705,7 @@ class RoomControllerTest {
     void joinRoom_WithActiveMembership_ShouldIssueTokenWithMembershipId() throws Exception {
         JoinRoomRequest request = new JoinRoomRequest("RoomMem", "Bob", null);
         String roomId = "room-mem-456";
-        com.pokergame.model.Room room = new com.pokergame.model.Room(roomId, "RoomMem", "HostAlice", 6, 10, 20, 1000, null);
+        Room room = new Room(roomId, "RoomMem", "HostAlice", 6, 10, 20, 1000, null);
         room.addPlayer("HostAlice");
         String expectedMembershipId = room.addPlayer("Bob");
 

@@ -39,6 +39,9 @@ import java.nio.file.StandardOpenOption;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
+import com.pokergame.config.WebSocketEventListener;
+import java.time.LocalDateTime;
+import org.springframework.context.annotation.Configuration;
 
 /**
  * Empirical Adversarial Challenge Suite for Tier 6 Backend Persistence:
@@ -177,8 +180,8 @@ public class Tier6AdversarialPersistenceChallengeTest {
 
         RoomService mockRoomService = Mockito.mock(RoomService.class);
         GameLifecycleService mockGameLifecycleService = Mockito.mock(GameLifecycleService.class);
-        com.pokergame.config.WebSocketEventListener mockWebSocketEventListener =
-                Mockito.mock(com.pokergame.config.WebSocketEventListener.class);
+        WebSocketEventListener mockWebSocketEventListener =
+                Mockito.mock(WebSocketEventListener.class);
         GenericApplicationContext appContext = new GenericApplicationContext();
         appContext.refresh();
 
@@ -190,7 +193,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
         Room room1 = Room.restoreBuilder()
                 .roomId(r1).roomName("Valid Room 1").hostName("Alice").maxPlayers(6)
                 .smallBlind(10).bigBlind(20).buyIn(1000).password(null)
-                .playersWithJoinTime(Map.of("Alice", java.time.LocalDateTime.now(), "Bob", java.time.LocalDateTime.now()))
+                .playersWithJoinTime(Map.of("Alice", LocalDateTime.now(), "Bob", LocalDateTime.now()))
                 .gameStarted(true).build();
         Player p1 = new Player("Alice", "p1", 950);
         Player p2 = new Player("Bob", "p2", 950);
@@ -210,7 +213,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
         Room room3 = Room.restoreBuilder()
                 .roomId(r3).roomName("Broken Room").hostName("Dave").maxPlayers(6)
                 .smallBlind(10).bigBlind(20).buyIn(1000).password(null)
-                .playersWithJoinTime(Map.of("Dave", java.time.LocalDateTime.now()))
+                .playersWithJoinTime(Map.of("Dave", LocalDateTime.now()))
                 .gameStarted(false).build();
         AggregateStateImage img3 = mapper.captureStateImage(room3, "Dave", null);
         WalTransaction tx3 = store.prepare(r3);
@@ -223,7 +226,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
         Room room4 = Room.restoreBuilder()
                 .roomId(r4).roomName("Valid Lobby").hostName("Eve").maxPlayers(6)
                 .smallBlind(10).bigBlind(20).buyIn(1000).password(null)
-                .playersWithJoinTime(Map.of("Eve", java.time.LocalDateTime.now()))
+                .playersWithJoinTime(Map.of("Eve", LocalDateTime.now()))
                 .gameStarted(false).build();
         AggregateStateImage img4 = mapper.captureStateImage(room4, "Eve", null);
         WalTransaction tx4 = store.prepare(r4);
@@ -544,7 +547,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
         }
     }
 
-    @org.springframework.context.annotation.Configuration
+    @Configuration
     static class ChallengeE2eConfig {}
 
     // =========================================================================

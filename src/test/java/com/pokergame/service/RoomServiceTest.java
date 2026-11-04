@@ -46,6 +46,11 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import org.awaitility.Awaitility;
+import org.junit.jupiter.api.Assertions;
+import org.mockito.ArgumentMatchers;
 
 /** Tests room service behavior. */
 @Tag("unit")
@@ -114,7 +119,7 @@ class RoomServiceTest {
             assertThat(room.getRoomName()).isEqualTo("Test Room");
             assertThat(room.getHostName()).isEqualTo("HostPlayer");
             assertThat(room.getPlayers()).containsExactly("HostPlayer");
-            verify(messagingTemplate).convertAndSend(anyString(), org.mockito.ArgumentMatchers.any(Object.class));
+            verify(messagingTemplate).convertAndSend(anyString(), ArgumentMatchers.any(Object.class));
         }
 
         /**
@@ -289,7 +294,7 @@ class RoomServiceTest {
             roomService.joinRoom(new JoinRoomRequest("Test Room", "NewPlayer", null));
 
             assertThat(roomService.getRoom(roomId).getPlayers()).containsExactly("HostPlayer", "NewPlayer");
-            verify(messagingTemplate).convertAndSend(anyString(), org.mockito.ArgumentMatchers.any(Object.class));
+            verify(messagingTemplate).convertAndSend(anyString(), ArgumentMatchers.any(Object.class));
         }
 
         /**
@@ -503,7 +508,7 @@ class RoomServiceTest {
 
             assertThat(roomService.getRoom(roomId)).isNotNull();
             assertThat(roomService.getRoom(roomId).getPlayers()).containsExactly("HostPlayer");
-            verify(messagingTemplate).convertAndSend(anyString(), org.mockito.ArgumentMatchers.any(Object.class));
+            verify(messagingTemplate).convertAndSend(anyString(), ArgumentMatchers.any(Object.class));
         }
 
         /**
@@ -518,7 +523,7 @@ class RoomServiceTest {
 
             assertThat(roomService.getRoom(roomId)).isNull();
             verify(messagingTemplate, times(2))
-                    .convertAndSend(anyString(), org.mockito.ArgumentMatchers.any(Object.class));
+                    .convertAndSend(anyString(), ArgumentMatchers.any(Object.class));
         }
 
         /**
@@ -570,9 +575,9 @@ class RoomServiceTest {
                 roomService.joinRoom(new JoinRoomRequest(roomName, "Successor", null));
                 roomService.joinRoom(new JoinRoomRequest(roomName, "Player3", null));
 
-                java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
-                java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(2);
-                java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+                CountDownLatch startLatch = new CountDownLatch(1);
+                CountDownLatch doneLatch = new CountDownLatch(2);
+                AtomicReference<Throwable> error = new AtomicReference<>();
 
                 Thread t1 = new Thread(() -> {
                     try {
@@ -600,16 +605,16 @@ class RoomServiceTest {
                 t2.start();
                 startLatch.countDown();
 
-                boolean completed = doneLatch.await(3, java.util.concurrent.TimeUnit.SECONDS);
-                org.junit.jupiter.api.Assertions.assertTrue(completed, "Leave operations timed out at iteration " + i);
-                org.junit.jupiter.api.Assertions.assertNull(error.get(), "Unexpected error during concurrent leave: " + error.get());
+                boolean completed = doneLatch.await(3, TimeUnit.SECONDS);
+                Assertions.assertTrue(completed, "Leave operations timed out at iteration " + i);
+                Assertions.assertNull(error.get(), "Unexpected error during concurrent leave: " + error.get());
 
                 Room room = roomService.getRoom(roomId);
                 if (room != null) {
                     String currentHost = roomService.getCurrentHost(roomId);
-                    org.junit.jupiter.api.Assertions.assertNotNull(currentHost, "Current host must not be null if room exists");
-                    org.junit.jupiter.api.Assertions.assertTrue(room.getPlayers().contains(currentHost), "Current host must be a member of the room, was: " + currentHost);
-                    org.junit.jupiter.api.Assertions.assertEquals("Player3", currentHost);
+                    Assertions.assertNotNull(currentHost, "Current host must not be null if room exists");
+                    Assertions.assertTrue(room.getPlayers().contains(currentHost), "Current host must be a member of the room, was: " + currentHost);
+                    Assertions.assertEquals("Player3", currentHost);
                 }
             }
         }
@@ -630,10 +635,10 @@ class RoomServiceTest {
             roomService.joinRoom(new JoinRoomRequest("Test Room", "Player2", null));
             Room room = roomService.getRoom(roomId);
 
-            java.util.concurrent.CountDownLatch lockAcquired = new java.util.concurrent.CountDownLatch(1);
-            java.util.concurrent.CountDownLatch releaseLock = new java.util.concurrent.CountDownLatch(1);
-            java.util.concurrent.atomic.AtomicBoolean getRoomDataStarted = new java.util.concurrent.atomic.AtomicBoolean(false);
-            java.util.concurrent.atomic.AtomicBoolean getRoomDataFinished = new java.util.concurrent.atomic.AtomicBoolean(false);
+            CountDownLatch lockAcquired = new CountDownLatch(1);
+            CountDownLatch releaseLock = new CountDownLatch(1);
+            AtomicBoolean getRoomDataStarted = new AtomicBoolean(false);
+            AtomicBoolean getRoomDataFinished = new AtomicBoolean(false);
 
             Thread holder = new Thread(() -> {
                 synchronized (room) {
@@ -653,13 +658,13 @@ class RoomServiceTest {
             });
             reader.start();
 
-            org.awaitility.Awaitility.await().atMost(2, java.util.concurrent.TimeUnit.SECONDS).untilTrue(getRoomDataStarted);
-            org.junit.jupiter.api.Assertions.assertFalse(getRoomDataFinished.get(), "getRoomData must block while Room monitor is held by another thread");
+            Awaitility.await().atMost(2, TimeUnit.SECONDS).untilTrue(getRoomDataStarted);
+            Assertions.assertFalse(getRoomDataFinished.get(), "getRoomData must block while Room monitor is held by another thread");
 
             releaseLock.countDown();
             reader.join(2000);
             holder.join(2000);
-            org.junit.jupiter.api.Assertions.assertTrue(getRoomDataFinished.get());
+            Assertions.assertTrue(getRoomDataFinished.get());
         }
 
         @Test

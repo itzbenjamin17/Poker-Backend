@@ -14,6 +14,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.UUID;
 
 /**
  * Represents a poker game room/lobby where players can join and play together.
@@ -42,8 +46,8 @@ public class Room {
      * Writes remain guarded by this Room instance monitor. Atomic membership reads
      * also support private projection while a caller already holds the Game monitor.
      */
-    private final Map<String, String> playerMembershipIds = new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.Set<String> persistedMembershipPlayers = new java.util.HashSet<>();
+    private final Map<String, String> playerMembershipIds = new ConcurrentHashMap<>();
+    private final Set<String> persistedMembershipPlayers = new HashSet<>();
     private static final PasswordEncoder DEFAULT_PASSWORD_ENCODER = new BCryptPasswordEncoder();
 
     /**
@@ -56,7 +60,7 @@ public class Room {
      * Process-local active socket presence bounded by room membership.
      * Guarded by this Room instance monitor. Excluded from WAL serialization.
      */
-    private final java.util.Set<String> connectedPlayers = new java.util.HashSet<>();
+    private final Set<String> connectedPlayers = new HashSet<>();
     private final int maxPlayers;
     private final int smallBlind;
     private final int bigBlind;
@@ -285,7 +289,7 @@ public class Room {
                             room.playerMembershipIds.put(playerName, persistedId);
                             room.persistedMembershipPlayers.add(playerName);
                         } else {
-                            room.playerMembershipIds.put(playerName, java.util.UUID.randomUUID().toString());
+                            room.playerMembershipIds.put(playerName, UUID.randomUUID().toString());
                         }
                     }
                 }
@@ -321,7 +325,7 @@ public class Room {
             throw new IllegalStateException("Room is full");
         }
         playersWithJoinTime.put(playerName, LocalDateTime.now());
-        String membershipId = java.util.UUID.randomUUID().toString();
+        String membershipId = UUID.randomUUID().toString();
         playerMembershipIds.put(playerName, membershipId);
         return membershipId;
     }

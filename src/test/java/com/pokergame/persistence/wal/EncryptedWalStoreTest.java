@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import com.pokergame.persistence.config.PersistenceException;
+import java.util.Arrays;
 
 /** Tests encrypted WAL store behavior. */
 class EncryptedWalStoreTest {
@@ -71,7 +72,7 @@ class EncryptedWalStoreTest {
         byte[] committed = Files.readAllBytes(wal);
         store.prepare("room-3");
         byte[] withFinalPrepare = Files.readAllBytes(wal);
-        Files.write(wal, java.util.Arrays.copyOf(withFinalPrepare, withFinalPrepare.length - 5));
+        Files.write(wal, Arrays.copyOf(withFinalPrepare, withFinalPrepare.length - 5));
         assertEquals("safe", new String(store.recoverLatest("room-3").orElseThrow(), StandardCharsets.UTF_8));
 
         Files.write(wal, committed);
@@ -257,7 +258,7 @@ class EncryptedWalStoreTest {
         first.prepare("room-torn");
         Path wal = directory.resolve("room-torn.wal");
         byte[] bytes = Files.readAllBytes(wal);
-        Files.write(wal, java.util.Arrays.copyOf(bytes, bytes.length - 5));
+        Files.write(wal, Arrays.copyOf(bytes, bytes.length - 5));
         EncryptedWalStore second = new EncryptedWalStore(directory, keys);
         assertArrayEquals(new byte[]{1}, second.recoverLatest("room-torn").orElseThrow());
         assertTrue(second.requiresCheckpoint("room-torn"));
@@ -556,7 +557,7 @@ class EncryptedWalStoreTest {
      */
     private static byte[] filledKey(byte value) {
         byte[] key = new byte[32];
-        java.util.Arrays.fill(key, value);
+        Arrays.fill(key, value);
         return key;
     }
 }

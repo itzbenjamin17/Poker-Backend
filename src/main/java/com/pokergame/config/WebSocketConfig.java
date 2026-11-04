@@ -13,6 +13,14 @@ import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
 import java.util.List;
+import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.util.SecurityUtils;
+import java.security.Principal;
+import org.springframework.core.MethodParameter;
+import org.springframework.messaging.handler.invocation.HandlerMethodArgumentResolver;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 
 /** Configures STOMP endpoints, broker destinations, and inbound interceptors. */
 @Configuration
@@ -101,18 +109,18 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
      * @param argumentResolvers argument resolvers to configure
      */
     @Override
-    public void addArgumentResolvers(List<org.springframework.messaging.handler.invocation.HandlerMethodArgumentResolver> argumentResolvers) {
-        argumentResolvers.add(new org.springframework.messaging.handler.invocation.HandlerMethodArgumentResolver() {
+    public void addArgumentResolvers(List<HandlerMethodArgumentResolver> argumentResolvers) {
+        argumentResolvers.add(new HandlerMethodArgumentResolver() {
             @Override
-            public boolean supportsParameter(org.springframework.core.MethodParameter parameter) {
-                return parameter.hasParameterAnnotation(org.springframework.security.core.annotation.AuthenticationPrincipal.class)
-                        && com.pokergame.security.PlayerPrincipal.class.isAssignableFrom(parameter.getParameterType());
+            public boolean supportsParameter(MethodParameter parameter) {
+                return parameter.hasParameterAnnotation(AuthenticationPrincipal.class)
+                        && PlayerPrincipal.class.isAssignableFrom(parameter.getParameterType());
             }
 
             @Override
-            public Object resolveArgument(org.springframework.core.MethodParameter parameter, org.springframework.messaging.Message<?> message) {
-                java.security.Principal user = org.springframework.messaging.simp.SimpMessageHeaderAccessor.getUser(message.getHeaders());
-                return com.pokergame.util.SecurityUtils.getPlayer(user);
+            public Object resolveArgument(MethodParameter parameter, Message<?> message) {
+                Principal user = SimpMessageHeaderAccessor.getUser(message.getHeaders());
+                return SecurityUtils.getPlayer(user);
             }
         });
     }

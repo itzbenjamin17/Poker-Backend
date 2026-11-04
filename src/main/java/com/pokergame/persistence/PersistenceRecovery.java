@@ -22,6 +22,7 @@ import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.config.PersistenceException;
+import java.util.HashMap;
 
 /**
  * Reloads all saved poker games and rooms back into memory when the server starts up.
@@ -131,7 +132,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
 
         // Calculate a new grace period deadline from the current time
         long freshDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
-        Map<RecoveredPlayerKey, Long> recoveredDeadlines = new java.util.HashMap<>();
+        Map<RecoveredPlayerKey, Long> recoveredDeadlines = new HashMap<>();
 
         for (RecoveredAggregate aggregate : recoveredAggregates) {
             String roomId = aggregate.room().getRoomId();

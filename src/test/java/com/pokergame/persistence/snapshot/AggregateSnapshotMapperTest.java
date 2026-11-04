@@ -28,6 +28,19 @@ import java.util.concurrent.*;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
+import com.pokergame.enums.HandRank;
+import com.pokergame.exception.UnauthorisedActionException;
+import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.service.RoomService;
+import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.HashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.mockito.Mockito;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 /** Tests aggregate snapshot mapper behavior. */
 class AggregateSnapshotMapperTest {
@@ -123,18 +136,18 @@ class AggregateSnapshotMapperTest {
 
         String versionThree = new String(snapshot, StandardCharsets.UTF_8).replace("\"schemaVersion\":4", "\"schemaVersion\":3");
         assertNotEquals(new String(snapshot, StandardCharsets.UTF_8), versionThree);
-        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+        assertThrows(PersistenceException.class,
                 () -> mapper.deserialize(versionThree.getBytes(StandardCharsets.UTF_8)));
 
         String versionTwo = new String(snapshot, StandardCharsets.UTF_8).replace("\"schemaVersion\":4", "\"schemaVersion\":2");
         assertNotEquals(new String(snapshot, StandardCharsets.UTF_8), versionTwo);
-        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+        assertThrows(PersistenceException.class,
                 () -> mapper.deserialize(versionTwo.getBytes(StandardCharsets.UTF_8)));
         String invalidRevision = new String(snapshot, StandardCharsets.UTF_8).replace("\"stateRevision\":19", "\"stateRevision\":-1");
-        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+        assertThrows(PersistenceException.class,
                 () -> mapper.deserialize(invalidRevision.getBytes(StandardCharsets.UTF_8)));
 
-        Map<String, Integer> mutableAwards = new java.util.HashMap<>(Map.of("a", 1));
+        Map<String, Integer> mutableAwards = new HashMap<>(Map.of("a", 1));
         HandSettlementResult immutable = new HandSettlementResult(mutableAwards, Map.of(), Set.of("a"), 0, true);
         mutableAwards.put("b", 2);
         assertEquals(Map.of("a", 1), immutable.contestedAwards());
@@ -154,12 +167,12 @@ class AggregateSnapshotMapperTest {
                 Player.restoreBuilder().name("Alice").playerId("a").chips(2000).currentBet(0)
                         .holeCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
                         .bestHand(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
-                        .handRank(com.pokergame.enums.HandRank.HIGH_CARD)
+                        .handRank(HandRank.HIGH_CARD)
                         .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build(),
                 Player.restoreBuilder().name("Bob").playerId("b").chips(0).currentBet(0)
                         .holeCards(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.DIAMONDS)))
                         .bestHand(List.of())
-                        .handRank(com.pokergame.enums.HandRank.NO_HAND)
+                        .handRank(HandRank.NO_HAND)
                         .hasFolded(false).allIn(false).out(true).disconnected(false).readyForNextHand(false).build());
 
         PublicGameStateResponse finalState = new PublicGameStateResponse(
@@ -167,7 +180,7 @@ class AggregateSnapshotMapperTest {
                 List.of(new Card(Rank.TEN, Suit.CLUBS)),
                 List.of(
                         new PublicPlayerState("a", "Alice", 2000, 0, "ACTIVE", false, false, false, true, false,
-                                com.pokergame.enums.HandRank.HIGH_CARD, List.of(new Card(Rank.ACE, Suit.SPADES)),
+                                HandRank.HIGH_CARD, List.of(new Card(Rank.ACE, Suit.SPADES)),
                                 true, null, List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)), null, false),
                         new PublicPlayerState("b", "Bob", 0, 0, "OUT", false, false, false, false, true,
                                 null, List.of(), false, null, null, null, true)),
@@ -218,19 +231,19 @@ class AggregateSnapshotMapperTest {
         // Validate corrupt terminal results
         String wrongGameId = json.replace("\"retainedTerminalResult\":{\"type\":\"GAME_END\",\"gameId\":\"room-terminal\"",
                 "\"retainedTerminalResult\":{\"type\":\"GAME_END\",\"gameId\":\"wrong-game-id\"");
-        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+        assertThrows(PersistenceException.class,
                 () -> mapper.deserialize(wrongGameId.getBytes(StandardCharsets.UTF_8)));
 
         String negativeChips = json.replace("\"winnerChips\":2000", "\"winnerChips\":-1");
-        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+        assertThrows(PersistenceException.class,
                 () -> mapper.deserialize(negativeChips.getBytes(StandardCharsets.UTF_8)));
 
         String missingWinner = json.replace("\"winner\":\"Alice\"", "\"winner\":\"\"");
-        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+        assertThrows(PersistenceException.class,
                 () -> mapper.deserialize(missingWinner.getBytes(StandardCharsets.UTF_8)));
 
         String missingMessage = json.replace("\"message\":", "\"message\":\"\", \"oldMessage\":");
-        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+        assertThrows(PersistenceException.class,
                 () -> mapper.deserialize(missingMessage.getBytes(StandardCharsets.UTF_8)));
 
         assertTerminalFinalStateCorruptionRejected(mapper, json, "\"maxPlayers\":6", "\"maxPlayers\":1");
@@ -255,10 +268,10 @@ class AggregateSnapshotMapperTest {
         String prefix = json.substring(0, terminalStart);
         String terminal = json.substring(terminalStart);
         assertTrue(terminal.contains(target), "terminal fixture mutation target missing: " + target);
-        String corrupted = prefix + terminal.replaceFirst(java.util.regex.Pattern.quote(target),
-                java.util.regex.Matcher.quoteReplacement(replacement));
+        String corrupted = prefix + terminal.replaceFirst(Pattern.quote(target),
+                Matcher.quoteReplacement(replacement));
         assertTrue(corrupted.startsWith(prefix), "room and live game fixture must remain unchanged");
-        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+        assertThrows(PersistenceException.class,
                 () -> mapper.deserialize(corrupted.getBytes(StandardCharsets.UTF_8)));
     }
 
@@ -269,11 +282,11 @@ class AggregateSnapshotMapperTest {
         String prefix = json.substring(0, finalStateStart);
         String finalState = json.substring(finalStateStart);
         assertTrue(finalState.contains(target), "nested final state mutation target missing: " + target);
-        String corrupted = prefix + finalState.replaceFirst(java.util.regex.Pattern.quote(target),
-                java.util.regex.Matcher.quoteReplacement(replacement));
+        String corrupted = prefix + finalState.replaceFirst(Pattern.quote(target),
+                Matcher.quoteReplacement(replacement));
         assertEquals(json.substring(0, finalStateStart), corrupted.substring(0, finalStateStart),
                 "room, live game, and retained terminal envelope must remain unchanged");
-        assertThrows(com.pokergame.persistence.config.PersistenceException.class,
+        assertThrows(PersistenceException.class,
                 () -> mapper.deserialize(corrupted.getBytes(StandardCharsets.UTF_8)));
     }
 
@@ -303,7 +316,7 @@ class AggregateSnapshotMapperTest {
         Player initialA = restored.getPlayers().getFirst();
         assertEquals(150, restored.getMinimumRaiseAmount(initialA));
         assertFalse(restored.isRaiseOpenTo(initialA));
-        assertThrows(com.pokergame.exception.UnauthorisedActionException.class,
+        assertThrows(UnauthorisedActionException.class,
                 () -> restored.processPlayerDecision(initialA, new PlayerDecision(PlayerAction.RAISE, 150, "a")));
         Player restoredShort = restored.getPlayers().get(3);
         restored.processPlayerDecision(restoredShort, new PlayerDecision(PlayerAction.ALL_IN, 0, "s2"));
@@ -356,15 +369,15 @@ class AggregateSnapshotMapperTest {
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build(), evaluator);
         String legacyJson = "{\"schemaVersion\":2,\"deleted\":false,\"room\":{\"roomId\":\"r1\"}}";
-        com.pokergame.persistence.config.PersistenceException ex = assertThrows(
-                com.pokergame.persistence.config.PersistenceException.class,
+        PersistenceException ex = assertThrows(
+                PersistenceException.class,
                 () -> mapper.deserialize(legacyJson.getBytes(StandardCharsets.UTF_8)));
         assertTrue(ex.getMessage().contains("Unsupported aggregate snapshot schema: 2"));
     }
 
     private Player bettingPlayer(String name, String id, int chips, int currentBet, boolean allIn) {
         return Player.restoreBuilder().name(name).playerId(id).chips(chips).currentBet(currentBet)
-                .holeCards(List.of()).bestHand(List.of()).handRank(com.pokergame.enums.HandRank.NO_HAND)
+                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
                 .hasFolded(false).allIn(allIn).out(false).disconnected(false).readyForNextHand(false).build();
     }
 
@@ -425,9 +438,9 @@ class AggregateSnapshotMapperTest {
         game.dealHoleCards();
         game.postBlinds();
 
-        java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
-        java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
-        java.util.List<byte[]> capturedSnapshots = new java.util.concurrent.CopyOnWriteArrayList<>();
+        AtomicBoolean running = new AtomicBoolean(true);
+        AtomicReference<Throwable> error = new AtomicReference<>();
+        List<byte[]> capturedSnapshots = new CopyOnWriteArrayList<>();
 
         // Thread 1: Mutates game state under synchronized (game)
         Thread mutator = new Thread(() -> {
@@ -519,14 +532,14 @@ class AggregateSnapshotMapperTest {
         String roomId = "cme-stress-room";
         Player p1 = new Player("Alice", "p1", 1000);
         Player p2 = new Player("Bob", "p2", 1000);
-        Game game = new Game(roomId, new java.util.ArrayList<>(List.of(p1, p2)), 10, 20, evaluator);
+        Game game = new Game(roomId, new ArrayList<>(List.of(p1, p2)), 10, 20, evaluator);
 
         int readerCount = 4;
         int mutatorCount = 2;
         int operationsPerMutator = 1000;
-        java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
-        java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
-        java.util.concurrent.atomic.AtomicInteger snapshotsExtracted = new java.util.concurrent.atomic.AtomicInteger();
+        AtomicBoolean running = new AtomicBoolean(true);
+        AtomicReference<Throwable> error = new AtomicReference<>();
+        AtomicInteger snapshotsExtracted = new AtomicInteger();
         CountDownLatch startLatch = new CountDownLatch(1);
         CountDownLatch doneLatch = new CountDownLatch(mutatorCount);
 
@@ -659,8 +672,8 @@ class AggregateSnapshotMapperTest {
         assertEquals(bobMemId, recovered.room().getMembershipId("Bob"),
                 "Bob membershipId must survive WAL snapshot round-trip");
 
-        com.pokergame.service.RoomService roomService = new com.pokergame.service.RoomService(
-                org.mockito.Mockito.mock(org.springframework.messaging.simp.SimpMessagingTemplate.class));
+        RoomService roomService = new RoomService(
+                Mockito.mock(SimpMessagingTemplate.class));
         roomService.restoreRoom(recovered.room(), recovered.currentHost());
 
         assertEquals(aliceMemId, roomService.getRoom("mem-room").getMembershipId("Alice"));

@@ -40,6 +40,8 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import com.pokergame.security.RateLimitService;
+import java.util.HashSet;
 
 /**
  * Reconciles process-local WebSocket sessions with durable player membership.
@@ -56,7 +58,7 @@ public class WebSocketEventListener {
 
     private final RoomService roomService;
     private final GameLifecycleService gameLifecycleService;
-    private final com.pokergame.security.RateLimitService rateLimitService;
+    private final RateLimitService rateLimitService;
     private final long disconnectGracePeriodMs;
     private final ConcurrentMap<String, Set<String>> activeSessionsByUser = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PlayerPrincipal> sessionToPrincipal = new ConcurrentHashMap<>();
@@ -85,7 +87,7 @@ public class WebSocketEventListener {
      */
     public WebSocketEventListener(RoomService roomService,
             GameLifecycleService gameLifecycleService,
-            com.pokergame.security.RateLimitService rateLimitService,
+            RateLimitService rateLimitService,
             @Qualifier("taskScheduler") TaskScheduler taskScheduler,
             DurableMutationAspect durableMutationAspect,
             @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
@@ -712,7 +714,7 @@ public class WebSocketEventListener {
         LockLease roomLease = durableMutationAspect.acquireRoomLock(roomId);
         try (roomLease) {
             gameLifecycleService.cancelRuntimeTasks(roomId, false);
-            java.util.Set<String> usersToClean = new java.util.HashSet<>();
+            Set<String> usersToClean = new HashSet<>();
             for (String user : activeSessionsByUser.keySet()) {
                 if (user.endsWith(":" + roomId)) {
                     usersToClean.add(user);

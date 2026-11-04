@@ -28,6 +28,8 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import com.pokergame.enums.HandRank;
+import java.util.stream.Collectors;
 
 /**
  * Unit tests for the GameStateService class.
@@ -492,15 +494,15 @@ class GameStateServiceTest {
     void broadcastGameEnd_ContestedShowdownRevealsWinnerCards() {
         Player winner = testPlayers.getFirst();
         Player other = testPlayers.get(1);
-        List<Card> board = List.of(new Card(com.pokergame.enums.Rank.ACE, com.pokergame.enums.Suit.SPADES),
-                new Card(com.pokergame.enums.Rank.KING, com.pokergame.enums.Suit.SPADES),
-                new Card(com.pokergame.enums.Rank.QUEEN, com.pokergame.enums.Suit.SPADES),
-                new Card(com.pokergame.enums.Rank.JACK, com.pokergame.enums.Suit.SPADES),
-                new Card(com.pokergame.enums.Rank.TEN, com.pokergame.enums.Suit.SPADES));
-        winner.getHoleCards().addAll(List.of(new Card(com.pokergame.enums.Rank.TWO, com.pokergame.enums.Suit.CLUBS),
-                new Card(com.pokergame.enums.Rank.THREE, com.pokergame.enums.Suit.CLUBS)));
-        other.getHoleCards().addAll(List.of(new Card(com.pokergame.enums.Rank.FOUR, com.pokergame.enums.Suit.CLUBS),
-                new Card(com.pokergame.enums.Rank.FIVE, com.pokergame.enums.Suit.CLUBS)));
+        List<Card> board = List.of(new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.KING, Suit.SPADES),
+                new Card(Rank.QUEEN, Suit.SPADES),
+                new Card(Rank.JACK, Suit.SPADES),
+                new Card(Rank.TEN, Suit.SPADES));
+        winner.getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.CLUBS),
+                new Card(Rank.THREE, Suit.CLUBS)));
+        other.getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.CLUBS),
+                new Card(Rank.FIVE, Suit.CLUBS)));
         Game contested = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
                 .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
                 .communityCards(board).pot(0).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
@@ -524,16 +526,16 @@ class GameStateServiceTest {
     @Test
     void finalDtoCapturesTerminalCarryOverOnceWithWinnerStack1010AndEmptyPot() {
         Player sb = Player.restoreBuilder().name("SB").playerId("sb").chips(0).holeCards(List.of())
-                .bestHand(List.of()).handRank(com.pokergame.enums.HandRank.NO_HAND).currentBet(0)
+                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0)
                 .hasFolded(true).allIn(false).out(true).disconnected(false).readyForNextHand(false).build();
         Player bb = Player.restoreBuilder().name("BB").playerId("bb").chips(1000).holeCards(List.of())
-                .bestHand(List.of()).handRank(com.pokergame.enums.HandRank.NO_HAND).currentBet(0)
+                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0)
                 .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
         HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, true);
         Game terminal = Game.restoreBuilder().gameId(GAME_ID).players(List.of(sb, bb)).activePlayerIds(List.of("bb"))
                 .remainingDeck(List.of()).communityCards(List.of()).pot(10).dealerPosition(0).smallBlindPosition(0)
                 .bigBlindPosition(1).currentPlayerPosition(0).currentHighestBet(0)
-                .currentPhase(com.pokergame.enums.GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10)
+                .currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10)
                 .handContributions(Map.of()).preHandCarryOver(10).lastSettlementResult(settled)
                 .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
@@ -557,15 +559,15 @@ class GameStateServiceTest {
     void showdownDtoUsesPerPlayerContestedAwardsInsteadOfEqualShareGuess() {
         Player mainWinner = testPlayers.get(0);
         Player sideWinner = testPlayers.get(1);
-        mainWinner.setHandRank(com.pokergame.enums.HandRank.HIGH_CARD);
-        sideWinner.setHandRank(com.pokergame.enums.HandRank.ONE_PAIR);
+        mainWinner.setHandRank(HandRank.HIGH_CARD);
+        sideWinner.setHandRank(HandRank.ONE_PAIR);
         HandSettlementResult settlement = new HandSettlementResult(
                 Map.of(mainWinner.getPlayerId(), 150, sideWinner.getPlayerId(), 200),
                 Map.of(), Set.of(mainWinner.getPlayerId(), sideWinner.getPlayerId()), 0, true);
         Game settled = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
                 .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
                 .communityCards(List.of()).pot(0).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                .currentPlayerPosition(0).currentHighestBet(0).currentPhase(com.pokergame.enums.GamePhase.SHOWDOWN)
+                .currentPlayerPosition(0).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of())
                 .lastSettlementResult(settlement).preHandCarryOver(0).readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
@@ -593,17 +595,17 @@ class GameStateServiceTest {
         Game settled = Game.restoreBuilder().gameId(GAME_ID).players(players)
                 .activePlayerIds(players.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
                 .communityCards(List.of()).pot(450).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                .currentPlayerPosition(0).currentHighestBet(150).currentPhase(com.pokergame.enums.GamePhase.RIVER)
+                .currentPlayerPosition(0).currentHighestBet(150).currentPhase(GamePhase.RIVER)
                 .gameOver(false).smallBlind(5).bigBlind(10)
                 .handContributions(Map.of("main", 50, "side1", 100, "side2", 150, "side3", 150))
                 .preHandCarryOver(0).readyCountdownActive(true).everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         when(handEvaluator.getBestHand(any(), any()))
-                .thenReturn(new HandEvaluationResult(List.of(), com.pokergame.enums.HandRank.ROYAL_FLUSH))
-                .thenReturn(new HandEvaluationResult(List.of(), com.pokergame.enums.HandRank.STRAIGHT))
-                .thenReturn(new HandEvaluationResult(List.of(), com.pokergame.enums.HandRank.ONE_PAIR))
-                .thenReturn(new HandEvaluationResult(List.of(), com.pokergame.enums.HandRank.HIGH_CARD));
+                .thenReturn(new HandEvaluationResult(List.of(), HandRank.ROYAL_FLUSH))
+                .thenReturn(new HandEvaluationResult(List.of(), HandRank.STRAIGHT))
+                .thenReturn(new HandEvaluationResult(List.of(), HandRank.ONE_PAIR))
+                .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
 
         List<Player> winners = settled.conductShowdown();
         ArgumentCaptor<Object> initialCaptor = ArgumentCaptor.forClass(Object.class);
@@ -621,7 +623,7 @@ class GameStateServiceTest {
         assertEquals(List.of(), response.legalActions());
         assertEquals(Map.of("main", 200, "side1", 150, "side2", 100), response.players().stream()
                 .filter(PublicPlayerState::isWinner)
-                .collect(java.util.stream.Collectors.toMap(PublicPlayerState::id, PublicPlayerState::chipsWon)));
+                .collect(Collectors.toMap(PublicPlayerState::id, PublicPlayerState::chipsWon)));
         assertTrue(response.players().stream().noneMatch(p -> p.isCurrentPlayer()));
         PublicPlayerState initialMain = initial.players().stream().filter(p -> p.id().equals("main")).findFirst().orElseThrow();
         PublicPlayerState readyMain = response.players().stream().filter(p -> p.id().equals("main")).findFirst().orElseThrow();
@@ -639,7 +641,7 @@ class GameStateServiceTest {
         Game settled = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
                 .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
                 .communityCards(List.of()).pot(0).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                .currentPlayerPosition(0).currentHighestBet(0).currentPhase(com.pokergame.enums.GamePhase.SHOWDOWN)
+                .currentPlayerPosition(0).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of(connected.getPlayerId(), 50,
                         disconnected.getPlayerId(), 50), Map.of(), Set.of(connected.getPlayerId(), disconnected.getPlayerId()),
@@ -659,13 +661,13 @@ class GameStateServiceTest {
     @Test
     void genericSettledVoidSnapshotCarriesRemainderWithoutRevealingStaleCards() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        testPlayers.getFirst().setHandRank(com.pokergame.enums.HandRank.ROYAL_FLUSH);
-        testPlayers.getFirst().setBestHand(List.of(new Card(com.pokergame.enums.Rank.ACE,
-                com.pokergame.enums.Suit.SPADES)));
+        testPlayers.getFirst().setHandRank(HandRank.ROYAL_FLUSH);
+        testPlayers.getFirst().setBestHand(List.of(new Card(Rank.ACE,
+                Suit.SPADES)));
         Game voidGame = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
                 .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
                 .communityCards(List.of()).pot(100).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                .currentPlayerPosition(0).currentHighestBet(0).currentPhase(com.pokergame.enums.GamePhase.SHOWDOWN)
+                .currentPlayerPosition(0).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 100, true))
                 .readyCountdownActive(true).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
@@ -684,20 +686,20 @@ class GameStateServiceTest {
     @Test
     void uncontestedReadyProjectionDoesNotRevealPriorOutSpectatorsCards() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        Card winnerCard = new Card(com.pokergame.enums.Rank.ACE, com.pokergame.enums.Suit.SPADES);
-        Card oldCard = new Card(com.pokergame.enums.Rank.KING, com.pokergame.enums.Suit.HEARTS);
+        Card winnerCard = new Card(Rank.ACE, Suit.SPADES);
+        Card oldCard = new Card(Rank.KING, Suit.HEARTS);
         Player winner = Player.restoreBuilder().name("Player1").playerId("p1").chips(100)
-                .holeCards(List.of(winnerCard)).bestHand(List.of()).handRank(com.pokergame.enums.HandRank.NO_HAND)
+                .holeCards(List.of(winnerCard)).bestHand(List.of()).handRank(HandRank.NO_HAND)
                 .currentBet(0).hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
         Player oldOut = Player.restoreBuilder().name("Player2").playerId("p2").chips(100)
-                .holeCards(List.of(oldCard)).bestHand(List.of(new Card(com.pokergame.enums.Rank.ACE,
-                        com.pokergame.enums.Suit.DIAMONDS))).handRank(com.pokergame.enums.HandRank.ROYAL_FLUSH)
+                .holeCards(List.of(oldCard)).bestHand(List.of(new Card(Rank.ACE,
+                        Suit.DIAMONDS))).handRank(HandRank.ROYAL_FLUSH)
                 .currentBet(0).hasFolded(false).allIn(false).out(true).disconnected(false).readyForNextHand(false).build();
         List<Player> players = List.of(winner, oldOut);
         Game settled = Game.restoreBuilder().gameId(GAME_ID).players(players)
                 .activePlayerIds(List.of(winner.getPlayerId())).remainingDeck(List.of()).communityCards(List.of())
                 .pot(0).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(0)
-                .currentHighestBet(0).currentPhase(com.pokergame.enums.GamePhase.SHOWDOWN).gameOver(false)
+                .currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
                 .smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of(winner.getPlayerId(), 150), Map.of(),
                         Set.of(winner.getPlayerId()), 0, true))
@@ -834,7 +836,7 @@ class GameStateServiceTest {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         Player winner = testPlayers.get(0);
         Player loser = testPlayers.get(1);
-        winner.setHandRank(com.pokergame.enums.HandRank.TWO_PAIR);
+        winner.setHandRank(HandRank.TWO_PAIR);
         winner.setBestHand(List.of(
                 new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS),
                 new Card(Rank.KING, Suit.CLUBS), new Card(Rank.KING, Suit.DIAMONDS),
@@ -842,7 +844,7 @@ class GameStateServiceTest {
         winner.getHoleCards().clear();
         winner.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS)));
 
-        loser.setHandRank(com.pokergame.enums.HandRank.ONE_PAIR);
+        loser.setHandRank(HandRank.ONE_PAIR);
         loser.setBestHand(List.of(
                 new Card(Rank.JACK, Suit.SPADES), new Card(Rank.JACK, Suit.HEARTS),
                 new Card(Rank.TEN, Suit.CLUBS), new Card(Rank.NINE, Suit.DIAMONDS),
@@ -907,14 +909,14 @@ class GameStateServiceTest {
         assertTrue(winnerState.isWinner());
         assertEquals(200, winnerState.chipsWon());
         assertEquals(winner.getHoleCards(), winnerState.holeCards());
-        assertEquals(com.pokergame.enums.HandRank.TWO_PAIR, winnerState.handRank());
+        assertEquals(HandRank.TWO_PAIR, winnerState.handRank());
         assertTrue(winnerState.isReadyForNextHand());
         assertFalse(winnerState.isCurrentPlayer());
 
         assertFalse(loserState.isWinner());
         assertEquals(0, loserState.chipsWon());
         assertEquals(loser.getHoleCards(), loserState.holeCards());
-        assertEquals(com.pokergame.enums.HandRank.ONE_PAIR, loserState.handRank());
+        assertEquals(HandRank.ONE_PAIR, loserState.handRank());
         assertFalse(loserState.isReadyForNextHand());
         assertFalse(loserState.isCurrentPlayer());
 
@@ -944,7 +946,7 @@ class GameStateServiceTest {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         Player winner = testPlayers.get(0);
         Player loser = testPlayers.get(1);
-        winner.setHandRank(com.pokergame.enums.HandRank.FULL_HOUSE);
+        winner.setHandRank(HandRank.FULL_HOUSE);
         winner.setBestHand(List.of(
                 new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS),
                 new Card(Rank.ACE, Suit.CLUBS), new Card(Rank.KING, Suit.DIAMONDS),
@@ -952,7 +954,7 @@ class GameStateServiceTest {
         winner.getHoleCards().clear();
         winner.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS)));
 
-        loser.setHandRank(com.pokergame.enums.HandRank.FLUSH);
+        loser.setHandRank(HandRank.FLUSH);
         loser.setBestHand(List.of(
                 new Card(Rank.KING, Suit.HEARTS), new Card(Rank.QUEEN, Suit.HEARTS),
                 new Card(Rank.TEN, Suit.HEARTS), new Card(Rank.EIGHT, Suit.HEARTS),
@@ -1009,13 +1011,13 @@ class GameStateServiceTest {
         assertTrue(p1.isWinner());
         assertEquals(300, p1.chipsWon());
         assertEquals(winner.getHoleCards(), p1.holeCards());
-        assertEquals(com.pokergame.enums.HandRank.FULL_HOUSE, p1.handRank());
+        assertEquals(HandRank.FULL_HOUSE, p1.handRank());
         assertFalse(p1.isCurrentPlayer());
 
         assertFalse(p2.isWinner());
         assertEquals(0, p2.chipsWon());
         assertEquals(loser.getHoleCards(), p2.holeCards());
-        assertEquals(com.pokergame.enums.HandRank.FLUSH, p2.handRank());
+        assertEquals(HandRank.FLUSH, p2.handRank());
         assertFalse(p2.isCurrentPlayer());
     }
 
@@ -1023,7 +1025,7 @@ class GameStateServiceTest {
     void broadcastGameState_AfterBroadcastShowdownResultsWithoutGameLevelSettlement_PreservesSettlementAcrossReadyToggle() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         Player winner = testPlayers.getFirst();
-        winner.setHandRank(com.pokergame.enums.HandRank.STRAIGHT);
+        winner.setHandRank(HandRank.STRAIGHT);
         winner.getHoleCards().clear();
         winner.getHoleCards().addAll(List.of(new Card(Rank.TEN, Suit.SPADES), new Card(Rank.NINE, Suit.HEARTS)));
 
@@ -1078,9 +1080,9 @@ class GameStateServiceTest {
 
     private Player settledPlayer(String name, String id, int contribution) {
         return Player.restoreBuilder().name(name).playerId(id).chips(0).holeCards(List.of(
-                        new com.pokergame.model.Card(com.pokergame.enums.Rank.ACE, com.pokergame.enums.Suit.SPADES),
-                        new com.pokergame.model.Card(com.pokergame.enums.Rank.KING, com.pokergame.enums.Suit.HEARTS)))
-                .bestHand(List.of()).handRank(com.pokergame.enums.HandRank.NO_HAND).currentBet(contribution)
+                        new Card(Rank.ACE, Suit.SPADES),
+                        new Card(Rank.KING, Suit.HEARTS)))
+                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(contribution)
                 .hasFolded(false).allIn(true).out(false).disconnected(false).readyForNextHand(false).build();
     }
 

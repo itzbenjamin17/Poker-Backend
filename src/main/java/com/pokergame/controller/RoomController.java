@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.*;
 import com.pokergame.model.Room;
 import com.pokergame.util.LockLease;
 import java.util.List;
+import jakarta.servlet.http.HttpServletRequest;
 
 
 /**
@@ -71,7 +72,7 @@ public class RoomController {
     @PostMapping("/create")
     public ResponseEntity<ApiResponse<TokenResponse>> createRoom(
             @Valid @RequestBody CreateRoomRequest createRequest,
-            jakarta.servlet.http.HttpServletRequest request) {
+            HttpServletRequest request) {
         logger.info("Creating new room with request: {}", createRequest);
         
         // Sanitize names first to ensure consistency between token and storage
@@ -104,7 +105,7 @@ public class RoomController {
     @PostMapping("/join")
     public ResponseEntity<ApiResponse<TokenResponse>> joinRoom(
             @Valid @RequestBody JoinRoomRequest joinRequest,
-            jakarta.servlet.http.HttpServletRequest request) {
+            HttpServletRequest request) {
         logger.info("Player {} attempting to join room: {}", joinRequest.playerName(), joinRequest.roomName());
         
         // Sanitize names first to ensure consistency between token and storage

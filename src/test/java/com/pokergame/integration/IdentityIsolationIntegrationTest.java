@@ -18,6 +18,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.Assertions;
+import org.springframework.web.client.HttpClientErrorException;
 
 /** Tests identity isolation integration behavior. */
 @Tag("integration")
@@ -97,8 +99,8 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
                     .retrieve()
                     .toBodilessEntity();
             
-            org.junit.jupiter.api.Assertions.fail("Should have thrown 403/Forbidden");
-        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            Assertions.fail("Should have thrown 403/Forbidden");
+        } catch (HttpClientErrorException e) {
             assertThat(e.getStatusCode().value()).isEqualTo(403);
             assertThat(e.getResponseBodyAsString()).contains("Token is not valid for this room");
         }
@@ -136,8 +138,8 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
                     .header("Authorization", "Bearer " + staleToken)
                     .retrieve()
                     .toBodilessEntity();
-            org.junit.jupiter.api.Assertions.fail("Expected 401 Unauthorized for stale token");
-        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            Assertions.fail("Expected 401 Unauthorized for stale token");
+        } catch (HttpClientErrorException e) {
             assertThat(e.getStatusCode().value()).isEqualTo(401);
             assertThat(e.getResponseBodyAsString()).contains("Unauthorized");
         }
@@ -185,8 +187,8 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
                     .header("Authorization", "Bearer " + staleToken)
                     .retrieve()
                     .toBodilessEntity();
-            org.junit.jupiter.api.Assertions.fail("Expected 401 Unauthorized for stale token on game endpoint");
-        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            Assertions.fail("Expected 401 Unauthorized for stale token on game endpoint");
+        } catch (HttpClientErrorException e) {
             assertThat(e.getStatusCode().value()).isEqualTo(401);
             assertThat(e.getResponseBodyAsString()).contains("Unauthorized");
         }

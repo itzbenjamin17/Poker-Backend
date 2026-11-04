@@ -31,6 +31,10 @@ import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.PersistenceRecovery;
+import com.pokergame.config.WebSocketEventListener;
+import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.RoomService;
+import org.springframework.context.ApplicationContext;
 
 /**
  * Sets up the save/restore system for the poker game.
@@ -114,8 +118,8 @@ public class PersistenceConfiguration {
      */
     @Bean
     DurableMutationAspect durableMutationAspect(ObjectProvider<EncryptedWalStore> store, AggregateSnapshotMapper snapshotMapper,
-            ObjectProvider<com.pokergame.service.RoomService> roomService,
-            ObjectProvider<com.pokergame.service.GameLifecycleService> gameLifecycleService,
+            ObjectProvider<RoomService> roomService,
+            ObjectProvider<GameLifecycleService> gameLifecycleService,
             PersistenceProperties properties) {
         return new DurableMutationAspect(store.getIfAvailable(), snapshotMapper, roomService, gameLifecycleService, properties);
     }
@@ -135,10 +139,10 @@ public class PersistenceConfiguration {
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
     PersistenceRecovery persistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper,
-            com.pokergame.service.RoomService roomService,
-            com.pokergame.service.GameLifecycleService gameLifecycleService,
-            com.pokergame.config.WebSocketEventListener webSocketEventListener,
-            org.springframework.context.ApplicationContext applicationContext,
+            RoomService roomService,
+            GameLifecycleService gameLifecycleService,
+            WebSocketEventListener webSocketEventListener,
+            ApplicationContext applicationContext,
             @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
         return new PersistenceRecovery(store, mapper, roomService, gameLifecycleService, webSocketEventListener,
                 applicationContext, disconnectGracePeriodMs);

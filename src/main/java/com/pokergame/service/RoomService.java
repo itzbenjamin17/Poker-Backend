@@ -413,7 +413,7 @@ public class RoomService {
             if (rooms.get(roomId) != room) return;
             List<String> present = playerNames.stream().filter(room.getPlayers()::contains).distinct().toList();
             if (present.isEmpty()) return;
-            java.util.Map<String, String> retiredMemberships = new java.util.HashMap<>();
+            Map<String, String> retiredMemberships = new HashMap<>();
             for (String name : present) {
                 retiredMemberships.put(name, room.getMembershipId(name));
             }

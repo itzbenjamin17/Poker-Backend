@@ -39,6 +39,9 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.config.PersistenceException;
+import java.util.concurrent.Callable;
+import org.mockito.Mockito;
+import tools.jackson.databind.json.JsonMapper;
 
 /** Tests durable mutation aspect transaction boundaries and SpEL resolution. */
 @ExtendWith(MockitoExtension.class)
@@ -77,10 +80,10 @@ class DurableMutationAspectTest {
     @BeforeEach
     void setUp() {
         properties = new PersistenceProperties();
-        AggregateStateImage mockImage = org.mockito.Mockito.mock(AggregateStateImage.class);
-        org.mockito.Mockito.lenient().when(snapshotMapper.captureStateImage(any(), any(), any())).thenReturn(mockImage);
-        org.mockito.Mockito.lenient().when(snapshotMapper.serialize(any(AggregateStateImage.class))).thenReturn(new byte[]{1, 2, 3});
-        org.mockito.Mockito.lenient().when(snapshotMapper.serialize(any(Room.class), any(), any())).thenReturn(new byte[]{1, 2, 3});
+        AggregateStateImage mockImage = Mockito.mock(AggregateStateImage.class);
+        Mockito.lenient().when(snapshotMapper.captureStateImage(any(), any(), any())).thenReturn(mockImage);
+        Mockito.lenient().when(snapshotMapper.serialize(any(AggregateStateImage.class))).thenReturn(new byte[]{1, 2, 3});
+        Mockito.lenient().when(snapshotMapper.serialize(any(Room.class), any(), any())).thenReturn(new byte[]{1, 2, 3});
     }
 
     @AfterEach
@@ -159,7 +162,7 @@ class DurableMutationAspectTest {
 
         Room room = mock(Room.class);
         when(roomService.getRoom("room-4")).thenReturn(room);
-        org.mockito.Mockito.lenient().when(snapshotMapper.serialize(any(), any(), any())).thenReturn(new byte[]{1, 2, 3});
+        Mockito.lenient().when(snapshotMapper.serialize(any(), any(), any())).thenReturn(new byte[]{1, 2, 3});
 
         assertEquals("ok", aspect.persist(joinPoint, mutation));
         assertEquals(List.of("state-1", "timer-1"), effects, "Accepted effects are released exactly once");
@@ -263,7 +266,7 @@ class DurableMutationAspectTest {
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
         AggregateSnapshotMapper realMapper = spy(new AggregateSnapshotMapper(
-                tools.jackson.databind.json.JsonMapper.builder().findAndAddModules().build(),
+                JsonMapper.builder().findAndAddModules().build(),
                 new HandEvaluatorService()));
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, realMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
@@ -608,7 +611,7 @@ class DurableMutationAspectTest {
         return TestTarget.class.getMethod("validMutation", String.class).getAnnotation(DurableMutation.class);
     }
 
-    private ProceedingJoinPoint mutationPoint(String roomId, java.util.concurrent.Callable<Object> body) throws Throwable {
+    private ProceedingJoinPoint mutationPoint(String roomId, Callable<Object> body) throws Throwable {
         ProceedingJoinPoint joinPoint = mock(ProceedingJoinPoint.class);
         MethodSignature signature = mock(MethodSignature.class);
         when(signature.getMethod()).thenReturn(TestTarget.class.getMethod("validMutation", String.class));

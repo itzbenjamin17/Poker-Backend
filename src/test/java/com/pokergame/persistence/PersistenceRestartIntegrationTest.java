@@ -41,6 +41,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 
 import java.time.Duration;
+import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
 
 /** Tests persistence restart integration behavior. */
 class PersistenceRestartIntegrationTest {
@@ -258,7 +261,7 @@ class PersistenceRestartIntegrationTest {
             assertTrue(Files.exists(walDirectory.resolve(firstRoomId + ".wal")));
 
             // Attempt to create second room with duplicate name - should fail
-            assertThrows(com.pokergame.exception.BadRequestException.class, () -> {
+            assertThrows(BadRequestException.class, () -> {
                 rooms.createRoom(new CreateRoomRequest(uniqueRoomName, "Bob", 6, 5, 10, 1000, null));
             });
 
@@ -446,7 +449,7 @@ class PersistenceRestartIntegrationTest {
      */
     @Test
     void failedRoomCreationCleansUpRoomsActiveGamesAndTimers() throws Exception {
-        String failedRoomId = java.util.UUID.randomUUID().toString();
+        String failedRoomId = UUID.randomUUID().toString();
         try (ConfigurableApplicationContext context = startApplication()) {
             TestMutationHelper helper = context.getBean(TestMutationHelper.class);
             assertThrows(IllegalStateException.class, () ->
@@ -520,12 +523,12 @@ class PersistenceRestartIntegrationTest {
         return new SessionConnectEvent(this, message);
     }
 
-    @org.springframework.stereotype.Component
+    @Component
     public static class TestMutationHelper {
-        @org.springframework.beans.factory.annotation.Autowired
+        @Autowired
         private RoomService roomService;
 
-        @org.springframework.beans.factory.annotation.Autowired
+        @Autowired
         private GameLifecycleService gameLifecycleService;
 
         @DurableMutation(roomId = "#roomId")

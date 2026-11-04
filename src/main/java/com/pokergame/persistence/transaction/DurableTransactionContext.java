@@ -2,6 +2,8 @@ package com.pokergame.persistence.transaction;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Groups a room mutation with effects released after it is accepted.
@@ -11,7 +13,7 @@ import java.util.List;
  * </p>
  */
 public final class DurableTransactionContext {
-    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(DurableTransactionContext.class);
+    private static final Logger logger = LoggerFactory.getLogger(DurableTransactionContext.class);
     private static final ThreadLocal<Context> CURRENT = new ThreadLocal<>();
 
     /**

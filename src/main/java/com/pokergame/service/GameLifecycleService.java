@@ -33,6 +33,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.stream.Collectors;
+import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.ReadyGateState;
 
 /**
  * Service class responsible for game lifecycle management.
@@ -386,7 +388,7 @@ public class GameLifecycleService {
             return;
         }
 
-        if (game.getCurrentPhase() == com.pokergame.enums.GamePhase.SHOWDOWN || game.isReadyCountdownActive()) {
+        if (game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive()) {
             gameStateService.broadcastGameState(roomId, game);
         } else {
             publishProgression(roomId, game, game.reconcileAfterPlayerRemoval());
@@ -505,7 +507,7 @@ public class GameLifecycleService {
                 if (!game.isTerminalCarryOverSettled()) handleGameEnd(gameId, false);
                 return;
             }
-            if (game.getHandNumber() > 0 && (game.getCurrentPhase() != com.pokergame.enums.GamePhase.SHOWDOWN
+            if (game.getHandNumber() > 0 && (game.getCurrentPhase() != GamePhase.SHOWDOWN
                     || game.getLastSettlementResult() == null || !game.getLastSettlementResult().settled())) {
                 logger.warn("Ignoring new-hand request for unsettled game {} hand {}", gameId, game.getHandNumber());
                 return;
@@ -660,7 +662,7 @@ public class GameLifecycleService {
         Room room = roomService.getRoom(gameId);
         int maxPlayers = room == null ? 0 : room.getMaxPlayers();
         Player winner;
-        com.pokergame.dto.response.GameEndResponse event;
+        GameEndResponse event;
         synchronized (game) {
             if (game.isForfeitPending() && preferredWinner == null) return;
             // Freeze the terminal winner and event once carry-over has been paid.
@@ -1020,7 +1022,7 @@ public class GameLifecycleService {
                 case CLEANUP -> cleanupRequested = true;
                 case GAME_END -> handleGameEnd(gameId, false);
                 case AUTO_ADVANCE -> {
-                    if (game.getCurrentPhase() == com.pokergame.enums.GamePhase.SHOWDOWN) {
+                    if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
                         game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
                         return;
                     }
@@ -1335,7 +1337,7 @@ public class GameLifecycleService {
                 if (room != null) {
                     gameStateService.broadcastGameState(gameId, game);
                 }
-                if (game.getReadyGateState() == com.pokergame.enums.ReadyGateState.WAITING_FOR_PLAYERS
+                if (game.getReadyGateState() == ReadyGateState.WAITING_FOR_PLAYERS
                         && game.getReadyEligibleCount() >= 2) {
                     startReadyCountdown(gameId, configuredReadyCountdownMs);
                 }
@@ -1371,7 +1373,7 @@ public class GameLifecycleService {
                 DurableTransactionContext.afterCommit(() -> mutationProxy().handleGameEnd(gameId, false));
                 return;
             }
-            if (game.getCurrentPhase() != com.pokergame.enums.GamePhase.SHOWDOWN) {
+            if (game.getCurrentPhase() != GamePhase.SHOWDOWN) {
                 logger.debug("Skipping ready countdown for game {}: phase is {} (not SHOWDOWN)", gameId, game.getCurrentPhase());
                 return;
             }
@@ -1661,7 +1663,7 @@ public class GameLifecycleService {
      * concluded via forfeit vs a settled showdown.
      */
     private boolean isFallbackForfeit(Game game) {
-        return game.getCurrentPhase() != com.pokergame.enums.GamePhase.SHOWDOWN
+        return game.getCurrentPhase() != GamePhase.SHOWDOWN
                 || game.getLastSettlementResult() == null
                 || !game.getLastSettlementResult().settled();
     }

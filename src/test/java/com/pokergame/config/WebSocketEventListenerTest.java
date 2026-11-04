@@ -22,6 +22,12 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
+import com.pokergame.util.KeyedLockRegistry;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.Assertions;
+import org.mockito.ArgumentCaptor;
 
 class WebSocketEventListenerTest {
     @Test
@@ -33,13 +39,13 @@ class WebSocketEventListenerTest {
         var listener = new WebSocketEventListener(rooms, games, mock(RateLimitService.class), scheduler, aspect, 60_000);
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
         listener.registerSession(principal, "original-session");
-        var locks = new com.pokergame.util.KeyedLockRegistry<String>();
-        var waiting = new java.util.concurrent.CountDownLatch(1);
-        var cleanupOwnsRoom = new java.util.concurrent.CountDownLatch(1);
+        var locks = new KeyedLockRegistry<String>();
+        var waiting = new CountDownLatch(1);
+        var cleanupOwnsRoom = new CountDownLatch(1);
         doAnswer(invocation -> {
             if (Thread.currentThread().getName().equals("reconnect-regression")) {
                 waiting.countDown();
-                assertTrue(cleanupOwnsRoom.await(2, java.util.concurrent.TimeUnit.SECONDS));
+                assertTrue(cleanupOwnsRoom.await(2, TimeUnit.SECONDS));
             }
             return locks.acquire("room");
         }).when(aspect).acquireRoomLock("room");
@@ -49,20 +55,20 @@ class WebSocketEventListenerTest {
         }).when(games).markPlayerReconnected("room", "Alice");
         doAnswer(invocation -> { cleanupOwnsRoom.countDown(); return null; })
                 .when(games).cancelRuntimeTasks("room", false);
-        var reconnect = new java.util.concurrent.FutureTask<Void>(() -> {
+        var reconnect = new FutureTask<Void>(() -> {
             listener.registerSession(principal, "replacement-session"); return null;
         });
         var reconnectThread = new Thread(reconnect, "reconnect-regression");
         reconnectThread.setDaemon(true);
         reconnectThread.start();
-        assertTrue(waiting.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        assertTrue(waiting.await(2, TimeUnit.SECONDS));
         listener.publishRoomDestroyed("room");
-        var cleanup = new java.util.concurrent.FutureTask<Void>(() -> { listener.drainAll(); return null; });
+        var cleanup = new FutureTask<Void>(() -> { listener.drainAll(); return null; });
         var cleanupThread = new Thread(cleanup, "cleanup-regression");
         cleanupThread.setDaemon(true);
         cleanupThread.start();
-        cleanup.get(3, java.util.concurrent.TimeUnit.SECONDS);
-        reconnect.get(3, java.util.concurrent.TimeUnit.SECONDS);
+        cleanup.get(3, TimeUnit.SECONDS);
+        reconnect.get(3, TimeUnit.SECONDS);
         assertEquals(0, listener.getActiveSessionLockCount());
     }
 
@@ -134,8 +140,8 @@ class WebSocketEventListenerTest {
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
-        org.mockito.ArgumentCaptor<Instant> instantCaptor = org.mockito.ArgumentCaptor.forClass(Instant.class);
-        org.mockito.ArgumentCaptor<Long> deadlineCaptor = org.mockito.ArgumentCaptor.forClass(Long.class);
+        ArgumentCaptor<Instant> instantCaptor = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Long> deadlineCaptor = ArgumentCaptor.forClass(Long.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
@@ -151,7 +157,7 @@ class WebSocketEventListenerTest {
         verify(lifecycle).markPlayerDisconnected(eq("room"), eq("Alice"), deadlineCaptor.capture());
         long deadline = deadlineCaptor.getValue();
         Instant scheduledInstant = instantCaptor.getValue();
-        org.junit.jupiter.api.Assertions.assertEquals(Instant.ofEpochMilli(deadline), scheduledInstant,
+        Assertions.assertEquals(Instant.ofEpochMilli(deadline), scheduledInstant,
                 "TaskScheduler instant must exactly match the domain deadline epoch ms");
     }
 
@@ -222,7 +228,7 @@ class WebSocketEventListenerTest {
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
-        org.mockito.ArgumentCaptor<Runnable> callback = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+        ArgumentCaptor<Runnable> callback = ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
@@ -249,7 +255,7 @@ class WebSocketEventListenerTest {
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
-        org.mockito.ArgumentCaptor<Runnable> callback = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+        ArgumentCaptor<Runnable> callback = ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
@@ -319,7 +325,7 @@ class WebSocketEventListenerTest {
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
-        org.mockito.ArgumentCaptor<Instant> instantCaptor = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Instant> instantCaptor = ArgumentCaptor.forClass(Instant.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
 
         Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
@@ -368,7 +374,7 @@ class WebSocketEventListenerTest {
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
-        org.mockito.ArgumentCaptor<Instant> instantCaptor = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Instant> instantCaptor = ArgumentCaptor.forClass(Instant.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
 
         Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
@@ -403,7 +409,7 @@ class WebSocketEventListenerTest {
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
         @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
-        org.mockito.ArgumentCaptor<Runnable> callback = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+        ArgumentCaptor<Runnable> callback = ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
 
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");

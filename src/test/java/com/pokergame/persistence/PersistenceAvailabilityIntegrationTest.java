@@ -39,6 +39,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
+import com.pokergame.persistence.transaction.DurableMutationAspect;
+import com.pokergame.security.PlayerPrincipal;
 
 /** Exercises accepted gameplay and checkpoint recovery after a runtime save failure. */
 class PersistenceAvailabilityIntegrationTest {
@@ -58,9 +60,9 @@ class PersistenceAvailabilityIntegrationTest {
             rooms.joinRoom(new JoinRoomRequest("Available game", "Bob", null));
             rooms.joinRoom(new JoinRoomRequest("Available game", "Carol", null));
             WebSocketEventListener listener = context.getBean(WebSocketEventListener.class);
-            listener.registerSession(new com.pokergame.security.PlayerPrincipal("Alice", roomId), "session-alice");
-            listener.registerSession(new com.pokergame.security.PlayerPrincipal("Bob", roomId), "session-bob");
-            listener.registerSession(new com.pokergame.security.PlayerPrincipal("Carol", roomId), "session-carol");
+            listener.registerSession(new PlayerPrincipal("Alice", roomId), "session-alice");
+            listener.registerSession(new PlayerPrincipal("Bob", roomId), "session-bob");
+            listener.registerSession(new PlayerPrincipal("Carol", roomId), "session-carol");
             GameLifecycleService lifecycle = context.getBean(GameLifecycleService.class);
             lifecycle.createGameFromRoom(roomId);
             Game game = lifecycle.getGame(roomId);
@@ -106,7 +108,7 @@ class PersistenceAvailabilityIntegrationTest {
                 PlayerAction nextAction = nextCall > 0 ? PlayerAction.CALL : PlayerAction.CHECK;
                 context.getBean(PlayerActionService.class).processPlayerAction(
                         roomId, new PlayerActionRequest(nextAction, null), nextActor.getName());
-                context.getBean(com.pokergame.persistence.transaction.DurableMutationAspect.class).retryPendingSaves();
+                context.getBean(DurableMutationAspect.class).retryPendingSaves();
                 assertTrue(store.isHealthy(), "A checkpoint retry restores persistence health");
                 initialPot = game.getPot();
                 initialStacks = game.getPlayers().stream().collect(Collectors.toMap(Player::getPlayerId, Player::getChips));

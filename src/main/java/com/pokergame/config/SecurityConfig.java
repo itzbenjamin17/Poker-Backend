@@ -23,6 +23,8 @@ import com.pokergame.dto.response.ErrorResponse;
 import tools.jackson.databind.ObjectMapper;
 import org.springframework.http.MediaType;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter;
+import org.springframework.security.web.session.DisableEncodeUrlFilter;
 
 /**
  * Security configuration for stateless JWT authentication.
@@ -48,8 +50,8 @@ public class SecurityConfig {
      * @param objectMapper serializes error responses
      */
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
-                          com.pokergame.security.PayloadSizeFilter payloadSizeFilter,
-                          com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter,
+                          PayloadSizeFilter payloadSizeFilter,
+                          EndpointRateLimitFilter endpointRateLimitFilter,
                           ObjectMapper objectMapper) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.payloadSizeFilter = payloadSizeFilter;
@@ -116,10 +118,10 @@ public class SecurityConfig {
                 .httpBasic(basic -> basic.disable())
 
                 // Reject oversized payloads first (before any other processing or token consumption)
-                .addFilterBefore(payloadSizeFilter, org.springframework.security.web.session.DisableEncodeUrlFilter.class)
+                .addFilterBefore(payloadSizeFilter, DisableEncodeUrlFilter.class)
 
                 // Enforce rate limits next
-                .addFilterBefore(endpointRateLimitFilter, org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter.class)
+                .addFilterBefore(endpointRateLimitFilter, WebAsyncManagerIntegrationFilter.class)
 
                 // Add our JWT filter before Spring's pre-auth filter (since we use
                 // PreAuthenticatedAuthenticationToken)

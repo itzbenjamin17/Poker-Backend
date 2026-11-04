@@ -48,6 +48,16 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.mockito.Mockito.*;
+import com.pokergame.dto.internal.PlayerDecision;
+import java.time.Instant;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.EnumMap;
+import java.util.Iterator;
+import java.util.Spliterator;
+import java.util.stream.Collectors;
+import org.mockito.Mockito;
+import org.mockito.stubbing.Answer;
 
 /**
  * Unit tests for the GameLifecycleService class.
@@ -102,7 +112,7 @@ class GameLifecycleServiceTest {
     }
 
     private void stubGameEndCapture() {
-        org.mockito.stubbing.Answer<GameEndResponse> buildResponse = invocation -> {
+        Answer<GameEndResponse> buildResponse = invocation -> {
             String id = invocation.getArgument(0);
             Game game = invocation.getArgument(1);
             Player winner = invocation.getArgument(2);
@@ -454,8 +464,8 @@ class GameLifecycleServiceTest {
         lifecycle.restoreGame(game);
 
         lifecycle.scheduleAutoAdvance(room.getRoomId());
-        org.mockito.ArgumentCaptor<Runnable> callbacks = org.mockito.ArgumentCaptor.forClass(Runnable.class);
-        verify(taskScheduler).schedule(callbacks.capture(), any(java.time.Instant.class));
+        ArgumentCaptor<Runnable> callbacks = ArgumentCaptor.forClass(Runnable.class);
+        verify(taskScheduler).schedule(callbacks.capture(), any(Instant.class));
         Runnable staleAutoAdvance = callbacks.getValue();
         int winnerChipsBefore = a.getChips();
 
@@ -788,13 +798,13 @@ class GameLifecycleServiceTest {
 
         List<Player> playerList = new ArrayList<>(List.of(activePlayer, outPlayer)) {
             @Override
-            public java.util.Spliterator<Player> spliterator() {
+            public Spliterator<Player> spliterator() {
                 assertTrue(Thread.holdsLock(game), "Game monitor must be held during playerExistsInGame lookup");
                 return super.spliterator();
             }
 
             @Override
-            public java.util.Iterator<Player> iterator() {
+            public Iterator<Player> iterator() {
                 assertTrue(Thread.holdsLock(game), "Game monitor must be held during playerExistsInGame lookup");
                 return super.iterator();
             }
@@ -815,8 +825,8 @@ class GameLifecycleServiceTest {
         gameLifecycleService.createGameFromRoom(ROOM_ID);
         Game game = gameLifecycleService.getGame(ROOM_ID);
 
-        java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
-        java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+        AtomicBoolean running = new AtomicBoolean(true);
+        AtomicReference<Throwable> error = new AtomicReference<>();
 
         Thread lookupThread = new Thread(() -> {
             while (running.get() && error.get() == null) {
@@ -897,8 +907,8 @@ class GameLifecycleServiceTest {
         int readerCount = 4;
         int mutatorCount = 2;
         int operationsPerThread = 1500;
-        java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
-        java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+        AtomicBoolean running = new AtomicBoolean(true);
+        AtomicReference<Throwable> error = new AtomicReference<>();
         CountDownLatch startLatch = new CountDownLatch(1);
         CountDownLatch doneLatch = new CountDownLatch(mutatorCount);
 
@@ -1014,7 +1024,7 @@ class GameLifecycleServiceTest {
         verify(roomService, times(1)).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2", "Player3")), any());
         verify(roomService, never()).leaveRoom(anyString(), anyString());
         verify(gameStateService).captureGameEnd(eq(ROOM_ID), argThat(game ->
-                game.getPlayers().stream().map(Player::getName).collect(java.util.stream.Collectors.toSet())
+                game.getPlayers().stream().map(Player::getName).collect(Collectors.toSet())
                         .equals(Set.of("Host", "Player2", "Player3"))
                         && game.getPlayers().stream().filter(player -> player.getName().startsWith("Player"))
                         .allMatch(Player::getIsOut)), any(Player.class), eq(true), anyInt());
@@ -1187,8 +1197,8 @@ class GameLifecycleServiceTest {
         Player survivor = game.getPlayers().stream().filter(player -> player.getName().equals("Player2")).findFirst().orElseThrow();
         gameLifecycleService.markPlayerDisconnected(ROOM_ID, survivor.getName(), System.currentTimeMillis() + 60_000);
 
-        Map<ScheduledGameTask, Long> deadlines = new java.util.EnumMap<>(ScheduledGameTask.class);
-        Map<ScheduledGameTask, Long> generations = new java.util.EnumMap<>(ScheduledGameTask.class);
+        Map<ScheduledGameTask, Long> deadlines = new EnumMap<>(ScheduledGameTask.class);
+        Map<ScheduledGameTask, Long> generations = new EnumMap<>(ScheduledGameTask.class);
         long deadline = System.currentTimeMillis() + 30_000;
         for (ScheduledGameTask task : List.of(ScheduledGameTask.READY_OPEN, ScheduledGameTask.READY_TIMEOUT,
                 ScheduledGameTask.AUTO_ADVANCE, ScheduledGameTask.NEW_HAND, ScheduledGameTask.GAME_END)) {
@@ -1318,11 +1328,11 @@ class GameLifecycleServiceTest {
                 .handContributions(Map.of()).preHandCarryOver(10)
                 .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, true))
                 .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(java.util.Map.of()).handEvaluator(handEvaluator).build();
+                .scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
         lifecycle.restoreGame(terminal);
 
         lifecycle.handleGameEnd(ROOM_ID, false);
-        org.mockito.ArgumentCaptor<Object> captor = org.mockito.ArgumentCaptor.forClass(Object.class);
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(publisher).convertAndSend(eq("/game/" + ROOM_ID), captor.capture());
         GameEndResponse result = (GameEndResponse) captor.getValue();
         assertEquals(1010, result.winnerChips());
@@ -1362,15 +1372,15 @@ class GameLifecycleServiceTest {
 
             Player actor = game.getCurrentPlayer();
             if (!actor.equals(smallBlind)) {
-                game.processPlayerDecision(actor, new com.pokergame.dto.internal.PlayerDecision(
+                game.processPlayerDecision(actor, new PlayerDecision(
                         actor.getCurrentBet() < game.getCurrentHighestBet() ? PlayerAction.CALL : PlayerAction.CHECK,
                         0, actor.getPlayerId()));
             }
             PlayerAction aggressiveAction = game.getCurrentPhase() == GamePhase.PRE_FLOP
                     ? PlayerAction.RAISE : PlayerAction.BET;
-            game.processPlayerDecision(smallBlind, new com.pokergame.dto.internal.PlayerDecision(
+            game.processPlayerDecision(smallBlind, new PlayerDecision(
                     aggressiveAction, 500, smallBlind.getPlayerId()));
-            game.processPlayerDecision(bigBlind, new com.pokergame.dto.internal.PlayerDecision(
+            game.processPlayerDecision(bigBlind, new PlayerDecision(
                     PlayerAction.CALL, 0, bigBlind.getPlayerId()));
             assertEquals(1020, game.getPot(), "The actual calls and raise build the contested pot");
 
@@ -1387,7 +1397,7 @@ class GameLifecycleServiceTest {
                 lifecycle.removeDisconnectedPlayer(gameId, smallBlind.getName(), room.getMembershipId(smallBlind.getName()), sbDeadline);
             }
 
-            org.mockito.ArgumentCaptor<Object> captor = org.mockito.ArgumentCaptor.forClass(Object.class);
+            ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
             verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + gameId), captor.capture());
             GameEndResponse result = captor.getAllValues().stream().filter(GameEndResponse.class::isInstance)
                     .map(GameEndResponse.class::cast).findFirst().orElseThrow();
@@ -2062,8 +2072,8 @@ class GameLifecycleServiceTest {
             when(roomService.getRoom(roomId)).thenReturn(room);
             gameLifecycleService.restoreGame(game);
 
-            java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
-            java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(2);
+            CountDownLatch startLatch = new CountDownLatch(1);
+            CountDownLatch doneLatch = new CountDownLatch(2);
 
             Thread t1 = new Thread(() -> {
                 try {
@@ -2089,7 +2099,7 @@ class GameLifecycleServiceTest {
             t2.start();
             startLatch.countDown();
 
-            boolean finished = doneLatch.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            boolean finished = doneLatch.await(3, TimeUnit.SECONDS);
             assertTrue(finished, "Deadlock detected between handleGameEnd and handlePlayerLeave at iteration " + i);
         }
     }
@@ -2097,13 +2107,13 @@ class GameLifecycleServiceTest {
     @Test
     @DisplayName("Race start with guest leave: legal results follow winning operation without departed guest in seat")
     void raceStartWithGuestLeave_LegalResultsFollowWinningOperation() throws Exception {
-        java.util.Map<String, Room> activeRooms = new java.util.concurrent.ConcurrentHashMap<>();
-        org.mockito.Mockito.lenient().when(roomService.getRoom(anyString())).thenAnswer(inv -> activeRooms.get(inv.getArgument(0)));
-        org.mockito.Mockito.lenient().when(roomService.getCurrentHost(anyString())).thenAnswer(inv -> {
+        Map<String, Room> activeRooms = new ConcurrentHashMap<>();
+        Mockito.lenient().when(roomService.getRoom(anyString())).thenAnswer(inv -> activeRooms.get(inv.getArgument(0)));
+        Mockito.lenient().when(roomService.getCurrentHost(anyString())).thenAnswer(inv -> {
             Room r = activeRooms.get(inv.getArgument(0));
             return (r == null || r.getPlayers().isEmpty()) ? null : r.getPlayers().getFirst();
         });
-        org.mockito.Mockito.lenient().doAnswer(inv -> {
+        Mockito.lenient().doAnswer(inv -> {
             String rid = inv.getArgument(0);
             List<String> toLeave = inv.getArgument(1);
             Room r = activeRooms.get(rid);
@@ -2112,7 +2122,7 @@ class GameLifecycleServiceTest {
             }
             return null;
         }).when(roomService).leavePlayersBatch(anyString(), any(), any());
-        org.mockito.Mockito.lenient().doAnswer(inv -> {
+        Mockito.lenient().doAnswer(inv -> {
             String rid = inv.getArgument(0);
             String p = inv.getArgument(1);
             Room r = activeRooms.get(rid);
@@ -2129,10 +2139,10 @@ class GameLifecycleServiceTest {
             room.addPlayer("Guest");
             activeRooms.put(roomId, room);
 
-            java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
-            java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(2);
-            java.util.concurrent.atomic.AtomicReference<Throwable> startError = new java.util.concurrent.atomic.AtomicReference<>();
-            java.util.concurrent.atomic.AtomicReference<Throwable> leaveError = new java.util.concurrent.atomic.AtomicReference<>();
+            CountDownLatch startLatch = new CountDownLatch(1);
+            CountDownLatch doneLatch = new CountDownLatch(2);
+            AtomicReference<Throwable> startError = new AtomicReference<>();
+            AtomicReference<Throwable> leaveError = new AtomicReference<>();
 
             Thread startThread = new Thread(() -> {
                 try {
@@ -2160,7 +2170,7 @@ class GameLifecycleServiceTest {
             leaveThread.start();
             startLatch.countDown();
 
-            boolean done = doneLatch.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            boolean done = doneLatch.await(3, TimeUnit.SECONDS);
             assertTrue(done, "Race timed out at iteration " + i);
 
             Game game = gameLifecycleService.getGame(roomId);
@@ -2180,13 +2190,13 @@ class GameLifecycleServiceTest {
     @Test
     @DisplayName("Race start with host leave: legal results follow winning operation")
     void raceStartWithHostLeave_LegalResultsFollowWinningOperation() throws Exception {
-        java.util.Map<String, Room> activeRooms = new java.util.concurrent.ConcurrentHashMap<>();
-        org.mockito.Mockito.lenient().when(roomService.getRoom(anyString())).thenAnswer(inv -> activeRooms.get(inv.getArgument(0)));
-        org.mockito.Mockito.lenient().when(roomService.getCurrentHost(anyString())).thenAnswer(inv -> {
+        Map<String, Room> activeRooms = new ConcurrentHashMap<>();
+        Mockito.lenient().when(roomService.getRoom(anyString())).thenAnswer(inv -> activeRooms.get(inv.getArgument(0)));
+        Mockito.lenient().when(roomService.getCurrentHost(anyString())).thenAnswer(inv -> {
             Room r = activeRooms.get(inv.getArgument(0));
             return (r == null || r.getPlayers().isEmpty()) ? null : r.getPlayers().getFirst();
         });
-        org.mockito.Mockito.lenient().doAnswer(inv -> {
+        Mockito.lenient().doAnswer(inv -> {
             String rid = inv.getArgument(0);
             List<String> toLeave = inv.getArgument(1);
             Room r = activeRooms.get(rid);
@@ -2195,7 +2205,7 @@ class GameLifecycleServiceTest {
             }
             return null;
         }).when(roomService).leavePlayersBatch(anyString(), any(), any());
-        org.mockito.Mockito.lenient().doAnswer(inv -> {
+        Mockito.lenient().doAnswer(inv -> {
             String rid = inv.getArgument(0);
             String p = inv.getArgument(1);
             Room r = activeRooms.get(rid);
@@ -2212,10 +2222,10 @@ class GameLifecycleServiceTest {
             room.addPlayer("Guest");
             activeRooms.put(roomId, room);
 
-            java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
-            java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(2);
-            java.util.concurrent.atomic.AtomicReference<Throwable> startError = new java.util.concurrent.atomic.AtomicReference<>();
-            java.util.concurrent.atomic.AtomicReference<Throwable> leaveError = new java.util.concurrent.atomic.AtomicReference<>();
+            CountDownLatch startLatch = new CountDownLatch(1);
+            CountDownLatch doneLatch = new CountDownLatch(2);
+            AtomicReference<Throwable> startError = new AtomicReference<>();
+            AtomicReference<Throwable> leaveError = new AtomicReference<>();
 
             Thread startThread = new Thread(() -> {
                 try {
@@ -2243,7 +2253,7 @@ class GameLifecycleServiceTest {
             leaveThread.start();
             startLatch.countDown();
 
-            boolean done = doneLatch.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            boolean done = doneLatch.await(3, TimeUnit.SECONDS);
             assertTrue(done, "Race timed out at iteration " + i);
 
             Game game = gameLifecycleService.getGame(roomId);
@@ -2260,13 +2270,13 @@ class GameLifecycleServiceTest {
     @Test
     @DisplayName("departParticipants concurrent active-host and successor departures never select absent host")
     void departParticipants_ConcurrentHostAndSuccessorLeave_NeverSelectsAbsentHost() throws Exception {
-        java.util.Map<String, Room> activeRooms = new java.util.concurrent.ConcurrentHashMap<>();
-        org.mockito.Mockito.lenient().when(roomService.getRoom(anyString())).thenAnswer(inv -> activeRooms.get(inv.getArgument(0)));
-        org.mockito.Mockito.lenient().when(roomService.getCurrentHost(anyString())).thenAnswer(inv -> {
+        Map<String, Room> activeRooms = new ConcurrentHashMap<>();
+        Mockito.lenient().when(roomService.getRoom(anyString())).thenAnswer(inv -> activeRooms.get(inv.getArgument(0)));
+        Mockito.lenient().when(roomService.getCurrentHost(anyString())).thenAnswer(inv -> {
             Room r = activeRooms.get(inv.getArgument(0));
             return (r == null || r.getPlayers().isEmpty()) ? null : r.getPlayers().getFirst();
         });
-        org.mockito.Mockito.lenient().doAnswer(inv -> {
+        Mockito.lenient().doAnswer(inv -> {
             String rid = inv.getArgument(0);
             List<String> toLeave = inv.getArgument(1);
             Room r = activeRooms.get(rid);
@@ -2275,7 +2285,7 @@ class GameLifecycleServiceTest {
             }
             return null;
         }).when(roomService).leavePlayersBatch(anyString(), any(), any());
-        org.mockito.Mockito.lenient().doAnswer(inv -> {
+        Mockito.lenient().doAnswer(inv -> {
             String rid = inv.getArgument(0);
             String p = inv.getArgument(1);
             Room r = activeRooms.get(rid);
@@ -2304,9 +2314,9 @@ class GameLifecycleServiceTest {
 
             gameLifecycleService.restoreGame(game);
 
-            java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
-            java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(2);
-            java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+            CountDownLatch startLatch = new CountDownLatch(1);
+            CountDownLatch doneLatch = new CountDownLatch(2);
+            AtomicReference<Throwable> error = new AtomicReference<>();
 
             Thread t1 = new Thread(() -> {
                 try {
@@ -2334,7 +2344,7 @@ class GameLifecycleServiceTest {
             t2.start();
             startLatch.countDown();
 
-            boolean done = doneLatch.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            boolean done = doneLatch.await(3, TimeUnit.SECONDS);
             assertTrue(done, "Depart timed out at iteration " + i);
             assertNull(error.get(), "Unexpected error during concurrent departures: " + error.get());
         }

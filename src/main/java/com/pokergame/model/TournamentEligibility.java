@@ -1,6 +1,7 @@
 package com.pokergame.model;
 
 import java.util.List;
+import com.pokergame.enums.GamePhase;
 
 /** Shared phase-aware rules for tournament contenders and disconnect claims. */
 public final class TournamentEligibility {
@@ -8,7 +9,7 @@ public final class TournamentEligibility {
 
     public static boolean isContender(Game game, Player player) {
         if (player.getIsOut()) return false;
-        boolean unsettled = game.getCurrentPhase() != com.pokergame.enums.GamePhase.SHOWDOWN
+        boolean unsettled = game.getCurrentPhase() != GamePhase.SHOWDOWN
                 || game.getLastSettlementResult() == null || !game.getLastSettlementResult().settled();
         return unsettled || player.getChips() > 0;
     }

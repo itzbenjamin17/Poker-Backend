@@ -37,6 +37,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import com.pokergame.model.Game;
 
 /** Tests WebSocket action integration behavior. */
 @Tag("integration")
@@ -206,7 +207,7 @@ class WebSocketActionIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(error.message()).isEqualTo("Amount cannot exceed 10,000,000");
 
             // Verify game was not mutated (current player remains the same)
-            com.pokergame.model.Game game = gameLifecycleService.getGame(gameSession.roomId());
+            Game game = gameLifecycleService.getGame(gameSession.roomId());
             assertThat(game.getCurrentPlayer().getName()).isEqualTo(currentPlayer);
 
             session.disconnect();

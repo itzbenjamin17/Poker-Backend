@@ -28,6 +28,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import com.pokergame.persistence.config.PersistenceException;
+import java.nio.file.AccessDeniedException;
+import java.util.Locale;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Saves a poker game's history to disk using an encrypted Write-Ahead Log (WAL), with one file per room.
@@ -43,7 +47,7 @@ import com.pokergame.persistence.config.PersistenceException;
  * </p>
  */
 public final class EncryptedWalStore {
-    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(EncryptedWalStore.class);
+    private static final Logger logger = LoggerFactory.getLogger(EncryptedWalStore.class);
     private static final int MAGIC = 0x504B574C; // PKWL
     private static final short FORMAT_VERSION = 1;
     private static final short SCHEMA_VERSION = 1;
@@ -720,9 +724,9 @@ public final class EncryptedWalStore {
     private void forceDirectory() throws IOException {
         try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
             channel.force(true);
-        } catch (java.nio.file.AccessDeniedException e) {
+        } catch (AccessDeniedException e) {
             // Windows doesn't let us sync directories the same way Linux does. That's fine for local testing.
-            if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")) {
+            if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) {
                 throw e;
             }
         }

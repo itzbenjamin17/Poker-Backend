@@ -25,6 +25,12 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.HashSet;
+import java.util.List;
+import org.mockito.ArgumentCaptor;
 
 /** Guards membership isolation at the application-to-Spring routing boundary. */
 class MembershipRoutingRegressionTest {
@@ -35,10 +41,10 @@ class MembershipRoutingRegressionTest {
         RoomService rooms = mock(RoomService.class);
         when(rooms.getRoom("room")).thenReturn(room);
         var projections = new GameStateService(rooms, mock(SimpMessagingTemplate.class));
-        Game game = new Game("room", java.util.List.of(new Player("Alice", "alice-id", 100),
+        Game game = new Game("room", List.of(new Player("Alice", "alice-id", 100),
                 new Player("Host", "host-id", 100)), 5, 10, mock(HandEvaluatorService.class));
-        var roomHeld = new java.util.concurrent.CountDownLatch(1);
-        var releaseRoom = new java.util.concurrent.CountDownLatch(1);
+        var roomHeld = new CountDownLatch(1);
+        var releaseRoom = new CountDownLatch(1);
         Thread holder = new Thread(() -> {
             synchronized (room) {
                 roomHeld.countDown();
@@ -47,8 +53,8 @@ class MembershipRoutingRegressionTest {
         });
         holder.setDaemon(true);
         holder.start();
-        assertTrue(roomHeld.await(2, java.util.concurrent.TimeUnit.SECONDS));
-        var publish = new java.util.concurrent.FutureTask<Void>(() -> {
+        assertTrue(roomHeld.await(2, TimeUnit.SECONDS));
+        var publish = new FutureTask<Void>(() -> {
             synchronized (game) { projections.broadcastGameState("room", game); }
             return null;
         });
@@ -56,7 +62,7 @@ class MembershipRoutingRegressionTest {
         publisher.setDaemon(true);
         try {
             publisher.start();
-            publish.get(2, java.util.concurrent.TimeUnit.SECONDS);
+            publish.get(2, TimeUnit.SECONDS);
         } finally {
             releaseRoom.countDown();
             holder.join(2000);
@@ -84,7 +90,7 @@ class MembershipRoutingRegressionTest {
         when(registry.getUser(anyString())).thenAnswer(invocation -> {
             String name = invocation.getArgument(0);
             if (name.equals(retired.getName()) && name.equals(replacement.getName())) {
-                Set<SimpSession> combined = new java.util.HashSet<>(retiredUser.getSessions());
+                Set<SimpSession> combined = new HashSet<>(retiredUser.getSessions());
                 combined.addAll(replacementUser.getSessions());
                 SimpUser both = mock(SimpUser.class);
                 when(both.getSessions()).thenReturn(combined);
@@ -92,10 +98,10 @@ class MembershipRoutingRegressionTest {
             }
             return name.equals(replacement.getName()) ? replacementUser : retiredUser;
         });
-        Game game = new Game("room", java.util.List.of(new Player("Alice", "alice-id", 100),
+        Game game = new Game("room", List.of(new Player("Alice", "alice-id", 100),
                 new Player("Host", "host-id", 100)), 5, 10, mock(HandEvaluatorService.class));
         projections.broadcastGameState("room", game);
-        var recipient = org.mockito.ArgumentCaptor.forClass(String.class);
+        var recipient = ArgumentCaptor.forClass(String.class);
         verify(publisher).convertAndSendToUser(recipient.capture(), eq("/queue/private"), any(PrivatePlayerState.class));
 
         var headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
@@ -121,7 +127,7 @@ class MembershipRoutingRegressionTest {
 
     private static SimpUser user(String... sessionIds) {
         SimpUser user = mock(SimpUser.class);
-        Set<SimpSession> sessions = new java.util.HashSet<>();
+        Set<SimpSession> sessions = new HashSet<>();
         for (String id : sessionIds) {
             SimpSession session = mock(SimpSession.class);
             when(session.getId()).thenReturn(id);

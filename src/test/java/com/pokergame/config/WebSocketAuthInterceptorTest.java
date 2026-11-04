@@ -23,6 +23,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
+import com.pokergame.model.Room;
 
 /** Tests WebSocket auth interceptor behavior. */
 @Tag("unit")
@@ -491,7 +492,7 @@ class WebSocketAuthInterceptorTest {
     @Test
     @DisplayName("should reject CONNECT, SUBSCRIBE, and SEND when token membershipId is stale")
     void givenStaleMembershipId_whenConnectSubscribeOrSend_thenThrowAccessDeniedException() {
-        com.pokergame.model.Room room = new com.pokergame.model.Room(ROOM_ID, "Room", PLAYER_NAME, 4, 10, 20, 500, null);
+        Room room = new Room(ROOM_ID, "Room", PLAYER_NAME, 4, 10, 20, 500, null);
         String activeMemId = room.addPlayer(PLAYER_NAME);
         when(roomService.getRoom(ROOM_ID)).thenReturn(room);
 

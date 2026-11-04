@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import com.pokergame.exception.ResourceNotFoundException;
 
 /**
  * Unit tests for the PlayerActionService class.
@@ -82,8 +83,8 @@ class PlayerActionServiceTest {
 
         PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, null);
 
-        com.pokergame.exception.ResourceNotFoundException exception = assertThrows(
-                com.pokergame.exception.ResourceNotFoundException.class,
+        ResourceNotFoundException exception = assertThrows(
+                ResourceNotFoundException.class,
                 () -> playerActionService.processPlayerAction(GAME_ID, request, "Player1"));
 
         assertTrue(exception.getMessage().contains("Game not found"));

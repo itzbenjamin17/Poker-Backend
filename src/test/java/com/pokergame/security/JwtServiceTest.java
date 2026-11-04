@@ -17,6 +17,9 @@ import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import java.util.stream.Stream;
+import javax.crypto.SecretKey;
+import org.junit.jupiter.api.Assertions;
 
 /** Tests JWT service behavior. */
 @Tag("unit")
@@ -92,7 +95,7 @@ class JwtServiceTest {
             // Manually build a token with missing roomId using Jwts
             String token = io.jsonwebtoken.Jwts.builder()
                     .subject("TestPlayer")
-                    .signWith((javax.crypto.SecretKey) org.springframework.test.util.ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .signWith((SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
                     .compact();
 
             assertThat(jwtService.isTokenValid(token)).isFalse();
@@ -109,7 +112,7 @@ class JwtServiceTest {
             String token = io.jsonwebtoken.Jwts.builder()
                     .subject("TestPlayer")
                     .claim("roomId", "   ")
-                    .signWith((javax.crypto.SecretKey) org.springframework.test.util.ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .signWith((SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
                     .compact();
 
             assertThat(jwtService.isTokenValid(token)).isFalse();
@@ -130,7 +133,7 @@ class JwtServiceTest {
             assertThat(jwtService.isTokenValid(token)).isTrue();
 
             var claims = io.jsonwebtoken.Jwts.parser()
-                    .verifyWith((javax.crypto.SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .verifyWith((SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
                     .build()
                     .parseSignedClaims(token)
                     .getPayload();
@@ -159,7 +162,7 @@ class JwtServiceTest {
             String token = jwtService.generateToken("Player1", TEST_ROOM, "   ");
 
             var claims = io.jsonwebtoken.Jwts.parser()
-                    .verifyWith((javax.crypto.SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .verifyWith((SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
                     .build()
                     .parseSignedClaims(token)
                     .getPayload();
@@ -377,7 +380,7 @@ class JwtServiceTest {
                     .subject("Alice")
                     .claim("roomId", TEST_ROOM)
                     .claim("mid", "legacy-mid-123")
-                    .signWith((javax.crypto.SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .signWith((SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
                     .compact();
 
             PlayerPrincipal principal = jwtService.extractPrincipal(token);
@@ -446,7 +449,7 @@ class JwtServiceTest {
             ReflectionTestUtils.setField(service, "secretKeyString", secret);
             ReflectionTestUtils.setField(service, "expirationMillis", DEFAULT_EXPIRATION_MILLIS);
 
-            org.junit.jupiter.api.Assertions.assertDoesNotThrow(service::init);
+            Assertions.assertDoesNotThrow(service::init);
         }
 
         /**
@@ -572,8 +575,8 @@ class JwtServiceTest {
      * Supports the test scenario for special player names.
      * @return player names that must round-trip through token subjects
      */
-    static java.util.stream.Stream<String> specialPlayerNames() {
-        return java.util.stream.Stream.of(
+    static Stream<String> specialPlayerNames() {
+        return Stream.of(
             "Player with spaces",
             "Player_with_underscores",
             "Player-with-dashes",

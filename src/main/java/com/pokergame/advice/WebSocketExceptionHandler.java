@@ -21,6 +21,13 @@ import java.security.Principal;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import tools.jackson.databind.ObjectMapper;
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.ValidationException;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
+import org.springframework.validation.BindException;
+import org.springframework.validation.method.MethodValidationException;
 
 /**
  * Centralized exception handler for STOMP-over-WebSocket messaging traffic.
@@ -110,7 +117,7 @@ public class WebSocketExceptionHandler {
         boolean validationOrConversion = false;
         String validationMessage = null;
 
-        java.util.Set<Throwable> visited = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         Throwable cause = exception;
         while (cause != null && visited.add(cause)) {
             if (actionFeedback == null && cause instanceof ActionFeedbackException afe
@@ -153,9 +160,9 @@ public class WebSocketExceptionHandler {
         return throwable instanceof MessageConversionException
                 || throwable instanceof org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException
                 || throwable instanceof org.springframework.web.bind.MethodArgumentNotValidException
-                || throwable instanceof org.springframework.validation.BindException
-                || throwable instanceof jakarta.validation.ValidationException
-                || throwable instanceof org.springframework.validation.method.MethodValidationException
+                || throwable instanceof BindException
+                || throwable instanceof ValidationException
+                || throwable instanceof MethodValidationException
                 || (throwable != null && throwable.getClass().getName().contains("JacksonException"));
     }
 
@@ -170,17 +177,17 @@ public class WebSocketExceptionHandler {
                 return e.getBindingResult().getFieldError().getDefaultMessage();
             }
         }
-        if (throwable instanceof org.springframework.validation.BindException e) {
+        if (throwable instanceof BindException e) {
             if (e.getFieldError() != null) {
                 return e.getFieldError().getDefaultMessage();
             }
         }
-        if (throwable instanceof jakarta.validation.ConstraintViolationException e) {
+        if (throwable instanceof ConstraintViolationException e) {
             if (e.getConstraintViolations() != null && !e.getConstraintViolations().isEmpty()) {
                 return e.getConstraintViolations().iterator().next().getMessage();
             }
         }
-        if (throwable instanceof org.springframework.validation.method.MethodValidationException e) {
+        if (throwable instanceof MethodValidationException e) {
             if (e.getAllErrors() != null && !e.getAllErrors().isEmpty()) {
                 return e.getAllErrors().get(0).getDefaultMessage();
             }

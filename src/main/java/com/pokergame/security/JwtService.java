@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
 import java.util.Date;
+import java.util.UUID;
 
 /**
  * Service responsible for generating and validating JWT tokens for stateless
@@ -58,7 +59,7 @@ public class JwtService {
      * @return signed token with the configured expiry
      */
     public String generateToken(String playerName, String roomId) {
-        return generateToken(playerName, roomId, java.util.UUID.randomUUID().toString());
+        return generateToken(playerName, roomId, UUID.randomUUID().toString());
     }
 
     /**

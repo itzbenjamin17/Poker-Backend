@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import java.util.ArrayList;
 
 /**
  * Unit tests for the HandEvaluatorService class.
@@ -57,7 +58,7 @@ class HandEvaluatorServiceTest {
                                 card(Rank.NINE, Suit.HEARTS), card(Rank.SEVEN, Suit.HEARTS), card(Rank.FOUR, Suit.HEARTS));
                 List<Card> lowerKicker = List.of(card(Rank.ACE, Suit.CLUBS), card(Rank.JACK, Suit.CLUBS),
                                 card(Rank.NINE, Suit.CLUBS), card(Rank.SEVEN, Suit.CLUBS), card(Rank.THREE, Suit.CLUBS));
-                List<Card> mutableDescending = new java.util.ArrayList<>(aceHigh);
+                List<Card> mutableDescending = new ArrayList<>(aceHigh);
                 List<Card> before = List.copyOf(mutableDescending);
 
                 assertFalse(service.isBetterHandOfSameRank(mutableDescending, sameRanksOtherSuits, HandRank.HIGH_CARD));

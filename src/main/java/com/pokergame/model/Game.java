@@ -13,6 +13,8 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import com.pokergame.dto.internal.TurnOutcome;
+import com.pokergame.dto.response.GameEndResponse;
+import java.util.stream.Collectors;
 
 /**
  * Represents a poker game instance with players, betting rounds, and game state
@@ -55,7 +57,7 @@ public class Game {
     private ReadyGateState readyGateState;
     private long handNumber;
     private long stateRevision;
-    private com.pokergame.dto.response.GameEndResponse retainedTerminalResult;
+    private GameEndResponse retainedTerminalResult;
 
     // Track if everyone has had their initial turn in the current betting round
     private boolean everyoneHasHadInitialTurn;
@@ -293,8 +295,8 @@ public class Game {
         public GameRestoreBuilder readyGateState(ReadyGateState value) { this.readyGateState = value; return this; }
         public GameRestoreBuilder handNumber(long value) { this.handNumber = value; return this; }
         public GameRestoreBuilder stateRevision(long value) { this.stateRevision = value; return this; }
-        private com.pokergame.dto.response.GameEndResponse retainedTerminalResult;
-        public GameRestoreBuilder retainedTerminalResult(com.pokergame.dto.response.GameEndResponse value) { this.retainedTerminalResult = value; return this; }
+        private GameEndResponse retainedTerminalResult;
+        public GameRestoreBuilder retainedTerminalResult(GameEndResponse value) { this.retainedTerminalResult = value; return this; }
 
         public GameRestoreBuilder everyoneHasHadInitialTurn(boolean everyoneHasHadInitialTurn) {
             this.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
@@ -1122,7 +1124,7 @@ public class Game {
         // Keep integer remainders in the table pot for the next hand.
         pot = remainder;
         lastSettlementResult = new HandSettlementResult(awards, refunds,
-                uniqueWinners.stream().map(Player::getPlayerId).collect(java.util.stream.Collectors.toSet()),
+                uniqueWinners.stream().map(Player::getPlayerId).collect(Collectors.toSet()),
                 remainder, true);
         logger.info(
                 "Side-pot distribution complete for game {} | uniqueWinners={} | refundedUncalled={} | potRemainder={}",
@@ -1290,8 +1292,8 @@ public class Game {
             List<Player> eligiblePlayers) {
         if (!allocations.isEmpty()) {
             PotAllocation previous = allocations.getLast();
-            Set<String> previousIds = previous.eligiblePlayers().stream().map(Player::getPlayerId).collect(java.util.stream.Collectors.toSet());
-            Set<String> currentIds = eligiblePlayers.stream().map(Player::getPlayerId).collect(java.util.stream.Collectors.toSet());
+            Set<String> previousIds = previous.eligiblePlayers().stream().map(Player::getPlayerId).collect(Collectors.toSet());
+            Set<String> currentIds = eligiblePlayers.stream().map(Player::getPlayerId).collect(Collectors.toSet());
             if (previousIds.equals(currentIds)) {
                 allocations.set(allocations.size() - 1,
                         new PotAllocation(previous.amount() + amount, previous.eligiblePlayers()));
@@ -2160,7 +2162,7 @@ public class Game {
      *
      * @return the retained terminal {@link com.pokergame.dto.response.GameEndResponse}, or {@code null} if the game has not concluded
      */
-    public com.pokergame.dto.response.GameEndResponse getRetainedTerminalResult() {
+    public GameEndResponse getRetainedTerminalResult() {
         return retainedTerminalResult;
     }
 
@@ -2169,7 +2171,7 @@ public class Game {
      *
      * @param retainedTerminalResult the frozen terminal {@link com.pokergame.dto.response.GameEndResponse} to retain
      */
-    public void setRetainedTerminalResult(com.pokergame.dto.response.GameEndResponse retainedTerminalResult) {
+    public void setRetainedTerminalResult(GameEndResponse retainedTerminalResult) {
         this.retainedTerminalResult = retainedTerminalResult;
     }
 }

@@ -19,6 +19,9 @@ import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.enums.ReadyGateState;
+import com.pokergame.model.HandSettlementResult;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Converts live game data (Rooms and Games) into a clean snapshot format for saving to disk,
@@ -127,7 +130,7 @@ public final class AggregateSnapshotMapper {
      */
     public byte[] serializeDeletion(String roomId) {
         AggregateStateImage.RoomState tombstone = new AggregateStateImage.RoomState(
-                roomId, "deleted", "deleted", 2, 1, 2, 20, null, null, java.util.Map.of(), false);
+                roomId, "deleted", "deleted", 2, 1, 2, 20, null, null, Map.of(), false);
         return write(new AggregateStateImage(AggregateStateImage.CURRENT_SCHEMA_VERSION, true, tombstone,
                 "deleted", null));
     }
@@ -143,7 +146,7 @@ public final class AggregateSnapshotMapper {
      */
     public RecoveredAggregate deserialize(byte[] bytes) {
         try {
-            tools.jackson.databind.JsonNode root = objectMapper.readTree(bytes);
+            JsonNode root = objectMapper.readTree(bytes);
             int schemaVersion = root.path("schemaVersion").asInt(-1);
             // Verify that we can actually read this snapshot version
             if (schemaVersion != AggregateStateImage.CURRENT_SCHEMA_VERSION) {
@@ -195,7 +198,7 @@ public final class AggregateSnapshotMapper {
 
         // Room membership is authoritative independently of retained final Game rows.
         Map<String, LocalDateTime> joinTimes = state.playersWithJoinTime() == null
-                ? java.util.Map.of() : state.playersWithJoinTime();
+                ? Map.of() : state.playersWithJoinTime();
         List<String> roomMembers = List.copyOf(joinTimes.keySet());
         String host = image.currentHost();
         String reconciledHost = host != null && roomMembers.contains(host) ? host
@@ -308,7 +311,7 @@ public final class AggregateSnapshotMapper {
             return null;
         }
         Map<String, LocalDateTime> joinTimes = state.playersWithJoinTime() == null
-                ? java.util.Map.of() : state.playersWithJoinTime();
+                ? Map.of() : state.playersWithJoinTime();
         return Room.restoreBuilder()
                 .roomId(state.roomId())
                 .roomName(state.roomName())
@@ -452,7 +455,7 @@ public final class AggregateSnapshotMapper {
                 finalState.readyCountdownDeadlineEpochMs() != null || !Boolean.FALSE.equals(finalState.isAutoAdvancing()) ||
                 !Boolean.FALSE.equals(finalState.isReadyCountdownActive()) || !Boolean.FALSE.equals(finalState.claimWinAvailable()) ||
                 finalState.claimWinPlayerName() != null || finalState.winningsPerPlayer() != null ||
-                finalState.readyGateState() != com.pokergame.enums.ReadyGateState.CLOSED) {
+                finalState.readyGateState() != ReadyGateState.CLOSED) {
             throw new PersistenceException("Retained terminal result contains live-game controls");
         }
         if (!validateCards(finalState.communityCards(), 5)) {
@@ -693,15 +696,15 @@ public final class AggregateSnapshotMapper {
                 state.isReadyForNextHand());
     }
 
-    private static AggregateStateImage.SettlementState settlementState(com.pokergame.model.HandSettlementResult result) {
+    private static AggregateStateImage.SettlementState settlementState(HandSettlementResult result) {
         if (result == null) return null;
         return new AggregateStateImage.SettlementState(result.contestedAwards(), result.refunds(),
                 result.winnerIds(), result.remainder(), result.settled());
     }
 
-    private static com.pokergame.model.HandSettlementResult settlementResult(AggregateStateImage.SettlementState state) {
+    private static HandSettlementResult settlementResult(AggregateStateImage.SettlementState state) {
         if (state == null) return null;
-        return new com.pokergame.model.HandSettlementResult(state.contestedAwards(), state.refunds(),
+        return new HandSettlementResult(state.contestedAwards(), state.refunds(),
                 state.winnerIds(), state.remainder(), state.settled());
     }
 
