@@ -140,7 +140,7 @@ public final class DurableMutationAspect {
                 return joinPoint.proceed();
             }
 
-            try (LockLease lease = roomLocks.acquire(roomId)) {
+            try (LockLease _ = roomLocks.acquire(roomId)) {
                 DurableTransactionContext.begin(roomId);
                 RollbackState beforeMutation = null;
                 try {

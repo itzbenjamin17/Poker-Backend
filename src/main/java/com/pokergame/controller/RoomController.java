@@ -146,7 +146,7 @@ public class RoomController {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
 
-        try (LockLease ignored = durableMutationAspect.acquireRoomLock(roomId)) {
+        try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
             gameLifecycleService.departParticipants(roomId, List.of(playerName));
             logger.info("Player {} successfully left room {}", playerName, roomId);
@@ -171,7 +171,7 @@ public class RoomController {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
 
-        try (LockLease ignored = durableMutationAspect.acquireRoomLock(roomId)) {
+        try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
             gameLifecycleService.validatePlayerMembership(roomId, playerPrincipal.playerName(), playerPrincipal.membershipId());
             logger.debug("Fetching room info for room: {}", roomId);
             Room room = roomService.getRoom(roomId);
@@ -211,7 +211,7 @@ public class RoomController {
             throw new UnauthorisedActionException("Token is not valid for this room.");
         }
 
-        try (LockLease ignored = durableMutationAspect.acquireRoomLock(roomId)) {
+        try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
             if (!roomService.isRoomHost(roomId, playerName)) {
                 logger.warn("Non-host player {} attempted to start game for room {}", playerName, roomId);

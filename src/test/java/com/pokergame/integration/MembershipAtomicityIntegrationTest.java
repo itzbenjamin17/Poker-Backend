@@ -49,7 +49,7 @@ class MembershipAtomicityIntegrationTest {
             PlayerPrincipal retired = new PlayerPrincipal("Alice", roomId, rooms.getRoom(roomId).getMembershipId("Alice"));
             DurableMutationAspect locks = context.getBean(DurableMutationAspect.class);
             Future<Throwable> request;
-            try (LockLease ignored = locks.acquireRoomLock(roomId)) {
+            try (LockLease _ = locks.acquireRoomLock(roomId)) {
                 request = executor.submit(() -> {
                     try {
                         controller.getPrivateState(roomId, retired);
@@ -85,7 +85,7 @@ class MembershipAtomicityIntegrationTest {
             DurableMutationAspect locks = context.getBean(DurableMutationAspect.class);
             Future<Throwable> request;
             String replacementMembership;
-            try (LockLease ignored = locks.acquireRoomLock(roomId)) {
+            try (LockLease _ = locks.acquireRoomLock(roomId)) {
                 request = executor.submit(() -> {
                     try {
                         if (roomEndpoint) roomController.leaveRoom(roomId, retired);

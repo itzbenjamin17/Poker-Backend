@@ -76,7 +76,7 @@ class KeyedLockRegistryTest {
         CountDownLatch doneLatch = new CountDownLatch(1);
 
         Thread holder = new Thread(() -> {
-            try (LockLease ignored = lockRegistry.acquire(key)) {
+            try (LockLease _ = lockRegistry.acquire(key)) {
                 heldLatch.countDown();
                 doneLatch.await(5, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
@@ -158,7 +158,7 @@ class KeyedLockRegistryTest {
                 try {
                     startLatch.await();
                     for (int i = 0; i < iterations; i++) {
-                        try (LockLease lease = lockRegistry.acquire(key)) {
+                        try (LockLease _ = lockRegistry.acquire(key)) {
                             int current = activeExecutions.incrementAndGet();
                             if (current > 1) {
                                 overlapDetected.set(true);
