@@ -7,6 +7,9 @@ import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
 import com.pokergame.util.MdcUtils;
 import com.pokergame.util.SecurityUtils;
+import com.pokergame.service.event.RoomDestroyed;
+import com.pokergame.service.event.RoomMemberRegistered;
+import com.pokergame.service.event.RoomMembershipRetired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -583,6 +586,36 @@ public class WebSocketEventListener {
         if (roomId == null) return;
         drainQueue.add(new RoomDestroyedIntent(roomId));
         triggerDrain();
+    }
+
+    /**
+     * Starts the first-connection grace period for an accepted room membership.
+     *
+     * @param event accepted create or join
+     */
+    @EventListener
+    public void onRoomMemberRegistered(RoomMemberRegistered event) {
+        registerInitialConnection(event.roomId(), event.playerName(), event.membershipId(), event.deadlineEpochMs());
+    }
+
+    /**
+     * Queues transient cleanup for a retired membership.
+     *
+     * @param event accepted departure
+     */
+    @EventListener
+    public void onRoomMembershipRetired(RoomMembershipRetired event) {
+        publishMembershipRetired(event.roomId(), event.playerName(), event.membershipId());
+    }
+
+    /**
+     * Queues transient cleanup for a destroyed room.
+     *
+     * @param event accepted room removal
+     */
+    @EventListener
+    public void onRoomDestroyed(RoomDestroyed event) {
+        publishRoomDestroyed(event.roomId());
     }
 
     private void triggerDrain() {

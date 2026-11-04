@@ -9,7 +9,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
-import com.pokergame.config.WebSocketEventListener;
+import com.pokergame.service.event.RoomDestroyed;
+import com.pokergame.service.event.RoomMemberRegistered;
+import com.pokergame.service.event.RoomMembershipRetired;
+import org.springframework.context.ApplicationEventPublisher;
 
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
@@ -797,34 +800,63 @@ class RoomServiceTest {
     @Test
     @DisplayName("createRoom establishes first connection allowance with original acceptance deadline")
     void createRoom_EstablishesFirstConnectionRegistrationWithAcceptanceDeadline() {
-        WebSocketEventListener listener = mock(WebSocketEventListener.class);
-        RoomService serviceWithListener = new RoomService(messagingTemplate, listener, 60_000L);
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        RoomService serviceWithPublisher = new RoomService(messagingTemplate, publisher, 60_000L);
 
-        String roomId = serviceWithListener.createRoom(validCreateRequest);
-        Room createdRoom = serviceWithListener.getRoom(roomId);
+        String roomId = serviceWithPublisher.createRoom(validCreateRequest);
+        Room createdRoom = serviceWithPublisher.getRoom(roomId);
 
         assertNotNull(createdRoom.getAbsenceDeadline("HostPlayer"));
         String membershipId = createdRoom.getMembershipId("HostPlayer");
         assertNotNull(membershipId);
 
-        verify(listener).registerInitialConnection(eq(roomId), eq("HostPlayer"), eq(membershipId), eq(createdRoom.getAbsenceDeadline("HostPlayer")));
+        verify(publisher).publishEvent(new RoomMemberRegistered(
+                roomId, "HostPlayer", membershipId, createdRoom.getAbsenceDeadline("HostPlayer")));
     }
 
     @Test
     @DisplayName("joinRoom establishes first connection allowance with original acceptance deadline")
     void joinRoom_EstablishesFirstConnectionRegistrationWithAcceptanceDeadline() {
-        WebSocketEventListener listener = mock(WebSocketEventListener.class);
-        RoomService serviceWithListener = new RoomService(messagingTemplate, listener, 60_000L);
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        RoomService serviceWithPublisher = new RoomService(messagingTemplate, publisher, 60_000L);
 
-        String roomId = serviceWithListener.createRoom(validCreateRequest);
-        serviceWithListener.joinRoom(new JoinRoomRequest("Test Room", "Player2", null));
+        String roomId = serviceWithPublisher.createRoom(validCreateRequest);
+        serviceWithPublisher.joinRoom(new JoinRoomRequest("Test Room", "Player2", null));
 
-        Room room = serviceWithListener.getRoom(roomId);
+        Room room = serviceWithPublisher.getRoom(roomId);
         assertNotNull(room.getAbsenceDeadline("Player2"));
         String p2MembershipId = room.getMembershipId("Player2");
         assertNotNull(p2MembershipId);
 
-        verify(listener).registerInitialConnection(eq(roomId), eq("Player2"), eq(p2MembershipId), eq(room.getAbsenceDeadline("Player2")));
+        verify(publisher).publishEvent(new RoomMemberRegistered(
+                roomId, "Player2", p2MembershipId, room.getAbsenceDeadline("Player2")));
+    }
+
+    @Test
+    @DisplayName("leaveRoom publishes retirement of exactly the leaving member's membership")
+    void leaveRoom_PublishesMembershipRetired() {
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        RoomService serviceWithPublisher = new RoomService(messagingTemplate, publisher, 60_000L);
+
+        String roomId = serviceWithPublisher.createRoom(validCreateRequest);
+        serviceWithPublisher.joinRoom(new JoinRoomRequest("Test Room", "Player2", null));
+        String p2MembershipId = serviceWithPublisher.getRoom(roomId).getMembershipId("Player2");
+
+        serviceWithPublisher.leaveRoom(roomId, "Player2");
+
+        verify(publisher).publishEvent(new RoomMembershipRetired(roomId, "Player2", p2MembershipId));
+    }
+
+    @Test
+    @DisplayName("destroyRoom publishes room destruction")
+    void destroyRoom_PublishesRoomDestroyed() {
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        RoomService serviceWithPublisher = new RoomService(messagingTemplate, publisher, 60_000L);
+
+        String roomId = serviceWithPublisher.createRoom(validCreateRequest);
+        serviceWithPublisher.destroyRoom(roomId);
+
+        verify(publisher).publishEvent(new RoomDestroyed(roomId));
     }
 
     @Test

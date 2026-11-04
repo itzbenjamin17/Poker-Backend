@@ -7,8 +7,11 @@ import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.enums.ResponseMessage;
-import com.pokergame.config.WebSocketEventListener;
+import com.pokergame.service.event.RoomDestroyed;
+import com.pokergame.service.event.RoomMemberRegistered;
+import com.pokergame.service.event.RoomMembershipRetired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Room;
@@ -39,7 +42,7 @@ public class RoomService {
     private static final Logger logger = LoggerFactory.getLogger(RoomService.class);
 
     private final SimpMessagingTemplate messagingTemplate;
-    private final WebSocketEventListener webSocketEventListener;
+    private final ApplicationEventPublisher eventPublisher;
     private final long disconnectGracePeriodMs;
     private final PasswordEncoder passwordEncoder;
     private RoomService self;
@@ -50,7 +53,7 @@ public class RoomService {
      * @param messagingTemplate WebSocket messaging collaborator
      */
     public RoomService(SimpMessagingTemplate messagingTemplate) {
-        this(messagingTemplate, null, 120_000L, new BCryptPasswordEncoder());
+        this(messagingTemplate, event -> { }, 120_000L, new BCryptPasswordEncoder());
     }
 
     /**
@@ -60,37 +63,37 @@ public class RoomService {
      * @param passwordEncoder   password encoder for hashing and validating credentials
      */
     public RoomService(SimpMessagingTemplate messagingTemplate, PasswordEncoder passwordEncoder) {
-        this(messagingTemplate, null, 120_000L, passwordEncoder);
+        this(messagingTemplate, event -> { }, 120_000L, passwordEncoder);
     }
 
     /**
-     * Creates the room registry with WebSocket event listener for initial connection leases.
+     * Creates the room registry with an event publisher for membership and room lifecycle notifications.
      *
      * @param messagingTemplate       WebSocket messaging collaborator
-     * @param webSocketEventListener process-local connection listener
+     * @param eventPublisher          publishes room lifecycle events once a mutation is accepted
      * @param disconnectGracePeriodMs reconnect grace interval in ms
      */
     public RoomService(SimpMessagingTemplate messagingTemplate,
-            WebSocketEventListener webSocketEventListener,
+            ApplicationEventPublisher eventPublisher,
             long disconnectGracePeriodMs) {
-        this(messagingTemplate, webSocketEventListener, disconnectGracePeriodMs, new BCryptPasswordEncoder());
+        this(messagingTemplate, eventPublisher, disconnectGracePeriodMs, new BCryptPasswordEncoder());
     }
 
     /**
-     * Creates the room registry with WebSocket event listener and password encoder.
+     * Creates the room registry with an event publisher and password encoder.
      *
      * @param messagingTemplate       WebSocket messaging collaborator
-     * @param webSocketEventListener process-local connection listener
+     * @param eventPublisher          publishes room lifecycle events once a mutation is accepted
      * @param disconnectGracePeriodMs reconnect grace interval in ms
      * @param passwordEncoder         password encoder for hashing and verifying room passwords
      */
     @Autowired
     public RoomService(SimpMessagingTemplate messagingTemplate,
-            @Lazy WebSocketEventListener webSocketEventListener,
+            ApplicationEventPublisher eventPublisher,
             @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs,
             PasswordEncoder passwordEncoder) {
         this.messagingTemplate = messagingTemplate;
-        this.webSocketEventListener = webSocketEventListener;
+        this.eventPublisher = eventPublisher;
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
         this.passwordEncoder = passwordEncoder != null ? passwordEncoder : new BCryptPasswordEncoder();
     }
@@ -173,13 +176,11 @@ public class RoomService {
         }
 
         DurableTransactionContext.afterCommit(() -> {
-            if (webSocketEventListener != null) {
-                Room createdRoom = rooms.get(roomId);
-                String membershipId = createdRoom != null ? createdRoom.getMembershipId(sanitizedPlayerName) : null;
-                Long absenceDeadline = createdRoom != null ? createdRoom.getAbsenceDeadline(sanitizedPlayerName) : null;
-                long deadline = absenceDeadline != null ? absenceDeadline : (System.currentTimeMillis() + disconnectGracePeriodMs);
-                webSocketEventListener.registerInitialConnection(roomId, sanitizedPlayerName, membershipId, deadline);
-            }
+            Room createdRoom = rooms.get(roomId);
+            String membershipId = createdRoom != null ? createdRoom.getMembershipId(sanitizedPlayerName) : null;
+            Long absenceDeadline = createdRoom != null ? createdRoom.getAbsenceDeadline(sanitizedPlayerName) : null;
+            long deadline = absenceDeadline != null ? absenceDeadline : (System.currentTimeMillis() + disconnectGracePeriodMs);
+            eventPublisher.publishEvent(new RoomMemberRegistered(roomId, sanitizedPlayerName, membershipId, deadline));
         });
 
         sendAfterCommit("/room/" + roomId,
@@ -301,13 +302,11 @@ public class RoomService {
         }
 
         DurableTransactionContext.afterCommit(() -> {
-            if (webSocketEventListener != null) {
-                Room joinedRoom = rooms.get(roomId);
-                String mId = joinedRoom != null ? joinedRoom.getMembershipId(sanitizedPlayerName) : null;
-                Long absenceDeadline = joinedRoom != null ? joinedRoom.getAbsenceDeadline(sanitizedPlayerName) : null;
-                long deadline = absenceDeadline != null ? absenceDeadline : (System.currentTimeMillis() + disconnectGracePeriodMs);
-                webSocketEventListener.registerInitialConnection(roomId, sanitizedPlayerName, mId, deadline);
-            }
+            Room joinedRoom = rooms.get(roomId);
+            String mId = joinedRoom != null ? joinedRoom.getMembershipId(sanitizedPlayerName) : null;
+            Long absenceDeadline = joinedRoom != null ? joinedRoom.getAbsenceDeadline(sanitizedPlayerName) : null;
+            long deadline = absenceDeadline != null ? absenceDeadline : (System.currentTimeMillis() + disconnectGracePeriodMs);
+            eventPublisher.publishEvent(new RoomMemberRegistered(roomId, sanitizedPlayerName, mId, deadline));
         });
 
         logger.info("Player {} joined room: {}", sanitizedPlayerName, room.getRoomName());
@@ -361,10 +360,8 @@ public class RoomService {
             } else {
                 // Regular player leaving lobby
                 room.removePlayer(playerName);
-                if (webSocketEventListener != null) {
-                    DurableTransactionContext.afterCommit(() ->
-                            webSocketEventListener.publishMembershipRetired(roomId, playerName, membershipId));
-                }
+                DurableTransactionContext.afterCommit(() ->
+                        eventPublisher.publishEvent(new RoomMembershipRetired(roomId, playerName, membershipId)));
                 logger.info("Player {} left room: {}", playerName, room.getRoomName());
 
                 if (room.getPlayers().isEmpty()) {
@@ -421,11 +418,9 @@ public class RoomService {
                 retiredMemberships.put(name, room.getMembershipId(name));
             }
             present.forEach(room::removePlayer);
-            if (webSocketEventListener != null) {
-                DurableTransactionContext.afterCommit(() ->
-                        retiredMemberships.forEach((name, mid) ->
-                                webSocketEventListener.publishMembershipRetired(roomId, name, mid)));
-            }
+            DurableTransactionContext.afterCommit(() ->
+                    retiredMemberships.forEach((name, mid) ->
+                            eventPublisher.publishEvent(new RoomMembershipRetired(roomId, name, mid))));
             if (room.getPlayers().isEmpty()) {
                 roomHosts.remove(roomId);
                 if (room.isTerminal()) {
@@ -668,9 +663,7 @@ public class RoomService {
                 logger.info("Room destroyed: {} (ID: {})", room.getRoomName(), roomId);
             }
         }
-        if (webSocketEventListener != null) {
-            DurableTransactionContext.afterCommit(() -> webSocketEventListener.publishRoomDestroyed(roomId));
-        }
+        DurableTransactionContext.afterCommit(() -> eventPublisher.publishEvent(new RoomDestroyed(roomId)));
     }
 
     /**
