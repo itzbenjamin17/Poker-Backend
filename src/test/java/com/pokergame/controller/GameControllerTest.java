@@ -22,6 +22,9 @@ import com.pokergame.util.LockLease;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -536,6 +539,63 @@ class GameControllerTest {
                 .hasMessage("Token membership is stale or invalid.");
 
         verify(playerActionService, never()).processPlayerAction(anyString(), any(), anyString());
+    }
+
+    /**
+     * Membership boundary: a secured endpoint must be rejected with 401 whenever the
+     * active membership boundary refuses the token. The boundary (validatePlayerMembership,
+     * ADR-0004) fails closed for a null, blank, stale (mismatched), or absent-authoritative
+     * membership, so each of those values must be refused before any game state is read.
+     * Blank is represented by whitespace; null is covered by the @NullSource case.
+     */
+    @ParameterizedTest(name = "membershipId=[{0}]")
+    @NullSource
+    @ValueSource(strings = {"", "   ", "stale-does-not-match", "no-active-membership"})
+    @DisplayName("GET /api/game/{gameId}/state - Unauthorized (401) for null/blank/stale/missing membership")
+    void getGameState_RejectedMembership_ShouldReturnUnauthorized401(String membershipId) throws Exception {
+        PlayerPrincipal rejectedPrincipal = new PlayerPrincipal(playerName, gameId, membershipId);
+        Authentication rejectedAuth =
+                new PreAuthenticatedAuthenticationToken(rejectedPrincipal, "token", Collections.emptyList());
+
+        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
+                .when(gameLifecycleService).validatePlayerMembership(gameId, playerName, membershipId);
+
+        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
+                .principal(rejectedAuth))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.error").value("Unauthorized"))
+                .andExpect(jsonPath("$.message").value("Token membership is stale or invalid."));
+
+        // The boundary runs before game state is read, so no snapshot is produced for a refused token.
+        verify(gameStateService, never()).getPublicGameStateSnapshot(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("GET /api/game/{gameId}/state - 200 when membership matches the active id")
+    void getGameState_MatchingMembership_ShouldReturnOk() throws Exception {
+        String activeMembershipId = "active-mid";
+        PlayerPrincipal matchingPrincipal = new PlayerPrincipal(playerName, gameId, activeMembershipId);
+        Authentication matchingAuth =
+                new PreAuthenticatedAuthenticationToken(matchingPrincipal, "token", Collections.emptyList());
+
+        Game game = mock(Game.class);
+        PublicGameStateResponse response = new PublicGameStateResponse(
+                6, 100, Collections.emptyList(), 0, GamePhase.PRE_FLOP, 10,
+                Collections.emptyList(), Collections.emptyList(), playerName, "p1-id"
+        );
+        // A matching membership passes the boundary (no throw), so the request proceeds.
+        when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
+        when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(true);
+        when(gameLifecycleService.getGame(gameId)).thenReturn(game);
+        when(gameStateService.getPublicGameStateSnapshot(gameId, game)).thenReturn(response);
+
+        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
+                .principal(matchingAuth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pot").value(100));
+
+        verify(gameLifecycleService).validatePlayerMembership(gameId, playerName, activeMembershipId);
     }
 }
 

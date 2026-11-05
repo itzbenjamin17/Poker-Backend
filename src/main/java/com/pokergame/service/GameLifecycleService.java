@@ -1182,28 +1182,6 @@ public class GameLifecycleService {
     }
 
     /**
-     * Checks whether a player currently exists in an active game and matches the expected membership ID.
-     *
-     * @param gameId       the unique identifier of the game
-     * @param playerName   the player name to check
-     * @param membershipId the expected membership identity from token
-     * @return true if player exists and membership matches, false otherwise
-     */
-    public boolean playerExistsInGame(String gameId, String playerName, String membershipId) {
-        if (!playerExistsInGame(gameId, playerName)) {
-            return false;
-        }
-        if (membershipId == null || membershipId.isBlank()) {
-            return true;
-        }
-        Room room = roomService != null ? roomService.getRoom(gameId) : null;
-        if (room == null) {
-            return true;
-        }
-        return Objects.equals(membershipId, room.getMembershipId(playerName));
-    }
-
-    /**
      * Validates that the provided membership ID matches the active membership for the player in the room.
      * If the player presents a token with a stale or mismatched membership ID, the request is rejected.
      *
