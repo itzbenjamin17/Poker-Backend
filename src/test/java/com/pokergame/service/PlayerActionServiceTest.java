@@ -1,11 +1,13 @@
 package com.pokergame.service;
 
+import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.ResponseMessage;
+import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
@@ -15,8 +17,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -969,5 +974,347 @@ class PlayerActionServiceTest {
 
         assertDoesNotThrow(
                 () -> playerActionService.processPlayerAction(GAME_ID, foldRequest, currentPlayer.getName()));
+    }
+
+    // ==================== processPlayerAction - Outcome Arms ====================
+
+    private static TurnOutcome outcome(TurnOutcome.TurnOutcomeType type) {
+        return new TurnOutcome(type, null, null, 0);
+    }
+
+    @Test
+    @DisplayName("an all-in call that leaves nobody able to act schedules the auto-advance and notifies clients")
+    void processPlayerAction_AllInLeavesNobodyToAct_ShouldScheduleAutoAdvanceAndNotify() {
+        List<Player> players = new ArrayList<>();
+        players.add(new Player("P1", UUID.randomUUID().toString(), 100));
+        players.add(new Player("P2", UUID.randomUUID().toString(), 100));
+        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        game.resetForNewHand();
+        game.dealHoleCards();
+        game.postBlinds();
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(game);
+
+        Player first = game.getCurrentPlayer();
+        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.ALL_IN, null),
+                first.getName());
+        clearInvocations(gameStateService, gameLifecycleService);
+
+        Player second = game.getCurrentPlayer();
+        assertNotEquals(first.getName(), second.getName());
+        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.ALL_IN, null),
+                second.getName());
+
+        assertTrue(first.getIsAllIn());
+        assertTrue(second.getIsAllIn());
+        verify(gameLifecycleService).scheduleAutoAdvance(GAME_ID);
+        verify(gameStateService).broadcastAutoAdvanceNotification(GAME_ID, game);
+        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
+        verify(gameStateService, never()).broadcastShowdownResults(anyString(), any(Game.class), any(), anyInt());
+        verify(gameLifecycleService, never()).startReadyCountdown(anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("a PHASE_ADVANCED outcome broadcasts the game state")
+    void processPlayerAction_PhaseAdvanced_ShouldBroadcastGameState() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        doReturn(outcome(TurnOutcome.TurnOutcomeType.PHASE_ADVANCED)).when(spyGame).processPlayerDecision(any(), any());
+
+        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.FOLD, null),
+                spyGame.getCurrentPlayer().getName());
+
+        verify(gameStateService).broadcastGameState(GAME_ID, spyGame);
+        verify(gameLifecycleService, never()).scheduleAutoAdvance(anyString());
+    }
+
+    @Test
+    @DisplayName("a SHOWDOWN that ends the tournament schedules the game end and does not open the ready gate")
+    void processPlayerAction_ShowdownTournamentOver_ShouldScheduleGameEndWithoutReadyGate() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        List<Player> winners = List.of(testPlayers.getFirst());
+        doReturn(new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null, winners, 40))
+                .when(spyGame).processPlayerDecision(any(), any());
+        doReturn(true).when(spyGame).isTournamentOver();
+
+        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.FOLD, null),
+                spyGame.getCurrentPlayer().getName());
+
+        verify(gameLifecycleService).scheduleGameEnd(GAME_ID, GameLifecycleService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
+        verify(gameLifecycleService, never()).startReadyCountdown(anyString(), anyLong());
+        verify(gameLifecycleService, never()).scheduleReadyCountdownOpen(anyString(), anyLong());
+        verify(gameStateService).broadcastShowdownResults(GAME_ID, spyGame, winners, 40);
+    }
+
+    @Test
+    @DisplayName("a SHOWDOWN with no display delay starts the ready countdown immediately")
+    void processPlayerAction_ShowdownWithoutDisplayDelay_ShouldStartReadyCountdown() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        List<Player> winners = List.of(testPlayers.getFirst());
+        doReturn(new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null, winners, 40))
+                .when(spyGame).processPlayerDecision(any(), any());
+        ReflectionTestUtils.setField(playerActionService, "roundEndDelayMs", 0L);
+        ReflectionTestUtils.setField(playerActionService, "readyCountdownMs", 12_000L);
+
+        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.FOLD, null),
+                spyGame.getCurrentPlayer().getName());
+
+        verify(gameLifecycleService).startReadyCountdown(GAME_ID, 12_000L);
+        verify(gameLifecycleService, never()).scheduleReadyCountdownOpen(anyString(), anyLong());
+        verify(gameLifecycleService, never()).scheduleGameEnd(anyString(), anyLong());
+        verify(gameStateService).broadcastShowdownResults(GAME_ID, spyGame, winners, 40);
+    }
+
+    @Test
+    @DisplayName("a SHOWDOWN with a display delay schedules the ready countdown to open later")
+    void processPlayerAction_ShowdownWithDisplayDelay_ShouldScheduleReadyCountdownOpen() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        List<Player> winners = List.of(testPlayers.getFirst());
+        doReturn(new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null, winners, 40))
+                .when(spyGame).processPlayerDecision(any(), any());
+        ReflectionTestUtils.setField(playerActionService, "roundEndDelayMs", 2_500L);
+
+        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.FOLD, null),
+                spyGame.getCurrentPlayer().getName());
+
+        verify(gameLifecycleService).scheduleReadyCountdownOpen(GAME_ID, 2_500L);
+        verify(gameLifecycleService, never()).startReadyCountdown(anyString(), anyLong());
+        verify(gameLifecycleService, never()).scheduleGameEnd(anyString(), anyLong());
+        verify(gameStateService).broadcastShowdownResults(GAME_ID, spyGame, winners, 40);
+    }
+
+    // ==================== processPlayerAction - Post-processing Failures ====================
+
+    @Test
+    @DisplayName("a post-processing failure re-broadcasts the game state and the action still succeeds")
+    void processPlayerAction_PostProcessingFails_ShouldRebroadcastAndSucceed() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        doReturn(outcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING)).when(spyGame).processPlayerDecision(any(), any());
+        doThrow(new IllegalStateException("scheduler unavailable")).when(gameLifecycleService)
+                .scheduleAutoAdvance(GAME_ID);
+
+        assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID,
+                new PlayerActionRequest(PlayerAction.FOLD, null), spyGame.getCurrentPlayer().getName()));
+
+        verify(gameStateService).broadcastGameState(GAME_ID, spyGame);
+        verify(gameStateService, never()).broadcastAutoAdvanceNotification(anyString(), any(Game.class));
+    }
+
+    @Test
+    @DisplayName("a failing re-broadcast after a post-processing failure is swallowed and the action still succeeds")
+    void processPlayerAction_PostProcessingAndRebroadcastFail_ShouldStillSucceed() {
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
+        doThrow(new IllegalStateException("broadcast failed")).when(gameStateService)
+                .broadcastGameState(anyString(), any(Game.class));
+
+        Player currentPlayer = testGame.getCurrentPlayer();
+        assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID,
+                new PlayerActionRequest(PlayerAction.FOLD, null), currentPlayer.getName()));
+
+        assertTrue(currentPlayer.getHasFolded());
+        verify(gameStateService, times(2)).broadcastGameState(GAME_ID, testGame);
+    }
+
+    // ==================== processPlayerAction - Rejection Paths ====================
+
+    @Test
+    @DisplayName("an action is rejected while the game is auto-advancing")
+    void processPlayerAction_WhenAutoAdvancing_ShouldThrowBadRequestException() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        spyGame.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, System.currentTimeMillis() + 5_000);
+        String playerName = spyGame.getCurrentPlayer().getName();
+        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, null);
+
+        BadRequestException exception = assertThrows(BadRequestException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, playerName));
+
+        assertEquals("Actions are not allowed while the game is auto-advancing.", exception.getMessage());
+        assertEquals("HAND_ADVANCING", exception.actionErrorCode());
+        verify(spyGame, never()).processPlayerDecision(any(), any());
+        verifyNoInteractions(gameStateService);
+    }
+
+    @Test
+    @DisplayName("a rejected game-over action carries the GAME_FINISHED code")
+    void processPlayerAction_WhenGameOver_ShouldCarryGameFinishedCode() {
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
+        testGame.markGameOver();
+        String playerName = testGame.getCurrentPlayer().getName();
+        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.FOLD, null);
+
+        BadRequestException exception = assertThrows(BadRequestException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, playerName));
+
+        assertEquals("GAME_FINISHED", exception.actionErrorCode());
+        verifyNoInteractions(gameStateService);
+    }
+
+    @Test
+    @DisplayName("a rejected not-your-turn action carries the NOT_YOUR_TURN code and changes nothing")
+    void processPlayerAction_WhenNotPlayerTurn_ShouldCarryNotYourTurnCode() {
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
+        String currentName = testGame.getCurrentPlayer().getName();
+        String otherName = testPlayers.stream().map(Player::getName).filter(n -> !n.equals(currentName))
+                .findFirst().orElseThrow();
+        int potBefore = testGame.getPot();
+        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, null);
+
+        UnauthorisedActionException exception = assertThrows(UnauthorisedActionException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, otherName));
+
+        assertEquals("NOT_YOUR_TURN", exception.actionErrorCode());
+        assertTrue(exception.getMessage().contains(currentName));
+        assertEquals(potBefore, testGame.getPot());
+        verifyNoInteractions(gameStateService);
+    }
+
+    @Test
+    @DisplayName("a rejected disconnected-player action carries the DISCONNECTED code and changes nothing")
+    void processPlayerAction_WhenCurrentPlayerDisconnected_ShouldCarryDisconnectedCode() {
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
+        Player currentPlayer = testGame.getCurrentPlayer();
+        currentPlayer.setDisconnected(true);
+        int potBefore = testGame.getPot();
+        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, null);
+
+        UnauthorisedActionException exception = assertThrows(UnauthorisedActionException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
+
+        assertEquals("DISCONNECTED", exception.actionErrorCode());
+        assertEquals(potBefore, testGame.getPot());
+        verifyNoInteractions(gameStateService);
+    }
+
+    @Test
+    @DisplayName("a request with no action is rejected")
+    void processPlayerAction_WithNullAction_ShouldThrowBadRequestException() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        String playerName = spyGame.getCurrentPlayer().getName();
+        PlayerActionRequest request = new PlayerActionRequest(null, null);
+
+        BadRequestException exception = assertThrows(BadRequestException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, playerName));
+
+        assertEquals("Action is required", exception.getMessage());
+        verify(spyGame, never()).processPlayerDecision(any(), any());
+        verifyNoInteractions(gameStateService);
+    }
+
+    @Test
+    @DisplayName("a null request is rejected")
+    void processPlayerAction_WithNullRequest_ShouldThrowBadRequestException() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        String playerName = spyGame.getCurrentPlayer().getName();
+
+        BadRequestException exception = assertThrows(BadRequestException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, null, playerName));
+
+        assertEquals("Action is required", exception.getMessage());
+        verify(spyGame, never()).processPlayerDecision(any(), any());
+        verifyNoInteractions(gameStateService);
+    }
+
+    @Test
+    @DisplayName("a negative amount is rejected with NEGATIVE_AMOUNT")
+    void processPlayerAction_WithNegativeAmount_ShouldThrowBadRequestException() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        String playerName = spyGame.getCurrentPlayer().getName();
+        // The record's compact constructor already rejects this input, so the service's own guard
+        // can only be reached through a stubbed request.
+        PlayerActionRequest request = mock(PlayerActionRequest.class);
+        when(request.action()).thenReturn(PlayerAction.CALL);
+        when(request.amount()).thenReturn(-5);
+
+        BadRequestException exception = assertThrows(BadRequestException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, playerName));
+
+        assertEquals("Action amount cannot be negative", exception.getMessage());
+        assertEquals("NEGATIVE_AMOUNT", exception.actionErrorCode());
+        assertEquals("Amount must be positive; yours: -5", exception.actionErrorMessage());
+        verify(spyGame, never()).processPlayerDecision(any(), any());
+        verifyNoInteractions(gameStateService);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = PlayerAction.class, names = {"BET", "RAISE"})
+    @DisplayName("a bet or raise of 0 is rejected with AMOUNT_REQUIRED")
+    void processPlayerAction_WithZeroBetOrRaise_ShouldThrowBadRequestException(PlayerAction action) {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        String playerName = spyGame.getCurrentPlayer().getName();
+        // The record's compact constructor already rejects this input, so the service's own guard
+        // can only be reached through a stubbed request.
+        PlayerActionRequest request = mock(PlayerActionRequest.class);
+        when(request.action()).thenReturn(action);
+        when(request.amount()).thenReturn(0);
+
+        BadRequestException exception = assertThrows(BadRequestException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, playerName));
+
+        assertEquals("Bet/raise amount must be greater than 0", exception.getMessage());
+        assertEquals("AMOUNT_REQUIRED", exception.actionErrorCode());
+        verify(spyGame, never()).processPlayerDecision(any(), any());
+        verifyNoInteractions(gameStateService);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = PlayerAction.class, names = {"BET", "RAISE"})
+    @DisplayName("a bet or raise above the player's chips is rejected with INSUFFICIENT_CHIPS")
+    void processPlayerAction_WithBetOrRaiseAboveChips_ShouldThrowBadRequestException(PlayerAction action) {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        Player currentPlayer = spyGame.getCurrentPlayer();
+        int chips = currentPlayer.getChips();
+        PlayerActionRequest request = new PlayerActionRequest(action, chips + 1);
+
+        BadRequestException exception = assertThrows(BadRequestException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
+
+        assertEquals("Action amount cannot exceed your available chips", exception.getMessage());
+        assertEquals("INSUFFICIENT_CHIPS", exception.actionErrorCode());
+        assertEquals("Available: " + chips + "; yours: " + (chips + 1), exception.actionErrorMessage());
+        assertEquals(chips, currentPlayer.getChips());
+        verify(spyGame, never()).processPlayerDecision(any(), any());
+        verifyNoInteractions(gameStateService);
+    }
+
+    // ==================== processPlayerAction - Null Amount ====================
+
+    @Test
+    @DisplayName("a CALL with a null amount is passed to the game as amount 0")
+    void processPlayerAction_CallWithNullAmount_ShouldUseZeroAmount() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        Player currentPlayer = spyGame.getCurrentPlayer();
+
+        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.CALL, null),
+                currentPlayer.getName());
+
+        verify(spyGame).processPlayerDecision(eq(currentPlayer),
+                argThat(decision -> decision.action() == PlayerAction.CALL && decision.amount() == 0));
+        assertEquals(spyGame.getCurrentHighestBet(), currentPlayer.getCurrentBet());
+    }
+
+    @Test
+    @DisplayName("a CHECK with a null amount is passed to the game as amount 0")
+    void processPlayerAction_CheckWithNullAmount_ShouldUseZeroAmount() {
+        Game spyGame = spy(testGame);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
+        spyGame.dealFlop();
+        Player currentPlayer = spyGame.getCurrentPlayer();
+
+        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.CHECK, null),
+                currentPlayer.getName());
+
+        verify(spyGame).processPlayerDecision(eq(currentPlayer),
+                argThat(decision -> decision.action() == PlayerAction.CHECK && decision.amount() == 0));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 }
