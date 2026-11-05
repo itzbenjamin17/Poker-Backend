@@ -2470,6 +2470,440 @@ class GameLifecycleServiceTest {
         verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player3")), any());
     }
 
+    private void verifyNobodyRemovedFromRoom() {
+        verify(roomService, never()).leavePlayersBatch(anyString(), anyList(), any());
+        verify(roomService, never()).leaveRoom(anyString(), anyString());
+    }
+
+    private Player findGamePlayer(Game game, String name) {
+        return game.getPlayers().stream().filter(p -> p.getName().equals(name)).findFirst().orElseThrow();
+    }
+
+    private Game createTerminalGame() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        game.markGameOver();
+        return game;
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer ignores null game id, player name or membership id")
+    void removeDisconnectedPlayer_NullArguments_AreIgnored() {
+        gameLifecycleService.removeDisconnectedPlayer(null, "Player2", "membership", 1L);
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, null, "membership", 1L);
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", null, 1L);
+
+        verifyNoInteractions(roomService);
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer does nothing when the room no longer exists")
+    void removeDisconnectedPlayer_RoomMissing_IsNoOp() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(null);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "membership", System.currentTimeMillis() - 100);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer does nothing when the player is not in the room")
+    void removeDisconnectedPlayer_PlayerNotInRoom_IsNoOp() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Stranger", "membership", System.currentTimeMillis() - 100);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a lobby player whose membership id is obsolete")
+    void removeDisconnectedPlayer_Lobby_ObsoleteMembershipId_KeepsPlayer() {
+        Room lobby = new Room("lobby-3", "Lobby", "Host", 4, 10, 20, 1000, null);
+        lobby.addPlayer("Host");
+        lobby.addPlayer("Guest");
+        long deadline = System.currentTimeMillis() - 100;
+        lobby.setAbsenceDeadline("Guest", deadline);
+        when(roomService.getRoom("lobby-3")).thenReturn(lobby);
+
+        gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", "obsolete-id", deadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a lobby player who has reconnected")
+    void removeDisconnectedPlayer_Lobby_ReconnectedPlayer_KeepsPlayer() {
+        Room lobby = new Room("lobby-3", "Lobby", "Host", 4, 10, 20, 1000, null);
+        lobby.addPlayer("Host");
+        lobby.addPlayer("Guest");
+        long deadline = System.currentTimeMillis() - 100;
+        lobby.setAbsenceDeadline("Guest", deadline);
+        lobby.setPlayerConnected("Guest", true);
+        when(roomService.getRoom("lobby-3")).thenReturn(lobby);
+
+        gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", lobby.getMembershipId("Guest"), deadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a lobby player with no absence deadline")
+    void removeDisconnectedPlayer_Lobby_NoAbsenceDeadline_KeepsPlayer() {
+        Room lobby = new Room("lobby-3", "Lobby", "Host", 4, 10, 20, 1000, null);
+        lobby.addPlayer("Host");
+        lobby.addPlayer("Guest");
+        when(roomService.getRoom("lobby-3")).thenReturn(lobby);
+
+        gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", lobby.getMembershipId("Guest"),
+                System.currentTimeMillis() - 100);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a lobby player when the expected deadline is not the current one")
+    void removeDisconnectedPlayer_Lobby_DeadlineMismatch_KeepsPlayer() {
+        Room lobby = new Room("lobby-3", "Lobby", "Host", 4, 10, 20, 1000, null);
+        lobby.addPlayer("Host");
+        lobby.addPlayer("Guest");
+        long currentDeadline = System.currentTimeMillis() - 100;
+        lobby.setAbsenceDeadline("Guest", currentDeadline);
+        when(roomService.getRoom("lobby-3")).thenReturn(lobby);
+
+        gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", lobby.getMembershipId("Guest"),
+                currentDeadline - 5_000);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a lobby player until the deadline has passed")
+    void removeDisconnectedPlayer_Lobby_BeforeDeadline_KeepsPlayer() {
+        Room lobby = new Room("lobby-3", "Lobby", "Host", 4, 10, 20, 1000, null);
+        lobby.addPlayer("Host");
+        lobby.addPlayer("Guest");
+        long deadline = System.currentTimeMillis() + 60_000;
+        lobby.setAbsenceDeadline("Guest", deadline);
+        when(roomService.getRoom("lobby-3")).thenReturn(lobby);
+
+        gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", lobby.getMembershipId("Guest"), deadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps an active-game player whose membership id is obsolete")
+    void removeDisconnectedPlayer_ActiveGame_ObsoleteMembershipId_KeepsPlayer() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        long deadline = System.currentTimeMillis() - 100;
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "obsolete-id", deadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps an active-game player who reconnected before the timer fired")
+    void removeDisconnectedPlayer_ActiveGame_ReconnectedPlayer_KeepsPlayer() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        long deadline = System.currentTimeMillis() - 100;
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
+        gameLifecycleService.markPlayerReconnected(ROOM_ID, "Player2");
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), deadline);
+
+        assertFalse(findGamePlayer(game, "Player2").getIsDisconnected());
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a disconnected active-game player that has no deadline")
+    void removeDisconnectedPlayer_ActiveGame_NoDeadline_KeepsPlayer() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        Player player2 = findGamePlayer(game, "Player2");
+        player2.setDisconnected(true);
+        player2.setDisconnectDeadlineEpochMs(null);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"),
+                System.currentTimeMillis() - 100);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps an active-game player when the expected deadline is not the current one")
+    void removeDisconnectedPlayer_ActiveGame_DeadlineMismatch_KeepsPlayer() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        long currentDeadline = System.currentTimeMillis() - 100;
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", currentDeadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"),
+                currentDeadline - 5_000);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps an active-game player until the deadline has passed")
+    void removeDisconnectedPlayer_ActiveGame_BeforeDeadline_KeepsPlayer() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        long deadline = System.currentTimeMillis() + 60_000;
+        gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), deadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a room-only member who reconnected while a game is active")
+    void removeDisconnectedPlayer_ActiveGame_RoomOnlyMemberConnected_KeepsMember() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        testRoom.addPlayer("Spectator");
+        long deadline = System.currentTimeMillis() - 100;
+        testRoom.setAbsenceDeadline("Spectator", deadline);
+        testRoom.setPlayerConnected("Spectator", true);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), deadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a room-only member with no absence deadline while a game is active")
+    void removeDisconnectedPlayer_ActiveGame_RoomOnlyMemberNoDeadline_KeepsMember() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        testRoom.addPlayer("Spectator");
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"),
+                System.currentTimeMillis() - 100);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a room-only member whose expected deadline is not the current one")
+    void removeDisconnectedPlayer_ActiveGame_RoomOnlyMemberDeadlineMismatch_KeepsMember() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        testRoom.addPlayer("Spectator");
+        long currentDeadline = System.currentTimeMillis() - 100;
+        testRoom.setAbsenceDeadline("Spectator", currentDeadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"),
+                currentDeadline - 5_000);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a room-only member until the deadline has passed")
+    void removeDisconnectedPlayer_ActiveGame_RoomOnlyMemberBeforeDeadline_KeepsMember() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        testRoom.addPlayer("Spectator");
+        long deadline = System.currentTimeMillis() + 60_000;
+        testRoom.setAbsenceDeadline("Spectator", deadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), deadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer removes a room-only member whose grace expired while a game is active")
+    void removeDisconnectedPlayer_ActiveGame_RoomOnlyMemberExpired_LeavesRoom() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        testRoom.addPlayer("Spectator");
+        long deadline = System.currentTimeMillis() - 100;
+        testRoom.setAbsenceDeadline("Spectator", deadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), deadline);
+
+        verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Spectator")), any());
+        assertEquals(2, game.getPlayers().size(), "A room-only member is not a game participant");
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a terminal-game player whose membership id is obsolete")
+    void removeDisconnectedPlayer_TerminalGame_ObsoleteMembershipId_KeepsPlayer() {
+        Game game = createTerminalGame();
+        long deadline = System.currentTimeMillis() - 100;
+        Player player2 = findGamePlayer(game, "Player2");
+        player2.setDisconnected(true);
+        player2.setDisconnectDeadlineEpochMs(deadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "obsolete-id", deadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a terminal-game player with no deadline anywhere")
+    void removeDisconnectedPlayer_TerminalGame_NoDeadline_KeepsPlayer() {
+        Game game = createTerminalGame();
+        findGamePlayer(game, "Player2").setDisconnected(true);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"),
+                System.currentTimeMillis() - 100);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a terminal-game player when the expected deadline is not the current one")
+    void removeDisconnectedPlayer_TerminalGame_DeadlineMismatch_KeepsPlayer() {
+        Game game = createTerminalGame();
+        long currentDeadline = System.currentTimeMillis() - 100;
+        Player player2 = findGamePlayer(game, "Player2");
+        player2.setDisconnected(true);
+        player2.setDisconnectDeadlineEpochMs(currentDeadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"),
+                currentDeadline - 5_000);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer checks the game player's deadline before the room's in a terminal game")
+    void removeDisconnectedPlayer_TerminalGame_GamePlayerDeadlineWinsOverRoomDeadline() {
+        Game game = createTerminalGame();
+        long playerDeadline = System.currentTimeMillis() - 100;
+        long roomDeadline = playerDeadline - 5_000;
+        Player player2 = findGamePlayer(game, "Player2");
+        player2.setDisconnected(true);
+        player2.setDisconnectDeadlineEpochMs(playerDeadline);
+        testRoom.setAbsenceDeadline("Player2", roomDeadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), roomDeadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a terminal-game player until the deadline has passed")
+    void removeDisconnectedPlayer_TerminalGame_BeforeDeadline_KeepsPlayer() {
+        Game game = createTerminalGame();
+        long deadline = System.currentTimeMillis() + 60_000;
+        Player player2 = findGamePlayer(game, "Player2");
+        player2.setDisconnected(true);
+        player2.setDisconnectDeadlineEpochMs(deadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), deadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a terminal-game player who is no longer disconnected")
+    void removeDisconnectedPlayer_TerminalGame_PlayerNotDisconnected_KeepsPlayer() {
+        Game game = createTerminalGame();
+        long deadline = System.currentTimeMillis() - 100;
+        Player player2 = findGamePlayer(game, "Player2");
+        player2.setDisconnected(false);
+        player2.setDisconnectDeadlineEpochMs(deadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), deadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer keeps a room-only member who reconnected after the game ended")
+    void removeDisconnectedPlayer_TerminalGame_RoomOnlyMemberConnected_KeepsMember() {
+        createTerminalGame();
+        testRoom.addPlayer("Spectator");
+        long deadline = System.currentTimeMillis() - 100;
+        testRoom.setAbsenceDeadline("Spectator", deadline);
+        testRoom.setPlayerConnected("Spectator", true);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), deadline);
+
+        verifyNobodyRemovedFromRoom();
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer removes a terminal-game player using the game player's deadline")
+    void removeDisconnectedPlayer_TerminalGame_GamePlayerDeadlineExpired_LeavesRoomAndKeepsRoster() {
+        Game game = createTerminalGame();
+        long deadline = System.currentTimeMillis() - 100;
+        Player player2 = findGamePlayer(game, "Player2");
+        player2.setDisconnected(true);
+        player2.setDisconnectDeadlineEpochMs(deadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), deadline);
+
+        verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
+        assertTrue(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Player2")),
+                "The terminal roster stays frozen");
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer falls back to the room's absence deadline in a terminal game")
+    void removeDisconnectedPlayer_TerminalGame_FallsBackToRoomAbsenceDeadline_LeavesRoom() {
+        Game game = createTerminalGame();
+        long deadline = System.currentTimeMillis() - 100;
+        Player player2 = findGamePlayer(game, "Player2");
+        player2.setDisconnected(true);
+        player2.setDisconnectDeadlineEpochMs(null);
+        testRoom.setAbsenceDeadline("Player2", deadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), deadline);
+
+        verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer removes a room-only member whose grace expired after the game ended")
+    void removeDisconnectedPlayer_TerminalGame_RoomOnlyMemberExpired_LeavesRoom() {
+        createTerminalGame();
+        testRoom.addPlayer("Spectator");
+        long deadline = System.currentTimeMillis() - 100;
+        testRoom.setAbsenceDeadline("Spectator", deadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), deadline);
+
+        verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Spectator")), any());
+    }
+
+    @Test
+    @DisplayName("removeDisconnectedPlayer treats a settled tournament-over game as terminal and finalizes it")
+    void removeDisconnectedPlayer_SettledTournamentOver_LeavesRoomAndFinalizesGame() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        Player busted = game.getPlayers().get(0);
+        busted.setIsOut();
+        game.conductShowdown();
+        assertTrue(game.getLastSettlementResult().settled());
+        assertTrue(game.isTournamentOver());
+        assertFalse(game.isGameOver());
+        long deadline = System.currentTimeMillis() - 100;
+        busted.setDisconnected(true);
+        busted.setDisconnectDeadlineEpochMs(deadline);
+
+        gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, busted.getName(), testRoom.getMembershipId(busted.getName()),
+                deadline);
+
+        verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of(busted.getName())), any());
+        assertTrue(game.isGameOver(), "A settled tournament-over game is finalized by the terminal path");
+    }
+
     @Test
     @DisplayName("createGameFromRoom reconciles absent seat lease into disconnected flag and retains connected state for connected seat")
     void createGameFromRoom_ReconcilesAbsentSeatLeaseAndRetainsConnectedSeat() {
