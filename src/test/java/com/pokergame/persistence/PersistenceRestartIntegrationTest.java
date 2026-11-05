@@ -358,7 +358,7 @@ class PersistenceRestartIntegrationTest {
     }
 
     /**
-     * Finding B9-1 / Ticket 32: When a mutation in RoomService fails midway, in-memory state is
+     * When a mutation in RoomService fails midway, in-memory state is
      * rolled back to its pre-failure snapshot and subsequent mutations succeed.
      */
     @Test
@@ -395,7 +395,7 @@ class PersistenceRestartIntegrationTest {
     }
 
     /**
-     * Finding B9-1 / Ticket 32: When a mutation in GameLifecycleService fails midway,
+     * When a mutation in GameLifecycleService fails midway,
      * the aggregate is restored to its pre-failure snapshot and subsequent valid mutations succeed.
      */
     @Test
@@ -445,7 +445,7 @@ class PersistenceRestartIntegrationTest {
     }
 
     /**
-     * Finding B9-1 / Ticket 32: Failed room creation cleans up rooms, activeGames, and pending timers.
+     * Failed room creation cleans up rooms, activeGames, and pending timers.
      */
     @Test
     void failedRoomCreationCleansUpRoomsActiveGamesAndTimers() throws Exception {

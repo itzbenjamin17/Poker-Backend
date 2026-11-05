@@ -21,13 +21,15 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Empirical Adversarial Concurrency Stress Suite for AggregateSnapshotMapper.toState(Game) (Finding B6-2).
+ * Protects {@link AggregateSnapshotMapper#toState(Game)} under concurrent mutation: snapshots
+ * taken while players, attributes, and revisions change never throw (no ConcurrentModification)
+ * and always return a well-formed game state.
  */
-public class Tier4AdversarialSnapshotChallengeTest {
+public class SnapshotConcurrencyIsolationTest {
 
     @Test
-    @DisplayName("Challenge 2.1: Continuous mutator vs reader high-contention stress on AggregateSnapshotMapper.toState(Game)")
-    void challenge_aggregateSnapshotMapper_concurrentMutationsVsSnapshot_noCME() throws Exception {
+    @DisplayName("Continuous readers vs mutators on toState(Game) never raise ConcurrentModificationException")
+    void aggregateSnapshotMapper_concurrentMutationsVsSnapshot_noCME() throws Exception {
         HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build(), evaluator);
@@ -148,8 +150,8 @@ public class Tier4AdversarialSnapshotChallengeTest {
     }
 
     @Test
-    @DisplayName("Challenge 2.2: Concurrent removePlayerFromGame and toState snapshot extraction")
-    void challenge_aggregateSnapshotMapper_concurrentRemovePlayerAndSnapshot() throws Exception {
+    @DisplayName("Concurrent removePlayerFromGame and toState snapshot extraction stays consistent")
+    void aggregateSnapshotMapper_concurrentRemovePlayerAndSnapshot() throws Exception {
         HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build(), evaluator);

@@ -31,17 +31,11 @@ class RoomTest {
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private Room room;
 
-    /**
-     * Initializes the test fixtures before each scenario.
-     */
     @BeforeEach
     void setUp() {
         room = new Room("room123", "Test Room", "HostPlayer", 6, 10, 20, 1000, null);
     }
 
-    /**
-     * Protects the expected behavior for room creation.
-     */
     @Test
     void testRoomCreation() {
         assertNotNull(room);
@@ -440,31 +434,7 @@ class RoomTest {
     }
 
     /**
-     * Protects the expected behavior for get room ID.
-     */
-    @Test
-    void testGetRoomId() {
-        assertEquals("room123", room.getRoomId());
-    }
-
-    /**
-     * Protects the expected behavior for get room name.
-     */
-    @Test
-    void testGetRoomName() {
-        assertEquals("Test Room", room.getRoomName());
-    }
-
-    /**
-     * Protects the expected behavior for get host name.
-     */
-    @Test
-    void testGetHostName() {
-        assertEquals("HostPlayer", room.getHostName());
-    }
-
-    /**
-     * Protects the expected behavior for get players.
+     * The players view reflects insertion order and grows as players join.
      */
     @Test
     void testGetPlayers() {
@@ -477,39 +447,7 @@ class RoomTest {
     }
 
     /**
-     * Protects the expected behavior for get max players.
-     */
-    @Test
-    void testGetMaxPlayers() {
-        assertEquals(6, room.getMaxPlayers());
-    }
-
-    /**
-     * Protects the expected behavior for get small blind.
-     */
-    @Test
-    void testGetSmallBlind() {
-        assertEquals(10, room.getSmallBlind());
-    }
-
-    /**
-     * Protects the expected behavior for get big blind.
-     */
-    @Test
-    void testGetBigBlind() {
-        assertEquals(20, room.getBigBlind());
-    }
-
-    /**
-     * Protects the expected behavior for get buy in.
-     */
-    @Test
-    void testGetBuyIn() {
-        assertEquals(1000, room.getBuyIn());
-    }
-
-    /**
-     * Protects the expected behavior for get created at.
+     * Creation timestamp is stamped at construction and falls within a recent window.
      */
     @Test
     void testGetCreatedAt() {
@@ -520,11 +458,10 @@ class RoomTest {
     }
 
     /**
-     * Protects the expected behavior for room immutability.
+     * Configuration (id, blinds, capacity) stays fixed as players join; only the roster changes.
      */
     @Test
     void testRoomImmutability() {
-        // Room properties should be immutable
         assertEquals("room123", room.getRoomId());
         assertEquals("Test Room", room.getRoomName());
         assertEquals("HostPlayer", room.getHostName());

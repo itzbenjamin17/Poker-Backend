@@ -435,7 +435,7 @@ class DurableMutationAspectTest {
     }
 
     /**
-     * Finding B9-1: Subsequent mutation failure restores accepted in-memory pending save state.
+     * Subsequent mutation failure restores accepted in-memory pending save state.
      */
     @Test
     @DisplayName("Subsequent mutation failure rolls back to accepted pending save image")
@@ -479,7 +479,7 @@ class DurableMutationAspectTest {
     }
 
     /**
-     * Finding B9-1: Storage and serialization failures do not leave in-memory aggregate corrupted.
+     * Storage and serialization failures do not leave in-memory aggregate corrupted.
      */
     @Test
     @DisplayName("When serialization fails on accepted mutation, aggregate is preserved and subsequent mutation succeeds")
@@ -519,7 +519,7 @@ class DurableMutationAspectTest {
     }
 
     /**
-     * Finding B9-1 / Ticket 32: When mutation fails on lobby room without active game,
+     * When mutation fails on lobby room without active game,
      * room is restored and game is evicted without destroying the room.
      */
     @Test
@@ -556,7 +556,7 @@ class DurableMutationAspectTest {
     }
 
     /**
-     * Finding B9-1 / Ticket 32: RoomService.restoreRoom reconciles inconsistent host mappings
+     * RoomService.restoreRoom reconciles inconsistent host mappings
      * and preserves legitimate player state under lock.
      */
     @Test

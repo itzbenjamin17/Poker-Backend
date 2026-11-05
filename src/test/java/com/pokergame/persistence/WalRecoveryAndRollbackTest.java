@@ -44,13 +44,15 @@ import java.time.LocalDateTime;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Empirical Adversarial Challenge Suite for Tier 6 Backend Persistence:
- * - B10-2: Multi-cycle torn frame truncation stress across various byte boundaries (1B, 4B, 7B, 8B, partial ciphertexts).
- * - B10-8: Multi-room corrupted WAL quarantine stress during server startup recovery.
- * - B9-1: Mid-mutation in-memory aggregate rollback and chip conservation stress (checked and unchecked exceptions).
- * - B10-1: Safe default and E2E persistence disablement verification.
+ * Protects encrypted WAL durability and recovery behavior:
+ * <ul>
+ *   <li>crash-torn frames at varied byte boundaries are truncated and recovery proceeds cleanly;</li>
+ *   <li>corrupted room WALs are quarantined during startup recovery while valid rooms still restore;</li>
+ *   <li>a mid-mutation failure rolls the in-memory aggregate back and conserves chips;</li>
+ *   <li>persistence stays disabled by default and under the e2e profile / CLI override.</li>
+ * </ul>
  */
-public class Tier6AdversarialPersistenceChallengeTest {
+public class WalRecoveryAndRollbackTest {
 
     private static final int MAGIC = 0x504B574C;
 
@@ -61,13 +63,13 @@ public class Tier6AdversarialPersistenceChallengeTest {
     }
 
     // =========================================================================
-    // CHALLENGE 1: Torn Frame Stress Test (B10-2)
+    // Crash-torn frame truncation and recovery
     // =========================================================================
 
     @Test
-    @DisplayName("Challenge 1: Multi-cycle crash-torn frame stress across 1B, 4B, 7B, 8B and ciphertext boundaries")
-    void challenge_b10_2_multiCycleTornFrameStressWithBoundaryTruncations(@TempDir Path tempDir) throws Exception {
-        String roomId = "challenge-room-b10-2";
+    @DisplayName("Multi-cycle crash-torn frame stress across 1B, 4B, 7B, 8B and ciphertext boundaries recovers cleanly")
+    void tornFrameTruncation_recoversLastCommittedPayloadAndTruncatesDisk(@TempDir Path tempDir) throws Exception {
+        String roomId = "torn-frame-room";
         EncryptionKeyring keyring = createKeyring("k1", (byte) 7);
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
         Path walPath = tempDir.resolve(roomId + ".wal");
@@ -166,12 +168,12 @@ public class Tier6AdversarialPersistenceChallengeTest {
     }
 
     // =========================================================================
-    // CHALLENGE 2: Corrupted Room Quarantine Stress Test (B10-8)
+    // Corrupted WAL quarantine during startup recovery
     // =========================================================================
 
     @Test
-    @DisplayName("Challenge 2: Multi-room corrupted WAL quarantine stress during server startup recovery")
-    void challenge_b10_8_corruptedRoomQuarantineStartupStress_multiRoomIsolation(@TempDir Path tempDir) throws Exception {
+    @DisplayName("Multi-room corrupted WAL quarantine during startup recovery isolates bad rooms and restores valid ones")
+    void corruptedWalQuarantine_duringStartupRecovery_isolatesBadRoomsKeepsValidRooms(@TempDir Path tempDir) throws Exception {
         EncryptionKeyring keyring = createKeyring("k1", (byte) 21);
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
         HandEvaluatorService evaluator = new HandEvaluatorService();
@@ -266,8 +268,8 @@ public class Tier6AdversarialPersistenceChallengeTest {
     }
 
     @Test
-    @DisplayName("Challenge 2.1: Corrupted WAL frame header / crypto on disk causes recoverAll to fail closed")
-    void challenge_b10_8_corruptedWalFrameHeaderOnDiskTest(@TempDir Path tempDir) throws Exception {
+    @DisplayName("Corrupted WAL frame header / crypto on disk causes recoverAll to fail closed and quarantine")
+    void corruptedWalFrameHeaderOnDisk_quarantinesRoomAndRecoversRemaining(@TempDir Path tempDir) throws Exception {
         EncryptionKeyring keyring = createKeyring("k1", (byte) 29);
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
 
@@ -302,18 +304,18 @@ public class Tier6AdversarialPersistenceChallengeTest {
     }
 
     // =========================================================================
-    // CHALLENGE 3: Mid-Mutation In-Memory Rollback Stress (B9-1)
+    // Mid-mutation in-memory rollback and chip conservation
     // =========================================================================
 
     @Test
-    @DisplayName("Challenge 3: Mid-mutation rollback on checked & unchecked exceptions preserves zero dirty state")
-    void challenge_b9_1_midMutationRollback_checkedAndUncheckedExceptions_noDirtyState(@TempDir Path tempDir) throws Exception {
+    @DisplayName("Mid-mutation rollback on checked & unchecked exceptions leaves no dirty in-memory or persisted state")
+    void midMutationRollback_checkedAndUncheckedExceptions_noDirtyState(@TempDir Path tempDir) throws Exception {
         String base64Key = Base64.getEncoder().encodeToString(new byte[32]);
         String base64Secret = Base64.getEncoder().encodeToString(new byte[64]);
 
         String roomId;
         try (ConfigurableApplicationContext context = new SpringApplicationBuilder(
-                PokerApplication.class, AdversarialMutationHelper.class)
+                PokerApplication.class, FaultInjectingMutationHelper.class)
                 .profiles("test")
                 .web(WebApplicationType.NONE)
                 .properties(
@@ -333,7 +335,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
 
             RoomService rooms = context.getBean(RoomService.class);
             GameLifecycleService games = context.getBean(GameLifecycleService.class);
-            AdversarialMutationHelper helper = context.getBean(AdversarialMutationHelper.class);
+            FaultInjectingMutationHelper helper = context.getBean(FaultInjectingMutationHelper.class);
 
             // Step 1: Create room and start game with Alice and Bob
             roomId = rooms.createRoom(new CreateRoomRequest("Rollback Test Room", "Alice", 6, 10, 20, 1000, null));
@@ -384,7 +386,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
 
         // Restart application and verify uncorrupted state persisted cleanly without any dirty records
         try (ConfigurableApplicationContext secondContext = new SpringApplicationBuilder(
-                PokerApplication.class, AdversarialMutationHelper.class)
+                PokerApplication.class, FaultInjectingMutationHelper.class)
                 .profiles("test")
                 .web(WebApplicationType.NONE)
                 .properties(
@@ -416,13 +418,13 @@ public class Tier6AdversarialPersistenceChallengeTest {
     }
 
     @Test
-    @DisplayName("Challenge 3.1: Aborted room creation cleans up in-memory maps, active games, and WAL files")
-    void challenge_b9_1_failedRoomCreationCleanEvictionStress(@TempDir Path tempDir) throws Exception {
+    @DisplayName("Aborted room creation cleans up in-memory maps, active games, and WAL files")
+    void abortedRoomCreation_cleansUpInMemoryStateAndWalFile(@TempDir Path tempDir) throws Exception {
         String base64Key = Base64.getEncoder().encodeToString(new byte[32]);
         String base64Secret = Base64.getEncoder().encodeToString(new byte[64]);
 
         try (ConfigurableApplicationContext context = new SpringApplicationBuilder(
-                PokerApplication.class, AdversarialMutationHelper.class)
+                PokerApplication.class, FaultInjectingMutationHelper.class)
                 .profiles("test")
                 .web(WebApplicationType.NONE)
                 .properties(
@@ -442,7 +444,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
 
             RoomService rooms = context.getBean(RoomService.class);
             GameLifecycleService games = context.getBean(GameLifecycleService.class);
-            AdversarialMutationHelper helper = context.getBean(AdversarialMutationHelper.class);
+            FaultInjectingMutationHelper helper = context.getBean(FaultInjectingMutationHelper.class);
 
             String abortedRoomId = UUID.randomUUID().toString();
             CreateRoomRequest req = new CreateRoomRequest("Aborted Room", "Eve", 6, 10, 20, 1000, null);
@@ -461,13 +463,13 @@ public class Tier6AdversarialPersistenceChallengeTest {
     }
 
     @Test
-    @DisplayName("Challenge 3.2: Rapid alternating mutation failures maintain mathematical chip conservation")
-    void challenge_b9_1_consecutiveAlternatingFailureStress_conservationOfChips(@TempDir Path tempDir) throws Exception {
+    @DisplayName("Rapid alternating mutation failures maintain chip conservation across every iteration")
+    void alternatingMutationFailures_conserveChips(@TempDir Path tempDir) throws Exception {
         String base64Key = Base64.getEncoder().encodeToString(new byte[32]);
         String base64Secret = Base64.getEncoder().encodeToString(new byte[64]);
 
         try (ConfigurableApplicationContext context = new SpringApplicationBuilder(
-                PokerApplication.class, AdversarialMutationHelper.class)
+                PokerApplication.class, FaultInjectingMutationHelper.class)
                 .profiles("test")
                 .web(WebApplicationType.NONE)
                 .properties(
@@ -487,7 +489,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
 
             RoomService rooms = context.getBean(RoomService.class);
             GameLifecycleService games = context.getBean(GameLifecycleService.class);
-            AdversarialMutationHelper helper = context.getBean(AdversarialMutationHelper.class);
+            FaultInjectingMutationHelper helper = context.getBean(FaultInjectingMutationHelper.class);
 
             String roomId = rooms.createRoom(new CreateRoomRequest("Conservation Room", "Alice", 6, 10, 20, 1000, null));
             rooms.joinRoom(new JoinRoomRequest("Conservation Room", "Bob", null));
@@ -518,14 +520,14 @@ public class Tier6AdversarialPersistenceChallengeTest {
     }
 
     // =========================================================================
-    // CHALLENGE 4: Safe Default and E2E Persistence Override (B10-1)
+    // Persistence disabled by default and under profile / CLI override
     // =========================================================================
 
     @Test
-    @DisplayName("Challenge 4: Safe default false and E2E profile persistence disablement")
-    void challenge_b10_1_persistenceDisabledByDefaultAndE2EOverride() {
+    @DisplayName("Persistence resolves to disabled under the e2e profile and under explicit CLI override")
+    void persistenceDisabledByDefaultAndUnderE2EOverride() {
         // Test 1: In E2E profile with springdotenv disabled (simulating clean CI without dotenv)
-        try (ConfigurableApplicationContext e2eContext = new SpringApplicationBuilder(ChallengeE2eConfig.class)
+        try (ConfigurableApplicationContext e2eContext = new SpringApplicationBuilder(PersistenceToggleConfig.class)
                 .profiles("e2e")
                 .web(WebApplicationType.NONE)
                 .run("--springdotenv.enabled=false")) {
@@ -536,7 +538,7 @@ public class Tier6AdversarialPersistenceChallengeTest {
         }
 
         // Test 2: CLI argument --poker.persistence.enabled=false explicitly overrides any environment or dotenv
-        try (ConfigurableApplicationContext cliContext = new SpringApplicationBuilder(ChallengeE2eConfig.class)
+        try (ConfigurableApplicationContext cliContext = new SpringApplicationBuilder(PersistenceToggleConfig.class)
                 .profiles("test")
                 .web(WebApplicationType.NONE)
                 .run("--poker.persistence.enabled=false")) {
@@ -548,19 +550,19 @@ public class Tier6AdversarialPersistenceChallengeTest {
     }
 
     @Configuration
-    static class ChallengeE2eConfig {}
+    static class PersistenceToggleConfig {}
 
     // =========================================================================
-    // Helper Bean for Advising with @DurableMutation
+    // Helper bean that advises mutations with @DurableMutation and injects faults
     // =========================================================================
 
     @Component
-    public static class AdversarialMutationHelper {
+    public static class FaultInjectingMutationHelper {
 
         private final RoomService roomService;
         private final GameLifecycleService gameLifecycleService;
 
-        public AdversarialMutationHelper(RoomService roomService, GameLifecycleService gameLifecycleService) {
+        public FaultInjectingMutationHelper(RoomService roomService, GameLifecycleService gameLifecycleService) {
             this.roomService = roomService;
             this.gameLifecycleService = gameLifecycleService;
         }

@@ -5,7 +5,11 @@ import com.pokergame.enums.Suit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 /**
  * Unit tests for the Card class.
@@ -14,120 +18,54 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("Card model")
 class CardTest {
 
-    /**
-     * Protects the expected behavior for card creation.
-     */
     @Test
-    void testCardCreation() {
+    void exposesRankAndSuitComponents() {
         Card card = new Card(Rank.ACE, Suit.SPADES);
-        assertNotNull(card);
         assertEquals(Rank.ACE, card.rank());
         assertEquals(Suit.SPADES, card.suit());
     }
 
-    /**
-     * Protects the expected behavior for get value.
-     */
     @Test
-    void testGetValue() {
-        Card aceCard = new Card(Rank.ACE, Suit.HEARTS);
-        assertEquals(14, aceCard.getValue());
-
-        Card kingCard = new Card(Rank.KING, Suit.DIAMONDS);
-        assertEquals(13, kingCard.getValue());
-
-        Card twoCard = new Card(Rank.TWO, Suit.CLUBS);
-        assertEquals(2, twoCard.getValue());
+    void getValueDelegatesToRank() {
+        assertEquals(14, new Card(Rank.ACE, Suit.HEARTS).getValue());
+        assertEquals(13, new Card(Rank.KING, Suit.DIAMONDS).getValue());
+        assertEquals(2, new Card(Rank.TWO, Suit.CLUBS).getValue());
     }
 
     /**
-     * Protects the expected behavior for rank accessor.
+     * The {@code toString} form is a human-readable label surfaced in logs and messages, so the
+     * exact rendering is pinned.
      */
-    @Test
-    void testRankAccessor() {
-        Card card = new Card(Rank.QUEEN, Suit.HEARTS);
-        assertEquals(Rank.QUEEN, card.rank());
+    @ParameterizedTest
+    @CsvSource({
+            "ACE,SPADES,Ace of Spades",
+            "KING,HEARTS,King of Hearts",
+            "TWO,CLUBS,2 of Clubs"
+    })
+    void rendersReadableLabel(Rank rank, Suit suit, String expected) {
+        assertEquals(expected, new Card(rank, suit).toString());
     }
 
     /**
-     * Protects the expected behavior for suit accessor.
+     * Card equality is value-based (rank + suit); the game relies on it for deck uniqueness and
+     * dealt-card set membership, so it is asserted rather than assumed from the record.
      */
     @Test
-    void testSuitAccessor() {
-        Card card = new Card(Rank.JACK, Suit.DIAMONDS);
-        assertEquals(Suit.DIAMONDS, card.suit());
+    void equalsIsValueBasedOnRankAndSuit() {
+        assertEquals(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.SPADES));
+        assertEquals(new Card(Rank.ACE, Suit.SPADES).hashCode(), new Card(Rank.ACE, Suit.SPADES).hashCode());
+        assertNotEquals(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES));
     }
 
-    /**
-     * Protects the expected behavior for to string.
-     */
     @Test
-    void testToString() {
-        Card card = new Card(Rank.ACE, Suit.SPADES);
-        assertEquals("Ace of Spades", card.toString());
-
-        Card kingHearts = new Card(Rank.KING, Suit.HEARTS);
-        assertEquals("King of Hearts", kingHearts.toString());
-
-        Card twoClubs = new Card(Rank.TWO, Suit.CLUBS);
-        assertEquals("2 of Clubs", twoClubs.toString());
-    }
-
-    /**
-     * Protects the expected behavior for card equality.
-     */
-    @Test
-    void testCardEquality() {
-        Card card1 = new Card(Rank.ACE, Suit.SPADES);
-        Card card2 = new Card(Rank.ACE, Suit.SPADES);
-        Card card3 = new Card(Rank.KING, Suit.SPADES);
-
-        // Records automatically implement equals based on components
-        assertEquals(card1, card2);
-        assertNotEquals(card1, card3);
-    }
-
-    /**
-     * Protects the expected behavior for card hash code.
-     */
-    @Test
-    void testCardHashCode() {
-        Card card1 = new Card(Rank.QUEEN, Suit.HEARTS);
-        Card card2 = new Card(Rank.QUEEN, Suit.HEARTS);
-
-        // Records automatically implement consistent hashCode
-        assertEquals(card1.hashCode(), card2.hashCode());
-    }
-
-    /**
-     * Protects the expected behavior for all ranks and suits.
-     */
-    @Test
-    void testAllRanksAndSuits() {
-        // Test that all combinations of ranks and suits can be created
+    void everyRankAndSuitCombinationIsConstructible() {
         for (Rank rank : Rank.values()) {
             for (Suit suit : Suit.values()) {
                 Card card = new Card(rank, suit);
-                assertNotNull(card);
                 assertEquals(rank, card.rank());
                 assertEquals(suit, card.suit());
                 assertEquals(rank.getValue(), card.getValue());
             }
         }
-    }
-
-    /**
-     * Protects the expected behavior for card immutability.
-     */
-    @Test
-    void testCardImmutability() {
-        // As a record, Card is immutable by design
-        Card card = new Card(Rank.TEN, Suit.DIAMONDS);
-        assertEquals(Rank.TEN, card.rank());
-        assertEquals(Suit.DIAMONDS, card.suit());
-
-        // Verify accessors return consistent values
-        assertEquals(card.rank(), card.rank());
-        assertEquals(card.suit(), card.suit());
     }
 }

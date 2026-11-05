@@ -237,7 +237,6 @@ class PersistenceRecoveryTest {
     }
 
     /**
-     * Finding B10-8 / Ticket 36:
      * Protects the contract that when a corrupted snapshot causes mapper.deserialize to throw,
      * PersistenceRecovery catches the exception, calls store.quarantine(roomId, reason),
      * does not abort startup, and recovers all remaining valid rooms and games.
@@ -280,7 +279,6 @@ class PersistenceRecoveryTest {
     }
 
     /**
-     * Finding B10-8 / Ticket 36:
      * Protects the contract that when aggregate restoration throws (e.g. restoreGame throws runtime exception),
      * PersistenceRecovery catches the exception, calls store.quarantine(roomId, reason),
      * does not abort startup, and recovers all remaining valid rooms and games.
@@ -333,7 +331,6 @@ class PersistenceRecoveryTest {
     }
 
     /**
-     * Finding B10-8 / Ticket 36:
      * Protects the contract that when roomService.restoreRoom throws a runtime exception,
      * PersistenceRecovery catches the exception, calls store.quarantine(roomId, reason),
      * does not abort startup, and recovers all remaining valid rooms.
@@ -373,7 +370,6 @@ class PersistenceRecoveryTest {
     }
 
     /**
-     * Finding B10-8 / Ticket 36:
      * Protects the contract that when all room WAL files are corrupted,
      * PersistenceRecovery quarantines every corrupt file and still completes startup cleanly.
      */

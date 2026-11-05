@@ -140,7 +140,7 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
     }
 
     /**
-     * Protects against B7-10: Stale session JWT token reuse after leaving and rejoining a room.
+     * Protects against stale session JWT token reuse after leaving and rejoining a room.
      * The old token must be rejected with HTTP 401 Unauthorized.
      */
     @Test
@@ -187,7 +187,7 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
     }
 
     /**
-     * Protects against B7-10: Stale session JWT token reuse on game endpoints.
+     * Protects against stale session JWT token reuse on game endpoints.
      */
     @Test
     @DisplayName("should reject stale session token on game endpoints with 401")

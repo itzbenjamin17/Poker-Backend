@@ -20,17 +20,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Empirical Adversarial Concurrency Stress Suite for RoomService.joinRoom (Finding B1-5).
+ * Protects room admission capacity under concurrent joins: no matter how many threads race to
+ * join, the room admits exactly its capacity, rejects the rest with the expected errors, and
+ * never exceeds maxPlayers.
  */
 @ExtendWith(MockitoExtension.class)
-public class Tier4AdversarialRoomServiceChallengeTest {
+public class RoomAdmissionCapacityConcurrencyTest {
 
     @Mock
     private SimpMessagingTemplate messagingTemplate;
 
     @Test
-    @DisplayName("Challenge 1.1: High-contention join storm (60 threads vs capacity 3) strictly admits 2 joiners and rejects 58 with Room is full")
-    void challenge_joinRoom_highContentionJoinStorm_strictlyAdmitsMaxPlayers() throws Exception {
+    @DisplayName("High-contention join storm (60 threads, capacity 3) admits exactly 2 joiners and rejects 58 with 'Room is full'")
+    void joinRoom_highContentionJoinStorm_strictlyAdmitsMaxPlayers() throws Exception {
         RoomService roomService = new RoomService(messagingTemplate);
         int maxCapacity = 3; // 1 host + 2 joiners allowed
         String roomId = roomService.createRoom(new CreateRoomRequest(
@@ -95,8 +97,8 @@ public class Tier4AdversarialRoomServiceChallengeTest {
     }
 
     @Test
-    @DisplayName("Challenge 1.2: Concurrent join storm with duplicate names and unique names preserves capacity invariant")
-    void challenge_joinRoom_mixedCollisionsAndJoins_enforcesExactCapacityAndErrorTypes() throws Exception {
+    @DisplayName("Concurrent join storm with duplicate and unique names preserves the capacity invariant")
+    void joinRoom_mixedCollisionsAndJoins_enforcesExactCapacityAndErrorTypes() throws Exception {
         RoomService roomService = new RoomService(messagingTemplate);
         int maxCapacity = 4; // 1 host + 3 joiners allowed
         String roomId = roomService.createRoom(new CreateRoomRequest(
@@ -167,8 +169,8 @@ public class Tier4AdversarialRoomServiceChallengeTest {
     }
 
     @Test
-    @DisplayName("Challenge 1.3: Rapid multi-cycle capacity saturation across varying room sizes (2 to 6)")
-    void challenge_joinRoom_multiCycleRapidCapacitySaturation() throws Exception {
+    @DisplayName("Rapid multi-cycle saturation across varying room sizes (2 to 6) never exceeds capacity")
+    void joinRoom_multiCycleRapidCapacitySaturation() throws Exception {
         RoomService roomService = new RoomService(messagingTemplate);
         Random random = new Random(42);
 

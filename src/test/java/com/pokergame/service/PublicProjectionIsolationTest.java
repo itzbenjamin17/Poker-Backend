@@ -21,8 +21,14 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+/**
+ * Protects the public projection contract under showdown settlement: a settled hand keeps its
+ * winners/winnings and suppresses turn pointers regardless of churn, folded hole cards stay
+ * hidden, settlement in one room never leaks into another, and game-end capacity is clamped to
+ * the legal range.
+ */
 @ExtendWith(MockitoExtension.class)
-class Tier3AdversarialChallengeTest {
+class PublicProjectionIsolationTest {
 
     private GameStateService gameStateService;
 
@@ -73,8 +79,8 @@ class Tier3AdversarialChallengeTest {
     }
 
     @Test
-    @DisplayName("B8-1 Stress: Flapping ready/unready 100 times retains settlement and suppresses currentPlayer")
-    void b8_1_flappingReadyState_preservesSettlementIntegrity() {
+    @DisplayName("Repeated ready/unready toggling during showdown retains settlement and suppresses currentPlayer")
+    void readyFlapping_preservesSettlementIntegrity() {
         when(roomService.getRoom(ROOM_A)).thenReturn(roomA);
 
         Player p1 = createPlayer("Alice", "p-1", 500, false);
@@ -166,8 +172,8 @@ class Tier3AdversarialChallengeTest {
     }
 
     @Test
-    @DisplayName("B8-1 Multi-room isolation: Retained settlement in Room A does not leak into Room B")
-    void b8_1_multiRoomIsolation_noSettlementLeak() {
+    @DisplayName("Retained settlement in one room does not leak into an active hand in another room")
+    void multiRoomIsolation_noSettlementLeak() {
         when(roomService.getRoom(ROOM_A)).thenReturn(roomA);
         when(roomService.getRoom(ROOM_B)).thenReturn(roomB);
 
@@ -239,8 +245,8 @@ class Tier3AdversarialChallengeTest {
     }
 
     @Test
-    @DisplayName("B8-9 Extreme boundary clamping: captureGameEnd clamps maxPlayers to [2, 10] across all adversarial inputs")
-    void b8_9_captureGameEnd_adversarialMaxPlayersClamping() {
+    @DisplayName("captureGameEnd clamps maxPlayers into [2, 10] for every out-of-range input")
+    void captureGameEnd_clampsMaxPlayersToLegalRange() {
         Player winner = createPlayer("Champ", "p-1", 1000, false);
         Game game = Game.restoreBuilder()
                 .gameId(ROOM_A)
@@ -268,11 +274,11 @@ class Tier3AdversarialChallengeTest {
                 .handEvaluator(handEvaluator)
                 .build();
 
-        int[] adversarialValues = {
+        int[] outOfRangeValues = {
                 Integer.MIN_VALUE, -999999, -1, 0, 1, 11, 12, 100, 999999, Integer.MAX_VALUE
         };
 
-        for (int val : adversarialValues) {
+        for (int val : outOfRangeValues) {
             when(roomService.getRoom(ROOM_A)).thenReturn(null);
             GameEndResponse resNullRoom = gameStateService.captureGameEnd(ROOM_A, game, winner, false, val);
             int maxP = resNullRoom.finalState().maxPlayers();

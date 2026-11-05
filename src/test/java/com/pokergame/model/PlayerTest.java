@@ -22,17 +22,11 @@ class PlayerTest {
 
     private Player player;
 
-    /**
-     * Initializes the test fixtures before each scenario.
-     */
     @BeforeEach
     void setUp() {
         player = new Player("TestPlayer", "player123", 1000);
     }
 
-    /**
-     * Protects the expected behavior for player creation.
-     */
     @Test
     void testPlayerCreation() {
         assertNotNull(player);
@@ -41,18 +35,12 @@ class PlayerTest {
         assertEquals(1000, player.getChips());
     }
 
-    /**
-     * Protects the expected behavior for player creation with zero chips.
-     */
     @Test
     void testPlayerCreationWithZeroChips() {
         Player poorPlayer = new Player("Poor", "player456", 0);
         assertEquals(0, poorPlayer.getChips());
     }
 
-    /**
-     * Protects the expected behavior for player creation with null name.
-     */
     @Test
     void testPlayerCreationWithNullName() {
         BadRequestException exception = assertThrows(
@@ -61,9 +49,6 @@ class PlayerTest {
         assertEquals("Player name required", exception.getMessage());
     }
 
-    /**
-     * Protects the expected behavior for player creation with empty name.
-     */
     @Test
     void testPlayerCreationWithEmptyName() {
         BadRequestException exception = assertThrows(
@@ -72,9 +57,6 @@ class PlayerTest {
         assertEquals("Player name required", exception.getMessage());
     }
 
-    /**
-     * Protects the expected behavior for player creation with negative chips.
-     */
     @Test
     void testPlayerCreationWithNegativeChips() {
         BadRequestException exception = assertThrows(
@@ -83,9 +65,6 @@ class PlayerTest {
         assertEquals("Chips cannot be negative", exception.getMessage());
     }
 
-    /**
-     * Protects the expected behavior for initial state.
-     */
     @Test
     void testInitialState() {
         assertEquals(0, player.getCurrentBet());
@@ -97,9 +76,6 @@ class PlayerTest {
         assertEquals(HandRank.NO_HAND, player.getHandRank());
     }
 
-    /**
-     * Protects the expected behavior for fold action.
-     */
     @Test
     void testFoldAction() {
         int pot = 100;
@@ -110,9 +86,6 @@ class PlayerTest {
         assertEquals(1000, player.getChips(), "Chips should not change on fold");
     }
 
-    /**
-     * Protects the expected behavior for check action.
-     */
     @Test
     void testCheckAction() {
         int pot = 100;
@@ -123,9 +96,6 @@ class PlayerTest {
         assertEquals(0, player.getCurrentBet());
     }
 
-    /**
-     * Protects the expected behavior for bet action.
-     */
     @Test
     void testBetAction() {
         int pot = 100;
@@ -137,9 +107,6 @@ class PlayerTest {
         assertEquals(50, player.getCurrentBet());
     }
 
-    /**
-     * Protects the expected behavior for call action.
-     */
     @Test
     void testCallAction() {
         int pot = 100;
@@ -151,9 +118,6 @@ class PlayerTest {
         assertEquals(50, player.getCurrentBet());
     }
 
-    /**
-     * Protects the expected behavior for raise action.
-     */
     @Test
     void testRaiseAction() {
         int pot = 100;
@@ -165,9 +129,6 @@ class PlayerTest {
         assertEquals(100, player.getCurrentBet());
     }
 
-    /**
-     * Protects the expected behavior for all in action.
-     */
     @Test
     void testAllInAction() {
         int pot = 100;
@@ -179,9 +140,6 @@ class PlayerTest {
         assertEquals(1000, player.getCurrentBet());
     }
 
-    /**
-     * Protects the expected behavior for pay chips.
-     */
     @Test
     void testPayChips() {
         int pot = 100;
@@ -192,9 +150,6 @@ class PlayerTest {
         assertEquals(250, player.getCurrentBet());
     }
 
-    /**
-     * Protects the expected behavior for pay chips marks all in when stack reaches zero.
-     */
     @Test
     void testPayChipsMarksAllInWhenStackReachesZero() {
         Player shortStack = new Player("Short", "short-1", 50);
@@ -206,9 +161,6 @@ class PlayerTest {
         assertEquals(50, shortStack.getCurrentBet());
     }
 
-    /**
-     * Protects the expected behavior for add chips.
-     */
     @Test
     void testAddChips() {
         player.addChips(500);
@@ -218,18 +170,13 @@ class PlayerTest {
         assertEquals(1500, player.getChips());
     }
 
-    /**
-     * Protects the expected behavior for reset attributes.
-     */
     @Test
     void testResetAttributes() {
-        // Set up some state
         player.doAction(PlayerAction.BET, 100, 0);
         player.doAction(PlayerAction.FOLD, 0, 0);
         player.setHandRank(HandRank.FLUSH);
         player.setBestHand(List.of(new Card(Rank.ACE, Suit.SPADES)));
 
-        // Reset
         player.resetAttributes();
 
         assertEquals(0, player.getHoleCards().size());
@@ -240,9 +187,6 @@ class PlayerTest {
         assertEquals(0, player.getCurrentBet());
     }
 
-    /**
-     * Protects the expected behavior for reset current bet.
-     */
     @Test
     void testResetCurrentBet() {
         player.doAction(PlayerAction.BET, 100, 0);
@@ -253,9 +197,6 @@ class PlayerTest {
         assertEquals(900, player.getChips(), "Chips should not be affected");
     }
 
-    /**
-     * Protects the expected behavior for set is out.
-     */
     @Test
     void testSetIsOut() {
         assertFalse(player.getIsOut());
@@ -263,9 +204,6 @@ class PlayerTest {
         assertTrue(player.getIsOut());
     }
 
-    /**
-     * Protects the expected behavior for set best hand.
-     */
     @Test
     void testSetBestHand() {
         List<Card> hand = List.of(
@@ -280,18 +218,12 @@ class PlayerTest {
         assertEquals(hand, player.getBestHand());
     }
 
-    /**
-     * Protects the expected behavior for set hand rank.
-     */
     @Test
     void testSetHandRank() {
         player.setHandRank(HandRank.ROYAL_FLUSH);
         assertEquals(HandRank.ROYAL_FLUSH, player.getHandRank());
     }
 
-    /**
-     * Protects the expected behavior for multiple bets increment current bet.
-     */
     @Test
     void testMultipleBetsIncrementCurrentBet() {
         player.doAction(PlayerAction.BET, 100, 0);
@@ -302,9 +234,6 @@ class PlayerTest {
         assertEquals(700, player.getChips());
     }
 
-    /**
-     * Protects the expected behavior for player state persists across actions.
-     */
     @Test
     void testPlayerStatePersistsAcrossActions() {
         int pot = 0;
@@ -319,9 +248,6 @@ class PlayerTest {
         assertEquals(300, player.getCurrentBet());
     }
 
-    /**
-     * Protects the expected behavior for all in with partial chips.
-     */
     @Test
     void testAllInWithPartialChips() {
         Player shortStack = new Player("ShortStack", "player999", 50);
@@ -335,9 +261,6 @@ class PlayerTest {
         assertEquals(50, shortStack.getCurrentBet());
     }
 
-    /**
-     * Protects the expected behavior for hole cards initially empty.
-     */
     @Test
     void testHoleCardsInitiallyEmpty() {
         List<Card> holeCards = player.getHoleCards();
@@ -346,23 +269,8 @@ class PlayerTest {
     }
 
     /**
-     * Protects the expected behavior for get player ID.
-     */
-    @Test
-    void testGetPlayerId() {
-        assertEquals("player123", player.getPlayerId());
-    }
-
-    /**
-     * Protects the expected behavior for get name.
-     */
-    @Test
-    void testGetName() {
-        assertEquals("TestPlayer", player.getName());
-    }
-
-    /**
-     * Protects the expected behavior for equals uses stable player ID across reconstructed instances.
+     * Identity is keyed on the stable player ID, not the display name, so a reconstructed player
+     * with the same ID but a different name is treated as the same participant.
      */
     @Test
     void testEqualsUsesStablePlayerIdAcrossReconstructedInstances() {
@@ -372,9 +280,6 @@ class PlayerTest {
         assertEquals(reconstructed, player);
     }
 
-    /**
-     * Protects the expected behavior for hash code matches for same player ID.
-     */
     @Test
     void testHashCodeMatchesForSamePlayerId() {
         Player reconstructed = new Player("DifferentName", "player123", 50);
@@ -382,9 +287,6 @@ class PlayerTest {
         assertEquals(player.hashCode(), reconstructed.hashCode());
     }
 
-    /**
-     * Protects the expected behavior for equals returns false for different player IDs.
-     */
     @Test
     void testEqualsReturnsFalseForDifferentPlayerIds() {
         Player differentPlayer = new Player("TestPlayer", "other-player", 1000);
@@ -393,7 +295,8 @@ class PlayerTest {
     }
 
     /**
-     * Protects the expected behavior for equals supports collection lookups for reconstructed instances.
+     * Player identity supports hash-based collection membership, so a reconstructed instance with
+     * the same ID resolves to the same entry.
      */
     @Test
     void testEqualsSupportsCollectionLookupsForReconstructedInstances() {
@@ -405,9 +308,6 @@ class PlayerTest {
         assertTrue(players.contains(reconstructed));
     }
 
-    /**
-     * Protects the expected behavior for restoreBuilder restoring exact player state.
-     */
     @Test
     void testRestoreBuilder() {
         List<Card> holeCards = List.of(new Card(Rank.ACE, Suit.HEARTS), new Card(Rank.KING, Suit.HEARTS));
@@ -449,4 +349,3 @@ class PlayerTest {
         assertTrue(restored.getIsReadyForNextHand());
     }
 }
-

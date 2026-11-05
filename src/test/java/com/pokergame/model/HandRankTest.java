@@ -4,7 +4,12 @@ import com.pokergame.enums.HandRank;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for the HandRank enum.
@@ -14,37 +19,29 @@ import static org.junit.jupiter.api.Assertions.*;
 class HandRankTest {
 
     /**
-     * Protects the expected behavior for all hand ranks exist.
+     * The numeric rank drives showdown comparison and is serialized, so the exact value per
+     * hand category is a domain/wire contract.
      */
-    @Test
-    void testAllHandRanksExist() {
-        HandRank[] ranks = HandRank.values();
-        assertEquals(11, ranks.length, "Should have 11 hand ranks");
+    @ParameterizedTest
+    @CsvSource({
+            "NO_HAND,-1",
+            "HIGH_CARD,1",
+            "ONE_PAIR,2",
+            "TWO_PAIR,3",
+            "THREE_OF_A_KIND,4",
+            "STRAIGHT,5",
+            "FLUSH,6",
+            "FULL_HOUSE,7",
+            "FOUR_OF_A_KIND,8",
+            "STRAIGHT_FLUSH,9",
+            "ROYAL_FLUSH,10"
+    })
+    void handRankExposesExpectedNumericRank(HandRank rank, int expected) {
+        assertEquals(expected, rank.getRank());
     }
 
-    /**
-     * Protects the expected behavior for hand rank values.
-     */
     @Test
-    void testHandRankValues() {
-        assertEquals(-1, HandRank.NO_HAND.getRank());
-        assertEquals(1, HandRank.HIGH_CARD.getRank());
-        assertEquals(2, HandRank.ONE_PAIR.getRank());
-        assertEquals(3, HandRank.TWO_PAIR.getRank());
-        assertEquals(4, HandRank.THREE_OF_A_KIND.getRank());
-        assertEquals(5, HandRank.STRAIGHT.getRank());
-        assertEquals(6, HandRank.FLUSH.getRank());
-        assertEquals(7, HandRank.FULL_HOUSE.getRank());
-        assertEquals(8, HandRank.FOUR_OF_A_KIND.getRank());
-        assertEquals(9, HandRank.STRAIGHT_FLUSH.getRank());
-        assertEquals(10, HandRank.ROYAL_FLUSH.getRank());
-    }
-
-    /**
-     * Protects the expected behavior for beats method.
-     */
-    @Test
-    void testBeatsMethod() {
+    void beatsFollowsAscendingPokerOrder() {
         assertTrue(HandRank.ROYAL_FLUSH.beats(HandRank.STRAIGHT_FLUSH));
         assertTrue(HandRank.STRAIGHT_FLUSH.beats(HandRank.FOUR_OF_A_KIND));
         assertTrue(HandRank.FOUR_OF_A_KIND.beats(HandRank.FULL_HOUSE));
@@ -57,36 +54,16 @@ class HandRankTest {
         assertTrue(HandRank.HIGH_CARD.beats(HandRank.NO_HAND));
     }
 
-    /**
-     * Protects the expected behavior for beats returns false for lower or equal ranks.
-     */
     @Test
-    void testBeatsReturnsFalseForLowerOrEqualRanks() {
+    void beatsIsFalseForLowerOrEqualRanks() {
         assertFalse(HandRank.ONE_PAIR.beats(HandRank.TWO_PAIR));
         assertFalse(HandRank.FLUSH.beats(HandRank.FULL_HOUSE));
         assertFalse(HandRank.HIGH_CARD.beats(HandRank.HIGH_CARD));
     }
 
-    /**
-     * Protects the expected behavior for equals method.
-     */
     @Test
-    void testEqualsMethod() {
-        assertTrue(HandRank.ROYAL_FLUSH.equals(HandRank.ROYAL_FLUSH));
-        assertTrue(HandRank.FLUSH.equals(HandRank.FLUSH));
-        assertTrue(HandRank.ONE_PAIR.equals(HandRank.ONE_PAIR));
-
-        assertFalse(HandRank.ROYAL_FLUSH.equals(HandRank.STRAIGHT_FLUSH));
-        assertFalse(HandRank.TWO_PAIR.equals(HandRank.ONE_PAIR));
-    }
-
-    /**
-     * Protects the expected behavior for royal flush is strongest.
-     */
-    @Test
-    void testRoyalFlushIsStrongest() {
-        HandRank[] ranks = HandRank.values();
-        for (HandRank rank : ranks) {
+    void royalFlushBeatsEveryOtherRank() {
+        for (HandRank rank : HandRank.values()) {
             if (rank != HandRank.ROYAL_FLUSH) {
                 assertTrue(HandRank.ROYAL_FLUSH.beats(rank),
                         "Royal Flush should beat " + rank);
@@ -94,13 +71,9 @@ class HandRankTest {
         }
     }
 
-    /**
-     * Protects the expected behavior for no hand is weakest.
-     */
     @Test
-    void testNoHandIsWeakest() {
-        HandRank[] ranks = HandRank.values();
-        for (HandRank rank : ranks) {
+    void everyRankBeatsNoHand() {
+        for (HandRank rank : HandRank.values()) {
             if (rank != HandRank.NO_HAND) {
                 assertTrue(rank.beats(HandRank.NO_HAND),
                         rank + " should beat NO_HAND");
@@ -108,12 +81,8 @@ class HandRankTest {
         }
     }
 
-    /**
-     * Protects the expected behavior for hand rank ordering.
-     */
     @Test
-    void testHandRankOrdering() {
-        // Verify ranks are in ascending order (except NO_HAND)
+    void handRanksAreOrderedAscendingFromHighCard() {
         HandRank[] ranks = {
                 HandRank.HIGH_CARD,
                 HandRank.ONE_PAIR,
@@ -131,26 +100,5 @@ class HandRankTest {
             assertTrue(ranks[i].getRank() < ranks[i + 1].getRank(),
                     ranks[i] + " should have lower rank value than " + ranks[i + 1]);
         }
-    }
-
-    /**
-     * Protects the expected behavior for value of.
-     */
-    @Test
-    void testValueOf() {
-        assertEquals(HandRank.ROYAL_FLUSH, HandRank.valueOf("ROYAL_FLUSH"));
-        assertEquals(HandRank.STRAIGHT_FLUSH, HandRank.valueOf("STRAIGHT_FLUSH"));
-        assertEquals(HandRank.ONE_PAIR, HandRank.valueOf("ONE_PAIR"));
-        assertEquals(HandRank.NO_HAND, HandRank.valueOf("NO_HAND"));
-    }
-
-    /**
-     * Protects the expected behavior for enum equality.
-     */
-    @Test
-    void testEnumEquality() {
-        HandRank flush1 = HandRank.FLUSH;
-        HandRank flush2 = HandRank.FLUSH;
-        assertSame(flush1, flush2, "Enum instances should be identical");
     }
 }
