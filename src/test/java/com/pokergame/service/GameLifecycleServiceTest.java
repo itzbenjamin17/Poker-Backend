@@ -2475,6 +2475,70 @@ class GameLifecycleServiceTest {
         verify(roomService, never()).leaveRoom(anyString(), anyString());
     }
 
+    /**
+     * Immutable before/after view of the aggregate state a disconnect guard path must leave
+     * untouched: the room roster, each member's membership id, connection flag and absence
+     * deadline, plus (when a game exists) each game player's disconnect state/deadline, the
+     * game-over flag and the scheduled-task deadline/generation maps.
+     *
+     * <p>Finding 7: a no-op disconnect guard previously asserted only that neither
+     * {@code leavePlayersBatch} nor {@code leaveRoom} ran. That leaves a guard free to clear a
+     * deadline, flip a connection flag, finalize the game, schedule work or publish without being
+     * caught. Comparing a full snapshot and asserting no publisher interaction closes that gap.
+     */
+    private record RoomGameSnapshot(
+            List<String> roster,
+            Map<String, String> membershipIds,
+            Map<String, Boolean> connected,
+            Map<String, Long> absenceDeadlines,
+            Map<String, Boolean> gamePlayerDisconnected,
+            Map<String, Long> gamePlayerDisconnectDeadlines,
+            Boolean gameOver,
+            Map<ScheduledGameTask, Long> scheduledDeadlines,
+            Map<ScheduledGameTask, Long> scheduledGenerations) {
+    }
+
+    private RoomGameSnapshot snapshotRoomAndGame(Room room, Game game) {
+        List<String> roster = List.copyOf(room.getPlayers());
+        Map<String, String> membershipIds = new java.util.LinkedHashMap<>();
+        Map<String, Boolean> connected = new java.util.LinkedHashMap<>();
+        Map<String, Long> absenceDeadlines = new java.util.LinkedHashMap<>();
+        for (String name : roster) {
+            membershipIds.put(name, room.getMembershipId(name));
+            connected.put(name, room.isPlayerConnected(name));
+            absenceDeadlines.put(name, room.getAbsenceDeadline(name));
+        }
+        Map<String, Boolean> gameDisconnected = new java.util.LinkedHashMap<>();
+        Map<String, Long> gameDeadlines = new java.util.LinkedHashMap<>();
+        Boolean gameOver = null;
+        Map<ScheduledGameTask, Long> scheduledDeadlines = Map.of();
+        Map<ScheduledGameTask, Long> scheduledGenerations = Map.of();
+        if (game != null) {
+            for (Player player : game.getPlayers()) {
+                gameDisconnected.put(player.getName(), player.getIsDisconnected());
+                gameDeadlines.put(player.getName(), player.getDisconnectDeadlineEpochMs());
+            }
+            gameOver = game.isGameOver();
+            scheduledDeadlines = game.getScheduledTaskDeadlinesSnapshot();
+            scheduledGenerations = game.getScheduledTaskGenerationsSnapshot();
+        }
+        return new RoomGameSnapshot(roster, membershipIds, connected, absenceDeadlines,
+                gameDisconnected, gameDeadlines, gameOver, scheduledDeadlines, scheduledGenerations);
+    }
+
+    /**
+     * Asserts the aggregate is byte-for-byte unchanged versus {@code before} and that no member
+     * was removed and no client state was published. Use for disconnect guard paths that must be
+     * no-ops. The caller clears {@code gameStateService} invocations after any setup broadcast so
+     * this check sees only interactions from the guarded call.
+     */
+    private void assertNoOpDisconnect(RoomGameSnapshot before, Room room, Game game) {
+        assertEquals(before, snapshotRoomAndGame(room, game),
+                "A no-op disconnect guard must leave roster/membership/connection/deadline/game-over/scheduled state unchanged");
+        verifyNobodyRemovedFromRoom();
+        verifyNoInteractions(gameStateService);
+    }
+
     private Player findGamePlayer(Game game, String name) {
         return game.getPlayers().stream().filter(p -> p.getName().equals(name)).findFirst().orElseThrow();
     }
@@ -2526,10 +2590,12 @@ class GameLifecycleServiceTest {
         long deadline = System.currentTimeMillis() - 100;
         lobby.setAbsenceDeadline("Guest", deadline);
         when(roomService.getRoom("lobby-3")).thenReturn(lobby);
+        RoomGameSnapshot before = snapshotRoomAndGame(lobby, null);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", "obsolete-id", deadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, lobby, null);
     }
 
     @Test
@@ -2542,10 +2608,12 @@ class GameLifecycleServiceTest {
         lobby.setAbsenceDeadline("Guest", deadline);
         lobby.setPlayerConnected("Guest", true);
         when(roomService.getRoom("lobby-3")).thenReturn(lobby);
+        RoomGameSnapshot before = snapshotRoomAndGame(lobby, null);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", lobby.getMembershipId("Guest"), deadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, lobby, null);
     }
 
     @Test
@@ -2555,11 +2623,13 @@ class GameLifecycleServiceTest {
         lobby.addPlayer("Host");
         lobby.addPlayer("Guest");
         when(roomService.getRoom("lobby-3")).thenReturn(lobby);
+        RoomGameSnapshot before = snapshotRoomAndGame(lobby, null);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", lobby.getMembershipId("Guest"),
                 System.currentTimeMillis() - 100);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, lobby, null);
     }
 
     @Test
@@ -2571,11 +2641,13 @@ class GameLifecycleServiceTest {
         long currentDeadline = System.currentTimeMillis() - 100;
         lobby.setAbsenceDeadline("Guest", currentDeadline);
         when(roomService.getRoom("lobby-3")).thenReturn(lobby);
+        RoomGameSnapshot before = snapshotRoomAndGame(lobby, null);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", lobby.getMembershipId("Guest"),
                 currentDeadline - 5_000);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, lobby, null);
     }
 
     @Test
@@ -2587,10 +2659,12 @@ class GameLifecycleServiceTest {
         long deadline = System.currentTimeMillis() + 60_000;
         lobby.setAbsenceDeadline("Guest", deadline);
         when(roomService.getRoom("lobby-3")).thenReturn(lobby);
+        RoomGameSnapshot before = snapshotRoomAndGame(lobby, null);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", lobby.getMembershipId("Guest"), deadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, lobby, null);
     }
 
     @Test
@@ -2598,12 +2672,15 @@ class GameLifecycleServiceTest {
     void removeDisconnectedPlayer_ActiveGame_ObsoleteMembershipId_KeepsPlayer() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
         long deadline = System.currentTimeMillis() - 100;
         gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "obsolete-id", deadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2615,11 +2692,13 @@ class GameLifecycleServiceTest {
         long deadline = System.currentTimeMillis() - 100;
         gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
         gameLifecycleService.markPlayerReconnected(ROOM_ID, "Player2");
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), deadline);
 
         assertFalse(findGamePlayer(game, "Player2").getIsDisconnected());
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2631,11 +2710,13 @@ class GameLifecycleServiceTest {
         Player player2 = findGamePlayer(game, "Player2");
         player2.setDisconnected(true);
         player2.setDisconnectDeadlineEpochMs(null);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"),
                 System.currentTimeMillis() - 100);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2643,13 +2724,16 @@ class GameLifecycleServiceTest {
     void removeDisconnectedPlayer_ActiveGame_DeadlineMismatch_KeepsPlayer() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
         long currentDeadline = System.currentTimeMillis() - 100;
         gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", currentDeadline);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"),
                 currentDeadline - 5_000);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2657,12 +2741,15 @@ class GameLifecycleServiceTest {
     void removeDisconnectedPlayer_ActiveGame_BeforeDeadline_KeepsPlayer() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
         long deadline = System.currentTimeMillis() + 60_000;
         gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), deadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2670,14 +2757,17 @@ class GameLifecycleServiceTest {
     void removeDisconnectedPlayer_ActiveGame_RoomOnlyMemberConnected_KeepsMember() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
         testRoom.addPlayer("Spectator");
         long deadline = System.currentTimeMillis() - 100;
         testRoom.setAbsenceDeadline("Spectator", deadline);
         testRoom.setPlayerConnected("Spectator", true);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), deadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2685,12 +2775,15 @@ class GameLifecycleServiceTest {
     void removeDisconnectedPlayer_ActiveGame_RoomOnlyMemberNoDeadline_KeepsMember() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
         testRoom.addPlayer("Spectator");
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"),
                 System.currentTimeMillis() - 100);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2698,14 +2791,17 @@ class GameLifecycleServiceTest {
     void removeDisconnectedPlayer_ActiveGame_RoomOnlyMemberDeadlineMismatch_KeepsMember() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
         testRoom.addPlayer("Spectator");
         long currentDeadline = System.currentTimeMillis() - 100;
         testRoom.setAbsenceDeadline("Spectator", currentDeadline);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"),
                 currentDeadline - 5_000);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2713,13 +2809,16 @@ class GameLifecycleServiceTest {
     void removeDisconnectedPlayer_ActiveGame_RoomOnlyMemberBeforeDeadline_KeepsMember() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
         testRoom.addPlayer("Spectator");
         long deadline = System.currentTimeMillis() + 60_000;
         testRoom.setAbsenceDeadline("Spectator", deadline);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), deadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2746,10 +2845,12 @@ class GameLifecycleServiceTest {
         Player player2 = findGamePlayer(game, "Player2");
         player2.setDisconnected(true);
         player2.setDisconnectDeadlineEpochMs(deadline);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "obsolete-id", deadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2757,11 +2858,13 @@ class GameLifecycleServiceTest {
     void removeDisconnectedPlayer_TerminalGame_NoDeadline_KeepsPlayer() {
         Game game = createTerminalGame();
         findGamePlayer(game, "Player2").setDisconnected(true);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"),
                 System.currentTimeMillis() - 100);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2772,11 +2875,13 @@ class GameLifecycleServiceTest {
         Player player2 = findGamePlayer(game, "Player2");
         player2.setDisconnected(true);
         player2.setDisconnectDeadlineEpochMs(currentDeadline);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"),
                 currentDeadline - 5_000);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2789,10 +2894,12 @@ class GameLifecycleServiceTest {
         player2.setDisconnected(true);
         player2.setDisconnectDeadlineEpochMs(playerDeadline);
         testRoom.setAbsenceDeadline("Player2", roomDeadline);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), roomDeadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2803,10 +2910,12 @@ class GameLifecycleServiceTest {
         Player player2 = findGamePlayer(game, "Player2");
         player2.setDisconnected(true);
         player2.setDisconnectDeadlineEpochMs(deadline);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), deadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -2817,24 +2926,28 @@ class GameLifecycleServiceTest {
         Player player2 = findGamePlayer(game, "Player2");
         player2.setDisconnected(false);
         player2.setDisconnectDeadlineEpochMs(deadline);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), deadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
     @DisplayName("removeDisconnectedPlayer keeps a room-only member who reconnected after the game ended")
     void removeDisconnectedPlayer_TerminalGame_RoomOnlyMemberConnected_KeepsMember() {
-        createTerminalGame();
+        Game game = createTerminalGame();
         testRoom.addPlayer("Spectator");
         long deadline = System.currentTimeMillis() - 100;
         testRoom.setAbsenceDeadline("Spectator", deadline);
         testRoom.setPlayerConnected("Spectator", true);
+        RoomGameSnapshot before = snapshotRoomAndGame(testRoom, game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), deadline);
 
-        verifyNobodyRemovedFromRoom();
+        assertNoOpDisconnect(before, testRoom, game);
     }
 
     @Test
@@ -3347,13 +3460,18 @@ class GameLifecycleServiceTest {
         long before = System.currentTimeMillis();
 
         runScheduled(game, ScheduledGameTask.AUTO_ADVANCE, deadline);
+        long after = System.currentTimeMillis();
 
         assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
         assertTrue(game.isTournamentOver());
         assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
         Long gameEndDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END);
         assertNotNull(gameEndDeadline);
+        // ADR-0010: the absolute deadline is client-visible recovery state, so bound it on both
+        // sides. An upper bound catches a wrong positive delay or unit-conversion bug that a
+        // lower-bound-only assertion would miss.
         assertTrue(gameEndDeadline >= before + GameLifecycleService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
+        assertTrue(gameEndDeadline <= after + GameLifecycleService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
         assertFalse(game.isReadyCountdownActive(), "A finished tournament must not open the ready gate");
         assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
         assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
@@ -3383,17 +3501,22 @@ class GameLifecycleServiceTest {
     @DisplayName("executeScheduledTask AUTO_ADVANCE finishing a hand persists READY_OPEN when a display delay is configured")
     void executeScheduledTask_AutoAdvanceComplete_WithDisplayDelay_PersistsReadyOpen() {
         Game game = riverGame();
-        ReflectionTestUtils.setField(gameLifecycleService, "roundEndDisplayDelayMs", 5_000L);
+        long configuredRoundEndDelayMs = 5_000L;
+        ReflectionTestUtils.setField(gameLifecycleService, "roundEndDisplayDelayMs", configuredRoundEndDelayMs);
         long deadline = scheduleForTest(game, ScheduledGameTask.AUTO_ADVANCE);
         long before = System.currentTimeMillis();
 
         runScheduled(game, ScheduledGameTask.AUTO_ADVANCE, deadline);
+        long after = System.currentTimeMillis();
 
         assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
         assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
         Long readyOpenDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN);
         assertNotNull(readyOpenDeadline);
-        assertTrue(readyOpenDeadline >= before + 5_000);
+        // ADR-0010: bound the client-visible deadline on both sides against the configured
+        // round-end display delay so a wrong positive delay would fail the test.
+        assertTrue(readyOpenDeadline >= before + configuredRoundEndDelayMs);
+        assertTrue(readyOpenDeadline <= after + configuredRoundEndDelayMs);
         assertFalse(game.isReadyCountdownActive(), "The ready gate waits for the display delay");
         assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
         verify(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
@@ -3407,11 +3530,17 @@ class GameLifecycleServiceTest {
         long before = System.currentTimeMillis();
 
         runScheduled(game, ScheduledGameTask.AUTO_ADVANCE, deadline);
+        long after = System.currentTimeMillis();
 
         assertEquals(GamePhase.FLOP, game.getCurrentPhase());
         Long nextDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE);
         assertNotNull(nextDeadline);
+        // ADR-0010: the reschedule uses GameLifecycleService.AUTO_ADVANCE_STEP_DELAY_MS (4000),
+        // a package-private constant not reachable from this test, so the literal mirrors it.
+        // Bounding the upper side catches a wrong positive step delay or unit-conversion bug.
+        long autoAdvanceStepDelayMs = 4_000L;
         assertTrue(nextDeadline > before);
+        assertTrue(nextDeadline <= after + autoAdvanceStepDelayMs);
         assertNotEquals(deadline, nextDeadline);
         assertFalse(game.isReadyCountdownActive());
         assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));

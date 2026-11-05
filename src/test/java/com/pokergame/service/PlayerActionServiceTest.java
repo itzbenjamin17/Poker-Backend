@@ -1013,9 +1013,125 @@ class PlayerActionServiceTest {
         verify(gameLifecycleService, never()).startReadyCountdown(anyString(), anyLong());
     }
 
+    /**
+     * Plays legal check/call actions through the service for the current actor until the hand
+     * leaves PRE_FLOP, returning the outcome that advanced the first betting round. Used to reach
+     * a PHASE_ADVANCED outcome through real play rather than a stubbed {@code processPlayerDecision}.
+     * handEvaluator is mocked only to score hands if a showdown is reached, not to force progression.
+     */
+    private void playUntilPhaseAdvances(Game game) {
+        GamePhase startPhase = game.getCurrentPhase();
+        for (int guard = 0; guard < 20 && game.getCurrentPhase() == startPhase && !game.isHandOver(); guard++) {
+            Player actor = game.getCurrentPlayer();
+            List<PlayerAction> legal = game.getLegalActionsFor(actor);
+            PlayerAction choice = legal.contains(PlayerAction.CHECK) ? PlayerAction.CHECK : PlayerAction.CALL;
+            playerActionService.processPlayerAction(GAME_ID,
+                    new PlayerActionRequest(choice, null), actor.getName());
+        }
+    }
+
     @Test
-    @DisplayName("a PHASE_ADVANCED outcome broadcasts the game state")
+    @DisplayName("a real betting round that completes before showdown advances the phase and broadcasts state")
+    void processPlayerAction_RealBettingRoundCompletes_AdvancesPhaseAndBroadcasts() {
+        List<Player> players = new ArrayList<>();
+        players.add(new Player("A", UUID.randomUUID().toString(), 1000));
+        players.add(new Player("B", UUID.randomUUID().toString(), 1000));
+        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        game.resetForNewHand();
+        game.dealHoleCards();
+        game.postBlinds();
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(game);
+        int potAfterBlinds = game.getPot();
+
+        playUntilPhaseAdvances(game);
+
+        // The real decision path reached PHASE_ADVANCED: the hand moved to the flop without a
+        // showdown or auto-advance, and the pot reflects the limped pre-flop round (SB completed
+        // to the big blind). Would fail if processPlayerDecision mis-classified a legal call/check.
+        assertEquals(GamePhase.FLOP, game.getCurrentPhase());
+        assertTrue(game.getPot() >= potAfterBlinds, "Completing the pre-flop round cannot shrink the pot");
+        assertEquals(2 * game.getBigBlind(), game.getPot(), "Both players matched the big blind pre-flop");
+        verify(gameStateService, atLeastOnce()).broadcastGameState(GAME_ID, game);
+        verify(gameLifecycleService, never()).scheduleAutoAdvance(anyString());
+        verify(gameStateService, never()).broadcastShowdownResults(anyString(), any(Game.class), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("a real hand played to the river showdown broadcasts results and opens the ready gate")
+    void processPlayerAction_RealRiverShowdown_BroadcastsResultsAndStartsReadyCountdown() {
+        List<Player> players = new ArrayList<>();
+        players.add(new Player("A", UUID.randomUUID().toString(), 1000));
+        players.add(new Player("B", UUID.randomUUID().toString(), 1000));
+        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        game.resetForNewHand();
+        game.dealHoleCards();
+        game.postBlinds();
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(game);
+        // The showdown evaluates hands; a fixed result just names a winner deterministically. It
+        // does not drive progression to showdown, which comes from the real river betting round.
+        when(handEvaluator.getBestHand(anyList(), anyList()))
+                .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
+        // Both players still hold chips after a limped hand, so the tournament is not over and the
+        // ready gate opens. No display delay means the countdown starts immediately.
+        ReflectionTestUtils.setField(playerActionService, "roundEndDelayMs", 0L);
+        ReflectionTestUtils.setField(playerActionService, "readyCountdownMs", 12_000L);
+
+        // Check/call every street until the river betting round completes and the hand resolves.
+        for (int guard = 0; guard < 40 && game.getCurrentPhase() != GamePhase.SHOWDOWN; guard++) {
+            Player actor = game.getCurrentPlayer();
+            List<PlayerAction> legal = game.getLegalActionsFor(actor);
+            if (legal.isEmpty()) break;
+            PlayerAction choice = legal.contains(PlayerAction.CHECK) ? PlayerAction.CHECK : PlayerAction.CALL;
+            playerActionService.processPlayerAction(GAME_ID,
+                    new PlayerActionRequest(choice, null), actor.getName());
+        }
+
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase(), "A limped hand reaches a river showdown");
+        assertFalse(game.isTournamentOver(), "Both players still hold chips");
+        verify(gameStateService).broadcastShowdownResults(eq(GAME_ID), eq(game), anyList(), anyInt());
+        verify(gameLifecycleService).startReadyCountdown(GAME_ID, 12_000L);
+        verify(gameLifecycleService, never()).scheduleGameEnd(anyString(), anyLong());
+        verify(gameLifecycleService, never()).scheduleReadyCountdownOpen(anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("a real river showdown with a display delay schedules the ready gate to open later")
+    void processPlayerAction_RealRiverShowdownWithDisplayDelay_SchedulesReadyGateOpen() {
+        List<Player> players = new ArrayList<>();
+        players.add(new Player("A", UUID.randomUUID().toString(), 1000));
+        players.add(new Player("B", UUID.randomUUID().toString(), 1000));
+        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        game.resetForNewHand();
+        game.dealHoleCards();
+        game.postBlinds();
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(game);
+        when(handEvaluator.getBestHand(anyList(), anyList()))
+                .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
+        ReflectionTestUtils.setField(playerActionService, "roundEndDelayMs", 2_500L);
+
+        for (int guard = 0; guard < 40 && game.getCurrentPhase() != GamePhase.SHOWDOWN; guard++) {
+            Player actor = game.getCurrentPlayer();
+            List<PlayerAction> legal = game.getLegalActionsFor(actor);
+            if (legal.isEmpty()) break;
+            PlayerAction choice = legal.contains(PlayerAction.CHECK) ? PlayerAction.CHECK : PlayerAction.CALL;
+            playerActionService.processPlayerAction(GAME_ID,
+                    new PlayerActionRequest(choice, null), actor.getName());
+        }
+
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+        assertFalse(game.isTournamentOver());
+        verify(gameStateService).broadcastShowdownResults(eq(GAME_ID), eq(game), anyList(), anyInt());
+        verify(gameLifecycleService).scheduleReadyCountdownOpen(GAME_ID, 2_500L);
+        verify(gameLifecycleService, never()).startReadyCountdown(anyString(), anyLong());
+        verify(gameLifecycleService, never()).scheduleGameEnd(anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("[orchestration] a PHASE_ADVANCED outcome broadcasts the game state")
     void processPlayerAction_PhaseAdvanced_ShouldBroadcastGameState() {
+        // Orchestration coverage: a fabricated PHASE_ADVANCED verifies the service's broadcast
+        // routing in isolation. The behavioral guarantee that a legal action truly yields
+        // PHASE_ADVANCED is covered by processPlayerAction_RealBettingRoundCompletes_*.
         Game spyGame = spy(testGame);
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
         doReturn(outcome(TurnOutcome.TurnOutcomeType.PHASE_ADVANCED)).when(spyGame).processPlayerDecision(any(), any());
@@ -1028,8 +1144,14 @@ class PlayerActionServiceTest {
     }
 
     @Test
-    @DisplayName("a SHOWDOWN that ends the tournament schedules the game end and does not open the ready gate")
+    @DisplayName("[orchestration] a SHOWDOWN that ends the tournament schedules the game end and does not open the ready gate")
     void processPlayerAction_ShowdownTournamentOver_ShouldScheduleGameEndWithoutReadyGate() {
+        // Orchestration coverage: reaching the SHOWDOWN arm of processPlayerDecision with the
+        // tournament already over is not reachable through a single legal action. A player loses
+        // their whole stack only by going all-in, and a called all-in leaves the hand to an
+        // auto-runout (AUTO_ADVANCING) whose showdown happens in advanceAutoAdvanceStep, not in
+        // processPlayerDecision. This fabricated outcome therefore stands as the only coverage of
+        // the tournament-over branch; the non-tournament-over SHOWDOWN arm is driven by real play.
         Game spyGame = spy(testGame);
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
         List<Player> winners = List.of(testPlayers.getFirst());
@@ -1043,45 +1165,6 @@ class PlayerActionServiceTest {
         verify(gameLifecycleService).scheduleGameEnd(GAME_ID, GameLifecycleService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
         verify(gameLifecycleService, never()).startReadyCountdown(anyString(), anyLong());
         verify(gameLifecycleService, never()).scheduleReadyCountdownOpen(anyString(), anyLong());
-        verify(gameStateService).broadcastShowdownResults(GAME_ID, spyGame, winners, 40);
-    }
-
-    @Test
-    @DisplayName("a SHOWDOWN with no display delay starts the ready countdown immediately")
-    void processPlayerAction_ShowdownWithoutDisplayDelay_ShouldStartReadyCountdown() {
-        Game spyGame = spy(testGame);
-        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
-        List<Player> winners = List.of(testPlayers.getFirst());
-        doReturn(new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null, winners, 40))
-                .when(spyGame).processPlayerDecision(any(), any());
-        ReflectionTestUtils.setField(playerActionService, "roundEndDelayMs", 0L);
-        ReflectionTestUtils.setField(playerActionService, "readyCountdownMs", 12_000L);
-
-        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.FOLD, null),
-                spyGame.getCurrentPlayer().getName());
-
-        verify(gameLifecycleService).startReadyCountdown(GAME_ID, 12_000L);
-        verify(gameLifecycleService, never()).scheduleReadyCountdownOpen(anyString(), anyLong());
-        verify(gameLifecycleService, never()).scheduleGameEnd(anyString(), anyLong());
-        verify(gameStateService).broadcastShowdownResults(GAME_ID, spyGame, winners, 40);
-    }
-
-    @Test
-    @DisplayName("a SHOWDOWN with a display delay schedules the ready countdown to open later")
-    void processPlayerAction_ShowdownWithDisplayDelay_ShouldScheduleReadyCountdownOpen() {
-        Game spyGame = spy(testGame);
-        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
-        List<Player> winners = List.of(testPlayers.getFirst());
-        doReturn(new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null, winners, 40))
-                .when(spyGame).processPlayerDecision(any(), any());
-        ReflectionTestUtils.setField(playerActionService, "roundEndDelayMs", 2_500L);
-
-        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.FOLD, null),
-                spyGame.getCurrentPlayer().getName());
-
-        verify(gameLifecycleService).scheduleReadyCountdownOpen(GAME_ID, 2_500L);
-        verify(gameLifecycleService, never()).startReadyCountdown(anyString(), anyLong());
-        verify(gameLifecycleService, never()).scheduleGameEnd(anyString(), anyLong());
         verify(gameStateService).broadcastShowdownResults(GAME_ID, spyGame, winners, 40);
     }
 
@@ -1221,13 +1304,16 @@ class PlayerActionServiceTest {
     }
 
     @Test
-    @DisplayName("a negative amount is rejected with NEGATIVE_AMOUNT")
+    @DisplayName("[branch coverage] a negative CALL amount hits the service NEGATIVE_AMOUNT guard")
     void processPlayerAction_WithNegativeAmount_ShouldThrowBadRequestException() {
         Game spyGame = spy(testGame);
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
         String playerName = spyGame.getCurrentPlayer().getName();
-        // The record's compact constructor already rejects this input, so the service's own guard
-        // can only be reached through a stubbed request.
+        // Branch coverage only, NOT request-boundary confidence: the real PlayerActionRequest
+        // constructor rejects a CALL carrying a non-zero amount with UNEXPECTED_AMOUNT, so a client
+        // can never deliver this to the service. The request-boundary behaviour (what a client
+        // actually receives for an invalid frame) is covered by PlayerActionBoundaryIntegrationTest.
+        // A mock is the only way to exercise this defence-in-depth guard.
         PlayerActionRequest request = mock(PlayerActionRequest.class);
         when(request.action()).thenReturn(PlayerAction.CALL);
         when(request.amount()).thenReturn(-5);
@@ -1244,13 +1330,15 @@ class PlayerActionServiceTest {
 
     @ParameterizedTest
     @EnumSource(value = PlayerAction.class, names = {"BET", "RAISE"})
-    @DisplayName("a bet or raise of 0 is rejected with AMOUNT_REQUIRED")
+    @DisplayName("[branch coverage] a zero BET or RAISE hits the service AMOUNT_REQUIRED guard")
     void processPlayerAction_WithZeroBetOrRaise_ShouldThrowBadRequestException(PlayerAction action) {
         Game spyGame = spy(testGame);
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
         String playerName = spyGame.getCurrentPlayer().getName();
-        // The record's compact constructor already rejects this input, so the service's own guard
-        // can only be reached through a stubbed request.
+        // Branch coverage only, NOT request-boundary confidence: the real PlayerActionRequest
+        // constructor rejects a zero-amount BET/RAISE with AMOUNT_REQUIRED, so this service guard
+        // is unreachable from a real client. Client-visible rejection is covered by
+        // PlayerActionBoundaryIntegrationTest. A mock is the only way to reach this guard.
         PlayerActionRequest request = mock(PlayerActionRequest.class);
         when(request.action()).thenReturn(action);
         when(request.amount()).thenReturn(0);
@@ -1288,33 +1376,46 @@ class PlayerActionServiceTest {
     // ==================== processPlayerAction - Null Amount ====================
 
     @Test
-    @DisplayName("a CALL with a null amount is passed to the game as amount 0")
-    void processPlayerAction_CallWithNullAmount_ShouldUseZeroAmount() {
-        Game spyGame = spy(testGame);
-        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
-        Player currentPlayer = spyGame.getCurrentPlayer();
+    @DisplayName("a CALL with a null amount matches the outstanding wager through real play")
+    void processPlayerAction_CallWithNullAmount_MatchesOutstandingWager() {
+        // Finding 4: assert the observable betting outcome of a null-amount CALL (the actor now
+        // matches the highest bet, the pot grew by the owed call and the turn moved on) instead of
+        // peeking at the internal PlayerDecision amount. A real Game, not a spy, proves the effect.
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
+        Player currentPlayer = testGame.getCurrentPlayer();
+        int highestBet = testGame.getCurrentHighestBet();
+        int owed = highestBet - currentPlayer.getCurrentBet();
+        int potBefore = testGame.getPot();
+        assertTrue(owed > 0, "The pre-flop small blind owes a call to the big blind");
 
         playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.CALL, null),
                 currentPlayer.getName());
 
-        verify(spyGame).processPlayerDecision(eq(currentPlayer),
-                argThat(decision -> decision.action() == PlayerAction.CALL && decision.amount() == 0));
-        assertEquals(spyGame.getCurrentHighestBet(), currentPlayer.getCurrentBet());
+        assertEquals(highestBet, currentPlayer.getCurrentBet(), "A null-amount call matches the outstanding wager");
+        assertEquals(potBefore + owed, testGame.getPot(), "The pot grows by exactly the owed call");
+        assertNotEquals(currentPlayer.getName(), testGame.getCurrentPlayer().getName(), "The turn moves to the opponent");
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     @Test
-    @DisplayName("a CHECK with a null amount is passed to the game as amount 0")
-    void processPlayerAction_CheckWithNullAmount_ShouldUseZeroAmount() {
-        Game spyGame = spy(testGame);
-        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
-        spyGame.dealFlop();
-        Player currentPlayer = spyGame.getCurrentPlayer();
+    @DisplayName("a CHECK with a null amount keeps the wager flat and advances the turn through real play")
+    void processPlayerAction_CheckWithNullAmount_KeepsWagerFlatAndAdvancesTurn() {
+        // Finding 4: a null-amount CHECK on the flop must leave the actor's bet unchanged while the
+        // turn advances and clients are notified. Observing those outcomes replaces the previous
+        // internal-argument (amount == 0) check.
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
+        // Reach the flop through real play so there is no wager owed and CHECK is legal.
+        playUntilPhaseAdvances(testGame);
+        assertEquals(GamePhase.FLOP, testGame.getCurrentPhase());
+        clearInvocations(gameStateService);
+        Player currentPlayer = testGame.getCurrentPlayer();
+        int betBefore = currentPlayer.getCurrentBet();
 
         playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.CHECK, null),
                 currentPlayer.getName());
 
-        verify(spyGame).processPlayerDecision(eq(currentPlayer),
-                argThat(decision -> decision.action() == PlayerAction.CHECK && decision.amount() == 0));
+        assertEquals(betBefore, currentPlayer.getCurrentBet(), "A check commits no chips");
+        assertNotEquals(currentPlayer.getName(), testGame.getCurrentPlayer().getName(), "The turn moves on after a check");
         verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 }
