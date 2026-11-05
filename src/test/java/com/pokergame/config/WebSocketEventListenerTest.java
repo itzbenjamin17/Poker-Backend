@@ -63,13 +63,46 @@ class WebSocketEventListenerTest {
         reconnectThread.start();
         assertTrue(waiting.await(2, TimeUnit.SECONDS));
         listener.publishRoomDestroyed("room");
-        var cleanup = new FutureTask<Void>(() -> { listener.drainAll(); return null; });
+        ArgumentCaptor<Runnable> scheduledCleanup = ArgumentCaptor.forClass(Runnable.class);
+        verify(scheduler).schedule(scheduledCleanup.capture(), any(Instant.class));
+        var cleanup = new FutureTask<Void>(() -> { scheduledCleanup.getValue().run(); return null; });
         var cleanupThread = new Thread(cleanup, "cleanup-regression");
         cleanupThread.setDaemon(true);
         cleanupThread.start();
         cleanup.get(3, TimeUnit.SECONDS);
         reconnect.get(3, TimeUnit.SECONDS);
         assertEquals(0, listener.getActiveSessionLockCount());
+    }
+
+    /** A retirement that runs late must not evict a player who has since re-joined. */
+    @Test
+    void lateMembershipRetirementDoesNotEvictRejoinedPlayer() {
+        RoomService rooms = mock(RoomService.class);
+        GameLifecycleService games = mock(GameLifecycleService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        var listener = new WebSocketEventListener(rooms, games, mock(RateLimitService.class), scheduler,
+                TestDurableMutationAspects.lockOnly(), 60_000);
+        Room room = new Room("room", "Room", "Bob", 4, 10, 20, 500, null);
+        String firstMembership = room.addPlayer("Bob");
+        when(rooms.getRoom("room")).thenReturn(room);
+        listener.registerSession(new PlayerPrincipal("Bob", "room", firstMembership), "bob-session-1");
+
+        // The retirement is scheduled but has not run yet.
+        listener.publishMembershipRetired("room", "Bob", firstMembership);
+        ArgumentCaptor<Runnable> delayedRetirement = ArgumentCaptor.forClass(Runnable.class);
+        verify(scheduler).schedule(delayedRetirement.capture(), any(Instant.class));
+
+        // Meanwhile Bob leaves and re-joins with a new membership and connects again.
+        room.removePlayer("Bob");
+        String secondMembership = room.addPlayer("Bob");
+        assertNotEquals(firstMembership, secondMembership);
+        listener.registerSession(new PlayerPrincipal("Bob", "room", secondMembership), "bob-session-2");
+
+        delayedRetirement.getValue().run();
+
+        assertTrue(listener.getActiveSessionCount("Bob:room") > 0);
+        assertTrue(room.hasPlayer("Bob"));
+        assertEquals(secondMembership, room.getMembershipId("Bob"));
     }
 
     @Test

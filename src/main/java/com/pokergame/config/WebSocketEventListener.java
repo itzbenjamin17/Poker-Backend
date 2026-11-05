@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.messaging.SessionConnectEvent;
@@ -31,13 +32,10 @@ import com.pokergame.util.KeyedLockRegistry;
 import com.pokergame.util.LockLease;
 
 import java.util.Objects;
-import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.atomic.AtomicBoolean;
 import com.pokergame.security.RateLimitService;
 import java.util.HashSet;
 
@@ -64,12 +62,6 @@ public class WebSocketEventListener {
     private final KeyedLockRegistry<String> sessionLocks = new KeyedLockRegistry<>();
     private final TaskScheduler taskScheduler;
     private final DurableMutationAspect durableMutationAspect;
-    private final Queue<CleanupIntent> drainQueue = new ConcurrentLinkedQueue<>();
-    private final AtomicBoolean isDraining = new AtomicBoolean(false);
-
-    private sealed interface CleanupIntent permits MembershipRetiredIntent, RoomDestroyedIntent {}
-    private record MembershipRetiredIntent(String roomId, String playerName, String membershipId) implements CleanupIntent {}
-    private record RoomDestroyedIntent(String roomId) implements CleanupIntent {}
 
     /**
      * Creates the listener with the authoritative cleanup service and process-local
@@ -314,7 +306,7 @@ public class WebSocketEventListener {
 
     /**
      * Registers a first-connection grace period for a newly created or joined room membership.
-     * Queued after the membership mutation commits, running outside room locks.
+     * Invoked after the membership mutation is accepted.
      * Validates room instance and membership identity, checks active sockets,
      * and avoids overwriting intervening connect/disconnect transitions.
      *
@@ -541,7 +533,7 @@ public class WebSocketEventListener {
 
     /**
      * Acquires the outer durable room lease before any player lease or aggregate monitor.
-     * This ordering also applies to reconnects, grace callbacks, and cleanup intents.
+     * This ordering also applies to reconnects, grace callbacks, and scheduled cleanups.
      *
      * @param roomId room whose session state is changing
      * @return room lease, or a no-op lease when persistence is disabled
@@ -561,18 +553,16 @@ public class WebSocketEventListener {
         return principal.playerName() + ":" + principal.roomId();
     }
 
-    /** Queues cleanup scoped to the retired membership, preserving any replacement. */
+    /** Schedules cleanup scoped to the retired membership, preserving any replacement. */
     public void publishMembershipRetired(String roomId, String playerName, String membershipId) {
         if (roomId == null || playerName == null) return;
-        drainQueue.add(new MembershipRetiredIntent(roomId, playerName, membershipId));
-        triggerDrain();
+        scheduleCleanup("membership retirement", () -> processMembershipRetired(roomId, playerName, membershipId));
     }
 
-    /** Queues removal of all transient sessions and deadlines for a destroyed room. */
+    /** Schedules removal of all transient sessions and deadlines for a destroyed room. */
     public void publishRoomDestroyed(String roomId) {
         if (roomId == null) return;
-        drainQueue.add(new RoomDestroyedIntent(roomId));
-        triggerDrain();
+        scheduleCleanup("room destruction", () -> processRoomDestroyed(roomId));
     }
 
     /**
@@ -586,7 +576,7 @@ public class WebSocketEventListener {
     }
 
     /**
-     * Queues transient cleanup for a retired membership.
+     * Schedules transient cleanup for a retired membership.
      *
      * @param event accepted departure
      */
@@ -596,7 +586,7 @@ public class WebSocketEventListener {
     }
 
     /**
-     * Queues transient cleanup for a destroyed room.
+     * Schedules transient cleanup for a destroyed room.
      *
      * @param event accepted room removal
      */
@@ -605,55 +595,27 @@ public class WebSocketEventListener {
         publishRoomDestroyed(event.roomId());
     }
 
-    private void triggerDrain() {
+    /**
+     * Runs transient-state cleanup on the scheduler so the publisher, which still holds
+     * the room lease while after-commit callbacks run, is not delayed by it. The cleanup
+     * takes the room lease itself and so runs once the publishing mutation has released it.
+     * A rejected task (scheduler shut down) is dropped: this state is process-local and
+     * disappears with the process.
+     *
+     * @param description what is being cleaned up, for logging
+     * @param cleanup     cleanup to run
+     */
+    private void scheduleCleanup(String description, Runnable cleanup) {
         try {
-            taskScheduler.schedule(this::drainQueueWorker, Instant.now());
-        } catch (Exception e) {
-            logger.debug("Asynchronous scheduling failed; draining inline", e);
-            drainQueueWorker();
-        }
-    }
-
-    /** Drains queued cleanup intents, waiting up to five seconds for another drain worker. */
-    public void drainAll() {
-        long start = System.currentTimeMillis();
-        while ((!drainQueue.isEmpty() || isDraining.get()) && (System.currentTimeMillis() - start < 5000)) {
-            drainQueueWorker();
-            try {
-                Thread.sleep(10);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-    }
-
-    private void drainQueueWorker() {
-        if (!isDraining.compareAndSet(false, true)) {
-            return;
-        }
-        try {
-            CleanupIntent intent;
-            while ((intent = drainQueue.poll()) != null) {
+            taskScheduler.schedule(() -> {
                 try {
-                    processIntent(intent);
+                    cleanup.run();
                 } catch (Exception e) {
-                    logger.warn("Error processing cleanup intent: {}", intent, e);
+                    logger.warn("Error processing {} cleanup", description, e);
                 }
-            }
-        } finally {
-            isDraining.set(false);
-            if (!drainQueue.isEmpty()) {
-                triggerDrain();
-            }
-        }
-    }
-
-    private void processIntent(CleanupIntent intent) {
-        if (intent instanceof MembershipRetiredIntent(String roomId, String playerName, String membershipId)) {
-            processMembershipRetired(roomId, playerName, membershipId);
-        } else if (intent instanceof RoomDestroyedIntent(String roomId)) {
-            processRoomDestroyed(roomId);
+            }, Instant.now());
+        } catch (TaskRejectedException e) {
+            logger.warn("Scheduler rejected {} cleanup; dropping it", description);
         }
     }
 
