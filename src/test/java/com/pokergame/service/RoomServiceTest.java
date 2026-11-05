@@ -1,6 +1,8 @@
 package com.pokergame.service;
 
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
@@ -16,7 +18,9 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
+import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.RoomDataResponse;
+import com.pokergame.enums.ResponseMessage;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Room;
@@ -927,4 +931,187 @@ class RoomServiceTest {
         verify(mockEncoder, never()).matches(any(), any());
     }
 
+    /** Groups join failures raised by the room aggregate itself. */
+    @Nested
+    @DisplayName("join failures raised by the room aggregate")
+    class JoinAddPlayerFailures {
+
+        /** Registers a spy of the created room so addPlayer can fail after the service's own checks pass. */
+        private Room registerSpiedRoom() {
+            String roomId = roomService.createRoom(validCreateRequest);
+            Room spied = spy(roomService.getRoom(roomId));
+            roomService.restoreRoom(spied, "HostPlayer");
+            return spied;
+        }
+
+        @Test
+        @DisplayName("maps the exact 'Room is full' IllegalStateException to BadRequestException")
+        void joinRoom_AddPlayerReportsRoomIsFull_ThrowsBadRequestException() {
+            Room spied = registerSpiedRoom();
+            doThrow(new IllegalStateException("Room is full")).when(spied).addPlayer("Guest");
+
+            assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest("Test Room", "Guest", null)))
+                    .isExactlyInstanceOf(BadRequestException.class)
+                    .hasMessage("Room is full");
+            assertThat(spied.getPlayers()).containsExactly("HostPlayer");
+        }
+
+        @Test
+        @DisplayName("maps any IllegalStateException message containing 'full' to BadRequestException")
+        void joinRoom_AddPlayerMessageContainsFull_ThrowsBadRequestException() {
+            Room spied = registerSpiedRoom();
+            doThrow(new IllegalStateException("Table is full right now")).when(spied).addPlayer("Guest");
+
+            assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest("Test Room", "Guest", null)))
+                    .isExactlyInstanceOf(BadRequestException.class)
+                    .hasMessage("Room is full");
+            assertThat(spied.getPlayers()).containsExactly("HostPlayer");
+        }
+
+        @Test
+        @DisplayName("re-throws an unrelated IllegalStateException unchanged")
+        void joinRoom_AddPlayerUnrelatedFailure_RethrowsOriginal() {
+            Room spied = registerSpiedRoom();
+            IllegalStateException failure = new IllegalStateException("Corrupt membership table");
+            doThrow(failure).when(spied).addPlayer("Guest");
+
+            assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest("Test Room", "Guest", null)))
+                    .isSameAs(failure);
+        }
+
+        @Test
+        @DisplayName("re-throws an IllegalStateException without a message unchanged")
+        void joinRoom_AddPlayerFailureWithoutMessage_RethrowsOriginal() {
+            Room spied = registerSpiedRoom();
+            IllegalStateException failure = new IllegalStateException();
+            doThrow(failure).when(spied).addPlayer("Guest");
+
+            assertThatThrownBy(() -> roomService.joinRoom(new JoinRoomRequest("Test Room", "Guest", null)))
+                    .isSameAs(failure);
+        }
+    }
+
+    /** Groups leave scenarios where the last remaining player is not the host. */
+    @Nested
+    @DisplayName("last non-host player leaving")
+    class LastPlayerLeaving {
+
+        /** Builds a room whose recorded host (G1) is no longer a member, leaving only G2. */
+        private Room roomWithOnlyNonHostPlayerLeft(boolean terminal) {
+            String roomId = roomService.createRoom(validCreateRequest);
+            roomService.joinRoom(new JoinRoomRequest("Test Room", "G1", null));
+            roomService.joinRoom(new JoinRoomRequest("Test Room", "G2", null));
+            roomService.leaveRoom(roomId, "HostPlayer", "G1");
+            Room room = roomService.getRoom(roomId);
+            room.removePlayer("G1");
+            room.setTerminal(terminal);
+            assertThat(room.getPlayers()).containsExactly("G2");
+            assertThat(roomService.getCurrentHost(roomId)).isEqualTo("G1");
+            reset(messagingTemplate);
+            return room;
+        }
+
+        @Test
+        @DisplayName("keeps a terminal room registered, clears its host mapping and broadcasts ROOM_CLOSED")
+        void leaveRoom_LastPlayerLeavesTerminalRoom_PreservesRoomContainer() {
+            Room room = roomWithOnlyNonHostPlayerLeft(true);
+            String roomId = room.getRoomId();
+
+            roomService.leaveRoom(roomId, "G2");
+
+            assertThat(roomService.getRoom(roomId)).isSameAs(room);
+            assertThat(room.getPlayers()).isEmpty();
+            assertThat(roomService.getCurrentHost(roomId)).isEqualTo("HostPlayer");
+            verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
+                    eq(new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null)));
+        }
+
+        @Test
+        @DisplayName("destroys a non-terminal room and broadcasts ROOM_CLOSED when the last player leaves")
+        void leaveRoom_LastPlayerLeavesNonTerminalRoom_DestroysRoom() {
+            Room room = roomWithOnlyNonHostPlayerLeft(false);
+            String roomId = room.getRoomId();
+
+            roomService.leaveRoom(roomId, "G2");
+
+            assertThat(roomService.getRoom(roomId)).isNull();
+            verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
+                    eq(new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null)));
+        }
+    }
+
+    /** Groups membership lookups and in-memory eviction. */
+    @Nested
+    @DisplayName("isPlayerInRoom and evictRoom")
+    class MembershipAndEviction {
+
+        @Test
+        @DisplayName("isPlayerInRoom is true for a known room and member")
+        void isPlayerInRoom_KnownRoomAndMember_ReturnsTrue() {
+            String roomId = roomService.createRoom(validCreateRequest);
+
+            assertThat(roomService.isPlayerInRoom(roomId, "HostPlayer")).isTrue();
+        }
+
+        @Test
+        @DisplayName("isPlayerInRoom is false for a known room with an unknown or null player")
+        void isPlayerInRoom_KnownRoomNonMember_ReturnsFalse() {
+            String roomId = roomService.createRoom(validCreateRequest);
+
+            assertThat(roomService.isPlayerInRoom(roomId, "Stranger")).isFalse();
+            assertThat(roomService.isPlayerInRoom(roomId, null)).isFalse();
+        }
+
+        @Test
+        @DisplayName("isPlayerInRoom is false for an unknown room")
+        void isPlayerInRoom_UnknownRoom_ReturnsFalse() {
+            roomService.createRoom(validCreateRequest);
+
+            assertThat(roomService.isPlayerInRoom("missing-room", "HostPlayer")).isFalse();
+        }
+
+        @Test
+        @DisplayName("isPlayerInRoom is false for a null room id")
+        void isPlayerInRoom_NullRoomId_ReturnsFalse() {
+            assertThat(roomService.isPlayerInRoom(null, "HostPlayer")).isFalse();
+        }
+
+        @Test
+        @DisplayName("evictRoom ignores a null room id")
+        void evictRoom_NullRoomId_IsNoOp() {
+            String roomId = roomService.createRoom(validCreateRequest);
+
+            assertThatCode(() -> roomService.evictRoom(null)).doesNotThrowAnyException();
+
+            assertThat(roomService.getRoom(roomId)).isNotNull();
+        }
+
+        @Test
+        @DisplayName("evictRoom ignores an unknown room id and leaves other rooms registered")
+        void evictRoom_UnknownRoomId_LeavesOtherRoomsUntouched() {
+            String roomId = roomService.createRoom(validCreateRequest);
+
+            assertThatCode(() -> roomService.evictRoom("missing-room")).doesNotThrowAnyException();
+
+            assertThat(roomService.getRoom(roomId)).isNotNull();
+            assertThat(roomService.isRoomHost(roomId, "HostPlayer")).isTrue();
+        }
+
+        @Test
+        @DisplayName("evictRoom removes a known room and its host mapping without events or broadcasts")
+        void evictRoom_KnownRoomId_RemovesRoomSilently() {
+            ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+            RoomService serviceWithPublisher = new RoomService(messagingTemplate, publisher, 60_000L);
+            String roomId = serviceWithPublisher.createRoom(validCreateRequest);
+            reset(messagingTemplate, publisher);
+
+            serviceWithPublisher.evictRoom(roomId);
+
+            assertThat(serviceWithPublisher.getRoom(roomId)).isNull();
+            assertThat(serviceWithPublisher.getCurrentHost(roomId)).isNull();
+            assertThat(serviceWithPublisher.isPlayerInRoom(roomId, "HostPlayer")).isFalse();
+            verify(publisher, never()).publishEvent(any(RoomDestroyed.class));
+            verify(messagingTemplate, never()).convertAndSend(anyString(), ArgumentMatchers.any(Object.class));
+        }
+    }
 }

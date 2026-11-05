@@ -524,6 +524,9 @@ public class RoomService {
      * @return true if player is currently in the room, false otherwise
      */
     public boolean isPlayerInRoom(String roomId, String playerName) {
+        if (roomId == null) {
+            return false;
+        }
         Room room = rooms.get(roomId);
         return room != null && room.hasPlayer(playerName);
     }
