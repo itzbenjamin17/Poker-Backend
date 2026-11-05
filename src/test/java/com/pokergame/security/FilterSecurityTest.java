@@ -16,7 +16,9 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /** Tests filter security behavior. */
@@ -127,7 +129,9 @@ class FilterSecurityTest {
 
         payloadSizeFilter.doFilterInternal(request, response, filterChain);
 
-        verify(filterChain).doFilter(request, response);
+        // The request is wrapped in a byte-counting request before proceeding, so the chain
+        // receives the bounded wrapper (not the raw request) with the same response.
+        verify(filterChain).doFilter(any(HttpServletRequest.class), eq(response));
     }
 
     /**
@@ -150,16 +154,18 @@ class FilterSecurityTest {
     }
 
     /**
-     * Protects the contract that the system should allow chunked transfer (Content-Length: -1) with current simple filter.
+     * Protects the contract that an unknown-length (Content-Length: -1) body under the limit is
+     * allowed to proceed down the chain. The previous behavior that let -1 bypass the limit
+     * unconditionally has been removed; the focused boundary coverage lives in PayloadSizeFilterTest.
      */
     @Test
-    @DisplayName("should allow chunked transfer (Content-Length: -1) with current simple filter")
-    void givenChunkedTransfer_whenDoFilter_thenAllowByBypassing() throws Exception {
+    @DisplayName("should allow unknown-length (Content-Length: -1) body under the limit")
+    void givenUnknownLengthUnderLimit_whenDoFilter_thenProceed() throws Exception {
         when(request.getContentLengthLong()).thenReturn(-1L);
 
         payloadSizeFilter.doFilterInternal(request, response, filterChain);
 
-        // Documenting that -1 bypasses the Content-Length check in this simple implementation
-        verify(filterChain).doFilter(request, response);
+        // The chain still runs for unknown-length requests; the body is bounded as it is read.
+        verify(filterChain).doFilter(any(HttpServletRequest.class), eq(response));
     }
 }

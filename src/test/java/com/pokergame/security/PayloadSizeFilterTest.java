@@ -10,6 +10,13 @@ import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
+import jakarta.servlet.ReadListener;
+import jakarta.servlet.ServletInputStream;
+import jakarta.servlet.http.HttpServletRequest;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -67,16 +74,97 @@ class PayloadSizeFilterTest {
     }
 
     @Test
-    @DisplayName("should allow chunked transfer or request with no Content-Length (-1)")
-    void givenChunkedTransferWithoutContentLength_whenDoFilter_thenAllowRequest() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/room/create");
-        // By default without setting content, getContentLengthLong() returns -1
+    @DisplayName("should allow unknown-length (Content-Length -1) body under the limit, reading its full body")
+    void givenUnknownLengthBodyUnderLimit_whenDoFilter_thenAllowAndConsume() throws Exception {
+        byte[] body = new byte[512];
+        UnknownLengthRequest request = new UnknownLengthRequest(body);
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain filterChain = new MockFilterChain();
 
         filter.doFilterInternal(request, response, filterChain);
 
-        assertThat(filterChain.getRequest()).isNotNull();
         assertThat(response.getStatus()).isEqualTo(200);
+        // The downstream request the chain received must be the wrapped (bounded) request, and
+        // its body must be fully readable up to the limit.
+        HttpServletRequest downstream = (HttpServletRequest) filterChain.getRequest();
+        assertThat(downstream).isNotNull();
+        assertThat(downstream.getInputStream().readAllBytes()).hasSize(body.length);
+    }
+
+    @Test
+    @DisplayName("should reject unknown-length (Content-Length -1) body over the limit with HTTP 413")
+    void givenUnknownLengthBodyOverLimit_whenBodyRead_thenRejectWith413() throws Exception {
+        byte[] body = new byte[11_000];
+        UnknownLengthRequest request = new UnknownLengthRequest(body);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        // The chain drains the body (as Jackson body binding would), triggering the bound.
+        MockFilterChain filterChain = new MockFilterChain() {
+            @Override
+            public void doFilter(jakarta.servlet.ServletRequest req, jakarta.servlet.ServletResponse res)
+                    throws IOException, jakarta.servlet.ServletException {
+                ((HttpServletRequest) req).getInputStream().readAllBytes();
+                super.doFilter(req, res);
+            }
+        };
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        assertThat(response.getStatus()).isEqualTo(413);
+        assertThat(response.getContentAsString()).contains("payload too large");
+    }
+
+    /**
+     * Request whose declared content length is unknown ({@code -1}, as with chunked transfer
+     * encoding) but whose input stream still yields a real body, so the filter's counting path
+     * is exercised rather than the declared-length fast path.
+     */
+    private static final class UnknownLengthRequest extends MockHttpServletRequest {
+        private final byte[] body;
+
+        UnknownLengthRequest(byte[] body) {
+            super("POST", "/api/room/create");
+            this.body = body;
+        }
+
+        @Override
+        public long getContentLengthLong() {
+            return -1L;
+        }
+
+        @Override
+        public int getContentLength() {
+            return -1;
+        }
+
+        @Override
+        public ServletInputStream getInputStream() {
+            ByteArrayInputStream source = new ByteArrayInputStream(body);
+            return new ServletInputStream() {
+                @Override
+                public int read() {
+                    return source.read();
+                }
+
+                @Override
+                public int read(byte[] b, int off, int len) {
+                    return source.read(b, off, len);
+                }
+
+                @Override
+                public boolean isFinished() {
+                    return source.available() == 0;
+                }
+
+                @Override
+                public boolean isReady() {
+                    return true;
+                }
+
+                @Override
+                public void setReadListener(ReadListener readListener) {
+                    // not used in blocking test reads
+                }
+            };
+        }
     }
 }
