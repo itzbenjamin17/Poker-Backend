@@ -3488,4 +3488,163 @@ class GameLifecycleServiceTest {
         assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
         verify(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
     }
+
+    private Game gameWithReadyCountdown() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        game.openReadyCountdown(System.currentTimeMillis() + 60_000);
+        clearInvocations(gameStateService, taskScheduler);
+        return game;
+    }
+
+    private void assertReadyRejected(Runnable action, String expectedMessage, Game game) {
+        UnauthorisedActionException ex = assertThrows(UnauthorisedActionException.class, action::run);
+        assertEquals(expectedMessage, ex.getMessage());
+        assertTrue(game.isReadyCountdownActive(), "A rejected ready change must leave the countdown open");
+        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
+    }
+
+    @Test
+    @DisplayName("markPlayerReadyForNextHand for a missing game throws ResourceNotFoundException")
+    void markPlayerReadyForNextHand_MissingGame_ThrowsResourceNotFound() {
+        ResourceNotFoundException ex = assertThrows(ResourceNotFoundException.class,
+                () -> gameLifecycleService.markPlayerReadyForNextHand("nonexistent-id", "Host"));
+        assertEquals("Game not found", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("unmarkPlayerReadyForNextHand for a missing game throws ResourceNotFoundException")
+    void unmarkPlayerReadyForNextHand_MissingGame_ThrowsResourceNotFound() {
+        ResourceNotFoundException ex = assertThrows(ResourceNotFoundException.class,
+                () -> gameLifecycleService.unmarkPlayerReadyForNextHand("nonexistent-id", "Host"));
+        assertEquals("Game not found", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("markPlayerReadyForNextHand is rejected when the ready countdown is not active")
+    void markPlayerReadyForNextHand_CountdownNotActive_IsRejected() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        assertFalse(game.isReadyCountdownActive());
+        clearInvocations(gameStateService);
+
+        UnauthorisedActionException ex = assertThrows(UnauthorisedActionException.class,
+                () -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host"));
+
+        assertEquals("Ready countdown is not active.", ex.getMessage());
+        assertFalse(game.getPlayers().stream().anyMatch(Player::getIsReadyForNextHand));
+        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
+    }
+
+    @Test
+    @DisplayName("unmarkPlayerReadyForNextHand is rejected when the ready countdown is not active")
+    void unmarkPlayerReadyForNextHand_CountdownNotActive_IsRejected() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        game.getPlayers().getFirst().setReadyForNextHand(true);
+        clearInvocations(gameStateService);
+
+        UnauthorisedActionException ex = assertThrows(UnauthorisedActionException.class,
+                () -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host"));
+
+        assertEquals("Ready countdown is not active.", ex.getMessage());
+        assertTrue(game.getPlayers().getFirst().getIsReadyForNextHand(), "A rejected unmark must not clear readiness");
+        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
+    }
+
+    @Test
+    @DisplayName("markPlayerReadyForNextHand is rejected for a player who is not in the game")
+    void markPlayerReadyForNextHand_PlayerNotInGame_IsRejected() {
+        Game game = gameWithReadyCountdown();
+
+        assertReadyRejected(() -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Stranger"),
+                "You are no longer part of this game.", game);
+    }
+
+    @Test
+    @DisplayName("unmarkPlayerReadyForNextHand is rejected for a player who is not in the game")
+    void unmarkPlayerReadyForNextHand_PlayerNotInGame_IsRejected() {
+        Game game = gameWithReadyCountdown();
+
+        assertReadyRejected(() -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Stranger"),
+                "You are no longer part of this game.", game);
+    }
+
+    @Test
+    @DisplayName("markPlayerReadyForNextHand is rejected for a player who is out")
+    void markPlayerReadyForNextHand_PlayerOut_IsRejected() {
+        Game game = gameWithReadyCountdown();
+        Player host = game.getPlayers().getFirst();
+        host.setIsOut();
+
+        assertReadyRejected(() -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host"),
+                "You are out of this game.", game);
+        assertFalse(host.getIsReadyForNextHand());
+    }
+
+    @Test
+    @DisplayName("unmarkPlayerReadyForNextHand is rejected for a player who is out")
+    void unmarkPlayerReadyForNextHand_PlayerOut_IsRejected() {
+        Game game = gameWithReadyCountdown();
+        Player host = game.getPlayers().getFirst();
+        host.setReadyForNextHand(true);
+        host.setIsOut();
+
+        assertReadyRejected(() -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host"),
+                "You are out of this game.", game);
+        assertTrue(host.getIsReadyForNextHand());
+    }
+
+    @Test
+    @DisplayName("markPlayerReadyForNextHand is rejected for a disconnected player")
+    void markPlayerReadyForNextHand_PlayerDisconnected_IsRejected() {
+        Game game = gameWithReadyCountdown();
+        Player host = game.getPlayers().getFirst();
+        host.setDisconnected(true);
+
+        assertReadyRejected(() -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host"),
+                "Reconnect before marking ready.", game);
+        assertFalse(host.getIsReadyForNextHand());
+    }
+
+    @Test
+    @DisplayName("markPlayerReadyForNextHand is rejected for a player with no chips")
+    void markPlayerReadyForNextHand_PlayerWithoutChips_IsRejected() {
+        Game game = gameWithReadyCountdown();
+        Player host = game.getPlayers().getFirst();
+        host.setChips(0);
+
+        assertReadyRejected(() -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host"),
+                "Players without chips cannot mark ready.", game);
+        assertFalse(host.getIsReadyForNextHand());
+    }
+
+    @Test
+    @DisplayName("unmarkPlayerReadyForNextHand is rejected for a disconnected player")
+    void unmarkPlayerReadyForNextHand_PlayerDisconnected_IsRejected() {
+        Game game = gameWithReadyCountdown();
+        Player host = game.getPlayers().getFirst();
+        host.setReadyForNextHand(true);
+        host.setDisconnected(true);
+
+        assertReadyRejected(() -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host"),
+                "You are not eligible to change readiness.", game);
+        assertTrue(host.getIsReadyForNextHand());
+    }
+
+    @Test
+    @DisplayName("unmarkPlayerReadyForNextHand is rejected for a player with no chips")
+    void unmarkPlayerReadyForNextHand_PlayerWithoutChips_IsRejected() {
+        Game game = gameWithReadyCountdown();
+        Player host = game.getPlayers().getFirst();
+        host.setReadyForNextHand(true);
+        host.setChips(0);
+
+        assertReadyRejected(() -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host"),
+                "You are not eligible to change readiness.", game);
+        assertTrue(host.getIsReadyForNextHand());
+    }
 }
