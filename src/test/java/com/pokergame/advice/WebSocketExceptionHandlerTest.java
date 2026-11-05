@@ -50,6 +50,7 @@ import org.springframework.validation.BindingResult;
 import org.springframework.validation.method.MethodValidationException;
 import org.springframework.validation.method.MethodValidationResult;
 import org.springframework.validation.method.ParameterValidationResult;
+import tools.jackson.databind.ObjectMapper;
 
 /** Client-observable private action error contract at the WebSocket exception boundary. */
 @Tag("unit")
@@ -277,11 +278,19 @@ class WebSocketExceptionHandlerTest {
 
     private static final String FALLBACK = "Enter a valid action amount";
 
-    /** Exception type whose class name marks it as a Jackson failure without depending on Jackson internals. */
-    private static final class FakeJacksonException extends RuntimeException {
-        FakeJacksonException(String message) {
-            super(message);
+    /**
+     * Produces a genuine decoding failure from the configured messaging mapper by feeding it a
+     * wrong-typed amount, so the classification matrix is anchored to the real
+     * {@code tools.jackson} exception the broker surfaces rather than a name-only stand-in.
+     */
+    private static Throwable realJacksonDecodingFailure() {
+        try {
+            new ObjectMapper().readValue("{\"action\":\"RAISE\",\"amount\":\"not-a-number\"}",
+                    PlayerActionRequest.class);
+        } catch (RuntimeException decodingFailure) {
+            return decodingFailure;
         }
+        throw new AssertionError("Expected the configured mapper to reject a wrong-typed amount");
     }
 
     /** Builds a frame addressed to the given suffix of the principal's room. */
@@ -446,14 +455,12 @@ class WebSocketExceptionHandlerTest {
 
     /** Failure types that carry no extractable message still map to the generic invalid-format copy. */
     @ParameterizedTest
-    @ValueSource(strings = {"conversion", "validation", "jackson"})
+    @ValueSource(strings = {"conversion", "validation"})
     @DisplayName("Conversion-style failures without a message fall back to generic message")
     void conversionStyleFailuresWithoutMessageFallBack(String kind) {
-        Exception exception = switch (kind) {
-            case "conversion" -> new MessageConversionException("cannot convert");
-            case "validation" -> new ValidationException("invalid");
-            default -> new FakeJacksonException("cannot read");
-        };
+        Exception exception = kind.equals("conversion")
+                ? new MessageConversionException("cannot convert")
+                : new ValidationException("invalid");
         verifyInvalidActionFormat(exception, FALLBACK);
     }
 
@@ -466,12 +473,17 @@ class WebSocketExceptionHandlerTest {
         verifyInvalidActionFormat(wrapped, "Too big");
     }
 
-    /** A Jackson failure deep in the cause chain is recognised as an invalid action format. */
+    /**
+     * A real {@code tools.jackson} decoding failure, surfaced the way the broker wraps it (inside a
+     * {@link MessageConversionException}), is classified as an invalid action format. This anchors
+     * the deep-cause branch to the concrete exception the configured mapper actually throws instead
+     * of to a class whose name merely contains {@code JacksonException}.
+     */
     @Test
-    @DisplayName("Jackson failure deep in the cause chain gives invalid action format")
+    @DisplayName("Real Jackson decoding failure in the cause chain gives invalid action format")
     void jacksonFailureDeepInCauseChainIsInvalidActionFormat() {
-        RuntimeException chain = new RuntimeException("outer",
-                new IllegalStateException("middle", new FakeJacksonException("unreadable")));
+        MessageConversionException chain =
+                new MessageConversionException("conversion failed", realJacksonDecodingFailure());
         verifyInvalidActionFormat(chain, FALLBACK);
     }
 

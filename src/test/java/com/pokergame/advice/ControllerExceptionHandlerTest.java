@@ -1,7 +1,6 @@
 package com.pokergame.advice;
 
 import com.pokergame.exception.ResourceNotFoundException;
-import com.pokergame.exception.TooManyRequestsException;
 
 import com.pokergame.dto.response.ErrorResponse;
 import org.junit.jupiter.api.DisplayName;
@@ -13,11 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
-import org.springframework.web.HttpMediaTypeNotAcceptableException;
-import org.springframework.web.HttpMediaTypeNotSupportedException;
-import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
-import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.Collections;
@@ -102,68 +97,11 @@ class ControllerExceptionHandlerTest {
         assertThat(response.getBody().message()).isEqualTo("Room not found with ID: room-abc-123");
     }
 
-    @Test
-    @DisplayName("should map TooManyRequestsException to 429 Too Many Requests with exception message")
-    void givenTooManyRequestsException_whenHandle_thenReturnTooManyRequests() {
-        ResponseEntity<ErrorResponse> response = handler.handleTooManyRequestsException(
-                new TooManyRequestsException("Slow down"));
-
-        assertErrorResponse(response, HttpStatus.TOO_MANY_REQUESTS, "Slow down");
-    }
-
-    @Test
-    @DisplayName("should map SecurityException to 403 Forbidden with exception message")
-    void givenSecurityException_whenHandle_thenReturnForbidden() {
-        ResponseEntity<ErrorResponse> response = handler.handleSecurityException(
-                new SecurityException("Not allowed here"));
-
-        assertErrorResponse(response, HttpStatus.FORBIDDEN, "Not allowed here");
-    }
-
-    @Test
-    @DisplayName("should map IllegalArgumentException to 400 Bad Request with exception message")
-    void givenIllegalArgumentException_whenHandle_thenReturnBadRequest() {
-        ResponseEntity<ErrorResponse> response = handler.handleIllegalArgumentException(
-                new IllegalArgumentException("Bad argument"));
-
-        assertErrorResponse(response, HttpStatus.BAD_REQUEST, "Bad argument");
-    }
-
-    @Test
-    @DisplayName("should map MissingServletRequestParameterException to 400 Bad Request naming the parameter")
-    void givenMissingServletRequestParameterException_whenHandle_thenReturnBadRequestNamingParameter() {
-        ResponseEntity<ErrorResponse> response = handler.handleMissingServletRequestParameterException(
-                new MissingServletRequestParameterException("playerId", "String"));
-
-        assertErrorResponse(response, HttpStatus.BAD_REQUEST, "Required parameter 'playerId' is missing");
-    }
-
-    @Test
-    @DisplayName("should map HttpRequestMethodNotSupportedException to 405 Method Not Allowed with stable message")
-    void givenHttpRequestMethodNotSupportedException_whenHandle_thenReturnMethodNotAllowed() {
-        ResponseEntity<ErrorResponse> response = handler.handleMethodNotSupportedException(
-                new HttpRequestMethodNotSupportedException("DELETE"));
-
-        assertErrorResponse(response, HttpStatus.METHOD_NOT_ALLOWED, "HTTP method not supported for this endpoint");
-    }
-
-    @Test
-    @DisplayName("should map HttpMediaTypeNotSupportedException to 415 Unsupported Media Type with stable message")
-    void givenHttpMediaTypeNotSupportedException_whenHandle_thenReturnUnsupportedMediaType() {
-        ResponseEntity<ErrorResponse> response = handler.handleMediaTypeNotSupportedException(
-                new HttpMediaTypeNotSupportedException("Content-Type 'text/plain' is not supported"));
-
-        assertErrorResponse(response, HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Content-Type not supported");
-    }
-
-    @Test
-    @DisplayName("should map HttpMediaTypeNotAcceptableException to 406 Not Acceptable with stable message")
-    void givenHttpMediaTypeNotAcceptableException_whenHandle_thenReturnNotAcceptable() {
-        ResponseEntity<ErrorResponse> response = handler.handleMediaTypeNotAcceptableException(
-                new HttpMediaTypeNotAcceptableException("Could not find acceptable representation"));
-
-        assertErrorResponse(response, HttpStatus.NOT_ACCEPTABLE, "Requested media type is not supported");
-    }
+    // TooManyRequestsException (429), SecurityException (403), IllegalArgumentException (400),
+    // MissingServletRequestParameterException (400), HttpRequestMethodNotSupportedException (405),
+    // HttpMediaTypeNotSupportedException (415), and HttpMediaTypeNotAcceptableException (406) are
+    // now asserted at the MVC boundary in ControllerExceptionHandlerMvcTest, which also proves the
+    // @ExceptionHandler registration and precedence those direct calls could not.
 
     @Test
     @DisplayName("should map NoResourceFoundException to 404 Not Found with no body")
