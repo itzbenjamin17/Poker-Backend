@@ -38,7 +38,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import com.pokergame.security.RateLimitService;
 import java.util.HashSet;
 
@@ -63,7 +62,6 @@ public class WebSocketEventListener {
     private final ConcurrentMap<String, PlayerPrincipal> sessionToPrincipal = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PendingDisconnect> pendingDisconnects = new ConcurrentHashMap<>();
     private final KeyedLockRegistry<String> sessionLocks = new KeyedLockRegistry<>();
-    private final AtomicLong registrationSequence = new AtomicLong();
     private final TaskScheduler taskScheduler;
     private final DurableMutationAspect durableMutationAspect;
     private final Queue<CleanupIntent> drainQueue = new ConcurrentLinkedQueue<>();
@@ -256,8 +254,7 @@ public class WebSocketEventListener {
                 logger.info("WebSocket disconnected for user {}. Scheduling delayed cleanup ({} ms)",
                         compositeName, disconnectGracePeriodMs);
 
-                long token = registrationSequence.incrementAndGet();
-                PendingDisconnect registration = new PendingDisconnect(roomId, membershipId, disconnectDeadlineEpochMs, token);
+                PendingDisconnect registration = new PendingDisconnect(membershipId, disconnectDeadlineEpochMs);
                 pendingDisconnects.put(compositeName, registration);
                 ScheduledFuture<?> future = taskScheduler.schedule(
                         () -> cleanupDisconnectedUser(playerPrincipal, registration),
@@ -360,8 +357,7 @@ public class WebSocketEventListener {
                     return;
                 }
 
-                long token = registrationSequence.incrementAndGet();
-                PendingDisconnect registration = new PendingDisconnect(roomId, membershipId, deadlineEpochMs, token);
+                PendingDisconnect registration = new PendingDisconnect(membershipId, deadlineEpochMs);
                 pendingDisconnects.put(compositeName, registration);
                 ScheduledFuture<?> future = taskScheduler.schedule(
                         () -> cleanupDisconnectedUser(principal, registration),
@@ -411,8 +407,7 @@ public class WebSocketEventListener {
                         restoredMembershipId = restoredRoom.getMembershipId(playerName);
                     }
                 }
-                long token = registrationSequence.incrementAndGet();
-                PendingDisconnect registration = new PendingDisconnect(roomId, restoredMembershipId, deadlineEpochMs, token);
+                PendingDisconnect registration = new PendingDisconnect(restoredMembershipId, deadlineEpochMs);
                 pendingDisconnects.put(compositeName, registration);
                 ScheduledFuture<?> future = taskScheduler.schedule(
                         () -> cleanupDisconnectedUser(principal, registration), Instant.ofEpochMilli(deadlineEpochMs));
@@ -513,29 +508,23 @@ public class WebSocketEventListener {
 
     /**
      * A scheduled grace-period cleanup for one player membership in one room.
-     * Reconnect handling cancels it, and the cleanup callback checks the token-bound
-     * registration is still current before removing anyone, so only the timer
-     * belonging to that membership can act.
+     * Reconnect handling cancels it, and the cleanup callback checks that this exact
+     * instance is still the registered one (by identity) before removing anyone, so
+     * a superseded or cancelled timer cannot act.
      */
     private static final class PendingDisconnect {
-        private final String roomId;
         private final String membershipId;
         private final long deadlineEpochMs;
-        private final long token;
         private volatile ScheduledFuture<?> future;
         private volatile boolean cancelled;
 
-        private PendingDisconnect(String roomId, String membershipId, long deadlineEpochMs, long token) {
-            this.roomId = roomId;
+        private PendingDisconnect(String membershipId, long deadlineEpochMs) {
             this.membershipId = membershipId;
             this.deadlineEpochMs = deadlineEpochMs;
-            this.token = token;
         }
 
-        String roomId() { return roomId; }
         String membershipId() { return membershipId; }
         long deadlineEpochMs() { return deadlineEpochMs; }
-        long token() { return token; }
         boolean isCancelled() { return cancelled; }
 
         void attach(ScheduledFuture<?> scheduled) {
