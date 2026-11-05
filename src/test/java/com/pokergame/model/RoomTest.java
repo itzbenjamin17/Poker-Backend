@@ -798,29 +798,34 @@ class RoomTest {
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger fullCount = new AtomicInteger(0);
 
-        for (int i = 0; i < totalThreads; i++) {
-            final String playerName = "Player" + i;
-            executor.submit(() -> {
-                readyLatch.countDown();
-                try {
-                    startLatch.await();
-                    concurrentRoom.addPlayer(playerName);
-                    successCount.incrementAndGet();
-                } catch (IllegalStateException e) {
-                    if ("Room is full".equals(e.getMessage())) {
-                        fullCount.incrementAndGet();
+        try {
+            for (int i = 0; i < totalThreads; i++) {
+                final String playerName = "Player" + i;
+                executor.submit(() -> {
+                    readyLatch.countDown();
+                    try {
+                        startLatch.await();
+                        concurrentRoom.addPlayer(playerName);
+                        successCount.incrementAndGet();
+                    } catch (IllegalStateException e) {
+                        if ("Room is full".equals(e.getMessage())) {
+                            fullCount.incrementAndGet();
+                        }
+                    } catch (Exception ignored) {
+                    } finally {
+                        doneLatch.countDown();
                     }
-                } catch (Exception ignored) {
-                } finally {
-                    doneLatch.countDown();
-                }
-            });
-        }
+                });
+            }
 
-        readyLatch.await(5, TimeUnit.SECONDS);
-        startLatch.countDown();
-        assertTrue(doneLatch.await(5, TimeUnit.SECONDS), "All concurrent join threads must finish");
-        executor.shutdown();
+            readyLatch.await(5, TimeUnit.SECONDS);
+            startLatch.countDown();
+            assertTrue(doneLatch.await(5, TimeUnit.SECONDS), "All concurrent join threads must finish");
+        } finally {
+            // Shut the pool down even if an assertion above fails, so no worker thread leaks.
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "Executor must terminate promptly");
+        }
 
         assertEquals(capacity, successCount.get(), "Exactly maxPlayers joins must succeed");
         assertEquals(totalThreads - capacity, fullCount.get(), "Excess join attempts must fail with Room is full");

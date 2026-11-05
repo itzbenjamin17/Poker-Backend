@@ -1818,54 +1818,70 @@ class GameLifecycleServiceTest {
     void leaveGame_DuringGameEnd_ShouldHandleGracefully() throws InterruptedException {
         testRoom.addPlayer("Player3");
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        reset(gameStateService);
+        stubGameEndCapture();
         gameLifecycleService.createGameFromRoom(ROOM_ID);
 
         Game game = gameLifecycleService.getGame(ROOM_ID);
         Player player1 = game.getPlayers().get(0);
         Player player2 = game.getPlayers().get(1);
+        // The sole survivor (the only member who does not leave) must own the terminal result.
+        Player survivor = game.getPlayers().stream()
+                .filter(p -> !p.equals(player1) && !p.equals(player2))
+                .findFirst()
+                .orElseThrow();
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
         CountDownLatch latch = new CountDownLatch(2);
+        ConcurrentLinkedQueue<Throwable> unexpectedFailures = new ConcurrentLinkedQueue<>();
 
-        // Thread 1: Player leaves (causes game end since only 1 will remain)
-        executor.submit(() -> {
-            try {
-                ready.countDown();
-                assertTrue(start.await(2, TimeUnit.SECONDS));
-                gameLifecycleService.leaveGame(ROOM_ID, player1.getName());
-            } catch (Exception e) {
-                // Expected - game might end
-            } finally {
-                latch.countDown();
+        try {
+            // Two of the three members leave at the same time, driving the game to its single-survivor
+            // terminal state through whichever interleaving the scheduler picks.
+            for (Player leaver : List.of(player1, player2)) {
+                final String leaverName = leaver.getName();
+                executor.submit(() -> {
+                    try {
+                        ready.countDown();
+                        assertTrue(start.await(2, TimeUnit.SECONDS));
+                        gameLifecycleService.leaveGame(ROOM_ID, leaverName);
+                    } catch (Throwable t) {
+                        // leaveGame is specified idempotent, so no interleaving may throw: capture any
+                        // failure instead of swallowing it so the assertions below can surface it.
+                        unexpectedFailures.add(t);
+                    } finally {
+                        latch.countDown();
+                    }
+                });
             }
-        });
 
-        // Thread 2: Another player tries to leave at the same time
-        executor.submit(() -> {
-            try {
-                ready.countDown();
-                assertTrue(start.await(2, TimeUnit.SECONDS));
-                gameLifecycleService.leaveGame(ROOM_ID, player2.getName());
-            } catch (Exception e) {
-                // Expected - game might already be ended or player might be gone
-            } finally {
-                latch.countDown();
-            }
-        });
-
-        assertTrue(ready.await(2, TimeUnit.SECONDS), "Workers did not become ready in time");
-        start.countDown();
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "Operations took too long");
-        executor.shutdown();
-
-        // Game should either still exist with 1 player, or be completely gone
-        // Either outcome is acceptable as long as no corruption occurred
-        Game finalGame = gameLifecycleService.getGame(ROOM_ID);
-        if (finalGame != null) {
-            assertTrue(finalGame.getPlayers().size() >= 0, "Player count should be valid");
+            assertTrue(ready.await(2, TimeUnit.SECONDS), "Workers did not become ready in time");
+            start.countDown();
+            assertTrue(latch.await(5, TimeUnit.SECONDS), "Operations took too long");
+        } finally {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "Executor must terminate promptly");
         }
+
+        assertTrue(unexpectedFailures.isEmpty(), "Concurrent leaves produced failures: " + unexpectedFailures);
+
+        // Regardless of interleaving, exactly one valid linearized terminal state must result.
+        Game finalGame = gameLifecycleService.getGame(ROOM_ID);
+        assertNotNull(finalGame, "The terminal aggregate must be retained after the game ends");
+        assertTrue(finalGame.isGameOver(), "Two of three members leaving must terminate the game");
+        // The terminal roster freezes the survivor as the only member still active (not out).
+        List<Player> stillActive = finalGame.getPlayers().stream()
+                .filter(p -> !p.getIsOut())
+                .toList();
+        assertEquals(1, stillActive.size(), "Exactly one survivor stays active in the terminal roster");
+        assertEquals(survivor.getName(), stillActive.getFirst().getName(),
+                "The member who never left must be the surviving winner");
+        assertNotNull(finalGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP),
+                "A terminal game schedules its cleanup task");
+        // Game-end is published exactly once on the terminal path, no matter which leave closed it.
+        verify(gameStateService, times(1)).sendGameEnd(any(GameEndResponse.class));
     }
 
     @Test
@@ -2075,12 +2091,16 @@ class GameLifecycleServiceTest {
 
             CountDownLatch startLatch = new CountDownLatch(1);
             CountDownLatch doneLatch = new CountDownLatch(2);
+            ConcurrentLinkedQueue<Throwable> unexpectedFailures = new ConcurrentLinkedQueue<>();
 
             Thread t1 = new Thread(() -> {
                 try {
                     startLatch.await();
                     gameLifecycleService.handleGameEnd(roomId, false);
-                } catch (Exception ignored) {
+                } catch (Throwable t) {
+                    // Neither operation is specified to fail; a thrown exception is a real defect, so
+                    // record it rather than hiding it behind a bare countdown.
+                    unexpectedFailures.add(t);
                 } finally {
                     doneLatch.countDown();
                 }
@@ -2090,7 +2110,8 @@ class GameLifecycleServiceTest {
                 try {
                     startLatch.await();
                     gameLifecycleService.departParticipants(roomId, List.of("Player2"));
-                } catch (Exception ignored) {
+                } catch (Throwable t) {
+                    unexpectedFailures.add(t);
                 } finally {
                     doneLatch.countDown();
                 }
@@ -2102,6 +2123,17 @@ class GameLifecycleServiceTest {
 
             boolean finished = doneLatch.await(3, TimeUnit.SECONDS);
             assertTrue(finished, "Deadlock detected between handleGameEnd and handlePlayerLeave at iteration " + i);
+            // Bounded completion alone is not enough: the Room-before-Game lock order (ADR-0009)
+            // must also keep both operations failure-free under the race.
+            assertTrue(unexpectedFailures.isEmpty(),
+                    "Concurrent handleGameEnd/departParticipants failed at iteration " + i + ": " + unexpectedFailures);
+
+            // Both operations have linearized: the game is terminal and the room agrees it is done,
+            // so no partial end was left behind by either interleaving.
+            Game endedGame = gameLifecycleService.getGame(roomId);
+            assertNotNull(endedGame, "The terminal game aggregate must be retained after handleGameEnd at iteration " + i);
+            assertTrue(endedGame.isGameOver(), "handleGameEnd must leave the game terminal at iteration " + i);
+            assertTrue(room.isTerminal(), "The room must be marked terminal once its game has ended at iteration " + i);
         }
     }
 

@@ -452,36 +452,41 @@ class RoomServiceTest {
             AtomicInteger fullExceptionCount = new AtomicInteger(0);
             Queue<Throwable> unexpectedErrors = new ConcurrentLinkedQueue<>();
 
-            for (int i = 1; i <= totalJoiningThreads; i++) {
-                final String playerName = "JoiningPlayer" + i;
-                executor.submit(() -> {
-                    readyLatch.countDown();
-                    try {
-                        startLatch.await();
-                        if (playerName.hashCode() % 2 == 0) {
-                            roomService.joinRoom(new JoinRoomRequest("Concurrent Join Room", playerName, null));
-                        } else {
-                            roomService.joinRoom(roomId, playerName, null);
+            try {
+                for (int i = 1; i <= totalJoiningThreads; i++) {
+                    final String playerName = "JoiningPlayer" + i;
+                    executor.submit(() -> {
+                        readyLatch.countDown();
+                        try {
+                            startLatch.await();
+                            if (playerName.hashCode() % 2 == 0) {
+                                roomService.joinRoom(new JoinRoomRequest("Concurrent Join Room", playerName, null));
+                            } else {
+                                roomService.joinRoom(roomId, playerName, null);
+                            }
+                            successCount.incrementAndGet();
+                        } catch (BadRequestException e) {
+                            if ("Room is full".equals(e.getMessage())) {
+                                fullExceptionCount.incrementAndGet();
+                            } else {
+                                unexpectedErrors.add(e);
+                            }
+                        } catch (Throwable t) {
+                            unexpectedErrors.add(t);
+                        } finally {
+                            doneLatch.countDown();
                         }
-                        successCount.incrementAndGet();
-                    } catch (BadRequestException e) {
-                        if ("Room is full".equals(e.getMessage())) {
-                            fullExceptionCount.incrementAndGet();
-                        } else {
-                            unexpectedErrors.add(e);
-                        }
-                    } catch (Throwable t) {
-                        unexpectedErrors.add(t);
-                    } finally {
-                        doneLatch.countDown();
-                    }
-                });
-            }
+                    });
+                }
 
-            assertThat(readyLatch.await(5, TimeUnit.SECONDS)).isTrue();
-            startLatch.countDown();
-            assertThat(doneLatch.await(5, TimeUnit.SECONDS)).isTrue();
-            executor.shutdown();
+                assertThat(readyLatch.await(5, TimeUnit.SECONDS)).isTrue();
+                startLatch.countDown();
+                assertThat(doneLatch.await(5, TimeUnit.SECONDS)).isTrue();
+            } finally {
+                // Shut the pool down even if an assertion above fails, so no worker thread leaks.
+                executor.shutdownNow();
+                assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            }
 
             assertThat(unexpectedErrors).isEmpty();
             assertThat(successCount.get()).isEqualTo(capacity - 1);
@@ -770,36 +775,41 @@ class RoomServiceTest {
             AtomicInteger successCount = new AtomicInteger();
             Queue<Throwable> unexpectedFailures = new ConcurrentLinkedQueue<>();
 
-            for (int index = 0; index < attempts; index++) {
-                int currentIndex = index;
-                executor.submit(() -> {
-                    try {
-                        ready.countDown();
-                        assertThat(start.await(CONCURRENCY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).isTrue();
+            try {
+                for (int index = 0; index < attempts; index++) {
+                    int currentIndex = index;
+                    executor.submit(() -> {
+                        try {
+                            ready.countDown();
+                            assertThat(start.await(CONCURRENCY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).isTrue();
 
-                        roomService.createRoom(new CreateRoomRequest(
-                                "Concurrent Name",
-                                "Host" + currentIndex,
-                                6,
-                                5,
-                                10,
-                                100,
-                                null));
-                        successCount.incrementAndGet();
-                    } catch (BadRequestException expected) {
-                        assertThat(expected).hasMessageContaining("already taken");
-                    } catch (Throwable throwable) {
-                        unexpectedFailures.add(throwable);
-                    } finally {
-                        done.countDown();
-                    }
-                });
+                            roomService.createRoom(new CreateRoomRequest(
+                                    "Concurrent Name",
+                                    "Host" + currentIndex,
+                                    6,
+                                    5,
+                                    10,
+                                    100,
+                                    null));
+                            successCount.incrementAndGet();
+                        } catch (BadRequestException expected) {
+                            assertThat(expected).hasMessageContaining("already taken");
+                        } catch (Throwable throwable) {
+                            unexpectedFailures.add(throwable);
+                        } finally {
+                            done.countDown();
+                        }
+                    });
+                }
+
+                assertThat(ready.await(CONCURRENCY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).isTrue();
+                start.countDown();
+                assertThat(done.await(CONCURRENCY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).isTrue();
+            } finally {
+                // Shut the pool down even if an assertion above fails, so no worker thread leaks.
+                executor.shutdownNow();
+                assertThat(executor.awaitTermination(CONCURRENCY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).isTrue();
             }
-
-            assertThat(ready.await(CONCURRENCY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).isTrue();
-            start.countDown();
-            assertThat(done.await(CONCURRENCY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).isTrue();
-            executor.shutdownNow();
 
             assertThat(unexpectedFailures).isEmpty();
             assertThat(successCount).hasValue(1);

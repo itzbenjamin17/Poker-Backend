@@ -46,38 +46,43 @@ public class Tier4AdversarialRoomServiceChallengeTest {
         AtomicInteger roomFullCount = new AtomicInteger(0);
         Queue<Throwable> unexpectedErrors = new ConcurrentLinkedQueue<>();
 
-        for (int i = 1; i <= totalThreads; i++) {
-            final int index = i;
-            final String playerName = "Contender_" + index;
-            executor.submit(() -> {
-                readyLatch.countDown();
-                try {
-                    startLatch.await();
-                    // Interleave joinRoom overloads (by request vs by roomId)
-                    if (index % 2 == 0) {
-                        roomService.joinRoom(new JoinRoomRequest("Contention Storm Room", playerName, null));
-                    } else {
-                        roomService.joinRoom(roomId, playerName, null);
+        try {
+            for (int i = 1; i <= totalThreads; i++) {
+                final int index = i;
+                final String playerName = "Contender_" + index;
+                executor.submit(() -> {
+                    readyLatch.countDown();
+                    try {
+                        startLatch.await();
+                        // Interleave joinRoom overloads (by request vs by roomId)
+                        if (index % 2 == 0) {
+                            roomService.joinRoom(new JoinRoomRequest("Contention Storm Room", playerName, null));
+                        } else {
+                            roomService.joinRoom(roomId, playerName, null);
+                        }
+                        successCount.incrementAndGet();
+                    } catch (BadRequestException e) {
+                        if ("Room is full".equals(e.getMessage())) {
+                            roomFullCount.incrementAndGet();
+                        } else {
+                            unexpectedErrors.add(e);
+                        }
+                    } catch (Throwable t) {
+                        unexpectedErrors.add(t);
+                    } finally {
+                        doneLatch.countDown();
                     }
-                    successCount.incrementAndGet();
-                } catch (BadRequestException e) {
-                    if ("Room is full".equals(e.getMessage())) {
-                        roomFullCount.incrementAndGet();
-                    } else {
-                        unexpectedErrors.add(e);
-                    }
-                } catch (Throwable t) {
-                    unexpectedErrors.add(t);
-                } finally {
-                    doneLatch.countDown();
-                }
-            });
-        }
+                });
+            }
 
-        assertTrue(readyLatch.await(5, TimeUnit.SECONDS), "Threads failed to get ready in time");
-        startLatch.countDown();
-        assertTrue(doneLatch.await(10, TimeUnit.SECONDS), "Concurrent joins timed out");
-        executor.shutdown();
+            assertTrue(readyLatch.await(5, TimeUnit.SECONDS), "Threads failed to get ready in time");
+            startLatch.countDown();
+            assertTrue(doneLatch.await(10, TimeUnit.SECONDS), "Concurrent joins timed out");
+        } finally {
+            // Shut the pool down even if an assertion above fails, so no worker thread leaks.
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "Executor must terminate promptly");
+        }
 
         assertThat(unexpectedErrors).as("Unexpected errors encountered").isEmpty();
         assertEquals(maxCapacity - 1, successCount.get(), "Must admit exactly maxCapacity - 1 joiners");
@@ -109,40 +114,45 @@ public class Tier4AdversarialRoomServiceChallengeTest {
         AtomicInteger nameTakenCount = new AtomicInteger(0);
         Queue<Throwable> unexpectedErrors = new ConcurrentLinkedQueue<>();
 
-        for (int i = 1; i <= totalThreads; i++) {
-            final int index = i;
-            final boolean isDuplicateCandidate = (index % 2 == 0);
-            final String playerName = isDuplicateCandidate ? "ClashPlayer" : "UniquePlayer_" + index;
+        try {
+            for (int i = 1; i <= totalThreads; i++) {
+                final int index = i;
+                final boolean isDuplicateCandidate = (index % 2 == 0);
+                final String playerName = isDuplicateCandidate ? "ClashPlayer" : "UniquePlayer_" + index;
 
-            executor.submit(() -> {
-                readyLatch.countDown();
-                try {
-                    startLatch.await();
-                    roomService.joinRoom(new JoinRoomRequest("Collision Storm Room", playerName, null));
-                    successCount.incrementAndGet();
-                    if (isDuplicateCandidate) {
-                        duplicateSuccessCount.incrementAndGet();
+                executor.submit(() -> {
+                    readyLatch.countDown();
+                    try {
+                        startLatch.await();
+                        roomService.joinRoom(new JoinRoomRequest("Collision Storm Room", playerName, null));
+                        successCount.incrementAndGet();
+                        if (isDuplicateCandidate) {
+                            duplicateSuccessCount.incrementAndGet();
+                        }
+                    } catch (BadRequestException e) {
+                        if ("Room is full".equals(e.getMessage())) {
+                            roomFullCount.incrementAndGet();
+                        } else if ("Player name already taken".equals(e.getMessage())) {
+                            nameTakenCount.incrementAndGet();
+                        } else {
+                            unexpectedErrors.add(e);
+                        }
+                    } catch (Throwable t) {
+                        unexpectedErrors.add(t);
+                    } finally {
+                        doneLatch.countDown();
                     }
-                } catch (BadRequestException e) {
-                    if ("Room is full".equals(e.getMessage())) {
-                        roomFullCount.incrementAndGet();
-                    } else if ("Player name already taken".equals(e.getMessage())) {
-                        nameTakenCount.incrementAndGet();
-                    } else {
-                        unexpectedErrors.add(e);
-                    }
-                } catch (Throwable t) {
-                    unexpectedErrors.add(t);
-                } finally {
-                    doneLatch.countDown();
-                }
-            });
+                });
+            }
+
+            assertTrue(readyLatch.await(5, TimeUnit.SECONDS), "Threads failed to get ready in time");
+            startLatch.countDown();
+            assertTrue(doneLatch.await(10, TimeUnit.SECONDS), "Concurrent joins timed out");
+        } finally {
+            // Shut the pool down even if an assertion above fails, so no worker thread leaks.
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "Executor must terminate promptly");
         }
-
-        assertTrue(readyLatch.await(5, TimeUnit.SECONDS), "Threads failed to get ready in time");
-        startLatch.countDown();
-        assertTrue(doneLatch.await(10, TimeUnit.SECONDS), "Concurrent joins timed out");
-        executor.shutdown();
 
         assertThat(unexpectedErrors).as("Unexpected errors encountered").isEmpty();
         assertEquals(maxCapacity - 1, successCount.get(), "Exactly maxCapacity - 1 joins must succeed");
@@ -178,32 +188,37 @@ public class Tier4AdversarialRoomServiceChallengeTest {
             AtomicInteger full = new AtomicInteger(0);
             Queue<Throwable> errors = new ConcurrentLinkedQueue<>();
 
-            for (int j = 1; j <= joiners; j++) {
-                final String pName = "Cycler_" + cycle + "_" + j;
-                executor.submit(() -> {
-                    readyLatch.countDown();
-                    try {
-                        startLatch.await();
-                        roomService.joinRoom(roomId, pName, null);
-                        success.incrementAndGet();
-                    } catch (BadRequestException e) {
-                        if ("Room is full".equals(e.getMessage())) {
-                            full.incrementAndGet();
-                        } else {
-                            errors.add(e);
+            try {
+                for (int j = 1; j <= joiners; j++) {
+                    final String pName = "Cycler_" + cycle + "_" + j;
+                    executor.submit(() -> {
+                        readyLatch.countDown();
+                        try {
+                            startLatch.await();
+                            roomService.joinRoom(roomId, pName, null);
+                            success.incrementAndGet();
+                        } catch (BadRequestException e) {
+                            if ("Room is full".equals(e.getMessage())) {
+                                full.incrementAndGet();
+                            } else {
+                                errors.add(e);
+                            }
+                        } catch (Throwable t) {
+                            errors.add(t);
+                        } finally {
+                            doneLatch.countDown();
                         }
-                    } catch (Throwable t) {
-                        errors.add(t);
-                    } finally {
-                        doneLatch.countDown();
-                    }
-                });
-            }
+                    });
+                }
 
-            assertTrue(readyLatch.await(5, TimeUnit.SECONDS));
-            startLatch.countDown();
-            assertTrue(doneLatch.await(10, TimeUnit.SECONDS));
-            executor.shutdown();
+                assertTrue(readyLatch.await(5, TimeUnit.SECONDS));
+                startLatch.countDown();
+                assertTrue(doneLatch.await(10, TimeUnit.SECONDS));
+            } finally {
+                // Shut the pool down even if an assertion above fails, so no worker thread leaks.
+                executor.shutdownNow();
+                assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "Executor must terminate promptly");
+            }
 
             assertThat(errors).isEmpty();
             assertEquals(capacity - 1, success.get(), "Cycle " + cycle + " must admit exactly capacity - 1");

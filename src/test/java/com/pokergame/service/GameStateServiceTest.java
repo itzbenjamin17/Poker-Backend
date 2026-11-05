@@ -98,10 +98,24 @@ class GameStateServiceTest {
     @Test
     void broadcastGameState_WithValidGame_ShouldBroadcastToGameChannel() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        // Deal hole cards so the public projection has something private to mask.
+        testGame.dealHoleCards();
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
         gameStateService.broadcastGameState(GAME_ID, testGame);
 
-        verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
+        // The public channel receives a PublicGameStateResponse (not a bare Object) carrying the
+        // game's state revision, and every player's hole cards are masked away before the flop.
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        Object payload = captor.getValue();
+        assertInstanceOf(PublicGameStateResponse.class, payload);
+        PublicGameStateResponse response = (PublicGameStateResponse) payload;
+        assertEquals(testGame.getStateRevision(), response.stateRevision(),
+                "The public broadcast must carry the game's current state revision");
+        assertTrue(response.players().stream()
+                        .allMatch(p -> p.holeCards() == null || p.holeCards().isEmpty()),
+                "The public projection must not expose any player's hole cards outside showdown");
     }
 
     /**
@@ -110,17 +124,28 @@ class GameStateServiceTest {
     @Test
     void broadcastGameState_ShouldSendPrivateStateToEachPlayer() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testGame.dealHoleCards();
 
         gameStateService.broadcastGameState(GAME_ID, testGame);
 
-        // Should send private messages to each player using convertAndSendToUser
+        // Each private message must carry only its own owner's hole cards and identity, so one
+        // player can never receive another's cards.
         for (Player player : testGame.getPlayers()) {
             String compositeName = player.getName() + ":" + GAME_ID + ":" + testRoom.getMembershipId(player.getName());
+            ArgumentCaptor<Object> privateCaptor = ArgumentCaptor.forClass(Object.class);
 
             verify(messagingTemplate).convertAndSendToUser(
                     eq(compositeName),
                     eq("/queue/private"),
-                    any(Object.class));
+                    privateCaptor.capture());
+
+            Object privatePayload = privateCaptor.getValue();
+            assertInstanceOf(PrivatePlayerState.class, privatePayload);
+            PrivatePlayerState privateState = (PrivatePlayerState) privatePayload;
+            assertEquals(player.getPlayerId(), privateState.playerId(),
+                    "A private projection must be addressed to its own owner");
+            assertEquals(player.getHoleCards(), privateState.holeCards(),
+                    "A private projection must carry only the owner's hole cards");
         }
     }
 
@@ -252,9 +277,20 @@ class GameStateServiceTest {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         List<Player> winners = List.of(testPlayers.getFirst());
 
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+
         gameStateService.broadcastShowdownResults(GAME_ID, testGame, winners, 50);
 
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
+        // The showdown broadcast must be a PublicGameStateResponse naming the winner and carrying
+        // the game's state revision, not merely some object on the right destination.
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        Object payload = captor.getValue();
+        assertInstanceOf(PublicGameStateResponse.class, payload);
+        PublicGameStateResponse response = (PublicGameStateResponse) payload;
+        assertEquals(List.of(testPlayers.getFirst().getName()), response.winners(),
+                "The showdown projection must report the single winner");
+        assertEquals(testGame.getStateRevision(), response.stateRevision(),
+                "The showdown broadcast must carry the game's current state revision");
     }
 
     /**

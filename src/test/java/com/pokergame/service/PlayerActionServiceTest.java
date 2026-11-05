@@ -210,24 +210,49 @@ class PlayerActionServiceTest {
     }
 
     /**
-     * Protects the contract that process player action with valid check when allowed should process.
+     * Protects the contract that a CHECK from a zero-owed position is accepted without moving
+     * chips and that it completes the pre-flop round when the big blind exercises their option.
+     *
+     * <p>The pre-flop limp (SB completes, UTG/others call) leaves the big blind owing nothing, so
+     * CHECK is genuinely legal here rather than being a stand-in for CALL. The oracle asserts the
+     * big blind's stack and the pot are both unchanged by the check, and that the completed round
+     * advances the hand to the flop.</p>
      */
     @Test
     void processPlayerAction_WithValidCheck_WhenAllowed_ShouldProcess() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
 
-        // First, advance to a point where check is allowed
-        // After blinds, current player needs to at least call
-        // We need to simulate a situation where checking is valid
-        // For simplicity, let's make everyone match the current highest bet first
-        Player currentPlayer = testGame.getCurrentPlayer();
+        // Everyone other than the big blind limps in, returning the option to the big blind who,
+        // having already posted the big blind, owes nothing and may legally CHECK.
+        while (!testGame.getCurrentPlayer().getPlayerId().equals(testGame.getBigBlindPlayerId())) {
+            Player actor = testGame.getCurrentPlayer();
+            playerActionService.processPlayerAction(GAME_ID,
+                    new PlayerActionRequest(PlayerAction.CALL, null), actor.getName());
+        }
 
-        // If the current player already has the highest bet, they can check
-        // Let's manually set up such a situation
-        // For now, let's just test that the action is processed
-        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, null);
+        Player bigBlind = testGame.getCurrentPlayer();
+        assertEquals(testGame.getBigBlindPlayerId(), bigBlind.getPlayerId(),
+                "Action should have returned to the big blind");
+        assertEquals(0, testGame.getCurrentHighestBet() - bigBlind.getCurrentBet(),
+                "The big blind should owe nothing, so CHECK is the legal action");
 
-        assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
+        int bigBlindChipsBeforeCheck = bigBlind.getChips();
+        int potBeforeCheck = testGame.getPot();
+
+        playerActionService.processPlayerAction(GAME_ID,
+                new PlayerActionRequest(PlayerAction.CHECK, null), bigBlind.getName());
+
+        // A legal check moves no chips: neither the actor's stack nor the pot changes.
+        assertEquals(bigBlindChipsBeforeCheck, bigBlind.getChips(),
+                "CHECK must not change the checking player's chips");
+        assertEquals(potBeforeCheck, testGame.getPot(), "CHECK must not change the pot");
+
+        // With every actor matched, the completed pre-flop round advances to the flop and hands
+        // the action to a new current player.
+        assertEquals(GamePhase.FLOP, testGame.getCurrentPhase(),
+                "The big blind's check completes the pre-flop round and advances to the flop");
+        assertNotNull(testGame.getCurrentPlayer(), "The flop must have a current actor");
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     // ==================== processPlayerAction - Raise Tests ====================
@@ -623,7 +648,9 @@ class PlayerActionServiceTest {
     // ==================== Pot Updates Tests ====================
 
     /**
-     * Protects the contract that process player action call should update pot.
+     * Protects the exact chip accounting of a CALL: the caller commits precisely the amount owed
+     * against the current wager, their stack drops by that amount, their wager rises to match the
+     * table, and the pot grows by exactly the same amount.
      */
     @Test
     void processPlayerAction_Call_ShouldUpdatePot() {
@@ -631,11 +658,28 @@ class PlayerActionServiceTest {
 
         int initialPot = testGame.getPot();
         Player currentPlayer = testGame.getCurrentPlayer();
+        int chipsBeforeCall = currentPlayer.getChips();
+        int wagerBeforeCall = currentPlayer.getCurrentBet();
+        int highestBet = testGame.getCurrentHighestBet();
+        int owed = highestBet - wagerBeforeCall;
+        assertTrue(owed > 0, "The opening actor must owe the big blind, otherwise CALL is not legal");
 
         PlayerActionRequest callRequest = new PlayerActionRequest(PlayerAction.CALL, null);
         playerActionService.processPlayerAction(GAME_ID, callRequest, currentPlayer.getName());
 
-        assertTrue(testGame.getPot() >= initialPot);
+        assertEquals(chipsBeforeCall - owed, currentPlayer.getChips(),
+                "A call must decrement the stack by exactly the amount owed");
+        assertEquals(highestBet, currentPlayer.getCurrentBet(),
+                "After calling, the player's wager matches the current highest bet");
+        assertEquals(wagerBeforeCall + owed, currentPlayer.getCurrentBet(),
+                "The player's wager increases by exactly the amount owed");
+        assertEquals(initialPot + owed, testGame.getPot(),
+                "The pot grows by exactly the called amount");
+        assertEquals(GamePhase.PRE_FLOP, testGame.getCurrentPhase(),
+                "One of three players calling does not complete the pre-flop round");
+        assertNotEquals(currentPlayer.getPlayerId(), testGame.getCurrentPlayer().getPlayerId(),
+                "Action advances to the next player after a call that does not close the round");
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     /**

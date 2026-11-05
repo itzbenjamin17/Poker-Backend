@@ -6,6 +6,7 @@ import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -54,6 +55,17 @@ class PersistenceRecoveryTest {
     void setUp() {
         applicationContext = new GenericApplicationContext();
         applicationContext.refresh();
+    }
+
+    /**
+     * Closes the per-test Spring context so its beans and threads are released rather than
+     * leaking across the test class.
+     */
+    @AfterEach
+    void tearDown() {
+        if (applicationContext != null) {
+            applicationContext.close();
+        }
     }
 
     /**
