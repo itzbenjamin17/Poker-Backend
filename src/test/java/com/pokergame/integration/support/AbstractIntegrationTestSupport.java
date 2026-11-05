@@ -7,7 +7,9 @@ import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.security.RateLimitService;
 import org.awaitility.Awaitility;
 import org.jspecify.annotations.NonNull;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
@@ -16,10 +18,14 @@ import org.springframework.messaging.converter.CompositeMessageConverter;
 import org.springframework.messaging.converter.JacksonJsonMessageConverter;
 import org.springframework.messaging.converter.MessageConverter;
 import org.springframework.messaging.converter.StringMessageConverter;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessageType;
+import org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
+import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
@@ -29,6 +35,7 @@ import org.springframework.web.socket.messaging.WebSocketStompClient;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -45,27 +52,170 @@ public abstract class AbstractIntegrationTestSupport {
     protected static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(15);
     protected static final String FRONTEND_ORIGIN = "http://localhost:5173";
 
+    /**
+     * An explicitly hostile, unconfigured Origin for {@link #connectSessionWithOrigin}. It is not in the
+     * test profile's {@code app.security.cors.allowed-origins} allowlist, so a handshake carrying it must
+     * be rejected. Deliberately distinct from {@link #FRONTEND_ORIGIN}.
+     */
+    protected static final String DISALLOWED_ORIGIN = "http://evil.example.com";
+
+    /**
+     * Production property key that binds {@link RateLimitService}'s {@code enabled} flag
+     * ({@code @Value("${poker.rate-limiting.enabled:true}")}). Subclasses that need rate limiting on should
+     * prefer configuration over reflection, e.g.
+     * {@code @SpringBootTest(properties = AbstractIntegrationTestSupport.RATE_LIMITING_ENABLED_PROPERTY + "=true")}
+     * or a {@code @DynamicPropertySource}.
+     */
+    protected static final String RATE_LIMITING_ENABLED_PROPERTY = "poker.rate-limiting.enabled";
+
     @LocalServerPort
     protected int port;
 
     @Autowired
     protected RateLimitService rateLimitService;
 
+    /**
+     * Broker handler used by {@link #awaitBrokerSubscription}. Injected lazily through an
+     * {@link ObjectProvider} so classes whose context does not register a {@link SimpleBrokerMessageHandler}
+     * still wire; only tests that call the await helper touch it.
+     */
+    @Autowired
+    protected ObjectProvider<SimpleBrokerMessageHandler> brokerProvider;
+
     protected final ObjectMapper objectMapper = new ObjectMapper();
     protected RestClient restClient;
+
+    /**
+     * STOMP clients created through {@link #createStompClient} or registered via {@link #registerClient}.
+     * Closed failure-safely in {@link #tearDownIntegrationResources}.
+     */
+    private final List<WebSocketStompClient> managedClients = Collections.synchronizedList(new ArrayList<>());
+
+    /**
+     * STOMP sessions opened through {@link #connectSession} or registered via {@link #registerSession}.
+     * Disconnected failure-safely in {@link #tearDownIntegrationResources}.
+     */
+    private final List<StompSession> managedSessions = Collections.synchronizedList(new ArrayList<>());
 
     /**
      * Supports the test scenario for setup integration test.
      */
     @BeforeEach
     void setupIntegrationTest() {
-        // Reset rate limiting to disabled by default for each test
-        ReflectionTestUtils.setField(rateLimitService, "enabled", false);
+        // Reset rate limiting to disabled by default for each test. Subclasses that need it enabled should
+        // prefer the RATE_LIMITING_ENABLED_PROPERTY config seam (see enableRateLimiting()).
+        disableRateLimiting();
         rateLimitService.reset();
 
         restClient = RestClient.builder()
                 .baseUrl("http://localhost:" + port)
                 .build();
+    }
+
+    /**
+     * Closes every STOMP session and client this test opened, even when the test body threw and even when a
+     * subclass already performed its own tail cleanup (double-close is harmless). Each resource is released
+     * inside its own try/catch so one failure cannot skip the rest.
+     */
+    @AfterEach
+    void tearDownIntegrationResources() {
+        synchronized (managedSessions) {
+            for (StompSession session : managedSessions) {
+                try {
+                    if (session != null && session.isConnected()) {
+                        session.disconnect();
+                    }
+                } catch (RuntimeException ignored) {
+                    // Best-effort cleanup: a session that is already closed or failing must not block the rest.
+                }
+            }
+            managedSessions.clear();
+        }
+        synchronized (managedClients) {
+            for (WebSocketStompClient client : managedClients) {
+                try {
+                    if (client != null) {
+                        client.stop();
+                    }
+                } catch (RuntimeException ignored) {
+                    // Best-effort cleanup: stopping an already-stopped client must not block the rest.
+                }
+            }
+            managedClients.clear();
+        }
+    }
+
+    /**
+     * Tracks a STOMP client so the failure-safe {@link #tearDownIntegrationResources} stops it. Returns the
+     * same instance for fluent use. Safe to call for clients a test created itself.
+     *
+     * @param client client to track
+     * @return the same client
+     */
+    protected WebSocketStompClient registerClient(WebSocketStompClient client) {
+        if (client != null) {
+            managedClients.add(client);
+        }
+        return client;
+    }
+
+    /**
+     * Tracks a STOMP session so the failure-safe {@link #tearDownIntegrationResources} disconnects it.
+     * Returns the same instance for fluent use.
+     *
+     * @param session session to track
+     * @return the same session
+     */
+    protected StompSession registerSession(StompSession session) {
+        if (session != null) {
+            managedSessions.add(session);
+        }
+        return session;
+    }
+
+    /**
+     * Enables rate limiting for the current test without reflection-free config at the class level. Kept as a
+     * fallback for tests that must flip the flag mid-method; class-level cases should instead set
+     * {@link #RATE_LIMITING_ENABLED_PROPERTY} via {@code @SpringBootTest(properties=...)} or
+     * {@code @DynamicPropertySource}.
+     */
+    protected void enableRateLimiting() {
+        ReflectionTestUtils.setField(rateLimitService, "enabled", true);
+    }
+
+    /**
+     * Disables rate limiting for the current test. Counterpart to {@link #enableRateLimiting}.
+     */
+    protected void disableRateLimiting() {
+        ReflectionTestUtils.setField(rateLimitService, "enabled", false);
+    }
+
+    /**
+     * Blocks until the broker has registered a subscription for the given destination, mirroring the
+     * gold-standard readiness idiom in
+     * {@code PersistenceAvailabilityTransportIntegrationTest}. Use this instead of sleeping before publishing
+     * to a destination a test just subscribed to.
+     *
+     * @param destination STOMP destination a session subscribed to (e.g. {@code "/game/" + roomId})
+     */
+    protected void awaitBrokerSubscription(String destination) {
+        awaitBrokerSubscription(destination, DEFAULT_TIMEOUT);
+    }
+
+    /**
+     * Blocks until the broker has registered a subscription for the given destination or the timeout elapses.
+     *
+     * @param destination STOMP destination a session subscribed to
+     * @param timeout     maximum time to wait
+     */
+    protected void awaitBrokerSubscription(String destination, Duration timeout) {
+        SimpleBrokerMessageHandler broker = brokerProvider.getObject();
+        SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
+        headers.setDestination(destination);
+        var probe = MessageBuilder.createMessage(new byte[0], headers.getMessageHeaders());
+        Awaitility.await()
+                .atMost(timeout)
+                .until(() -> !broker.getSubscriptionRegistry().findSubscriptions(probe).isEmpty());
     }
 
     /**
@@ -221,23 +371,55 @@ public abstract class AbstractIntegrationTestSupport {
         converters.add(new StringMessageConverter());
         converters.add(new JacksonJsonMessageConverter());
         client.setMessageConverter(new CompositeMessageConverter(converters));
-        return client;
+        return registerClient(client);
     }
 
     /**
-     * Connects a STOMP session using a bearer token and the allowed frontend origin.
+     * Connects a STOMP session using a bearer token and the allowed frontend origin. The returned session is
+     * registered for failure-safe teardown.
      *
      * @param stompClient configured STOMP client
      * @param token player's bearer token
      * @return connected session
      */
     protected StompSession connectSession(WebSocketStompClient stompClient, String token) throws Exception {
+        WebSocketHttpHeaders handshakeHeaders = new WebSocketHttpHeaders();
+        handshakeHeaders.add("Origin", FRONTEND_ORIGIN);
+        return registerSession(openSession(stompClient, token, handshakeHeaders)
+                .get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS));
+    }
+
+    /**
+     * Attempts a STOMP handshake carrying an explicitly disallowed, unconfigured Origin (see
+     * {@link #DISALLOWED_ORIGIN}) so a test can assert the upgrade is rejected. Returns the pending future so
+     * the caller controls how it asserts the failure; it does NOT register the session (none should connect).
+     * This helper makes no claim about missing-Origin handling: it always sends an Origin header.
+     *
+     * @param stompClient configured STOMP client
+     * @param token       player's bearer token
+     * @param origin      hostile origin to present (use {@link #DISALLOWED_ORIGIN})
+     * @return future that completes exceptionally when the handshake is rejected
+     */
+    protected CompletableFuture<StompSession> connectSessionWithOrigin(
+            WebSocketStompClient stompClient, String token, String origin) {
+        WebSocketHttpHeaders handshakeHeaders = new WebSocketHttpHeaders();
+        handshakeHeaders.add("Origin", origin);
+        return openSession(stompClient, token, handshakeHeaders);
+    }
+
+    /**
+     * Starts a STOMP handshake and returns a future completed on connect or completed exceptionally on error.
+     *
+     * @param stompClient     configured STOMP client
+     * @param token           player's bearer token
+     * @param handshakeHeaders handshake headers, including the Origin to present
+     * @return future tracking the connection attempt
+     */
+    private CompletableFuture<StompSession> openSession(
+            WebSocketStompClient stompClient, String token, WebSocketHttpHeaders handshakeHeaders) {
         String wsUrl = "ws://localhost:" + port + "/ws";
         StompHeaders connectHeaders = new StompHeaders();
         connectHeaders.add("Authorization", "Bearer " + token);
-
-        WebSocketHttpHeaders handshakeHeaders = new WebSocketHttpHeaders();
-        handshakeHeaders.add("Origin", FRONTEND_ORIGIN);
 
         CompletableFuture<StompSession> sessionFuture = new CompletableFuture<>();
         stompClient.connectAsync(wsUrl, handshakeHeaders, connectHeaders, new StompSessionHandlerAdapter() {
@@ -265,7 +447,7 @@ public abstract class AbstractIntegrationTestSupport {
             }
         });
 
-        return sessionFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+        return sessionFuture;
     }
 
     /**
