@@ -58,6 +58,7 @@ import java.util.Spliterator;
 import java.util.stream.Collectors;
 import org.mockito.Mockito;
 import org.mockito.stubbing.Answer;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * Unit tests for the GameLifecycleService class.
@@ -2693,5 +2694,294 @@ class GameLifecycleServiceTest {
         lifecycle.evictGame(ROOM_ID);
         assertFalse(realStateService.hasRetainedSettlement(ROOM_ID),
                 "evictGame must evict retained settlement for evicted game");
+    }
+
+    // ==================== executeScheduledTask guard Tests ====================
+
+    private Game startedGame() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        return gameLifecycleService.getGame(ROOM_ID);
+    }
+
+    private Game showdownGame() {
+        Game game = startedGame();
+        game.conductShowdown();
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+        return game;
+    }
+
+    private Game riverGame() {
+        Game game = startedGame();
+        game.dealFlop();
+        game.dealTurn();
+        game.dealRiver();
+        assertEquals(GamePhase.RIVER, game.getCurrentPhase());
+        return game;
+    }
+
+    private long scheduleForTest(Game game, ScheduledGameTask task) {
+        long deadline = System.currentTimeMillis() + 60_000;
+        game.scheduleTask(task, deadline);
+        return deadline;
+    }
+
+    private void runScheduled(Game game, ScheduledGameTask task, long deadline) {
+        gameLifecycleService.executeScheduledTask(ROOM_ID, task, deadline,
+                game.getHandNumber(), game.getScheduledTaskGeneration(task));
+    }
+
+    private void assertNothingRan(Game game, ScheduledGameTask task, long deadline, long generation, long handNumber) {
+        assertEquals(deadline, game.getScheduledTaskDeadline(task), "The guarded task must stay scheduled");
+        assertEquals(generation, game.getScheduledTaskGeneration(task), "The guarded task must not be cleared");
+        assertEquals(handNumber, game.getHandNumber(), "No new hand may be dealt");
+        verifyNoInteractions(gameStateService, taskScheduler);
+        verifyNoInteractions(messagingTemplate);
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask does nothing while a forfeit is pending")
+    void executeScheduledTask_WhenForfeitPending_DoesNothing() {
+        Game game = showdownGame();
+        long deadline = scheduleForTest(game, ScheduledGameTask.NEW_HAND);
+        long generation = game.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND);
+        long handNumber = game.getHandNumber();
+        game.setForfeitPending(true);
+        clearInvocations(gameStateService, messagingTemplate, taskScheduler);
+
+        gameLifecycleService.executeScheduledTask(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline, handNumber, generation);
+
+        assertNothingRan(game, ScheduledGameTask.NEW_HAND, deadline, generation, handNumber);
+        assertTrue(game.isForfeitPending());
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask ignores a timer captured for an earlier hand")
+    void executeScheduledTask_WhenHandNumberIsStale_DoesNothing() {
+        Game game = showdownGame();
+        long deadline = scheduleForTest(game, ScheduledGameTask.NEW_HAND);
+        long generation = game.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND);
+        long handNumber = game.getHandNumber();
+        clearInvocations(gameStateService, messagingTemplate, taskScheduler);
+
+        gameLifecycleService.executeScheduledTask(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline, handNumber - 1, generation);
+
+        assertNothingRan(game, ScheduledGameTask.NEW_HAND, deadline, generation, handNumber);
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask ignores a timer captured before the task was rescheduled")
+    void executeScheduledTask_WhenGenerationIsStale_DoesNothing() {
+        Game game = showdownGame();
+        scheduleForTest(game, ScheduledGameTask.NEW_HAND);
+        long staleGeneration = game.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND);
+        long deadline = scheduleForTest(game, ScheduledGameTask.NEW_HAND);
+        long generation = game.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND);
+        long handNumber = game.getHandNumber();
+        assertNotEquals(staleGeneration, generation);
+        clearInvocations(gameStateService, messagingTemplate, taskScheduler);
+
+        gameLifecycleService.executeScheduledTask(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline, handNumber, staleGeneration);
+
+        assertNothingRan(game, ScheduledGameTask.NEW_HAND, deadline, generation, handNumber);
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask on a finished game clears and cancels a non-cleanup task")
+    void executeScheduledTask_WhenGameOverAndTaskIsNotCleanup_ClearsAndCancelsTask() {
+        @SuppressWarnings("unchecked")
+        ScheduledFuture<Object> future = mock(ScheduledFuture.class);
+        doReturn(future).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
+        Game game = startedGame();
+        gameLifecycleService.scheduleAutoAdvance(ROOM_ID);
+        long deadline = game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE);
+        long generation = game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
+        long handNumber = game.getHandNumber();
+        assertEquals(1, gameLifecycleService.getRuntimeTaskCount(ROOM_ID));
+        game.markGameOver();
+        clearInvocations(gameStateService, messagingTemplate);
+
+        gameLifecycleService.executeScheduledTask(ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, deadline, handNumber, generation);
+
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+        assertEquals(0, gameLifecycleService.getRuntimeTaskCount(ROOM_ID));
+        verify(future).cancel(false);
+        assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase(), "A finished game cannot auto-advance");
+        verifyNoInteractions(gameStateService, messagingTemplate);
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask ignores a timer whose deadline no longer matches")
+    void executeScheduledTask_WhenDeadlineIsStale_DoesNothing() {
+        Game game = showdownGame();
+        long deadline = scheduleForTest(game, ScheduledGameTask.NEW_HAND);
+        long generation = game.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND);
+        long handNumber = game.getHandNumber();
+        clearInvocations(gameStateService, messagingTemplate, taskScheduler);
+
+        gameLifecycleService.executeScheduledTask(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline + 1, handNumber, generation);
+
+        assertNothingRan(game, ScheduledGameTask.NEW_HAND, deadline, generation, handNumber);
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask ignores a timer for a task that is no longer scheduled")
+    void executeScheduledTask_WhenTaskIsNotScheduled_DoesNothing() {
+        Game game = showdownGame();
+        long handNumber = game.getHandNumber();
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.NEW_HAND));
+        clearInvocations(gameStateService, messagingTemplate, taskScheduler);
+
+        gameLifecycleService.executeScheduledTask(ROOM_ID, ScheduledGameTask.NEW_HAND,
+                System.currentTimeMillis() + 60_000, handNumber, 0);
+
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.NEW_HAND));
+        assertEquals(0, game.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND));
+        assertEquals(handNumber, game.getHandNumber());
+        verifyNoInteractions(gameStateService, taskScheduler);
+        verifyNoInteractions(messagingTemplate);
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask NEW_HAND clears the task and deals the next hand")
+    void executeScheduledTask_NewHand_ClearsTaskAndStartsNextHand() {
+        Game game = showdownGame();
+        long deadline = scheduleForTest(game, ScheduledGameTask.NEW_HAND);
+        long handNumber = game.getHandNumber();
+        clearInvocations(gameStateService);
+
+        runScheduled(game, ScheduledGameTask.NEW_HAND, deadline);
+
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.NEW_HAND));
+        assertEquals(handNumber + 1, game.getHandNumber());
+        assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
+        verify(gameStateService).broadcastGameState(eq(ROOM_ID), eq(game));
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask READY_OPEN clears the task and opens the ready countdown")
+    void executeScheduledTask_ReadyOpen_ClearsTaskAndOpensReadyCountdown() {
+        Game game = showdownGame();
+        long deadline = scheduleForTest(game, ScheduledGameTask.READY_OPEN);
+        long handNumber = game.getHandNumber();
+        assertFalse(game.isReadyCountdownActive());
+        clearInvocations(gameStateService);
+
+        runScheduled(game, ScheduledGameTask.READY_OPEN, deadline);
+
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+        assertTrue(game.isReadyCountdownActive());
+        assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        assertEquals(handNumber, game.getHandNumber(), "Opening the gate must not deal a hand");
+        verify(gameStateService).broadcastGameState(eq(ROOM_ID), eq(game));
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask AUTO_ADVANCE in SHOWDOWN clears the task and stops")
+    void executeScheduledTask_AutoAdvanceInShowdown_ClearsTaskAndStops() {
+        Game game = showdownGame();
+        long deadline = scheduleForTest(game, ScheduledGameTask.AUTO_ADVANCE);
+        long handNumber = game.getHandNumber();
+        clearInvocations(gameStateService, messagingTemplate, taskScheduler);
+
+        runScheduled(game, ScheduledGameTask.AUTO_ADVANCE, deadline);
+
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+        assertEquals(handNumber, game.getHandNumber());
+        assertFalse(game.isReadyCountdownActive(), "A late auto-advance timer cannot open the ready gate");
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
+        verifyNoInteractions(gameStateService, taskScheduler);
+        verifyNoInteractions(messagingTemplate);
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask AUTO_ADVANCE finishing a tournament schedules game end")
+    void executeScheduledTask_AutoAdvanceComplete_WhenTournamentOver_SchedulesGameEnd() {
+        Game game = riverGame();
+        Player winner = game.getPlayers().get(0);
+        Player loser = game.getPlayers().get(1);
+        loser.setChips(0);
+        lenient().when(handEvaluator.getBestHand(anyList(), anyList())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked") List<Card> holeCards = invocation.getArgument(1);
+            HandRank rank = holeCards.equals(winner.getHoleCards()) ? HandRank.ROYAL_FLUSH : HandRank.HIGH_CARD;
+            return new HandEvaluationResult(List.of(), rank);
+        });
+        long deadline = scheduleForTest(game, ScheduledGameTask.AUTO_ADVANCE);
+        long before = System.currentTimeMillis();
+
+        runScheduled(game, ScheduledGameTask.AUTO_ADVANCE, deadline);
+
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+        assertTrue(game.isTournamentOver());
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+        Long gameEndDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END);
+        assertNotNull(gameEndDeadline);
+        assertTrue(gameEndDeadline >= before + GameLifecycleService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
+        assertFalse(game.isReadyCountdownActive(), "A finished tournament must not open the ready gate");
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        verify(gameStateService).broadcastAutoAdvanceComplete(ROOM_ID, game);
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask AUTO_ADVANCE finishing a hand opens the ready gate when there is no display delay")
+    void executeScheduledTask_AutoAdvanceComplete_WithNoDisplayDelay_OpensReadyCountdown() {
+        Game game = riverGame();
+        ReflectionTestUtils.setField(gameLifecycleService, "roundEndDisplayDelayMs", 0L);
+        long deadline = scheduleForTest(game, ScheduledGameTask.AUTO_ADVANCE);
+
+        runScheduled(game, ScheduledGameTask.AUTO_ADVANCE, deadline);
+
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+        assertFalse(game.isTournamentOver());
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+        assertTrue(game.isReadyCountdownActive());
+        assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
+        verify(gameStateService).broadcastAutoAdvanceComplete(ROOM_ID, game);
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask AUTO_ADVANCE finishing a hand persists READY_OPEN when a display delay is configured")
+    void executeScheduledTask_AutoAdvanceComplete_WithDisplayDelay_PersistsReadyOpen() {
+        Game game = riverGame();
+        ReflectionTestUtils.setField(gameLifecycleService, "roundEndDisplayDelayMs", 5_000L);
+        long deadline = scheduleForTest(game, ScheduledGameTask.AUTO_ADVANCE);
+        long before = System.currentTimeMillis();
+
+        runScheduled(game, ScheduledGameTask.AUTO_ADVANCE, deadline);
+
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+        Long readyOpenDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN);
+        assertNotNull(readyOpenDeadline);
+        assertTrue(readyOpenDeadline >= before + 5_000);
+        assertFalse(game.isReadyCountdownActive(), "The ready gate waits for the display delay");
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        verify(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    @DisplayName("executeScheduledTask AUTO_ADVANCE with more streets to deal reschedules itself")
+    void executeScheduledTask_AutoAdvanceNotComplete_ReschedulesAutoAdvance() {
+        Game game = startedGame();
+        long deadline = scheduleForTest(game, ScheduledGameTask.AUTO_ADVANCE);
+        long before = System.currentTimeMillis();
+
+        runScheduled(game, ScheduledGameTask.AUTO_ADVANCE, deadline);
+
+        assertEquals(GamePhase.FLOP, game.getCurrentPhase());
+        Long nextDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE);
+        assertNotNull(nextDeadline);
+        assertTrue(nextDeadline > before);
+        assertNotEquals(deadline, nextDeadline);
+        assertFalse(game.isReadyCountdownActive());
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
+        verify(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
     }
 }
