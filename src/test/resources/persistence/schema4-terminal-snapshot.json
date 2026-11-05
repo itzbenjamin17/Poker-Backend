@@ -1,0 +1,200 @@
+{
+  "schemaVersion" : 4,
+  "deleted" : false,
+  "room" : {
+    "roomId" : "room-terminal",
+    "roomName" : "Final Table",
+    "originalHost" : "Alice",
+    "maxPlayers" : 6,
+    "smallBlind" : 5,
+    "bigBlind" : 10,
+    "buyIn" : 1000,
+    "password" : null,
+    "createdAt" : "2024-01-01T12:00:00",
+    "playersWithJoinTime" : {
+      "Alice" : "2024-01-01T12:00:00",
+      "Bob" : "2024-01-01T12:00:01"
+    },
+    "playerMembershipIds" : {
+      "Alice" : "11111111-1111-1111-1111-111111111111",
+      "Bob" : "22222222-2222-2222-2222-222222222222"
+    },
+    "gameStarted" : true
+  },
+  "currentHost" : "Alice",
+  "game" : {
+    "gameId" : "room-terminal",
+    "players" : [ {
+      "name" : "Alice",
+      "playerId" : "a",
+      "holeCards" : [ {
+        "rank" : "ACE",
+        "suit" : "SPADES"
+      }, {
+        "rank" : "KING",
+        "suit" : "SPADES"
+      } ],
+      "bestHand" : [ {
+        "rank" : "ACE",
+        "suit" : "SPADES"
+      }, {
+        "rank" : "KING",
+        "suit" : "SPADES"
+      } ],
+      "handRank" : "HIGH_CARD",
+      "chips" : 2000,
+      "currentBet" : 0,
+      "folded" : false,
+      "allIn" : false,
+      "out" : false,
+      "disconnected" : false,
+      "disconnectDeadlineEpochMs" : null,
+      "readyForNextHand" : false
+    }, {
+      "name" : "Bob",
+      "playerId" : "b",
+      "holeCards" : [ {
+        "rank" : "TWO",
+        "suit" : "HEARTS"
+      }, {
+        "rank" : "THREE",
+        "suit" : "DIAMONDS"
+      } ],
+      "bestHand" : [ ],
+      "handRank" : "NO_HAND",
+      "chips" : 0,
+      "currentBet" : 0,
+      "folded" : false,
+      "allIn" : false,
+      "out" : true,
+      "disconnected" : false,
+      "disconnectDeadlineEpochMs" : null,
+      "readyForNextHand" : false
+    } ],
+    "activePlayerIds" : [ "a", "b" ],
+    "remainingDeck" : [ ],
+    "communityCards" : [ {
+      "rank" : "TEN",
+      "suit" : "CLUBS"
+    } ],
+    "pot" : 0,
+    "dealerPosition" : 0,
+    "smallBlindPosition" : 0,
+    "bigBlindPosition" : 1,
+    "currentPlayerPosition" : 0,
+    "currentHighestBet" : 0,
+    "currentPhase" : "SHOWDOWN",
+    "gameOver" : true,
+    "smallBlind" : 5,
+    "bigBlind" : 10,
+    "handContributions" : { },
+    "readyCountdownActive" : false,
+    "readyCountdownDeadlineEpochMs" : null,
+    "everyoneHasHadInitialTurn" : true,
+    "actedPlayerIds" : [ ],
+    "scheduledTaskDeadlines" : {
+      "CLEANUP" : 999999
+    },
+    "preHandCarryOver" : 0,
+    "lastFullRaiseByStreet" : { },
+    "lastActedWagerByPlayer" : { },
+    "handSeatOrder" : [ "a", "b" ],
+    "dealerAnchorPlayerId" : "a",
+    "smallBlindPlayerId" : "a",
+    "bigBlindPlayerId" : "b",
+    "lastSettlementResult" : null,
+    "terminalCarryOverSettled" : false,
+    "readyGateState" : "CLOSED",
+    "handNumber" : 1,
+    "scheduledTaskGenerations" : {
+      "CLEANUP" : 1
+    },
+    "forfeitPending" : false,
+    "stateRevision" : 42,
+    "retainedTerminalResult" : {
+      "type" : "GAME_END",
+      "gameId" : "room-terminal",
+      "winner" : "Alice",
+      "winnerChips" : 2000,
+      "isForfeit" : false,
+      "message" : "Alice wins the game with 2000 chips!",
+      "finalState" : {
+        "maxPlayers" : 6,
+        "pot" : 0,
+        "pots" : [ ],
+        "uncalledAmount" : 0,
+        "phase" : "SHOWDOWN",
+        "currentBet" : 0,
+        "communityCards" : [ {
+          "rank" : "TEN",
+          "suit" : "CLUBS"
+        } ],
+        "players" : [ {
+          "id" : "a",
+          "name" : "Alice",
+          "chips" : 2000,
+          "currentBet" : 0,
+          "status" : "ACTIVE",
+          "isAllIn" : false,
+          "isCurrentPlayer" : false,
+          "hasFolded" : false,
+          "isSmallBlind" : true,
+          "isBigBlind" : false,
+          "handRank" : "HIGH_CARD",
+          "bestHand" : [ {
+            "rank" : "ACE",
+            "suit" : "SPADES"
+          } ],
+          "isWinner" : true,
+          "chipsWon" : null,
+          "holeCards" : [ {
+            "rank" : "ACE",
+            "suit" : "SPADES"
+          }, {
+            "rank" : "KING",
+            "suit" : "SPADES"
+          } ],
+          "disconnectDeadlineEpochMs" : null,
+          "isReadyForNextHand" : false
+        }, {
+          "id" : "b",
+          "name" : "Bob",
+          "chips" : 0,
+          "currentBet" : 0,
+          "status" : "OUT",
+          "isAllIn" : false,
+          "isCurrentPlayer" : false,
+          "hasFolded" : false,
+          "isSmallBlind" : false,
+          "isBigBlind" : true,
+          "handRank" : null,
+          "bestHand" : [ ],
+          "isWinner" : false,
+          "chipsWon" : null,
+          "holeCards" : null,
+          "disconnectDeadlineEpochMs" : null,
+          "isReadyForNextHand" : true
+        } ],
+        "currentPlayerName" : null,
+        "currentPlayerId" : null,
+        "winners" : [ "Alice" ],
+        "winningsPerPlayer" : null,
+        "isAutoAdvancing" : false,
+        "autoAdvanceMessage" : null,
+        "isReadyCountdownActive" : false,
+        "readyCountdownDeadlineEpochMs" : null,
+        "claimWinAvailable" : false,
+        "claimWinPlayerName" : null,
+        "handSettled" : true,
+        "carryOverAmount" : null,
+        "legalActions" : [ ],
+        "minimumBetAmount" : null,
+        "minimumRaiseAmount" : null,
+        "handNumber" : 1,
+        "readyGateState" : "CLOSED",
+        "serverTimeEpochMs" : 123456789,
+        "stateRevision" : 42
+      }
+    }
+  }
+}

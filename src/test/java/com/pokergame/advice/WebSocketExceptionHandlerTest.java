@@ -345,7 +345,6 @@ class WebSocketExceptionHandlerTest {
                 new ActionErrorResponse("INVALID_ACTION_FORMAT", PlayerAction.CHECK, expectedMessage));
     }
 
-    /** The messaging argument-validation exception surfaces its first field error. */
     @Test
     @DisplayName("Messaging validation failure with a field error reports that field message")
     void messagingValidationFailureWithFieldErrorReportsFieldMessage() throws Exception {
@@ -354,7 +353,6 @@ class WebSocketExceptionHandlerTest {
                 bindingResultWithError("Amount must be positive")), "Amount must be positive");
     }
 
-    /** A messaging validation failure without a binding result falls back to the generic copy. */
     @Test
     @DisplayName("Messaging validation failure without binding result falls back to generic message")
     void messagingValidationFailureWithoutBindingResultFallsBack() throws Exception {
@@ -362,7 +360,6 @@ class WebSocketExceptionHandlerTest {
                 FALLBACK);
     }
 
-    /** A messaging validation failure without field errors falls back to the generic copy. */
     @Test
     @DisplayName("Messaging validation failure with empty binding result falls back to generic message")
     void messagingValidationFailureWithEmptyBindingResultFallsBack() throws Exception {
@@ -370,7 +367,6 @@ class WebSocketExceptionHandlerTest {
                 emptyBindingResult()), FALLBACK);
     }
 
-    /** The web argument-validation exception surfaces its first field error. */
     @Test
     @DisplayName("Web validation failure with a field error reports that field message")
     void webValidationFailureWithFieldErrorReportsFieldMessage() throws Exception {
@@ -378,7 +374,6 @@ class WebSocketExceptionHandlerTest {
                 methodParameter(), bindingResultWithError("Amount too large")), "Amount too large");
     }
 
-    /** A web validation failure whose binding result is null falls back to the generic copy. */
     @Test
     @DisplayName("Web validation failure with null binding result falls back to generic message")
     void webValidationFailureWithNullBindingResultFallsBack() {
@@ -387,7 +382,6 @@ class WebSocketExceptionHandlerTest {
         verifyInvalidActionFormat(exception, FALLBACK);
     }
 
-    /** A web validation failure without field errors falls back to the generic copy. */
     @Test
     @DisplayName("Web validation failure with empty binding result falls back to generic message")
     void webValidationFailureWithEmptyBindingResultFallsBack() throws Exception {
@@ -395,7 +389,6 @@ class WebSocketExceptionHandlerTest {
                 methodParameter(), emptyBindingResult()), FALLBACK);
     }
 
-    /** A bind failure surfaces its first field error. */
     @Test
     @DisplayName("Bind failure with a field error reports that field message")
     void bindFailureWithFieldErrorReportsFieldMessage() {
@@ -403,7 +396,6 @@ class WebSocketExceptionHandlerTest {
                 "Amount is not a number");
     }
 
-    /** A bind failure without field errors falls back to the generic copy. */
     @Test
     @DisplayName("Bind failure without field errors falls back to generic message")
     void bindFailureWithoutFieldErrorsFallsBack() {
@@ -417,7 +409,6 @@ class WebSocketExceptionHandlerTest {
         verifyInvalidActionFormat(new BindException(bindingResultWithError("   ")), FALLBACK);
     }
 
-    /** A constraint violation surfaces its message. */
     @Test
     @DisplayName("Constraint violation reports the violation message")
     void constraintViolationReportsViolationMessage() {
@@ -425,28 +416,24 @@ class WebSocketExceptionHandlerTest {
                 "Amount must be positive");
     }
 
-    /** A constraint violation exception without violations falls back to the generic copy. */
     @Test
     @DisplayName("Constraint violation exception without violations falls back to generic message")
     void constraintViolationExceptionWithoutViolationsFallsBack() {
         verifyInvalidActionFormat(new ConstraintViolationException(Set.of()), FALLBACK);
     }
 
-    /** A constraint violation exception with a null violation set falls back to the generic copy. */
     @Test
     @DisplayName("Constraint violation exception with null violations falls back to generic message")
     void constraintViolationExceptionWithNullViolationsFallsBack() {
         verifyInvalidActionFormat(new ConstraintViolationException((Set<ConstraintViolation<?>>) null), FALLBACK);
     }
 
-    /** A method-validation failure surfaces its first error message. */
     @Test
     @DisplayName("Method validation failure reports the first error message")
     void methodValidationFailureReportsFirstErrorMessage() {
         verifyInvalidActionFormat(methodValidationException("Amount must be positive"), "Amount must be positive");
     }
 
-    /** A method-validation failure without errors falls back to the generic copy. */
     @Test
     @DisplayName("Method validation failure without errors falls back to generic message")
     void methodValidationFailureWithoutErrorsFallsBack() {

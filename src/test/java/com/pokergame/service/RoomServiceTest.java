@@ -931,7 +931,13 @@ class RoomServiceTest {
         verify(mockEncoder, never()).matches(any(), any());
     }
 
-    /** Groups join failures raised by the room aggregate itself. */
+    /**
+     * Branch coverage for RoomService's post-addPlayer catch block. The reachable "Room is full" contract is
+     * already proven by the full-room and concurrency tests above. Production cannot actually reach this catch:
+     * Room synchronizes isFull() and addPlayer() on the same monitor, so the room cannot fill between the
+     * service's own capacity check and the add. These cases therefore force the failure through a spy rather
+     * than a fake injectable seam, exercising only the exception-mapping branch.
+     */
     @Nested
     @DisplayName("join failures raised by the room aggregate")
     class JoinAddPlayerFailures {

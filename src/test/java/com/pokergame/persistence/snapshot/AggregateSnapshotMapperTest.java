@@ -48,9 +48,11 @@ import java.util.stream.Stream;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.NullNode;
 import tools.jackson.databind.node.ObjectNode;
+import java.io.UncheckedIOException;
 
 /** Tests aggregate snapshot mapper behavior. */
 class AggregateSnapshotMapperTest {
@@ -714,8 +716,31 @@ class AggregateSnapshotMapperTest {
         return new AggregateSnapshotMapper(JSON, new HandEvaluatorService());
     }
 
-    /** Builds the JSON tree of a valid snapshot whose game retains a valid terminal result. */
+    /**
+     * Classpath location of the hand-written schema-4 terminal snapshot fixture. The fixture is an
+     * independent oracle (ADR-0001): it is NOT produced by {@link AggregateSnapshotMapper#captureStateImage}, so a
+     * symmetric field rename in the writer and reader cannot silently keep the corruption matrix green.
+     */
+    private static final String TERMINAL_FIXTURE = "/persistence/schema4-terminal-snapshot.json";
+
+    /** Loads and parses the checked-in valid terminal snapshot fixture as a fresh mutable tree. */
     private static ObjectNode validTerminalSnapshotTree() {
+        try (var in = AggregateSnapshotMapperTest.class.getResourceAsStream(TERMINAL_FIXTURE)) {
+            assertNotNull(in, "Missing terminal snapshot fixture on the classpath: " + TERMINAL_FIXTURE);
+            return (ObjectNode) JSON.readTree(in.readAllBytes());
+        } catch (java.io.IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * Guards that the mapper's writer still emits exactly the field names the independent fixture declares.
+     * If writer and reader were renamed together, the mapper would round-trip against itself but its freshly
+     * serialized output would no longer match the frozen fixture's field names, failing here.
+     */
+    @Test
+    @DisplayName("The mapper's serialized output carries the same field names as the independent fixture")
+    void captureStateImage_FieldNames_MatchIndependentFixture() {
         HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room(TERMINAL_ROOM_ID, "Final Table", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
@@ -763,7 +788,36 @@ class AggregateSnapshotMapperTest {
                 .handNumber(1).readyGateState(ReadyGateState.CLOSED).forfeitPending(false).stateRevision(42)
                 .retainedTerminalResult(terminalResult).handEvaluator(evaluator).build();
 
-        return JSON.valueToTree(new AggregateSnapshotMapper(JSON, evaluator).captureStateImage(room, "Alice", game));
+        ObjectNode serialized = JSON.valueToTree(
+                new AggregateSnapshotMapper(JSON, evaluator).captureStateImage(room, "Alice", game));
+
+        assertEquals(fieldNameShape(validTerminalSnapshotTree()), fieldNameShape(serialized),
+                "Mapper writer field names drifted from the independent terminal-snapshot fixture");
+    }
+
+    /**
+     * Collects every JSON field path in the tree (object keys recursively, with array elements folded onto a
+     * shared [*] path) so two trees with identical structure but different scalar values compare equal here,
+     * while any renamed/added/removed field is detected.
+     */
+    private static Set<String> fieldNameShape(JsonNode node) {
+        Set<String> paths = new java.util.TreeSet<>();
+        collectFieldPaths("", node, paths);
+        return paths;
+    }
+
+    private static void collectFieldPaths(String prefix, JsonNode node, Set<String> paths) {
+        if (node.isObject()) {
+            node.properties().forEach(entry -> {
+                String path = prefix + "/" + entry.getKey();
+                paths.add(path);
+                collectFieldPaths(path, entry.getValue(), paths);
+            });
+        } else if (node.isArray()) {
+            for (JsonNode element : node) {
+                collectFieldPaths(prefix + "[*]", element, paths);
+            }
+        }
     }
 
     private static ObjectNode finalStateOf(ObjectNode terminal) {

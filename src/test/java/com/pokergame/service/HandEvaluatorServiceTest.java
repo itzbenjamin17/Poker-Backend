@@ -1068,6 +1068,7 @@ class HandEvaluatorServiceTest {
                                 card(Rank.ACE, Suit.HEARTS), card(Rank.ACE, Suit.DIAMONDS),
                                 card(Rank.ACE, Suit.CLUBS));
 
+                assertTrue(service.isBetterHandOfSameRank(kingKicker, queenKicker, HandRank.FOUR_OF_A_KIND));
                 assertFalse(service.isBetterHandOfSameRank(queenKicker, kingKicker, HandRank.FOUR_OF_A_KIND));
                 assertFalse(service.isBetterHandOfSameRank(kingKicker, kingKickerOtherSuit, HandRank.FOUR_OF_A_KIND));
                 assertFalse(service.isBetterHandOfSameRank(kingKickerOtherSuit, kingKicker, HandRank.FOUR_OF_A_KIND));
