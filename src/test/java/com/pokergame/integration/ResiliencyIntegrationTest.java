@@ -4,11 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
-import com.pokergame.service.GameLifecycleService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.test.context.ActiveProfiles;
@@ -17,6 +15,7 @@ import org.springframework.test.context.ActiveProfiles;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import java.time.Duration;
+import org.springframework.web.socket.messaging.WebSocketStompClient;
 
 /** Tests resiliency integration behavior. */
 @Tag("integration")
@@ -25,11 +24,12 @@ import java.time.Duration;
 @DisplayName("Resiliency integration")
 class ResiliencyIntegrationTest extends AbstractIntegrationTestSupport {
 
-    @Autowired
-    private GameLifecycleService gameLifecycleService;
-
     /**
-     * Protects the contract that the system should allow a player to reconnect and continue acting in a game.
+     * Protects ADR-0011 last-session disconnect and reconnect-driven grace cancellation through the real
+     * socket lifecycle: closing a player's only session must flip the projection to DISCONNECTED, and
+     * reconnecting the same membership on a fresh live session must restore ACTIVE and let the player act. No
+     * direct lifecycle calls are used; disconnect/reconnect are driven entirely by SessionDisconnectEvent and
+     * the connect handshake.
      */
     @Test
     @DisplayName("should allow a player to reconnect and continue acting in a game")
@@ -48,42 +48,46 @@ class ResiliencyIntegrationTest extends AbstractIntegrationTestSupport {
         String otherToken = currentPlayerName.equals("ReconnectHost") ? guestToken : hostToken;
         String otherPlayerName = currentPlayerName.equals("ReconnectHost") ? "ReconnectGuest" : "ReconnectHost";
 
-        var stompClient = createStompClient();
+        WebSocketStompClient stompClient = createStompClient();
         StompSession currentSession = connectSession(stompClient, currentToken);
-        
+        // The other player holds one live session; closing it below is therefore a genuine last-session
+        // disconnect that ADR-0011 must surface as DISCONNECTED.
+        StompSession otherSession = connectSession(stompClient, otherToken);
+
         // 1. Current player acts (Pre-flop: Call)
         currentSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CALL, null));
-        
-        // 2. Simulate other player disconnecting
-        gameLifecycleService.markPlayerDisconnected(gameId, otherPlayerName, System.currentTimeMillis() + 120_000);
-        
-        // 3. Verify state shows DISCONNECTED for other player
-        JsonNode stateAfterDisconnect = readGameState(gameId, currentToken);
-        assertThat(stateAfterDisconnect.path("players").elements())
-                .toIterable()
-                .anyMatch(p -> otherPlayerName.equals(p.path("name").asText()) && "DISCONNECTED".equals(p.path("status").asText()));
 
-        // 4. Other player reconnects
+        // 2. Other player disconnects by closing its only socket; the SessionDisconnectEvent drives the
+        // transition — no direct markPlayerDisconnected call.
+        otherSession.disconnect();
+
+        // 3. The projection must show DISCONNECTED for the other player once the event is processed.
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            JsonNode state = readGameState(gameId, currentToken);
+            assertThat(state.path("players").elements()).toIterable()
+                    .anyMatch(p -> otherPlayerName.equals(p.path("name").asText())
+                            && "DISCONNECTED".equals(p.path("status").asText()));
+        });
+
+        // 4. Other player reconnects on a fresh live session with the same active membership; the connect
+        // handshake drives reconnection and grace cancellation — no direct markPlayerReconnected call.
         StompSession reconnectedOtherSession = connectSession(stompClient, otherToken);
-        gameLifecycleService.markPlayerReconnected(gameId, otherPlayerName);
 
-        // 5. Current player (now the other one) acts to finish Pre-flop
+        // 5. Await the projection returning to ACTIVE for the reconnected player.
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            JsonNode state = readGameState(gameId, hostToken);
+            assertThat(state.path("players").elements()).toIterable()
+                    .anyMatch(p -> otherPlayerName.equals(p.path("name").asText())
+                            && "ACTIVE".equals(p.path("status").asText()));
+        });
+
+        // 6. The reconnected player completes a legal action through the socket to finish Pre-flop.
         reconnectedOtherSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CHECK, null));
-        
-        // 6. Wait for Flop
-        await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
+
+        // 7. Wait for Flop, proving the reconnected player's action was processed.
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             JsonNode flopState = readGameState(gameId, hostToken);
             assertThat(flopState.path("phase").asText()).isEqualTo("FLOP");
         });
-        
-        // 7. Verify reconnected player is ACTIVE
-        JsonNode stateAfterReconnect = readGameState(gameId, hostToken);
-        assertThat(stateAfterReconnect.path("players").elements())
-                .toIterable()
-                .anyMatch(p -> otherPlayerName.equals(p.path("name").asText()) && "ACTIVE".equals(p.path("status").asText()));
-
-        currentSession.disconnect();
-        reconnectedOtherSession.disconnect();
-        stompClient.stop();
     }
 }

@@ -66,13 +66,24 @@ public abstract class AbstractIntegrationTestSupport {
      * {@code @SpringBootTest(properties = AbstractIntegrationTestSupport.RATE_LIMITING_ENABLED_PROPERTY + "=true")}
      * or a {@code @DynamicPropertySource}.
      */
-    protected static final String RATE_LIMITING_ENABLED_PROPERTY = "poker.rate-limiting.enabled";
+    public static final String RATE_LIMITING_ENABLED_PROPERTY = "poker.rate-limiting.enabled";
 
     @LocalServerPort
     protected int port;
 
     @Autowired
     protected RateLimitService rateLimitService;
+
+    /**
+     * The rate-limiting enablement injected into this context from {@link #RATE_LIMITING_ENABLED_PROPERTY}.
+     * {@link #setupIntegrationTest} resets {@link RateLimitService}'s flag to this configured value before
+     * each test so a class-level override (e.g.
+     * {@code @SpringBootTest(properties = RATE_LIMITING_ENABLED_PROPERTY + "=true")}) actually takes effect
+     * instead of being clobbered back to {@code false}. The suite default (test profile) is {@code false}, so
+     * classes that do not override keep their previous behaviour.
+     */
+    @org.springframework.beans.factory.annotation.Value("${poker.rate-limiting.enabled:false}")
+    protected boolean rateLimitingEnabledByConfig;
 
     /**
      * Broker handler used by {@link #awaitBrokerSubscription}. Injected lazily through an
@@ -102,9 +113,10 @@ public abstract class AbstractIntegrationTestSupport {
      */
     @BeforeEach
     void setupIntegrationTest() {
-        // Reset rate limiting to disabled by default for each test. Subclasses that need it enabled should
-        // prefer the RATE_LIMITING_ENABLED_PROPERTY config seam (see enableRateLimiting()).
-        disableRateLimiting();
+        // Reset rate limiting to the value configured for this context. The suite default (test profile) is
+        // disabled; a class that sets RATE_LIMITING_ENABLED_PROPERTY=true via @SpringBootTest/@DynamicPropertySource
+        // gets it enabled here without reflection in the test body.
+        ReflectionTestUtils.setField(rateLimitService, "enabled", rateLimitingEnabledByConfig);
         rateLimitService.reset();
 
         restClient = RestClient.builder()
@@ -209,13 +221,38 @@ public abstract class AbstractIntegrationTestSupport {
      * @param timeout     maximum time to wait
      */
     protected void awaitBrokerSubscription(String destination, Duration timeout) {
+        awaitBrokerSubscriptions(destination, 1, timeout);
+    }
+
+    /**
+     * Blocks until the broker has registered at least {@code minCount} subscriptions for the given
+     * destination. Useful when two sessions (or two handlers) subscribe to the same topic and the test must
+     * not publish until both are registered, replacing a fixed sleep.
+     *
+     * @param destination STOMP destination sessions subscribed to
+     * @param minCount     minimum number of registered subscriptions to wait for
+     */
+    protected void awaitBrokerSubscriptions(String destination, int minCount) {
+        awaitBrokerSubscriptions(destination, minCount, DEFAULT_TIMEOUT);
+    }
+
+    /**
+     * Blocks until the broker has registered at least {@code minCount} subscriptions for the destination or
+     * the timeout elapses.
+     *
+     * @param destination STOMP destination sessions subscribed to
+     * @param minCount     minimum number of registered subscriptions to wait for
+     * @param timeout      maximum time to wait
+     */
+    protected void awaitBrokerSubscriptions(String destination, int minCount, Duration timeout) {
         SimpleBrokerMessageHandler broker = brokerProvider.getObject();
         SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
         headers.setDestination(destination);
         var probe = MessageBuilder.createMessage(new byte[0], headers.getMessageHeaders());
         Awaitility.await()
                 .atMost(timeout)
-                .until(() -> !broker.getSubscriptionRegistry().findSubscriptions(probe).isEmpty());
+                .until(() -> broker.getSubscriptionRegistry().findSubscriptions(probe).values().stream()
+                        .mapToInt(List::size).sum() >= minCount);
     }
 
     /**

@@ -20,7 +20,6 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.client.HttpClientErrorException;
 
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -28,7 +27,9 @@ import static org.mockito.Mockito.*;
 
 /** Tests security integration behavior. */
 @Tag("integration")
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = AbstractIntegrationTestSupport.RATE_LIMITING_ENABLED_PROPERTY + "=true")
 @ActiveProfiles("test")
 @DisplayName("Security integration")
 class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
@@ -284,7 +285,8 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         @Test
         @DisplayName("oversized payload is rejected with 413 without invoking rate limit or parsing JWT")
         void givenOversizedPayload_whenRequestSent_thenRejectedWith413BeforeRateLimitOrJwt() {
-            ReflectionTestUtils.setField(rateLimitService, "enabled", true);
+            // Rate limiting is enabled at the class level via RATE_LIMITING_ENABLED_PROPERTY so this test proves
+            // the payload-size filter rejects before rate limiting would run; reset the spy's interaction history.
             reset(rateLimitService);
             reset(jwtService);
 
@@ -310,7 +312,6 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
         @Test
         @DisplayName("rate limited request is rejected with 429 without parsing JWT")
         void givenRateLimitExceeded_whenRequestSentWithInvalidToken_thenRejectedWith429BeforeJwt() {
-            ReflectionTestUtils.setField(rateLimitService, "enabled", true);
             doReturn(false).when(rateLimitService).tryConsumeRest(anyString());
             reset(jwtService);
 

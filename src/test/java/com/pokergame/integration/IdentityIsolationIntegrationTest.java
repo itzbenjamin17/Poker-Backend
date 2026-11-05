@@ -3,19 +3,26 @@ package com.pokergame.integration;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.dto.response.ActionErrorResponse;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
-import com.pokergame.security.RateLimitService;
+import org.jspecify.annotations.NonNull;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.messaging.simp.stomp.StompFrameHandler;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
+
+import java.lang.reflect.Type;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Assertions;
@@ -23,28 +30,33 @@ import org.springframework.web.client.HttpClientErrorException;
 
 /** Tests identity isolation integration behavior. */
 @Tag("integration")
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = AbstractIntegrationTestSupport.RATE_LIMITING_ENABLED_PROPERTY + "=true")
 @ActiveProfiles("test")
+// Enabling rate limiting via the property seam makes this context cacheable and shareable with other
+// rate-limiting contexts (e.g. LifecycleRegistrationCleanupTest). Since this class opens live sockets whose
+// teardown schedules grace-period pending-disconnects, dirty the context after the class so no leaked
+// WebSocket registration state bleeds into a sibling test that asserts pristine global counts.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @DisplayName("Identity isolation integration")
 class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
-
-    @Autowired
-    private RateLimitService rateLimitService;
 
     private WebSocketStompClient stompClient;
 
     /**
-     * Initializes the test fixtures before each scenario.
+     * Initializes the test fixtures before each scenario. Rate limiting is enabled for this class via the
+     * RATE_LIMITING_ENABLED_PROPERTY config seam, so the base setup leaves it on and resets the buckets.
      */
     @BeforeEach
     void setUp() {
-        ReflectionTestUtils.setField(rateLimitService, "enabled", true);
-        rateLimitService.reset();
         stompClient = createStompClient();
     }
 
     /**
-     * Protects the contract that the system should isolate rate limits for same player name in different rooms.
+     * Protects the contract that the system should isolate rate limits for same player name in different rooms:
+     * throttling one session is observable (the throttled session is closed) while the other's command is
+     * actually processed (it receives a private reply), not merely that its socket remains open.
      */
     @Test
     @DisplayName("should isolate rate limits for same player name in different rooms")
@@ -64,18 +76,39 @@ class IdentityIsolationIntegrationTest extends AbstractIntegrationTestSupport {
         StompSession session1 = connectSession(stompClient, token1);
         StompSession session2 = connectSession(stompClient, token2);
 
-        // 3. Exhaust Alice1's rate limit (Limit is 5 per second)
-        for (int i = 0; i < 5; i++) {
+        // session2 listens on its private queue so we can prove its command was actually processed by the
+        // server (a reply arrives) rather than inferring success from an open socket.
+        CompletableFuture<ActionErrorResponse> session2Reply = new CompletableFuture<>();
+        session2.subscribe("/user/queue/private", new StompFrameHandler() {
+            /** {@inheritDoc} */
+            @Override public Type getPayloadType(@NonNull StompHeaders headers) {
+                return ActionErrorResponse.class;
+            }
+
+            /** {@inheritDoc} */
+            @Override public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                if (payload instanceof ActionErrorResponse reply && !session2Reply.isDone()) {
+                    session2Reply.complete(reply);
+                }
+            }
+        });
+
+        // 3. Exhaust Alice1's bucket then push one more SEND past the limit (limit is 5 per second).
+        for (int i = 0; i < 6; i++) {
             sendAction(session1, roomId1, token1);
         }
 
-        // The 6th action for Alice1 should be throttled (we expect a disconnect or dropped message)
-        sendAction(session1, roomId1, token1);
-        
-        // 4. Alice2 should still be able to send messages because her bucket is separate
+        // Observable throttling: exceeding the bucket makes the server close session1's connection.
+        Awaitility.await()
+                .atMost(Duration.ofSeconds(5))
+                .untilAsserted(() -> assertThat(session1.isConnected()).isFalse());
+
+        // 4. Alice2's bucket is separate, so her command is processed: the server replies on her private
+        // queue (an ACTION_ERROR because no game is running) and her session stays open.
         sendAction(session2, roomId2, token2);
-        
-        // If session2 is still connected, it means it wasn't affected by session1's throttling
+
+        ActionErrorResponse reply = session2Reply.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+        assertThat(reply).isNotNull();
         assertThat(session2.isConnected()).isTrue();
     }
 

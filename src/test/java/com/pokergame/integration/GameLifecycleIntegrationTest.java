@@ -2,10 +2,14 @@ package com.pokergame.integration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.dto.response.ActionErrorResponse;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.RejectedAction;
+import com.pokergame.enums.ResponseMessage;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
+import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
@@ -13,11 +17,16 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpStatus;
+import org.springframework.messaging.simp.stomp.StompFrameHandler;
+import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.client.HttpClientErrorException;
 
+import java.lang.reflect.Type;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -595,21 +604,49 @@ class GameLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
 
                 int totalExpectedChips = 2000;
 
+                // Capture the state revision at showdown so we can assert the rejected action never mutates it.
+                JsonNode beforeStray = readGameState(gameId, hostToken);
+                long revisionBeforeStray = beforeStray.path("stateRevision").asLong();
+
+                // Listen on the host's private queue so the rejection is observed directly rather than inferred
+                // from a fixed sleep.
+                CompletableFuture<ActionErrorResponse> rejection = new CompletableFuture<>();
+                hostSession.subscribe("/user/queue/private", new StompFrameHandler() {
+                    @Override
+                    public Type getPayloadType(@NonNull StompHeaders headers) {
+                        return ActionErrorResponse.class;
+                    }
+
+                    @Override
+                    public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                        if (payload instanceof ActionErrorResponse response && !rejection.isDone()) {
+                            rejection.complete(response);
+                        }
+                    }
+                });
+                // Subscribe and send are on the same session, so STOMP per-session ordering guarantees the
+                // SUBSCRIBE is processed before the stray SEND below; no broker-readiness wait is needed.
+
                 // Send stray CHECK action from host in SHOWDOWN phase
                 hostSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CHECK, null));
 
-                // Small pause to allow any asynchronous processing to attempt execution
-                Thread.sleep(500);
+                // Await the structured rejection instead of pausing for a fixed window.
+                ActionErrorResponse error = rejection.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+                assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
+                assertThat(error.action()).isEqualTo(RejectedAction.CHECK);
 
-                // Verify state remains SHOWDOWN and chips are conserved
-                JsonNode showdownState = readGameState(gameId, hostToken);
-                assertThat(showdownState.path("phase").asText()).isEqualTo("SHOWDOWN");
-
-                int sumChips = 0;
-                for (JsonNode player : showdownState.path("players")) {
-                    sumChips += player.path("chips").asInt();
-                }
-                assertThat(sumChips + showdownState.path("pot").asInt()).isEqualTo(totalExpectedChips);
+                // The rejection must not mutate state: the revision stays put and chips stay conserved. An
+                // Awaitility condition guards against a late mutation arriving after the error.
+                await().atMost(DEFAULT_TIMEOUT).untilAsserted(() -> {
+                    JsonNode showdownState = readGameState(gameId, hostToken);
+                    assertThat(showdownState.path("phase").asText()).isEqualTo("SHOWDOWN");
+                    assertThat(showdownState.path("stateRevision").asLong()).isEqualTo(revisionBeforeStray);
+                    int sumChips = 0;
+                    for (JsonNode player : showdownState.path("players")) {
+                        sumChips += player.path("chips").asInt();
+                    }
+                    assertThat(sumChips + showdownState.path("pot").asInt()).isEqualTo(totalExpectedChips);
+                });
             } finally {
                 hostSession.disconnect();
                 guestSession.disconnect();
