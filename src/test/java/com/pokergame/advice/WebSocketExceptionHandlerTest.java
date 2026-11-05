@@ -35,6 +35,21 @@ import org.springframework.messaging.handler.annotation.support.MethodArgumentNo
 import org.springframework.validation.BeanPropertyBindingResult;
 import org.springframework.validation.FieldError;
 import com.pokergame.model.Room;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.ValidationException;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Stream;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.springframework.context.support.DefaultMessageSourceResolvable;
+import org.springframework.validation.BindException;
+import org.springframework.validation.BindingResult;
+import org.springframework.validation.method.MethodValidationException;
+import org.springframework.validation.method.MethodValidationResult;
+import org.springframework.validation.method.ParameterValidationResult;
 
 /** Client-observable private action error contract at the WebSocket exception boundary. */
 @Tag("unit")
@@ -258,5 +273,402 @@ class WebSocketExceptionHandlerTest {
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("ACTION_REJECTED", PlayerAction.FOLD, "Action unavailable"));
+    }
+
+    private static final String FALLBACK = "Enter a valid action amount";
+
+    /** Exception type whose class name marks it as a Jackson failure without depending on Jackson internals. */
+    private static final class FakeJacksonException extends RuntimeException {
+        FakeJacksonException(String message) {
+            super(message);
+        }
+    }
+
+    /** Builds a frame addressed to the given suffix of the principal's room. */
+    private Message<?> frame(Object payload, String suffix) {
+        return MessageBuilder.withPayload(payload)
+                .setHeader("simpDestination", "/app/" + gameId + "/" + suffix).build();
+    }
+
+    /** Builds the parameter handle that Spring's argument-validation exceptions require. */
+    private MethodParameter methodParameter() throws Exception {
+        Method method = WebSocketExceptionHandlerTest.class.getDeclaredMethod("actionFrame", PlayerAction.class);
+        return new MethodParameter(method, 0);
+    }
+
+    /** Builds a binding result holding one field error with the given message. */
+    private BindingResult bindingResultWithError(String message) {
+        BeanPropertyBindingResult result = new BeanPropertyBindingResult(new Object(), "actionRequest");
+        result.addError(new FieldError("actionRequest", "amount", message));
+        return result;
+    }
+
+    /** Builds a binding result without any errors. */
+    private BindingResult emptyBindingResult() {
+        return new BeanPropertyBindingResult(new Object(), "actionRequest");
+    }
+
+    @SuppressWarnings("unchecked")
+    private ConstraintViolation<Object> violation(String message) {
+        ConstraintViolation<Object> violation = Mockito.mock(ConstraintViolation.class);
+        Mockito.when(violation.getMessage()).thenReturn(message);
+        return violation;
+    }
+
+    /** Builds a method-validation failure whose only error carries the given message. */
+    private MethodValidationException methodValidationException(String message) {
+        MethodValidationResult result = Mockito.mock(MethodValidationResult.class);
+        List<ParameterValidationResult> parameterResults = List.of();
+        if (message != null) {
+            ParameterValidationResult parameterResult = Mockito.mock(ParameterValidationResult.class);
+            Mockito.when(parameterResult.getResolvableErrors())
+                    .thenReturn(List.of(new DefaultMessageSourceResolvable(new String[] { "code" }, null, message)));
+            parameterResults = List.of(parameterResult);
+        }
+        Mockito.when(result.getParameterValidationResults()).thenReturn(parameterResults);
+        return new MethodValidationException(result);
+    }
+
+    /** Runs the handler for an action frame and returns after the private feedback was sent. */
+    private void verifyInvalidActionFormat(Exception exception, String expectedMessage) {
+        handler.handleMessageException(exception, principal, actionFrame(PlayerAction.CHECK));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new ActionErrorResponse("INVALID_ACTION_FORMAT", PlayerAction.CHECK, expectedMessage));
+    }
+
+    /** The messaging argument-validation exception surfaces its first field error. */
+    @Test
+    @DisplayName("Messaging validation failure with a field error reports that field message")
+    void messagingValidationFailureWithFieldErrorReportsFieldMessage() throws Exception {
+        Message<?> frame = frame("{}", "action");
+        verifyInvalidActionFormat(new MethodArgumentNotValidException(frame, methodParameter(),
+                bindingResultWithError("Amount must be positive")), "Amount must be positive");
+    }
+
+    /** A messaging validation failure without a binding result falls back to the generic copy. */
+    @Test
+    @DisplayName("Messaging validation failure without binding result falls back to generic message")
+    void messagingValidationFailureWithoutBindingResultFallsBack() throws Exception {
+        verifyInvalidActionFormat(new MethodArgumentNotValidException(frame("{}", "action"), methodParameter()),
+                FALLBACK);
+    }
+
+    /** A messaging validation failure without field errors falls back to the generic copy. */
+    @Test
+    @DisplayName("Messaging validation failure with empty binding result falls back to generic message")
+    void messagingValidationFailureWithEmptyBindingResultFallsBack() throws Exception {
+        verifyInvalidActionFormat(new MethodArgumentNotValidException(frame("{}", "action"), methodParameter(),
+                emptyBindingResult()), FALLBACK);
+    }
+
+    /** The web argument-validation exception surfaces its first field error. */
+    @Test
+    @DisplayName("Web validation failure with a field error reports that field message")
+    void webValidationFailureWithFieldErrorReportsFieldMessage() throws Exception {
+        verifyInvalidActionFormat(new org.springframework.web.bind.MethodArgumentNotValidException(
+                methodParameter(), bindingResultWithError("Amount too large")), "Amount too large");
+    }
+
+    /** A web validation failure whose binding result is null falls back to the generic copy. */
+    @Test
+    @DisplayName("Web validation failure with null binding result falls back to generic message")
+    void webValidationFailureWithNullBindingResultFallsBack() {
+        var exception = Mockito.mock(org.springframework.web.bind.MethodArgumentNotValidException.class);
+        Mockito.when(exception.getBindingResult()).thenReturn(null);
+        verifyInvalidActionFormat(exception, FALLBACK);
+    }
+
+    /** A web validation failure without field errors falls back to the generic copy. */
+    @Test
+    @DisplayName("Web validation failure with empty binding result falls back to generic message")
+    void webValidationFailureWithEmptyBindingResultFallsBack() throws Exception {
+        verifyInvalidActionFormat(new org.springframework.web.bind.MethodArgumentNotValidException(
+                methodParameter(), emptyBindingResult()), FALLBACK);
+    }
+
+    /** A bind failure surfaces its first field error. */
+    @Test
+    @DisplayName("Bind failure with a field error reports that field message")
+    void bindFailureWithFieldErrorReportsFieldMessage() {
+        verifyInvalidActionFormat(new BindException(bindingResultWithError("Amount is not a number")),
+                "Amount is not a number");
+    }
+
+    /** A bind failure without field errors falls back to the generic copy. */
+    @Test
+    @DisplayName("Bind failure without field errors falls back to generic message")
+    void bindFailureWithoutFieldErrorsFallsBack() {
+        verifyInvalidActionFormat(new BindException(emptyBindingResult()), FALLBACK);
+    }
+
+    /** A blank field message is treated like a missing one. */
+    @Test
+    @DisplayName("Blank field message falls back to generic message")
+    void blankFieldMessageFallsBack() {
+        verifyInvalidActionFormat(new BindException(bindingResultWithError("   ")), FALLBACK);
+    }
+
+    /** A constraint violation surfaces its message. */
+    @Test
+    @DisplayName("Constraint violation reports the violation message")
+    void constraintViolationReportsViolationMessage() {
+        verifyInvalidActionFormat(new ConstraintViolationException(Set.of(violation("Amount must be positive"))),
+                "Amount must be positive");
+    }
+
+    /** A constraint violation exception without violations falls back to the generic copy. */
+    @Test
+    @DisplayName("Constraint violation exception without violations falls back to generic message")
+    void constraintViolationExceptionWithoutViolationsFallsBack() {
+        verifyInvalidActionFormat(new ConstraintViolationException(Set.of()), FALLBACK);
+    }
+
+    /** A constraint violation exception with a null violation set falls back to the generic copy. */
+    @Test
+    @DisplayName("Constraint violation exception with null violations falls back to generic message")
+    void constraintViolationExceptionWithNullViolationsFallsBack() {
+        verifyInvalidActionFormat(new ConstraintViolationException((Set<ConstraintViolation<?>>) null), FALLBACK);
+    }
+
+    /** A method-validation failure surfaces its first error message. */
+    @Test
+    @DisplayName("Method validation failure reports the first error message")
+    void methodValidationFailureReportsFirstErrorMessage() {
+        verifyInvalidActionFormat(methodValidationException("Amount must be positive"), "Amount must be positive");
+    }
+
+    /** A method-validation failure without errors falls back to the generic copy. */
+    @Test
+    @DisplayName("Method validation failure without errors falls back to generic message")
+    void methodValidationFailureWithoutErrorsFallsBack() {
+        verifyInvalidActionFormat(methodValidationException(null), FALLBACK);
+    }
+
+    /** Failure types that carry no extractable message still map to the generic invalid-format copy. */
+    @ParameterizedTest
+    @ValueSource(strings = {"conversion", "validation", "jackson"})
+    @DisplayName("Conversion-style failures without a message fall back to generic message")
+    void conversionStyleFailuresWithoutMessageFallBack(String kind) {
+        Exception exception = switch (kind) {
+            case "conversion" -> new MessageConversionException("cannot convert");
+            case "validation" -> new ValidationException("invalid");
+            default -> new FakeJacksonException("cannot read");
+        };
+        verifyInvalidActionFormat(exception, FALLBACK);
+    }
+
+    /** The cause chain supplies a validation message when the outer conversion failure has none. */
+    @Test
+    @DisplayName("Validation message nested inside a conversion failure is reported")
+    void nestedValidationMessageIsReported() {
+        MessageConversionException wrapped = new MessageConversionException("conversion failed",
+                new ConstraintViolationException(Set.of(violation("Too big"))));
+        verifyInvalidActionFormat(wrapped, "Too big");
+    }
+
+    /** A Jackson failure deep in the cause chain is recognised as an invalid action format. */
+    @Test
+    @DisplayName("Jackson failure deep in the cause chain gives invalid action format")
+    void jacksonFailureDeepInCauseChainIsInvalidActionFormat() {
+        RuntimeException chain = new RuntimeException("outer",
+                new IllegalStateException("middle", new FakeJacksonException("unreadable")));
+        verifyInvalidActionFormat(chain, FALLBACK);
+    }
+
+    /** A cause chain that loops back on itself terminates and still classifies the failure. */
+    @Test
+    @DisplayName("Cyclic cause chain terminates and still classifies the failure")
+    void cyclicCauseChainTerminates() {
+        RuntimeException first = new RuntimeException("first");
+        MessageConversionException second = new MessageConversionException("second");
+        first.initCause(second);
+        second.initCause(first);
+        verifyInvalidActionFormat(first, FALLBACK);
+    }
+
+    /** A cause chain without any recognised failure keeps the generic rejection. */
+    @Test
+    @DisplayName("Cyclic cause chain without recognised failures keeps the generic rejection")
+    void cyclicCauseChainWithoutRecognisedFailureKeepsGenericRejection() {
+        RuntimeException first = new RuntimeException("first");
+        RuntimeException second = new RuntimeException("second");
+        first.initCause(second);
+        second.initCause(first);
+        handler.handleMessageException(first, principal, actionFrame(PlayerAction.CALL));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new ActionErrorResponse("ACTION_REJECTED", PlayerAction.CALL, "Action unavailable"));
+    }
+
+    /** Deeply nested missing games map to GAME_NOT_FOUND. */
+    @Test
+    @DisplayName("Deeply nested ResourceNotFoundException gives GAME_NOT_FOUND")
+    void deeplyNestedResourceNotFoundGivesGameNotFound() {
+        RuntimeException chain = new RuntimeException("outer", new IllegalStateException("middle",
+                new ResourceNotFoundException("Game not found")));
+        handler.handleMessageException(chain, principal, actionFrame(PlayerAction.FOLD));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new ActionErrorResponse("GAME_NOT_FOUND", PlayerAction.FOLD, "Game unavailable"));
+    }
+
+    /** A missing game outranks a validation failure in the same chain. */
+    @Test
+    @DisplayName("ResourceNotFoundException outranks a validation failure in the same chain")
+    void resourceNotFoundOutranksValidationFailure() {
+        MessageConversionException wrapped = new MessageConversionException("conversion failed",
+                new ResourceNotFoundException("Game not found"));
+        handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.CHECK));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new ActionErrorResponse("GAME_NOT_FOUND", PlayerAction.CHECK, "Game unavailable"));
+    }
+
+    /** The outermost action-feedback exception in the chain wins. */
+    @Test
+    @DisplayName("Outermost action feedback in the chain wins")
+    void outermostActionFeedbackWins() {
+        BadRequestException inner = new BadRequestException("inner", "INNER_CODE", "Inner message");
+        BadRequestException outer = new BadRequestException("outer", "OUTER_CODE", "Outer message");
+        outer.initCause(inner);
+        handler.handleMessageException(outer, principal, actionFrame(PlayerAction.BET));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new ActionErrorResponse("OUTER_CODE", PlayerAction.BET, "Outer message"));
+    }
+
+    /** Action feedback without a client message falls back to the exception message. */
+    @Test
+    @DisplayName("Action feedback without a client message uses the exception message")
+    void actionFeedbackWithoutClientMessageUsesExceptionMessage() {
+        handler.handleMessageException(new BadRequestException("Plain detail", "SOME_CODE", null),
+                principal, actionFrame(PlayerAction.RAISE));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new ActionErrorResponse("SOME_CODE", PlayerAction.RAISE, "Plain detail"));
+    }
+
+    /** Action feedback without a code is ignored in favour of later classification. */
+    @Test
+    @DisplayName("Action feedback without a code is ignored")
+    void actionFeedbackWithoutCodeIsIgnored() {
+        BadRequestException codeless = new BadRequestException("No code");
+        codeless.initCause(new MessageConversionException("conversion failed"));
+        verifyInvalidActionFormat(codeless, FALLBACK);
+    }
+
+    /** Payload shapes from which the rejected action can be recovered. */
+    static Stream<Object> recoverablePayloads() {
+        return Stream.<Object>of(
+                "{\"action\":\"FOLD\"}",
+                "{\"action\":\"FOLD\",\"amount\":5}".getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** The rejected action is recovered from string and byte[] payloads. */
+    @ParameterizedTest
+    @MethodSource("recoverablePayloads")
+    @DisplayName("Rejected action is recovered from string and byte[] payloads")
+    void rejectedActionIsRecoveredFromRawPayloads(Object payload) {
+        handler.handleMessageException(new RuntimeException("boom"), principal, frame(payload, "action"));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new ActionErrorResponse("ACTION_REJECTED", PlayerAction.FOLD, "Action unavailable"));
+    }
+
+    /** Payload shapes from which no action can be recovered. */
+    static Stream<Object> unrecoverablePayloads() {
+        return Stream.<Object>of(
+                "not json",
+                "{bad".getBytes(StandardCharsets.UTF_8),
+                "{\"action\":5}",
+                "{\"action\":null}",
+                "{\"action\":\"PUSH\"}",
+                "{\"amount\":5}",
+                "null",
+                "[\"CHECK\"]",
+                42);
+    }
+
+    /** Unrecoverable actions are reported as a plain private notification. */
+    @ParameterizedTest
+    @MethodSource("unrecoverablePayloads")
+    @DisplayName("Unrecoverable action payload is reported as a private notification")
+    void unrecoverableActionPayloadIsReportedAsNotification(Object payload) {
+        handler.handleMessageException(new RuntimeException("boom"), principal, frame(payload, "action"));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "boom", playerName, gameId));
+        verify(messagingTemplate, Mockito.times(1)).convertAndSendToUser(ArgumentMatchers.anyString(),
+                ArgumentMatchers.anyString(), ArgumentMatchers.any(Object.class));
+    }
+
+    /** Missing or blank exception messages are replaced with a default. */
+    @ParameterizedTest
+    @ValueSource(strings = {"", "   "})
+    @DisplayName("Blank exception message is replaced with a default")
+    void blankExceptionMessageIsReplacedWithDefault(String message) {
+        handler.handleMessageException(new RuntimeException(message), principal, frame("{}", "other"));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "Request failed", playerName,
+                        gameId));
+    }
+
+    /** A null exception message is replaced with a default. */
+    @Test
+    @DisplayName("Null exception message is replaced with a default")
+    void nullExceptionMessageIsReplacedWithDefault() {
+        handler.handleMessageException(new RuntimeException((String) null), principal, frame("{}", "other"));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "Request failed", playerName,
+                        gameId));
+    }
+
+    /** A frame without a destination is treated as a non-action frame. */
+    @Test
+    @DisplayName("Frame without a destination is reported as a private notification")
+    void frameWithoutDestinationIsReportedAsNotification() {
+        Message<String> noDestination = MessageBuilder.withPayload("{}").build();
+        handler.handleMessageException(new RuntimeException("boom"), principal, noDestination);
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "boom", playerName, gameId));
+    }
+
+    /** Messages longer than 80 characters are cut to 77 characters plus an ellipsis. */
+    @Test
+    @DisplayName("Message longer than 80 characters is truncated with an ellipsis")
+    void messageLongerThanEightyCharactersIsTruncated() {
+        String longMessage = "x".repeat(81);
+        handler.handleMessageException(new RuntimeException(longMessage), principal, frame("{}", "other"));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "x".repeat(77) + "...",
+                        playerName, gameId));
+    }
+
+    /** A message of exactly 80 characters is delivered unchanged. */
+    @Test
+    @DisplayName("Message of exactly 80 characters is not truncated")
+    void messageOfExactlyEightyCharactersIsNotTruncated() {
+        String message = "y".repeat(80);
+        handler.handleMessageException(new RuntimeException(message), principal, frame("{}", "other"));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, message, playerName, gameId));
+    }
+
+    /** Conversion failures and deserialization messages are replaced with friendly copy. */
+    @ParameterizedTest
+    @ValueSource(strings = {"conversion", "deserialize"})
+    @DisplayName("Conversion and deserialization failures use friendly copy on non-action frames")
+    void conversionFailuresUseFriendlyCopyOnNonActionFrames(String kind) {
+        Exception exception = kind.equals("conversion")
+                ? new MessageConversionException("raw conversion detail")
+                : new RuntimeException("Cannot deserialize value of type int");
+        handler.handleMessageException(exception, principal, frame("{}", "other"));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
+                        "Invalid action request format. Please try again with a valid amount.", playerName, gameId));
+    }
+
+    /** Readiness rejections share the same message normalisation as other frames. */
+    @ParameterizedTest
+    @ValueSource(strings = {"ready", "unready"})
+    @DisplayName("Readiness rejection truncates long messages and keeps the requested action")
+    void readinessRejectionTruncatesLongMessages(String suffix) {
+        handler.handleMessageException(new RuntimeException("z".repeat(100)), principal, frame("{}", suffix));
+        RejectedAction expected = suffix.equals("ready") ? RejectedAction.READY : RejectedAction.UNREADY;
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new ActionErrorResponse("ACTION_REJECTED", expected, "z".repeat(77) + "..."));
     }
 }
