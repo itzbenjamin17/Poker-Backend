@@ -15,7 +15,6 @@ import java.util.*;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.model.PotCalculator.PotComputationResult;
-import java.util.stream.Collectors;
 
 /**
  * Represents a poker game instance with players, betting rounds, and game state
@@ -783,18 +782,6 @@ public class Game {
     }
 
     /**
-     * Determines the winning player(s) from the given list by comparing hand ranks.
-     * Handles ties by checking for multiple players with the same best hand.
-     *
-     * @param players list of players to compare
-     * @return list of winning players (may contain multiple players in case of a
-     *         tie)
-     */
-    private List<Player> determineWinners(List<Player> players) {
-        return ShowdownResolver.determineWinners(handEvaluator, players);
-    }
-
-    /**
      * Advances dealer, small blind, big blind, and current player positions
      * for the next hand. Rotates positions clockwise around the table.
      */
@@ -809,10 +796,6 @@ public class Game {
         this.currentPlayerPosition = result.currentPlayerPosition();
         smallBlindPlayerId = null;
         bigBlindPlayerId = null;
-    }
-
-    private int indexOfActivePlayer(String playerId) {
-        return TableSeating.indexOfActivePlayer(activePlayers, playerId);
     }
 
     /**
@@ -964,16 +947,6 @@ public class Game {
                 .filter(player -> !player.getIsOut() && player.getChips() > 0)
                 .count();
         return playersWithChips <= 1;
-    }
-
-    /**
-     * Excludes disconnected, eliminated, and zero-chip players from the ready gate so an absent
-     * or knocked-out player cannot stall the next hand indefinitely.
-     *
-     * @return players whose readiness is required
-     */
-    private List<Player> getReadyEligiblePlayers() {
-        return ReadyGate.getEligiblePlayers(players);
     }
 
     /**

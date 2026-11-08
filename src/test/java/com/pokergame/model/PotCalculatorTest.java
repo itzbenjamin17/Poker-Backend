@@ -1253,7 +1253,6 @@ class PotCalculatorTest {
                 Map<String, Integer> contributions = new LinkedHashMap<>();
                 int pot = 0;
 
-                int activeCount = 0;
                 for (int p = 0; p < playerCount; p++) {
                     String id = "fuzz_p" + p;
                     int contribution = rng.nextInt(500) + 1; // 1 to 500 chips
@@ -1267,7 +1266,6 @@ class PotCalculatorTest {
                     allPlayers.add(player);
                     if (!fold) {
                         contenders.add(player);
-                        activeCount++;
                     }
                     contributions.put(id, contribution);
                     pot += contribution;

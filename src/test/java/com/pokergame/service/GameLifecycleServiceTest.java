@@ -36,7 +36,6 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import tools.jackson.databind.json.JsonMapper;
 import static org.junit.jupiter.api.Assertions.*;
-import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 
@@ -1133,7 +1132,7 @@ class GameLifecycleServiceTest {
         reset(roomService);
         when(roomService.getRoom(ROOM_ID)).thenAnswer(invocation -> roomPresent.get() == 1 ? testRoom : null);
         doAnswer(invocation -> {
-            @SuppressWarnings("unchecked") List<String> leaving = invocation.getArgument(1);
+            List<String> leaving = invocation.getArgument(1);
             leaving.forEach(testRoom::removePlayer);
             if (testRoom.getPlayers().isEmpty()) roomPresent.set(0);
             return null;
@@ -1164,7 +1163,7 @@ class GameLifecycleServiceTest {
         reset(roomService);
         when(roomService.getRoom(ROOM_ID)).thenAnswer(invocation -> roomPresent.get() == 1 ? testRoom : null);
         doAnswer(invocation -> {
-            @SuppressWarnings("unchecked") List<String> leaving = invocation.getArgument(1);
+            List<String> leaving = invocation.getArgument(1);
             leaving.forEach(testRoom::removePlayer);
             if (testRoom.getPlayers().isEmpty()) roomPresent.set(0);
             return null;
@@ -1209,7 +1208,7 @@ class GameLifecycleServiceTest {
         }
 
         doAnswer(invocation -> {
-            @SuppressWarnings("unchecked") List<String> leaving = invocation.getArgument(1);
+            List<String> leaving = invocation.getArgument(1);
             leaving.forEach(testRoom::removePlayer);
             return null;
         }).when(roomService).leavePlayersBatch(eq(ROOM_ID), anyList(), any());
@@ -1366,7 +1365,7 @@ class GameLifecycleServiceTest {
             Player bigBlind = game.getPlayers().stream()
                     .filter(player -> player.getPlayerId().equals(game.getBigBlindPlayerId())).findFirst().orElseThrow();
             lenient().when(handEvaluator.getBestHand(anyList(), anyList())).thenAnswer(invocation -> {
-                @SuppressWarnings("unchecked") List<Card> holeCards = invocation.getArgument(1);
+                List<Card> holeCards = invocation.getArgument(1);
                 HandRank rank = holeCards.equals(smallBlind.getHoleCards()) ? HandRank.ROYAL_FLUSH : HandRank.HIGH_CARD;
                 return new HandEvaluationResult(List.of(), rank);
             });
@@ -2157,7 +2156,6 @@ class GameLifecycleServiceTest {
         }).when(roomService).leavePlayersBatch(anyString(), any(), any());
         Mockito.lenient().doAnswer(inv -> {
             String rid = inv.getArgument(0);
-            String p = inv.getArgument(1);
             Room r = activeRooms.get(rid);
             if (r != null) {
                 activeRooms.remove(rid);
@@ -2240,7 +2238,6 @@ class GameLifecycleServiceTest {
         }).when(roomService).leavePlayersBatch(anyString(), any(), any());
         Mockito.lenient().doAnswer(inv -> {
             String rid = inv.getArgument(0);
-            String p = inv.getArgument(1);
             Room r = activeRooms.get(rid);
             if (r != null) {
                 activeRooms.remove(rid);
@@ -2320,7 +2317,6 @@ class GameLifecycleServiceTest {
         }).when(roomService).leavePlayersBatch(anyString(), any(), any());
         Mockito.lenient().doAnswer(inv -> {
             String rid = inv.getArgument(0);
-            String p = inv.getArgument(1);
             Room r = activeRooms.get(rid);
             if (r != null) {
                 activeRooms.remove(rid);
@@ -2388,7 +2384,6 @@ class GameLifecycleServiceTest {
     void removeDisconnectedPlayer_ActiveGame_AllGuardsMatch_DepartsParticipant() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
-        Game game = gameLifecycleService.getGame(ROOM_ID);
         long deadline = System.currentTimeMillis() - 100;
 
         gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
@@ -3086,7 +3081,7 @@ class GameLifecycleServiceTest {
             return mockRoomData;
         });
 
-        ArgumentCaptor<ApiResponse> captor = ArgumentCaptor.forClass(ApiResponse.class);
+        ArgumentCaptor<ApiResponse<?>> captor = ArgumentCaptor.forClass(ApiResponse.class);
 
         gameLifecycleService.createGameFromRoom(ROOM_ID);
 
@@ -3484,7 +3479,7 @@ class GameLifecycleServiceTest {
         Player loser = game.getPlayers().get(1);
         loser.setChips(0);
         lenient().when(handEvaluator.getBestHand(anyList(), anyList())).thenAnswer(invocation -> {
-            @SuppressWarnings("unchecked") List<Card> holeCards = invocation.getArgument(1);
+            List<Card> holeCards = invocation.getArgument(1);
             HandRank rank = holeCards.equals(winner.getHoleCards()) ? HandRank.ROYAL_FLUSH : HandRank.HIGH_CARD;
             return new HandEvaluationResult(List.of(), rank);
         });

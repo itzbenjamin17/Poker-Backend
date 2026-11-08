@@ -3,7 +3,6 @@ package com.pokergame.service;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
 import static org.mockito.ArgumentMatchers.eq;
@@ -145,7 +144,6 @@ class RoomServiceTest {
 
             assertThat(room).isNotNull();
             assertThat(room.hasPassword()).isTrue();
-            assertThat(room.getPassword()).isNull();
             assertThat(room.getPasswordHash()).startsWith("$2");
             assertThat(room.checkPassword("secret123")).isTrue();
             assertThat(room.checkPassword("wrongpassword")).isFalse();
@@ -238,7 +236,6 @@ class RoomServiceTest {
                     "Spaced Pass Room", "Host", 4, 10, 20, 200, "  secret123  "));
             Room room = roomService.getRoom(roomId);
             assertThat(room.hasPassword()).isTrue();
-            assertThat(room.getPassword()).isNull();
             assertThat(room.getPasswordHash()).startsWith("$2");
             assertThat(room.checkPassword("  secret123  ")).isTrue();
             assertThat(room.checkPassword("secret123")).isFalse();
@@ -896,7 +893,6 @@ class RoomServiceTest {
         Room room = customService.getRoom(roomId);
         assertThat(room).isNotNull();
         assertThat(room.hasPassword()).isTrue();
-        assertThat(room.getPassword()).isNull();
         assertThat(room.getPasswordHash()).isEqualTo("$2a$10$customMockHashForSecretPass42");
 
         // Join with correct password
@@ -928,10 +924,8 @@ class RoomServiceTest {
         Room r2 = customService.getRoom(roomId2);
         assertThat(r1.hasPassword()).isFalse();
         assertThat(r1.getPasswordHash()).isNull();
-        assertThat(r1.getPassword()).isNull();
         assertThat(r2.hasPassword()).isFalse();
         assertThat(r2.getPasswordHash()).isNull();
-        assertThat(r2.getPassword()).isNull();
 
         // Any password or null password allows joining public room
         customService.joinRoom(new JoinRoomRequest("Public Room 1", "P2", null));

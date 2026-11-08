@@ -584,18 +584,6 @@ public class Room {
     }
 
     /**
-     * Deprecated to prevent cleartext password memory exposure.
-     * Use {@link #getPasswordHash()} to inspect the hash or {@link #checkPassword(String, PasswordEncoder)} to verify credentials.
-     *
-     * @return null to prevent exposing raw password in memory or serialization
-     * @deprecated use {@link #getPasswordHash()} or {@link #checkPassword(String, PasswordEncoder)}
-     */
-    @Deprecated
-    public String getPassword() {
-        return null;
-    }
-
-    /**
      * Distinguishes lobby host-leave behavior from active-game host transfer.
      *
      * @return whether gameplay has started

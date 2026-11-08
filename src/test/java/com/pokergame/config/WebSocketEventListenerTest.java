@@ -51,7 +51,10 @@ class WebSocketEventListenerTest {
         }).when(aspect).acquireRoomLock("room");
         doAnswer(invocation -> {
             // Models the room lease normally acquired by the durable service proxy.
-            try (var ignored = aspect.acquireRoomLock("room")) { return null; }
+            try (var lock = aspect.acquireRoomLock("room")) {
+                assertNotNull(lock);
+                return null;
+            }
         }).when(games).markPlayerReconnected("room", "Alice");
         doAnswer(invocation -> { cleanupOwnsRoom.countDown(); return null; })
                 .when(games).cancelRuntimeTasks("room", false);
@@ -172,7 +175,7 @@ class WebSocketEventListenerTest {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
-        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Instant> instantCaptor = ArgumentCaptor.forClass(Instant.class);
         ArgumentCaptor<Long> deadlineCaptor = ArgumentCaptor.forClass(Long.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
@@ -202,7 +205,7 @@ class WebSocketEventListenerTest {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
-        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        ScheduledFuture<?> future = mock(ScheduledFuture.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
@@ -260,7 +263,7 @@ class WebSocketEventListenerTest {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
-        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Runnable> callback = ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
@@ -287,7 +290,7 @@ class WebSocketEventListenerTest {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
-        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Runnable> callback = ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
@@ -322,7 +325,7 @@ class WebSocketEventListenerTest {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
-        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        ScheduledFuture<?> future = mock(ScheduledFuture.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
@@ -357,7 +360,7 @@ class WebSocketEventListenerTest {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
-        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Instant> instantCaptor = ArgumentCaptor.forClass(Instant.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
 
@@ -406,7 +409,7 @@ class WebSocketEventListenerTest {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
-        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Instant> instantCaptor = ArgumentCaptor.forClass(Instant.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
 
@@ -441,7 +444,7 @@ class WebSocketEventListenerTest {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
                 TestDurableMutationAspects.lockOnly(), 60_000);
-        @SuppressWarnings("unchecked") ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Runnable> callback = ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
 

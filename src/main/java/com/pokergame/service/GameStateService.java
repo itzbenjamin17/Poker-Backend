@@ -36,6 +36,7 @@ import com.pokergame.model.HandSettlementResult;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.enums.ScheduledGameTask;
 import java.util.stream.Collectors;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Service class responsible for managing and broadcasting game state.
@@ -182,16 +183,19 @@ public class GameStateService {
 
             HandSettlementResult settlement = game.getLastSettlementResult();
             boolean retainedSettlement = settlement != null && settlement.settled();
-            Set<String> winnerIds = retainedSettlement
-                    ? settlement.winnerIds()
-                    : winners.stream().map(Player::getPlayerId).collect(Collectors.toSet());
-            Map<String, Integer> contestedAwards = retainedSettlement
-                    ? settlement.contestedAwards()
-                    : winners.stream().collect(Collectors.toMap(Player::getPlayerId,
-                            ignored -> winningsPerPlayer, (left, right) -> left));
-            HandSettlementResult effectiveSettlement = retainedSettlement
-                    ? settlement
-                    : new HandSettlementResult(contestedAwards, Map.of(), winnerIds, 0, true);
+            Set<String> winnerIds;
+            Map<String, Integer> contestedAwards;
+            HandSettlementResult effectiveSettlement;
+            if (settlement != null && settlement.settled()) {
+                winnerIds = settlement.winnerIds();
+                contestedAwards = settlement.contestedAwards();
+                effectiveSettlement = settlement;
+            } else {
+                winnerIds = winners.stream().map(Player::getPlayerId).collect(Collectors.toSet());
+                contestedAwards = winners.stream().collect(Collectors.toMap(Player::getPlayerId,
+                        ignored -> winningsPerPlayer, (left, right) -> left));
+                effectiveSettlement = new HandSettlementResult(contestedAwards, Map.of(), winnerIds, 0, true);
+            }
             if (!game.isGameOver()) {
                 retainedSettlements.put(gameId, effectiveSettlement);
             } else {
@@ -245,7 +249,7 @@ public class GameStateService {
                     null,
                     null,
                     retainedSettlement,
-                    retainedSettlement ? settlement.remainder() : null,
+                    retainedSettlement ? effectiveSettlement.remainder() : null,
                     null, null, null, game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
                     game.getStateRevision());
         }
@@ -518,6 +522,7 @@ public class GameStateService {
      */
     private PublicGameStateResponse buildFinalStateResponse(String gameId, Game game, Player winner,
             boolean isForfeit, int maxPlayers) {
+        game = requireNonNull(game, "game");
         int resolvedMaxPlayers;
         if (maxPlayers >= 2 && maxPlayers <= 10) {
             resolvedMaxPlayers = maxPlayers;
@@ -613,9 +618,12 @@ public class GameStateService {
         final HandSettlementResult settlement = (rawSettlement != null && rawSettlement.settled())
                 ? rawSettlement
                 : (!game.isGameOver() && isShowdown ? retainedSettlements.get(gameId) : null);
-        boolean handSettled = settlement != null && settlement.settled();
+        HandSettlementResult projectionSettlement = settlement != null && settlement.settled()
+                ? settlement
+                : new HandSettlementResult(Map.of(), Map.of(), Set.of(), 0, false);
+        boolean handSettled = projectionSettlement.settled();
         boolean revealSettledHands = handSettled && game.getPlayers().stream()
-                .filter(player -> settlement.winnerIds().contains(player.getPlayerId()))
+                .filter(player -> projectionSettlement.winnerIds().contains(player.getPlayerId()))
                 .anyMatch(player -> player.getHandRank() != null
                         && player.getHandRank() != HandRank.NO_HAND);
         Player currentPlayer = !isShowdown && !autoAdvancing && !handSettled && !game.getActivePlayers().isEmpty()
@@ -630,15 +638,15 @@ public class GameStateService {
         }
         for (Player player : game.getPlayers()) {
             boolean isActive = !player.getHasFolded() && !player.getIsOut();
-            Boolean isWinner = handSettled ? settlement.winnerIds().contains(player.getPlayerId()) : null;
-            Integer chipsWon = handSettled ? settlement.contestedAwards().getOrDefault(player.getPlayerId(), 0) : null;
+            Boolean isWinner = handSettled ? projectionSettlement.winnerIds().contains(player.getPlayerId()) : null;
+            Integer chipsWon = handSettled ? projectionSettlement.contestedAwards().getOrDefault(player.getPlayerId(), 0) : null;
             playerStateList.add(toPublicPlayerState(
                     player,
                     player.equals(currentPlayer),
                     smallBlindPlayerId,
                     bigBlindPlayerId,
-                    handSettled && !settlement.winnerIds().isEmpty() && isActive ? player.getHandRank() : null,
-                    handSettled && !settlement.winnerIds().isEmpty() && isActive ? player.getBestHand() : null,
+                    handSettled && !projectionSettlement.winnerIds().isEmpty() && isActive ? player.getHandRank() : null,
+                    handSettled && !projectionSettlement.winnerIds().isEmpty() && isActive ? player.getBestHand() : null,
                     isWinner,
                     chipsWon,
                     revealSettledHands && isActive ? player.getHoleCards() : null));
@@ -647,11 +655,11 @@ public class GameStateService {
         String claimWinPlayerName = computeClaimWinPlayerName(game);
         boolean claimWinAvailable = claimWinPlayerName != null;
         List<String> winnerNames = handSettled
-                ? game.getPlayers().stream().filter(player -> settlement.winnerIds().contains(player.getPlayerId()))
+                ? game.getPlayers().stream().filter(player -> projectionSettlement.winnerIds().contains(player.getPlayerId()))
                         .map(Player::getName).toList()
                 : null;
         Integer winningsPerPlayer = handSettled
-                ? computeEqualWinnerAward(settlement.winnerIds(), settlement.contestedAwards())
+                ? computeEqualWinnerAward(projectionSettlement.winnerIds(), projectionSettlement.contestedAwards())
                 : null;
 
         return new PublicGameStateResponse(
@@ -674,7 +682,7 @@ public class GameStateService {
                 claimWinAvailable,
                 claimWinPlayerName,
                 handSettled,
-                handSettled ? settlement.remainder() : null,
+                handSettled ? projectionSettlement.remainder() : null,
                 currentPlayer == null ? List.of() : game.getLegalActionsFor(currentPlayer),
                 currentPlayer == null ? null : game.getBigBlind(),
                 currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer),

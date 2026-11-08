@@ -1,11 +1,7 @@
 package com.pokergame.persistence.snapshot;
 
 import com.pokergame.dto.internal.PlayerDecision;
-import com.pokergame.dto.response.GameEndResponse;
-import com.pokergame.dto.response.PublicGameStateResponse;
-import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.*;
-import com.pokergame.exception.BadRequestException;
 import com.pokergame.model.*;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;

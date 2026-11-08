@@ -636,7 +636,6 @@ class AggregateSnapshotMapperTest {
 
         // Verifications on restored room
         assertTrue(restoredRoom.hasPassword());
-        assertNull(restoredRoom.getPassword(), "restored Room getPassword must return null");
         assertEquals(room.getPasswordHash(), restoredRoom.getPasswordHash(), "restored Room must have exact passwordHash preserved");
         assertTrue(restoredRoom.checkPassword(rawSecret), "restored Room must match raw password against restored passwordHash");
         assertFalse(restoredRoom.checkPassword("WrongPass"), "restored Room must reject invalid password");
@@ -659,7 +658,6 @@ class AggregateSnapshotMapperTest {
         Room restored = recovered.room();
         assertFalse(restored.hasPassword());
         assertNull(restored.getPasswordHash());
-        assertNull(restored.getPassword());
         assertTrue(restored.checkPassword("any"));
         assertTrue(restored.checkPassword(null));
     }

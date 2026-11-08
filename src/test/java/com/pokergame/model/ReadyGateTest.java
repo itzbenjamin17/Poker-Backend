@@ -1,14 +1,9 @@
 package com.pokergame.model;
 
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
-
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.service.HandEvaluatorService;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-
 import com.pokergame.enums.ReadyGateState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;

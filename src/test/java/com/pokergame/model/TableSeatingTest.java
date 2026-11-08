@@ -255,7 +255,6 @@ class TableSeatingTest {
         @DisplayName("Skips player who is eliminated (isOut) in seat order")
         void advancePositions_SkipsEliminatedPlayer_NextActiveBecomesDealer() {
             Player p1 = player("p1", "Alice", 1000);
-            Player p2 = player("p2", "Bob", 0, true, false, false); // isOut
             Player p3 = player("p3", "Charlie", 1000);
             Player p4 = player("p4", "Dave", 1000);
             // activePlayers only contains non-out players
@@ -732,20 +731,6 @@ class TableSeatingTest {
             return new Player(name, id, chips);
         }
 
-        private Player createPlayer(String id, String name, int chips, boolean isOut, boolean hasFolded, boolean isAllIn) {
-            Player p = new Player(name, id, chips);
-            if (isOut) {
-                p.setIsOut();
-            }
-            if (hasFolded) {
-                p.doAction(PlayerAction.FOLD, 0, 0);
-            }
-            if (isAllIn) {
-                p.doAction(PlayerAction.ALL_IN, 0, 0);
-            }
-            return p;
-        }
-
         private List<Player> createPlayerList(int size) {
             List<Player> players = new ArrayList<>();
             for (int i = 0; i < size; i++) {
@@ -824,8 +809,6 @@ class TableSeatingTest {
             // Test starting from each possible player as the initial dealer anchor
             for (int startSeat = 0; startSeat < tableSize; startSeat++) {
                 String currentAnchor = "p" + startSeat;
-                int currentDealer = startSeat;
-
                 Set<Integer> dealerPositionsVisited = new HashSet<>();
 
                 for (int hand = 1; hand <= tableSize; hand++) {
@@ -849,7 +832,6 @@ class TableSeatingTest {
 
                     // Prepare next hand
                     currentAnchor = result.dealerAnchorPlayerId();
-                    currentDealer = result.dealerPosition();
                 }
 
                 // Every seat was dealer exactly once in the N-hand cycle
@@ -1650,10 +1632,6 @@ class TableSeatingTest {
             @DisplayName("Transition from 3 to 2 players applies heads-up rules immediately on advancePositions")
             void transitionThreeToTwo_AdvancePositions_AppliesHeadsUpImmediately() {
                 Game game = createGame(3, 1000);
-                List<Player> initial = List.copyOf(game.getActivePlayers());
-                Player p0 = initial.get(0);
-                Player p1 = initial.get(1);
-                Player p2 = initial.get(2);
 
                 // In 3-player game: dealer=0 (p0), SB=1 (p1), BB=2 (p2), current=0 (p0 acts first UTG)
                 assertEquals(0, game.getDealerPosition());
@@ -1661,7 +1639,7 @@ class TableSeatingTest {
                 assertEquals(2, game.getBigBlindPosition());
 
                 // p2 departs
-                game.removePlayerFromGame(p2);
+                game.removePlayerFromGame(game.getActivePlayers().get(2));
                 assertEquals(2, game.getActivePlayers().size());
 
                 // Next hand starts: advance positions

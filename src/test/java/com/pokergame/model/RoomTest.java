@@ -797,7 +797,6 @@ class RoomTest {
         Room privateRoom = new Room("priv-1", "Private Room", "Host", 4, 10, 20, 500, raw);
 
         assertTrue(privateRoom.hasPassword());
-        assertNull(privateRoom.getPassword(), "getPassword must return null to prevent cleartext exposure");
         assertNotNull(privateRoom.getPasswordHash());
         assertNotEquals(raw, privateRoom.getPasswordHash());
         assertTrue(privateRoom.getPasswordHash().startsWith("$2a$") || privateRoom.getPasswordHash().startsWith("$2b$"));
@@ -878,7 +877,6 @@ class RoomTest {
 
         assertFalse(publicRoom.hasPassword());
         assertNull(publicRoom.getPasswordHash());
-        assertNull(publicRoom.getPassword());
         assertTrue(publicRoom.checkPassword("any-input", passwordEncoder));
         assertTrue(publicRoom.matchesPassword("any-input", passwordEncoder));
         assertTrue(publicRoom.checkPassword(null, passwordEncoder));

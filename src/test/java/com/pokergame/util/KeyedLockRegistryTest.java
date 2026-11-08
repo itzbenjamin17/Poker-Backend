@@ -104,11 +104,11 @@ class KeyedLockRegistryTest {
     void nestedAcquisitionMaintainsLockUntilOuterCloses() {
         String key = "room-1";
 
-        try (LockLease outer = lockRegistry.acquire(key)) {
+        try (LockLease _ = lockRegistry.acquire(key)) {
             assertThat(lockRegistry.reservationCount(key)).isEqualTo(1);
             assertThat(lockRegistry.isLocked(key)).isTrue();
 
-            try (LockLease inner = lockRegistry.acquire(key)) {
+            try (LockLease _ = lockRegistry.acquire(key)) {
                 assertThat(lockRegistry.reservationCount(key)).isEqualTo(2);
                 assertThat(lockRegistry.isLocked(key)).isTrue();
             }

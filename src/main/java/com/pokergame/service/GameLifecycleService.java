@@ -1669,16 +1669,6 @@ public class GameLifecycleService {
         return (int) game.getPlayers().stream().filter(player -> isTournamentContender(game, player)).count();
     }
 
-    private int getConnectedContenderCount(Game game) {
-        return (int) game.getPlayers().stream()
-                .filter(player -> TournamentEligibility.isContender(game, player) && !player.getIsDisconnected()).count();
-    }
-
-    private boolean isContender(Game game, String playerName) {
-        return game.getPlayers().stream().anyMatch(player -> player.getName().equals(playerName)
-                && TournamentEligibility.isContender(game, player));
-    }
-
     /**
      * Removes a grace-expired player from room and game under one room transaction
      * when the expected membership identity and expected deadline match current domain state.
