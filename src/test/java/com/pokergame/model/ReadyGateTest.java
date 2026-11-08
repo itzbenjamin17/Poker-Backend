@@ -1,5 +1,14 @@
 package com.pokergame.model;
 
+import com.pokergame.dto.internal.PlayerDecision;
+import com.pokergame.enums.*;
+import com.pokergame.exception.BadRequestException;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import static org.mockito.Mockito.*;
+
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.service.HandEvaluatorService;
@@ -1595,6 +1604,28 @@ class ReadyGateTest {
             GameEndResponse endResp = new GameEndResponse("GAME_END", "adv-delegation-game", "Alice", 1800, false, "Won", null);
             game.setRetainedTerminalResult(endResp);
             assertEquals(endResp, game.getRetainedTerminalResult());
+        }
+    }
+
+    @Nested
+    @ExtendWith(MockitoExtension.class)
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    class AggregateScenarios extends GameScenarioFixture {
+
+        @Test
+        void testAreAllReadyEligiblePlayersReadyExcludesZeroChipPlayers() {
+                game.openReadyCountdown(System.currentTimeMillis() + 10_000);
+
+                // Set player 1 to 0 chips
+                game.getPlayers().get(1).doAction(PlayerAction.ALL_IN, 0, 0);
+
+                // Only player 0 and player 2 have chips > 0
+                game.getPlayers().get(0).setReadyForNextHand(true);
+                assertFalse(game.areAllReadyEligiblePlayersReady());
+
+                game.getPlayers().get(2).setReadyForNextHand(true);
+                // Player 1 has 0 chips, so with player 0 and 2 ready, all eligible should be ready
+                assertTrue(game.areAllReadyEligiblePlayersReady());
         }
     }
 }

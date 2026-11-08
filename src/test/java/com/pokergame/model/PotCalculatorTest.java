@@ -1,5 +1,18 @@
 package com.pokergame.model;
 
+import com.pokergame.dto.internal.PlayerDecision;
+import com.pokergame.dto.internal.TurnOutcome;
+import com.pokergame.enums.*;
+import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.UnauthorisedActionException;
+import com.pokergame.service.HandEvaluatorService;
+import java.util.ArrayList;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import static org.mockito.Mockito.*;
+
 import com.pokergame.enums.GamePhase;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Nested;
@@ -1404,6 +1417,200 @@ class PotCalculatorTest {
                     .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
                     .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false)
                     .build();
+        }
+    }
+
+    @Nested
+    @ExtendWith(MockitoExtension.class)
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    class AggregateScenarios extends GameScenarioFixture {
+
+        @Test
+        void foldedContributionBoundariesDoNotCreateOddChipsAcrossSameEligiblePot() {
+                List<Card> highCard = List.of(new Card(Rank.ACE, Suit.SPADES));
+                when(mockHandEvaluator.getBestHand(any(), any()))
+                                .thenReturn(new HandEvaluationResult(highCard, HandRank.HIGH_CARD));
+                when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
+                Player a = Player.restoreBuilder().name("A").playerId("a").chips(900).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(100).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player b = Player.restoreBuilder().name("B").playerId("b").chips(900).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(100).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player f1 = Player.restoreBuilder().name("F1").playerId("f1").chips(995).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(5).hasFolded(true)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player f2 = Player.restoreBuilder().name("F2").playerId("f2").chips(990).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(10).hasFolded(true)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player f3 = Player.restoreBuilder().name("F3").playerId("f3").chips(985).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(15).hasFolded(true)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Game ordinary = Game.restoreBuilder().gameId("coalesce-ordinary-pots")
+                                .players(List.of(a, b, f1, f2, f3)).activePlayerIds(List.of("a", "b", "f1", "f2", "f3"))
+                                .remainingDeck(List.of()).communityCards(List.of()).pot(230).dealerPosition(0)
+                                .smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(0).currentHighestBet(100)
+                                .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
+                                .handContributions(Map.of("a", 100, "b", 100, "f1", 5, "f2", 10, "f3", 15))
+                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                ordinary.conductShowdown();
+
+                assertEquals(1015, a.getChips());
+                assertEquals(1015, b.getChips());
+                assertEquals(0, ordinary.getPot());
+        }
+
+        @Test
+        void deadUpperLayersJoinNearestEligibleLowerAllocation() {
+                Player a = Player.restoreBuilder().name("A").playerId("a").chips(0).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player b = Player.restoreBuilder().name("B").playerId("b").chips(0).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player c = Player.restoreBuilder().name("C").playerId("c").chips(0).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(true)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player d = Player.restoreBuilder().name("D").playerId("d").chips(0).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(true)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Game game = Game.restoreBuilder().gameId("dead-upper-layer").players(List.of(a, b, c, d))
+                                .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(List.of())
+                                .communityCards(List.of()).pot(550).dealerPosition(0).smallBlindPosition(1)
+                                .bigBlindPosition(2).currentPlayerPosition(0).currentHighestBet(200)
+                                .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
+                                .handContributions(Map.of("a", 50, "b", 100, "c", 200, "d", 200))
+                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+                List<Card> high = List.of(new Card(Rank.ACE, Suit.SPADES));
+                List<Card> low = List.of(new Card(Rank.KING, Suit.SPADES));
+                when(mockHandEvaluator.getBestHand(any(), any()))
+                                .thenReturn(new HandEvaluationResult(high, HandRank.ROYAL_FLUSH))
+                                .thenReturn(new HandEvaluationResult(low, HandRank.ONE_PAIR));
+
+                assertEquals(List.of(a, b), game.conductShowdown());
+                assertEquals(200, a.getChips());
+                assertEquals(350, b.getChips());
+                assertEquals(0, game.getPot());
+                assertEquals(Map.of("a", 200, "b", 350), game.getLastSettlementResult().contestedAwards());
+                assertTrue(game.getLastSettlementResult().refunds().isEmpty());
+        }
+
+        @Test
+        void departedContributionStillDefinesSidePotAndCannotReceiveRefund() {
+                Player shortPlayer = new Player("Short", "s", 0);
+                Player midPlayer = new Player("Mid", "m", 150);
+                Game game = Game.restoreBuilder().gameId("departed-contributor").players(List.of(shortPlayer, midPlayer))
+                                .activePlayerIds(List.of("s", "m")).remainingDeck(List.of()).communityCards(List.of())
+                                .pot(350).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
+                                .currentPlayerPosition(0).currentHighestBet(150).currentPhase(GamePhase.RIVER)
+                                .gameOver(false).smallBlind(10).bigBlind(20)
+                                .handContributions(Map.of("s", 50, "m", 150, "departed", 150))
+                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+                List<Card> high = List.of(new Card(Rank.ACE, Suit.SPADES));
+                List<Card> low = List.of(new Card(Rank.KING, Suit.SPADES));
+                when(mockHandEvaluator.getBestHand(any(), any()))
+                                .thenReturn(new HandEvaluationResult(high, HandRank.ROYAL_FLUSH))
+                                .thenReturn(new HandEvaluationResult(low, HandRank.ONE_PAIR));
+
+                game.conductShowdown();
+
+                assertEquals(150, shortPlayer.getChips());
+                assertEquals(350, midPlayer.getChips());
+                assertEquals(0, game.getPot());
+                assertEquals(Map.of("s", 150, "m", 200), game.getLastSettlementResult().contestedAwards());
+                assertTrue(game.getLastSettlementResult().refunds().isEmpty());
+        }
+
+        @Test
+        void deadBlindLayersPayRetainedZeroContributionContender() {
+                Player contender = new Player("Contender", "a", 100);
+                Player foldedSmallBlind = Player.restoreBuilder().name("Folded SB").playerId("b").chips(90)
+                                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(10)
+                                .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player foldedBigBlind = Player.restoreBuilder().name("Folded BB").playerId("c").chips(80)
+                                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(20)
+                                .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Game game = Game.restoreBuilder().gameId("zero-contribution-contender")
+                                .players(List.of(contender, foldedSmallBlind, foldedBigBlind))
+                                .activePlayerIds(List.of("a", "b", "c")).remainingDeck(List.of()).communityCards(List.of())
+                                .pot(30).dealerPosition(0).smallBlindPosition(1).bigBlindPosition(2)
+                                .currentPlayerPosition(0).currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP)
+                                .gameOver(false).smallBlind(10).bigBlind(20)
+                                .handContributions(Map.of("b", 10, "c", 20)).preHandCarryOver(0)
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                game.conductShowdown();
+
+                assertEquals(130, contender.getChips());
+                assertEquals(0, game.getPot());
+                assertEquals(Map.of("a", 30), game.getLastSettlementResult().contestedAwards());
+        }
+
+        /**
+         * Protects the expected behavior for get pot breakdown treats single player layer as uncalled.
+         */
+        @Test
+        void testGetPotBreakdown_TreatsSinglePlayerLayerAsUncalled() {
+                List<Player> playersWithShove = new ArrayList<>();
+                playersWithShove.add(new Player("AllIn", "a1", 480));
+                playersWithShove.add(new Player("SmallBlind", "s1", 1000));
+                playersWithShove.add(new Player("BigBlind", "b1", 1000));
+
+                Game shoveGame = new Game("uncalled-breakdown", playersWithShove, 10, 20, mockHandEvaluator);
+                shoveGame.postBlinds();
+
+                Player allInPlayer = shoveGame.getCurrentPlayer();
+                shoveGame.processPlayerDecision(allInPlayer,
+                                new PlayerDecision(PlayerAction.ALL_IN, 0, allInPlayer.getPlayerId()));
+
+                assertEquals(List.of(510), shoveGame.getPotBreakdown());
+                assertEquals(0, shoveGame.getUncalledAmount());
+        }
+
+        @Test
+        void livePotKeepsEstablishedAllInCapAndPendingBetVisible() {
+                Player shortStack = Player.restoreBuilder().name("Short").playerId("short").chips(0).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(50).hasFolded(false)
+                                .allIn(true).out(false).disconnected(false).readyForNextHand(false).build();
+                Player bettor = Player.restoreBuilder().name("Bettor").playerId("bettor").chips(800).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(250).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Player owing = Player.restoreBuilder().name("Owing").playerId("owing").chips(950).holeCards(List.of())
+                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(50).hasFolded(false)
+                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                Game live = Game.restoreBuilder().gameId("live-cap-pending-bet").players(List.of(shortStack, bettor, owing))
+                                .activePlayerIds(List.of("short", "bettor", "owing")).remainingDeck(List.of())
+                                .communityCards(List.of()).pot(350).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
+                                .currentPlayerPosition(2).currentHighestBet(250).currentPhase(GamePhase.FLOP)
+                                .gameOver(false).smallBlind(10).bigBlind(20)
+                                .handContributions(Map.of("short", 50, "bettor", 250, "owing", 50))
+                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                assertEquals(List.of(150, 200), live.getPotBreakdown());
+                assertEquals(0, live.getUncalledAmount());
+        }
+
+        @Test
+        void liveCapSlicesIncludeFoldedChipsBelowCapAndPreHandCarryOver() {
+                Game live = livePotWithFoldedBlindAndCarryOver(370, 0);
+                assertEquals(List.of(170, 200), live.getPotBreakdown());
+                assertEquals(0, live.getUncalledAmount());
+
+                Game carried = livePotWithFoldedBlindAndCarryOver(380, 10);
+                assertEquals(List.of(180, 200), carried.getPotBreakdown(),
+                                "Pre-hand carry-over belongs in the main live allocation");
+                assertEquals(0, carried.getUncalledAmount());
         }
     }
 }

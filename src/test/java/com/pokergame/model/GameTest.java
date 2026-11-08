@@ -1,5 +1,9 @@
 package com.pokergame.model;
 
+import com.pokergame.service.HandEvaluatorService;
+import org.junit.jupiter.api.BeforeEach;
+import org.mockito.Mock;
+
 import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.enums.*;
 import com.pokergame.exception.BadRequestException;
@@ -24,7 +28,7 @@ import static org.mockito.Mockito.*;
 @DisplayName("Game model")
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-class GameTest extends GameIntegrationTestSupport {
+class GameTest extends GameScenarioFixture {
 
         /**
          * Protects the expected behavior for game creation.
@@ -300,47 +304,6 @@ class GameTest extends GameIntegrationTestSupport {
         }
 
         /**
-         * Protects the expected behavior for is betting round complete.
-         */
-        @Test
-        void testIsBettingRoundComplete() {
-                // Initially not complete because no one has had an initial turn yet.
-                assertFalse(game.isBettingRoundComplete());
-
-                // Set everyone has had initial turn
-                game.setEveryoneHasHadInitialTurn(true);
-
-                // Still not complete because of different bets
-                game.postBlinds();
-                assertFalse(game.isBettingRoundComplete());
-
-                // Make everyone match the bet
-                for (Player player : game.getActivePlayers()) {
-                        if (player.getCurrentBet() < game.getCurrentHighestBet()) {
-                                int callAmount = game.getCurrentHighestBet() - player.getCurrentBet();
-                                player.payChips(0, callAmount);
-                        }
-                }
-
-                // Now it should be complete
-                assertTrue(game.isBettingRoundComplete());
-        }
-
-        /**
-         * Protects the expected behavior for set everyone has had initial turn.
-         */
-        @Test
-        void testSetEveryoneHasHadInitialTurn() {
-                assertFalse(game.isBettingRoundComplete());
-
-                game.setEveryoneHasHadInitialTurn(true);
-
-                // All players have 0 bet initially, so with everyone having had a turn, round
-                // is complete
-                assertTrue(game.isBettingRoundComplete());
-        }
-
-        /**
          * Protects the expected behavior for reset bets for round.
          */
         @Test
@@ -497,22 +460,6 @@ class GameTest extends GameIntegrationTestSupport {
                 assertTrue(game.isTournamentOver());
         }
 
-        @Test
-        void testAreAllReadyEligiblePlayersReadyExcludesZeroChipPlayers() {
-                game.openReadyCountdown(System.currentTimeMillis() + 10_000);
-
-                // Set player 1 to 0 chips
-                game.getPlayers().get(1).doAction(PlayerAction.ALL_IN, 0, 0);
-
-                // Only player 0 and player 2 have chips > 0
-                game.getPlayers().get(0).setReadyForNextHand(true);
-                assertFalse(game.areAllReadyEligiblePlayersReady());
-
-                game.getPlayers().get(2).setReadyForNextHand(true);
-                // Player 1 has 0 chips, so with player 0 and 2 ready, all eligible should be ready
-                assertTrue(game.areAllReadyEligiblePlayersReady());
-        }
-
         /**
          * Protects the expected behavior for dealing full hand progression.
          */
@@ -578,54 +525,6 @@ class GameTest extends GameIntegrationTestSupport {
         }
 
         @Test
-        @DisplayName("restoreBuilder fully reconstructs the game state from persistence boundaries")
-        void testRestoreBuilder() {
-                Player p1 = new Player("P1", "p1-id", 500);
-                Player p2 = new Player("P2", "p2-id", 300);
-                List<Player> restoredPlayers = List.of(p1, p2);
-
-                List<Card> deckCards = List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.HEARTS));
-                List<Card> community = List.of(new Card(Rank.TWO, Suit.DIAMONDS));
-
-                Map<String, Integer> contribs = Map.of("p1-id", 100);
-                Set<String> acted = Set.of("p1-id");
-                Map<ScheduledGameTask, Long> tasks = Map.of(ScheduledGameTask.AUTO_ADVANCE, 12345L);
-
-                Game restored = Game.restoreBuilder()
-                                .gameId("restored-game")
-                                .players(restoredPlayers)
-                                .activePlayerIds(List.of("p1-id", "p2-id"))
-                                .remainingDeck(deckCards)
-                                .communityCards(community)
-                                .pot(100)
-                                .dealerPosition(1)
-                                .smallBlindPosition(0)
-                                .bigBlindPosition(1)
-                                .currentPlayerPosition(0)
-                                .currentHighestBet(50)
-                                .currentPhase(GamePhase.FLOP)
-                                .gameOver(false)
-                                .smallBlind(10)
-                                .bigBlind(20)
-                                .handContributions(contribs)
-                                .readyCountdownActive(true)
-                                .readyCountdownDeadlineEpochMs(9999L)
-                                .everyoneHasHadInitialTurn(true)
-                                .actedPlayersInRound(acted)
-                                .scheduledTaskDeadlines(tasks)
-                                .handEvaluator(mockHandEvaluator)
-                                .build();
-
-                assertEquals("restored-game", restored.getGameId());
-                assertEquals(100, restored.getPot());
-                assertEquals(GamePhase.FLOP, restored.getCurrentPhase());
-                assertTrue(restored.getCommunityCards().contains(new Card(Rank.TWO, Suit.DIAMONDS)));
-                assertEquals(2, restored.getActivePlayers().size());
-                assertEquals(10, restored.getSmallBlind());
-                assertEquals(20, restored.getBigBlind());
-        }
-
-        @Test
         @DisplayName("resetForNewHand clears actedPlayersInRound")
         void resetForNewHand_ClearsActedPlayersInRound() {
                 game.postBlinds();
@@ -641,4 +540,74 @@ class GameTest extends GameIntegrationTestSupport {
                                 "resetForNewHand must clear actedPlayersInRound");
         }
 
+}
+
+/** Shared aggregate fixtures for Game integration scenarios. */
+abstract class GameScenarioFixture {
+
+        @Mock
+        protected HandEvaluatorService mockHandEvaluator;
+
+        protected List<Player> players;
+        protected Game game;
+
+        /**
+         * Initializes the test fixtures before each scenario.
+         */
+        @BeforeEach
+        void setUp() {
+                players = new ArrayList<>();
+                players.add(new Player("Player1", "p1", 1000));
+                players.add(new Player("Player2", "p2", 1000));
+                players.add(new Player("Player3", "p3", 1000));
+
+                game = new Game("game123", players, 10, 20, mockHandEvaluator);
+        }
+
+        protected Player restoredPlayer(String name, String id, int chips, int currentBet, boolean allIn) {
+                return Player.restoreBuilder().name(name).playerId(id).chips(chips).currentBet(currentBet)
+                                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
+                                .hasFolded(false).allIn(allIn).out(false).disconnected(false)
+                                .readyForNextHand(false).build();
+        }
+
+        protected Game restoredBettingGame(String id, List<Player> handPlayers, int pot, int highestBet,
+                        int currentPlayerPosition, Map<String, Integer> contributions,
+                        Map<String, Integer> lastFullRaiseByStreet,
+                        Map<String, Integer> lastActedWagerByPlayer) {
+                return Game.restoreBuilder().gameId(id).players(handPlayers)
+                                .activePlayerIds(handPlayers.stream().map(Player::getPlayerId).toList())
+                                .remainingDeck(List.of()).communityCards(List.of()).pot(pot).dealerPosition(0)
+                                .smallBlindPosition(0).bigBlindPosition(Math.min(1, handPlayers.size() - 1))
+                                .currentPlayerPosition(currentPlayerPosition).currentHighestBet(highestBet)
+                                .currentPhase(GamePhase.PRE_FLOP).gameOver(false).smallBlind(5).bigBlind(10)
+                                .handContributions(contributions).preHandCarryOver(0)
+                                .lastFullRaiseByStreet(lastFullRaiseByStreet)
+                                .lastActedWagerByPlayer(lastActedWagerByPlayer)
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+        }
+
+        protected Game livePotWithFoldedBlindAndCarryOver(int pot, int carryOver) {
+                Player shortStack = restoredPlayer("Short", "short-" + pot, 0, 50, true);
+                Player bettor = restoredPlayer("Bettor", "bettor-" + pot, 800, 250, false);
+                Player owing = restoredPlayer("Owing", "owing-" + pot, 950, 50, false);
+                Player foldedBlind = Player.restoreBuilder().name("Folded BB").playerId("folded-" + pot).chips(980)
+                                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(20)
+                                .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+                String shortId = shortStack.getPlayerId();
+                String bettorId = bettor.getPlayerId();
+                String owingId = owing.getPlayerId();
+                String foldedId = foldedBlind.getPlayerId();
+                return Game.restoreBuilder().gameId("live-folded-cap-" + pot)
+                                .players(List.of(shortStack, bettor, owing, foldedBlind))
+                                .activePlayerIds(List.of(shortId, bettorId, owingId, foldedId)).remainingDeck(List.of())
+                                .communityCards(List.of()).pot(pot).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
+                                .currentPlayerPosition(2).currentHighestBet(250).currentPhase(GamePhase.FLOP).gameOver(false)
+                                .smallBlind(10).bigBlind(20).handContributions(Map.of(shortId, 50, bettorId, 250,
+                                                owingId, 50, foldedId, 20)).preHandCarryOver(carryOver)
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                                .scheduledTaskDeadlines(Map.of()).handEvaluator(mockHandEvaluator).build();
+        }
 }

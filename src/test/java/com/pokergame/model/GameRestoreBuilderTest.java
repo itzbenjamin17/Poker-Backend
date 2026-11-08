@@ -1,5 +1,12 @@
 package com.pokergame.model;
 
+import com.pokergame.dto.internal.PlayerDecision;
+import java.util.ArrayList;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+
 import org.junit.jupiter.api.Nested;
 
 import com.pokergame.dto.response.GameEndResponse;
@@ -1120,6 +1127,60 @@ class GameRestoreBuilderTest {
                     .scheduledTaskDeadlines(Map.of())
                     .scheduledTaskGenerations(Map.of())
                     .handEvaluator(new HandEvaluatorService());
+        }
+    }
+
+    @Nested
+    @ExtendWith(MockitoExtension.class)
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    class AggregateScenarios extends GameScenarioFixture {
+
+        @Test
+        @DisplayName("restoreBuilder fully reconstructs the game state from persistence boundaries")
+        void testRestoreBuilder() {
+                Player p1 = new Player("P1", "p1-id", 500);
+                Player p2 = new Player("P2", "p2-id", 300);
+                List<Player> restoredPlayers = List.of(p1, p2);
+
+                List<Card> deckCards = List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.HEARTS));
+                List<Card> community = List.of(new Card(Rank.TWO, Suit.DIAMONDS));
+
+                Map<String, Integer> contribs = Map.of("p1-id", 100);
+                Set<String> acted = Set.of("p1-id");
+                Map<ScheduledGameTask, Long> tasks = Map.of(ScheduledGameTask.AUTO_ADVANCE, 12345L);
+
+                Game restored = Game.restoreBuilder()
+                                .gameId("restored-game")
+                                .players(restoredPlayers)
+                                .activePlayerIds(List.of("p1-id", "p2-id"))
+                                .remainingDeck(deckCards)
+                                .communityCards(community)
+                                .pot(100)
+                                .dealerPosition(1)
+                                .smallBlindPosition(0)
+                                .bigBlindPosition(1)
+                                .currentPlayerPosition(0)
+                                .currentHighestBet(50)
+                                .currentPhase(GamePhase.FLOP)
+                                .gameOver(false)
+                                .smallBlind(10)
+                                .bigBlind(20)
+                                .handContributions(contribs)
+                                .readyCountdownActive(true)
+                                .readyCountdownDeadlineEpochMs(9999L)
+                                .everyoneHasHadInitialTurn(true)
+                                .actedPlayersInRound(acted)
+                                .scheduledTaskDeadlines(tasks)
+                                .handEvaluator(mockHandEvaluator)
+                                .build();
+
+                assertEquals("restored-game", restored.getGameId());
+                assertEquals(100, restored.getPot());
+                assertEquals(GamePhase.FLOP, restored.getCurrentPhase());
+                assertTrue(restored.getCommunityCards().contains(new Card(Rank.TWO, Suit.DIAMONDS)));
+                assertEquals(2, restored.getActivePlayers().size());
+                assertEquals(10, restored.getSmallBlind());
+                assertEquals(20, restored.getBigBlind());
         }
     }
 }

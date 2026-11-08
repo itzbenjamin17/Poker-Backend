@@ -14,7 +14,7 @@ import java.util.Map;
 
 /** Stateless betting rules; the game retains ownership of all mutable state. */
 final class BettingRound {
-    private static final Logger logger = LoggerFactory.getLogger(Game.class);
+    private static final Logger logger = LoggerFactory.getLogger(BettingRound.class);
     private BettingRound() {}
 
     record DecisionResult(PlayerDecision decision, int amount, String conversionMessage) {}

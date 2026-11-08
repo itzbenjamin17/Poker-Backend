@@ -1,5 +1,16 @@
 package com.pokergame.model;
 
+import com.pokergame.dto.internal.PlayerDecision;
+import com.pokergame.dto.internal.TurnOutcome;
+import com.pokergame.enums.*;
+import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.UnauthorisedActionException;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import static org.mockito.Mockito.*;
+
 import com.pokergame.service.HandEvaluatorService;
 
 import org.junit.jupiter.params.provider.ValueSource;
@@ -1821,6 +1832,257 @@ class TableSeatingTest {
                 assertEquals(2, table.size());
                 assertEquals(0, result.currentPlayerPosition());
             }
+        }
+    }
+
+    @Nested
+    @ExtendWith(MockitoExtension.class)
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    class AggregateScenarios extends GameScenarioFixture {
+
+        @Test
+        void departedBlindIdentityStaysAnchoredAndNextDealerWalksOriginalSeatOrder() {
+                Player dealer = new Player("D", "d", 100);
+                Player smallBlind = new Player("A", "a", 100);
+                Player bigBlind = new Player("B", "b", 100);
+                Player c = new Player("C", "c", 100);
+                Game anchored = Game.restoreBuilder().gameId("position-anchor")
+                                .players(List.of(dealer, smallBlind, bigBlind, c)).activePlayerIds(List.of("d", "a", "b", "c"))
+                                .remainingDeck(List.of()).communityCards(List.of()).pot(0).dealerPosition(0)
+                                .smallBlindPosition(1).bigBlindPosition(2).currentPlayerPosition(3).currentHighestBet(0)
+                                .currentPhase(GamePhase.FLOP).gameOver(false).smallBlind(5).bigBlind(10)
+                                .handContributions(Map.of()).preHandCarryOver(0).handSeatOrder(List.of("d", "a", "b", "c"))
+                                .dealerAnchorPlayerId("d").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                                .scheduledTaskDeadlines(Map.of()).handEvaluator(mockHandEvaluator).build();
+
+                anchored.removePlayerFromGame(dealer);
+                anchored.removePlayerFromGame(bigBlind);
+
+                assertEquals("a", anchored.getSmallBlindPlayerId());
+                assertEquals("b", anchored.getBigBlindPlayerId(), "The departed payer identity is retained, not reassigned");
+                assertFalse(anchored.getActivePlayers().stream().anyMatch(p -> p.getPlayerId().equals("b")));
+                anchored.advancePositions();
+                assertEquals("a", anchored.getDealerAnchorPlayerId());
+                assertEquals("a", anchored.getSmallBlindPlayerId());
+                assertEquals("c", anchored.getBigBlindPlayerId());
+        }
+
+        @Test
+        void postFlopActorUsesDealerAnchorAfterSmallBlindLeavesDuringPreFlop() {
+                Player a = restoredPlayer("A", "a", 990, 10, false);
+                Player b = restoredPlayer("B", "b", 980, 20, false);
+                Player c = restoredPlayer("C", "c", 1000, 0, false);
+                Player d = restoredPlayer("D", "d", 1000, 0, false);
+                Game hand = Game.restoreBuilder().gameId("post-flop-seat-anchor")
+                                .players(List.of(a, b, c, d)).activePlayerIds(List.of("a", "b", "c", "d"))
+                                .remainingDeck(List.of(new Card(Rank.TWO, Suit.SPADES), new Card(Rank.THREE, Suit.SPADES),
+                                                new Card(Rank.FOUR, Suit.SPADES), new Card(Rank.FIVE, Suit.SPADES),
+                                                new Card(Rank.SIX, Suit.SPADES))).communityCards(List.of()).pot(30).dealerPosition(3)
+                                .smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(2)
+                                .currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP).gameOver(false)
+                                .smallBlind(10).bigBlind(20).handContributions(Map.of("a", 10, "b", 20))
+                                .preHandCarryOver(0).handSeatOrder(List.of("a", "b", "c", "d"))
+                                .dealerAnchorPlayerId("d").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                hand.removePlayerFromGame(a);
+                assertEquals("c", hand.getCurrentPlayer().getPlayerId());
+                hand.processPlayerDecision(c, new PlayerDecision(PlayerAction.CALL, 0, "c"));
+                hand.processPlayerDecision(d, new PlayerDecision(PlayerAction.CALL, 0, "d"));
+                hand.processPlayerDecision(b, new PlayerDecision(PlayerAction.CHECK, 0, "b"));
+
+                assertEquals(GamePhase.FLOP, hand.getCurrentPhase());
+                assertEquals("b", hand.getCurrentPlayer().getPlayerId(),
+                                "First post-flop action starts after departed dealer D's stable hand anchor");
+                assertEquals("d", hand.getDealerAnchorPlayerId());
+                assertEquals("a", hand.getSmallBlindPlayerId(), "The departed blind payer identity remains recorded");
+
+                Player a2 = restoredPlayer("A2", "a2", 1000, 0, false);
+                Player b2 = restoredPlayer("B2", "b2", 1000, 0, false);
+                Player c2 = restoredPlayer("C2", "c2", 1000, 0, false);
+                Player d2 = restoredPlayer("D2", "d2", 1000, 0, false);
+                Game dealerLeft = Game.restoreBuilder().gameId("departed-dealer-post-flop")
+                                .players(List.of(a2, b2, c2, d2)).activePlayerIds(List.of("a2", "b2", "c2", "d2"))
+                                .remainingDeck(List.of()).communityCards(List.of()).pot(0).dealerPosition(3)
+                                .smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(2)
+                                .currentHighestBet(0).currentPhase(GamePhase.FLOP).gameOver(false)
+                                .smallBlind(10).bigBlind(20).handContributions(Map.of()).preHandCarryOver(0)
+                                .handSeatOrder(List.of("a2", "b2", "c2", "d2")).dealerAnchorPlayerId("d2")
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+                dealerLeft.removePlayerFromGame(d2);
+                dealerLeft.resetBetsForRound();
+                assertEquals("a2", dealerLeft.getCurrentPlayer().getPlayerId(),
+                                "A departed dealer anchor still determines the clockwise first seat");
+        }
+
+        @Test
+        void removingCurrentPlayerKeepsImmediateEligibleSuccessorAsActor() {
+                Player a = restoredPlayer("A", "a", 1000, 0, false);
+                Player b = restoredPlayer("B", "b", 1000, 0, false);
+                Player c = restoredPlayer("C", "c", 1000, 0, false);
+                Player d = restoredPlayer("D", "d", 1000, 0, false);
+                Game hand = Game.restoreBuilder().gameId("leave-successor")
+                                .players(List.of(a, b, c, d)).activePlayerIds(List.of("a", "b", "c", "d"))
+                                .remainingDeck(List.of()).communityCards(List.of()).pot(0).dealerPosition(0)
+                                .smallBlindPosition(1).bigBlindPosition(2).currentPlayerPosition(1)
+                                .currentHighestBet(0).currentPhase(GamePhase.FLOP).gameOver(false).smallBlind(5).bigBlind(10)
+                                .handContributions(Map.of()).preHandCarryOver(0).handSeatOrder(List.of("a", "b", "c", "d"))
+                                .dealerAnchorPlayerId("a").readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                hand.removePlayerFromGame(b);
+                TurnOutcome outcome = hand.reconcileAfterPlayerRemoval();
+
+                assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, outcome.type());
+                assertEquals("c", hand.getCurrentPlayer().getPlayerId(), "The successor is selected exactly once");
+        }
+
+        @Test
+        void departureThatCompletesMatchedFlopTurnsAdvancesToTurnOnce() {
+                Player a = restoredPlayer("A", "a", 1000, 0, false);
+                Player b = restoredPlayer("B", "b", 1000, 0, false);
+                Player c = restoredPlayer("C", "c", 1000, 0, false);
+                Game hand = Game.restoreBuilder().gameId("leave-completes-flop")
+                                .players(List.of(a, b, c)).activePlayerIds(List.of("a", "b", "c"))
+                                .remainingDeck(List.of(new Card(Rank.SIX, Suit.CLUBS))).communityCards(List.of(
+                                                new Card(Rank.TWO, Suit.CLUBS), new Card(Rank.THREE, Suit.DIAMONDS),
+                                                new Card(Rank.FOUR, Suit.HEARTS)))
+                                .pot(0).dealerPosition(0).smallBlindPosition(1).bigBlindPosition(2)
+                                .currentPlayerPosition(2).currentHighestBet(0).currentPhase(GamePhase.FLOP)
+                                .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
+                                .handSeatOrder(List.of("a", "b", "c")).dealerAnchorPlayerId("a")
+                                .readyCountdownActive(false).everyoneHasHadInitialTurn(false)
+                                .actedPlayersInRound(Set.of("a", "b")).scheduledTaskDeadlines(Map.of())
+                                .handEvaluator(mockHandEvaluator).build();
+
+                hand.removePlayerFromGame(c);
+                TurnOutcome outcome = hand.reconcileAfterPlayerRemoval();
+
+                assertEquals(TurnOutcome.TurnOutcomeType.PHASE_ADVANCED, outcome.type());
+                assertEquals(GamePhase.TURN, hand.getCurrentPhase());
+                assertEquals(4, hand.getCommunityCards().size(), "The turn card is dealt once after the three-card flop");
+        }
+
+        /**
+         * Protects the expected behavior for heads up post blinds dealer posts small blind.
+         */
+        @Test
+        void testHeadsUpPostBlindsDealerPostsSmallBlind() {
+                List<Player> headsUpPlayers = new ArrayList<>();
+                headsUpPlayers.add(new Player("Dealer", "d1", 1000));
+                headsUpPlayers.add(new Player("Opponent", "o1", 1000));
+
+                Game headsUpGame = new Game("heads-up-sb", headsUpPlayers, 10, 20, mockHandEvaluator);
+                headsUpGame.postBlinds();
+
+                assertEquals(0, headsUpGame.getDealerPosition());
+                assertEquals(10, headsUpGame.getActivePlayers().getFirst().getCurrentBet());
+        }
+
+        /**
+         * Protects the expected behavior for heads up post blinds non dealer posts big blind.
+         */
+        @Test
+        void testHeadsUpPostBlindsNonDealerPostsBigBlind() {
+                List<Player> headsUpPlayers = new ArrayList<>();
+                headsUpPlayers.add(new Player("Dealer", "d1", 1000));
+                headsUpPlayers.add(new Player("Opponent", "o1", 1000));
+
+                Game headsUpGame = new Game("heads-up-bb", headsUpPlayers, 10, 20, mockHandEvaluator);
+                headsUpGame.postBlinds();
+
+                assertEquals(20, headsUpGame.getActivePlayers().get(1).getCurrentBet());
+        }
+
+        /**
+         * Protects the expected behavior for heads up advance positions blinds rotate correctly between hands edge case.
+         */
+        @Test
+        void testHeadsUpAdvancePositionsBlindsRotateCorrectlyBetweenHandsEdgeCase() {
+                List<Player> headsUpPlayers = new ArrayList<>();
+                headsUpPlayers.add(new Player("Dealer", "d1", 1000));
+                headsUpPlayers.add(new Player("Opponent", "o1", 1000));
+
+                Game headsUpGame = new Game("heads-up-rotate", headsUpPlayers, 10, 20, mockHandEvaluator);
+
+                headsUpGame.postBlinds();
+                assertEquals(10, headsUpGame.getActivePlayers().get(0).getCurrentBet());
+                assertEquals(20, headsUpGame.getActivePlayers().get(1).getCurrentBet());
+
+                headsUpGame.resetForNewHand();
+                headsUpGame.postBlinds();
+
+                assertEquals(1, headsUpGame.getDealerPosition());
+                assertEquals(10, headsUpGame.getActivePlayers().get(1).getCurrentBet());
+                assertEquals(20, headsUpGame.getActivePlayers().get(0).getCurrentBet());
+        }
+
+        /**
+         * Protects the expected behavior for advance positions.
+         */
+        @Test
+        void testAdvancePositions() {
+                int initialDealer = game.getDealerPosition();
+
+                game.advancePositions();
+
+                assertEquals((initialDealer + 1) % 3, game.getDealerPosition());
+        }
+
+        /**
+         * Protects the expected behavior for next player.
+         */
+        @Test
+        void testNextPlayer() {
+                Player firstPlayer = game.getCurrentPlayer();
+                game.nextPlayer();
+                Player secondPlayer = game.getCurrentPlayer();
+
+                assertNotEquals(firstPlayer, secondPlayer);
+        }
+
+        /**
+         * Protects the contract that remove player from game when non current player leaves before current should preserve current player.
+         */
+        @Test
+        void removePlayerFromGame_WhenNonCurrentPlayerLeavesBeforeCurrent_ShouldPreserveCurrentPlayer() {
+                game.nextPlayer();
+                game.nextPlayer();
+                Player currentBeforeRemoval = game.getCurrentPlayer();
+
+                Player playerToRemove = game.getActivePlayers().stream()
+                                .filter(p -> !p.equals(currentBeforeRemoval))
+                                .findFirst()
+                                .orElseThrow();
+
+                game.removePlayerFromGame(playerToRemove);
+
+                assertEquals(currentBeforeRemoval, game.getCurrentPlayer());
+                assertEquals(2, game.getActivePlayers().size());
+        }
+
+        /**
+         * Protects the contract that get big blind player ID when non current player leaves and blind index stale should not throw.
+         */
+        @Test
+        void getBigBlindPlayerId_WhenNonCurrentPlayerLeavesAndBlindIndexStale_ShouldNotThrow() {
+                game.postBlinds();
+
+                Player playerToRemove = game.getActivePlayers().get(1);
+                assertNotEquals(playerToRemove, game.getCurrentPlayer());
+
+                game.removePlayerFromGame(playerToRemove);
+
+                String bigBlindPlayerId = assertDoesNotThrow(() -> game.getBigBlindPlayerId());
+
+                assertNotNull(bigBlindPlayerId);
+                assertTrue(game.getActivePlayers().stream().anyMatch(p -> p.getPlayerId().equals(bigBlindPlayerId)));
         }
     }
 }
