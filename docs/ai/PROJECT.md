@@ -69,6 +69,10 @@ Rooms have UUID identities and user-visible names; joining resolves the room nam
 
 `Game` owns the deck, players, betting state, phase, pot/side-pot bookkeeping, showdown outcomes, and durable scheduled-task metadata. Phases are `PRE_FLOP`, `FLOP`, `TURN`, `RIVER`, and `SHOWDOWN`. Preserve legal-action checks, heads-up blind rules, all-in eligibility, uncalled refunds, split payouts, and total chip conservation.
 
+Package-private model collaborators calculate betting rules (`BettingRound`), seating (`TableSeating`), pots (`PotCalculator`), showdown (`ShowdownResolver`), scheduling (`GameScheduling`), and readiness (`ReadyGate`). The public `GameRestoreBuilder` reconstructs a game from a state image. `Game` remains the aggregate root and owns its mutable state.
+
+`Game.restoreBuilder()` returns the top-level `GameRestoreBuilder`; code compiled against the former nested `Game.GameRestoreBuilder` must be updated and recompiled.
+
 The lifecycle service records delayed work with absolute deadlines and task identifiers such as auto-advance, ready-open, new-hand, cleanup, and game-end. Runtime callbacks check their expected state/deadline so obsolete callbacks do not advance a newer hand.
 
 WebSocket identity can have multiple active browser sessions. Session tracking only treats the player as disconnected after the last active session is gone, applies a grace deadline, and cancels cleanup on reconnect. A final game-end event and later aggregate cleanup are separate from an individual hand's showdown/ready transition.

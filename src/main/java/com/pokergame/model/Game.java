@@ -14,7 +14,6 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.response.GameEndResponse;
-import com.pokergame.model.PotCalculator.PotAllocation;
 import com.pokergame.model.PotCalculator.PotComputationResult;
 import java.util.stream.Collectors;
 
@@ -231,6 +230,8 @@ public class Game {
         return new GameRestoreBuilder();
     }
 
+
+
     /**
      * Resets the game state for a new hand.
      * Cleans up the finished hand and reports whether the game has ended.
@@ -406,106 +407,10 @@ public class Game {
                 currentHighestBet,
                 pot);
 
-        PlayerDecision actualDecision = decision;
-        String conversionMessage = null;
-
-        if (player == null || player.getHasFolded() || player.getIsOut() || player.getIsAllIn()) {
-            throw new UnauthorisedActionException("Player cannot act in the current hand", "ACTION_NOT_AVAILABLE", "Player is not eligible to act");
-        }
-
-        int callDifference = Math.max(0, currentHighestBet - player.getCurrentBet());
-        boolean aggressionContestable = hasOtherActionableOpponent(player);
-        if (actualDecision.action() == PlayerAction.CALL && callDifference == 0) {
-            throw new UnauthorisedActionException("There is no call amount owed", "CALL_NOT_AVAILABLE", "Call amount: 0");
-        }
-        if (actualDecision.action() == PlayerAction.RAISE && currentHighestBet == 0) {
-            throw new UnauthorisedActionException("There is no active wager to raise", "RAISE_NOT_AVAILABLE", "Use BET when no wager is active");
-        }
-        if (!aggressionContestable && (actualDecision.action() == PlayerAction.BET
-                || actualDecision.action() == PlayerAction.RAISE
-                || (actualDecision.action() == PlayerAction.ALL_IN
-                && player.getCurrentBet() + player.getChips() > currentHighestBet))) {
-            throw new UnauthorisedActionException("No other player can contest an additional wager",
-                    actualDecision.action() == PlayerAction.BET ? "BET_NOT_AVAILABLE" : "RAISE_NOT_AVAILABLE",
-                    callDifference > 0 ? "Call or fold" : "Check or fold");
-        }
-        if ((actualDecision.action() == PlayerAction.RAISE || actualDecision.action() == PlayerAction.ALL_IN)
-                && !isRaiseOpenTo(player)
-                && player.getCurrentBet() + (actualDecision.action() == PlayerAction.ALL_IN ? player.getChips() : actualDecision.amount()) > currentHighestBet) {
-            throw new UnauthorisedActionException("Betting has not reopened for this player", "RAISE_NOT_REOPENED", "Call or fold");
-        }
-
-        // Validate raise amounts (only if still a raise after conversion)
-        if (actualDecision.action() == PlayerAction.RAISE) {
-            if (actualDecision.amount() == 0) {
-                throw new BadRequestException("Raise amount must be greater than 0", "RAISE_AMOUNT_REQUIRED", "Raise must be positive; yours: 0");
-            }
-
-            if (actualDecision.amount() > player.getChips()) {
-                throw new BadRequestException("Raise amount cannot exceed available chips", "INSUFFICIENT_CHIPS", "Available: " + player.getChips() + "; yours: " + actualDecision.amount());
-            }
-
-            int totalBetAfterRaise = player.getCurrentBet() + actualDecision.amount();
-            if (totalBetAfterRaise <= currentHighestBet) {
-                int minimumRaise = callDifference + getLastFullRaise();
-                logger.warn("[Game] Invalid raise: player {} tried to raise to {}, current highest bet is {}",
-                        player.getName(), totalBetAfterRaise, currentHighestBet);
-                throw new UnauthorisedActionException(
-                        "Raise amount must result in a bet higher than current highest bet of " + currentHighestBet +
-                                ". Your current bet is " + player.getCurrentBet() +
-                                ", so the minimum incremental raise is " + minimumRaise,
-                        "MIN_RAISE", "Min raise: " + minimumRaise + "; yours: " + actualDecision.amount());
-            }
-
-            int raiseIncrement = totalBetAfterRaise - currentHighestBet;
-            int minimumRaise = callDifference + getLastFullRaise();
-            if (raiseIncrement < getLastFullRaise() && actualDecision.amount() < player.getChips()) {
-                throw new BadRequestException(
-                        "Raise increment must be at least " + getLastFullRaise() +
-                        ". You tried to raise by " + raiseIncrement,
-                        "MIN_RAISE", "Min raise: " + minimumRaise
-                                + "; yours: " + actualDecision.amount());
-            }
-        }
-
-        if (actualDecision.action() == PlayerAction.BET) {
-            if (currentHighestBet > 0) {
-                throw new UnauthorisedActionException(
-                        "Cannot bet when there is an active bet. You must call, raise, or fold.",
-                        "BET_NOT_AVAILABLE", "Active bet: " + currentHighestBet + "; call or raise");
-            }
-
-            if (actualDecision.amount() == 0) {
-                throw new BadRequestException("Bet amount must be greater than 0", "BET_AMOUNT_REQUIRED", "Bet must be positive; yours: 0");
-            }
-
-            if (actualDecision.amount() > player.getChips()) {
-                throw new BadRequestException("Bet amount cannot exceed available chips", "INSUFFICIENT_CHIPS", "Available: " + player.getChips() + "; yours: " + actualDecision.amount());
-            }
-
-            if (actualDecision.amount() < bigBlind && actualDecision.amount() < player.getChips()) {
-                throw new BadRequestException("Bet amount must be at least the big blind of " + bigBlind,
-                        "MIN_BET", "Min bet: " + bigBlind + "; yours: " + actualDecision.amount());
-            }
-        }
-
-        if (actualDecision.action() == PlayerAction.CHECK) {
-            if (currentHighestBet > player.getCurrentBet()) {
-                throw new UnauthorisedActionException(
-                        "Cannot check when there is an active bet. You must call, raise, or fold.",
-                        "CHECK_NOT_AVAILABLE", "To call: " + (currentHighestBet - player.getCurrentBet()));
-            }
-        }
-
-        if (actualDecision.action() == PlayerAction.CALL) {
-            int requiredCall = Math.max(0, currentHighestBet - player.getCurrentBet());
-            if (requiredCall > player.getChips()) {
-                logger.info("Player {} attempted CALL for {} with only {} chips. Converting to ALL_IN",
-                        player.getName(), requiredCall, player.getChips());
-                actualDecision = new PlayerDecision(PlayerAction.ALL_IN, 0, decision.playerId());
-                conversionMessage = "Your call was converted to all-in because the call amount exceeded your available chips.";
-            }
-        }
+        BettingRound.DecisionResult result = BettingRound.prepareDecision(player, decision, activePlayers,
+                currentHighestBet, bigBlind, lastActedWagerByPlayer, getLastFullRaise());
+        PlayerDecision actualDecision = result.decision();
+        String conversionMessage = result.conversionMessage();
 
         int potBeforeDecision = this.pot;
         int wagerBeforeDecision = currentHighestBet;
@@ -513,7 +418,7 @@ public class Game {
         switch (actualDecision.action()) {
             case FOLD, CHECK -> player.doAction(actualDecision.action(), 0, this.pot);
             case CALL, BET, RAISE -> {
-                int amount = calculateActualAmount(player, actualDecision);
+                int amount = result.amount();
                 this.pot = player.doAction(actualDecision.action(), amount, this.pot);
                 if (player.getCurrentBet() > currentHighestBet) {
                     currentHighestBet = player.getCurrentBet();
@@ -559,87 +464,42 @@ public class Game {
      */
     public TurnOutcome reconcileAfterPlayerRemoval() {
         if (activePlayers.isEmpty()) return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null, null, 0);
-        long actionable = activePlayers.stream().filter(p -> !p.getHasFolded() && !p.getIsOut()
-                && !p.getIsAllIn() && p.getChips() > 0).count();
-        if (actionable <= 1) {
-            currentHighestBet = activePlayers.stream().filter(p -> !p.getHasFolded() && !p.getIsOut())
-                    .mapToInt(Player::getCurrentBet).max().orElse(0);
-        }
+        currentHighestBet = BettingRound.highestBetAfterRemoval(activePlayers, currentHighestBet);
         return reconcileProgressionAfterMutation(null, false);
     }
 
     /** Resolves whether forced blinds leave an actor or require an automatic runout. */
     public TurnOutcome reconcileAfterForcedBlinds() {
         if (activePlayers.isEmpty()) return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null, null, 0);
-        if (isHandOver()) return reconcileProgressionAfterMutation(null, false);
-        if (shouldAutoRunout()) return new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, null, null, 0);
-        Player actor = getCurrentPlayer();
-        if (actor.getHasFolded() || actor.getIsOut() || actor.getIsAllIn()) nextPlayer();
+        BettingRound.ForcedBlindProgression progression = BettingRound.afterForcedBlinds(isHandOver(), shouldAutoRunout());
+        if (progression == BettingRound.ForcedBlindProgression.RECONCILE) return reconcileProgressionAfterMutation(null, false);
+        if (progression == BettingRound.ForcedBlindProgression.AUTO_RUNOUT) return new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, null, null, 0);
+        if (BettingRound.needsNextActor(getCurrentPlayer())) nextPlayer();
         return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null, null, 0);
     }
 
     private TurnOutcome reconcileProgressionAfterMutation(String conversionMessage, boolean selectNextActor) {
-        List<Player> actionablePlayers = activePlayers.stream()
-                .filter(p -> !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn())
-                .toList();
-        if (!actionablePlayers.isEmpty()
-                && actionablePlayers.stream().allMatch(p -> actedPlayersInRound.contains(p.getPlayerId()))
-                && !isBettingRoundComplete()) {
+        boolean roundComplete = isBettingRoundComplete();
+        if (BettingRound.allActionablePlayersActed(activePlayers, actedPlayersInRound) && !roundComplete) {
             everyoneHasHadInitialTurn = true;
+            roundComplete = isBettingRoundComplete();
         }
 
-        if (isHandOver()) {
+        TurnOutcome.TurnOutcomeType outcome = BettingRound.progression(
+                isHandOver(), roundComplete, currentPhase, shouldAutoRunout());
+        if (outcome == TurnOutcome.TurnOutcomeType.SHOWDOWN) {
             int potBeforeDistribution = getPot();
             List<Player> winners = conductShowdown();
             int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
-            return new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, conversionMessage, winners, winningsPerPlayer);
+            return new TurnOutcome(outcome, conversionMessage, winners, winningsPerPlayer);
         }
-
-        boolean bettingRoundComplete = isBettingRoundComplete();
-        if (bettingRoundComplete && currentPhase == GamePhase.RIVER) {
-            int potBeforeDistribution = getPot();
-            List<Player> winners = conductShowdown();
-            int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
-            return new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, conversionMessage, winners, winningsPerPlayer);
-        }
-
-        if (shouldAutoRunout()) {
-            return new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, conversionMessage, null, 0);
-        }
-
-        if (bettingRoundComplete) {
+        if (outcome == TurnOutcome.TurnOutcomeType.PHASE_ADVANCED) {
             actedPlayersInRound.clear();
             advancePhase();
-            return new TurnOutcome(TurnOutcome.TurnOutcomeType.PHASE_ADVANCED, conversionMessage, null, 0);
+        } else if (outcome == TurnOutcome.TurnOutcomeType.NEXT_PLAYER && selectNextActor) {
+            nextPlayer();
         }
-
-        if (selectNextActor) nextPlayer();
-        return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, conversionMessage, null, 0);
-    }
-
-    /**
-     * Calculates the actual chip amount required for a player's action.
-     *
-     * @param player   the player making the action
-     * @param decision the player's decision containing the action and amount
-     * @return the calculated chip amount needed for the action
-     */
-    private int calculateActualAmount(Player player, PlayerDecision decision) {
-        return switch (decision.action()) {
-            case CALL -> currentHighestBet - player.getCurrentBet();
-            case BET, RAISE -> decision.amount();
-            default -> 0;
-        };
-    }
-
-    private boolean hasActionablePlayerOwingCall() {
-        return activePlayers.stream().anyMatch(p -> !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn()
-                && p.getCurrentBet() < currentHighestBet);
-    }
-
-    private boolean hasOtherActionableOpponent(Player player) {
-        return activePlayers.stream().anyMatch(p -> p != player && !p.getHasFolded() && !p.getIsOut()
-                && !p.getIsAllIn() && p.getChips() > 0);
+        return new TurnOutcome(outcome, conversionMessage, null, 0);
     }
 
     /**
@@ -649,7 +509,7 @@ public class Game {
      * @return minimum full raise increment in chips
      */
     public int getLastFullRaise() {
-        return lastFullRaiseByStreet.getOrDefault(currentPhase.name(), bigBlind);
+        return BettingRound.lastFullRaise(lastFullRaiseByStreet, currentPhase, bigBlind);
     }
 
     /**
@@ -659,7 +519,7 @@ public class Game {
      * @return nonnegative call amount before applying the player's available stack
      */
     public int getCallDifference(Player player) {
-        return Math.max(0, currentHighestBet - player.getCurrentBet());
+        return BettingRound.callDifference(player, currentHighestBet);
     }
 
     /**
@@ -676,9 +536,7 @@ public class Game {
 
     /** True when no remaining actionable player owes chips before a forced runout. */
     public boolean shouldAutoRunout() {
-        long actionable = activePlayers.stream().filter(p -> !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn()).count();
-        boolean owedCall = hasActionablePlayerOwingCall();
-        return actionable <= 1 && !owedCall;
+        return BettingRound.shouldAutoRunout(activePlayers, currentHighestBet);
     }
 
     /**
@@ -690,8 +548,7 @@ public class Game {
      * @return whether wager history permits raising
      */
     public boolean isRaiseOpenTo(Player player) {
-        Integer actedAt = lastActedWagerByPlayer.get(player.getPlayerId());
-        return actedAt == null || currentHighestBet - actedAt >= getLastFullRaise();
+        return BettingRound.raiseOpenTo(player, lastActedWagerByPlayer, currentHighestBet, getLastFullRaise());
     }
 
     /**
@@ -703,19 +560,9 @@ public class Game {
      */
     public List<PlayerAction> getLegalActionsFor(Player player) {
         if (player == null || !players.contains(player) || player.getHasFolded() || player.getIsOut() || player.getIsAllIn()
-                || currentPhase == GamePhase.SHOWDOWN || getCurrentPlayer() == null
-                || !player.getPlayerId().equals(getCurrentPlayer().getPlayerId())) return List.of();
-        List<PlayerAction> actions = new ArrayList<>(List.of(PlayerAction.FOLD));
-        int call = getCallDifference(player);
-        actions.add(call == 0 ? PlayerAction.CHECK : PlayerAction.CALL);
-        boolean aggressionContestable = hasOtherActionableOpponent(player);
-        if (aggressionContestable && isRaiseOpenTo(player) && player.getChips() > call) {
-            actions.add(currentHighestBet == 0 ? PlayerAction.BET : PlayerAction.RAISE);
-            actions.add(PlayerAction.ALL_IN);
-        } else if (player.getChips() > 0 && player.getChips() <= call) {
-            actions.add(PlayerAction.ALL_IN);
-        }
-        return List.copyOf(actions);
+                || currentPhase == GamePhase.SHOWDOWN) return List.of();
+        return BettingRound.legalActions(player, players, activePlayers, getCurrentPlayer(), currentPhase,
+                currentHighestBet, lastActedWagerByPlayer, getLastFullRaise());
     }
 
     /**
@@ -753,34 +600,7 @@ public class Game {
      * @return true if the betting round is complete, false otherwise
      */
     public boolean isBettingRoundComplete() {
-        boolean hasPlayerWhoNeedsToAct = hasActionablePlayerOwingCall();
-
-        long playersAbleToAct = activePlayers.stream()
-                .filter(p -> !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn())
-                .count();
-        if (playersAbleToAct <= 1 && !hasPlayerWhoNeedsToAct) {
-            return true;
-        }
-
-        if (!everyoneHasHadInitialTurn) {
-            logger.debug("Betting round not complete: Not everyone has had initial turn");
-            return false;
-        }
-
-        logger.debug("Checking if betting round complete - Current highest bet: {}, Everyone has had initial turn: {}",
-                currentHighestBet, true);
-
-        if (logger.isDebugEnabled()) {
-            activePlayers.forEach(p -> logger.debug("Player {}: bet={}, folded={}, all-in={}, needsToAct={}",
-                    p.getName(), p.getCurrentBet(), p.getHasFolded(), p.getIsAllIn(),
-                    (p.getCurrentBet() < currentHighestBet && !p.getHasFolded() && !p.getIsAllIn())));
-        }
-
-        boolean isComplete = !hasPlayerWhoNeedsToAct;
-        logger.debug("Betting round result: {} (hasPlayerWhoNeedsToAct={})",
-                (isComplete ? "Complete" : "Not complete"), hasPlayerWhoNeedsToAct);
-
-        return isComplete;
+        return BettingRound.isComplete(activePlayers, currentHighestBet, everyoneHasHadInitialTurn);
     }
 
     /**
@@ -960,20 +780,6 @@ public class Game {
                 lastSettlementResult,
                 currentHighestBet,
                 gameId);
-    }
-
-    /**
-     * Helper for concise player-name logging in side-pot diagnostics.
-     */
-    private List<String> playerNames(List<Player> players) {
-        return PotCalculator.playerNames(players);
-    }
-
-    /**
-     * Helper for concise allocation logging in side-pot diagnostics.
-     */
-    private List<String> allocationSummary(List<PotAllocation> allocations) {
-        return PotCalculator.allocationSummary(allocations);
     }
 
     /**
