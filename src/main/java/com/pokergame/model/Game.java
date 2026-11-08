@@ -14,6 +14,8 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.model.PotCalculator.PotAllocation;
+import com.pokergame.model.PotCalculator.PotComputationResult;
 import java.util.stream.Collectors;
 
 /**
@@ -66,15 +68,23 @@ public class Game {
     private final Map<ScheduledGameTask, Long> scheduledTaskGenerations;
 
     /**
-     * Internal constructor that allows bypassing initial player count validation,
-     * which is required when restoring a snapshot of a game where players have left.
+     * Creates a new poker game with the specified players and betting parameters.
+     *
+     * @param gameId        unique identifier for the game
+     * @param players       list of players participating in the game (must have at
+     *                      least 2 players)
+     * @param smallBlind    the small blind amount
+     * @param bigBlind      the big blind amount
+     * @param handEvaluator service for evaluating poker hands
+     * @throws BadRequestException if gameId is null/empty, players list is
+     *                             invalid, or contains null elements
      */
-    private Game(String gameId, List<Player> players, int smallBlind, int bigBlind, HandEvaluatorService handEvaluator, boolean skipValidation) {
+    public Game(String gameId, List<Player> players, int smallBlind, int bigBlind, HandEvaluatorService handEvaluator) {
         if (gameId == null || gameId.trim().isEmpty()) {
             logger.error("[Game] Invalid gameId: '{}'", gameId);
             throw new BadRequestException("Game ID cannot be null or empty");
         }
-        if (!skipValidation && (players == null || players.size() < 2)) {
+        if (players == null || players.size() < 2) {
             logger.error("[Game] Invalid players list: null or too few players (size: {})",
                     players == null ? 0 : players.size());
             throw new BadRequestException("At least 2 players are required to start a game");
@@ -113,24 +123,103 @@ public class Game {
         this.readyGateState = ReadyGateState.CLOSED;
         this.handNumber = 0;
         this.stateRevision = 0;
+        this.retainedTerminalResult = null;
         this.scheduledTaskDeadlines = new EnumMap<>(ScheduledGameTask.class);
         this.scheduledTaskGenerations = new EnumMap<>(ScheduledGameTask.class);
     }
 
     /**
-     * Creates a new poker game with the specified players and betting parameters.
-     *
-     * @param gameId        unique identifier for the game
-     * @param players       list of players participating in the game (must have at
-     *                      least 2 players)
-     * @param smallBlind    the small blind amount
-     * @param bigBlind      the big blind amount
-     * @param handEvaluator service for evaluating poker hands
-     * @throws BadRequestException if gameId is null/empty, players list is
-     *                             invalid, or contains null elements
+     * Package-private constructor for restoring a game instance from snapshot state.
+     * Invoked exclusively by {@link GameRestoreBuilder#build()}.
      */
-    public Game(String gameId, List<Player> players, int smallBlind, int bigBlind, HandEvaluatorService handEvaluator) {
-        this(gameId, players, smallBlind, bigBlind, handEvaluator, false);
+    Game(GameRestoreBuilder builder) {
+        if (builder.getGameId() == null || builder.getGameId().trim().isEmpty()) {
+            logger.error("[Game] Invalid gameId: '{}'", builder.getGameId());
+            throw new BadRequestException("Game ID cannot be null or empty");
+        }
+        List<Player> builderPlayers = builder.getPlayers();
+        if (builderPlayers == null || builderPlayers.stream().anyMatch(Objects::isNull)) {
+            logger.error("[Game] Players list contains null element(s) or is null");
+            throw new BadRequestException("Invalid players list. Please try again.");
+        }
+        this.gameId = builder.getGameId();
+        this.players = new ArrayList<>(builderPlayers);
+
+        Map<String, Player> playersById = new HashMap<>();
+        this.players.forEach(player -> playersById.put(player.getPlayerId(), player));
+        this.activePlayers = new ArrayList<>();
+        List<String> activeIds = builder.getActivePlayerIds();
+        if (activeIds != null) {
+            for (String playerId : activeIds) {
+                Player player = playersById.get(playerId);
+                if (player == null) {
+                    throw new BadRequestException("Snapshot references an unknown active player");
+                }
+                this.activePlayers.add(player);
+            }
+        }
+
+        List<Card> remainingDeck = builder.getRemainingDeck();
+        this.deck = remainingDeck != null ? Deck.restore(remainingDeck) : new Deck();
+        this.communityCards = builder.getCommunityCards() != null ? new ArrayList<>(builder.getCommunityCards()) : new ArrayList<>();
+        this.pot = builder.getPot();
+        this.dealerPosition = builder.getDealerPosition();
+        this.smallBlindPosition = builder.getSmallBlindPosition();
+        this.bigBlindPosition = builder.getBigBlindPosition();
+        this.currentPlayerPosition = builder.getCurrentPlayerPosition();
+        this.currentHighestBet = builder.getCurrentHighestBet();
+        this.preHandCarryOver = builder.getPreHandCarryOver();
+        this.currentPhase = builder.getCurrentPhase();
+        this.gameOver = builder.isGameOver();
+        this.smallBlind = builder.getSmallBlind();
+        this.bigBlind = builder.getBigBlind();
+        this.handEvaluator = builder.getHandEvaluator();
+
+        Map<String, Integer> handContributions = builder.getHandContributions();
+        this.handContributions = handContributions != null ? new HashMap<>(handContributions) : new HashMap<>();
+        this.lastSettlementResult = builder.getLastSettlementResult();
+
+        Map<String, Integer> lastFullRaiseByStreet = builder.getLastFullRaiseByStreet();
+        this.lastFullRaiseByStreet = lastFullRaiseByStreet != null ? new HashMap<>(lastFullRaiseByStreet) : new HashMap<>();
+
+        Map<String, Integer> lastActedWagerByPlayer = builder.getLastActedWagerByPlayer();
+        this.lastActedWagerByPlayer = lastActedWagerByPlayer != null ? new HashMap<>(lastActedWagerByPlayer) : new HashMap<>();
+
+        List<String> handSeatOrder = builder.getHandSeatOrder();
+        this.handSeatOrder = (handSeatOrder != null && !handSeatOrder.isEmpty())
+                ? new ArrayList<>(handSeatOrder)
+                : new ArrayList<>(this.players.stream().map(Player::getPlayerId).toList());
+
+        this.dealerAnchorPlayerId = builder.getDealerAnchorPlayerId();
+        this.smallBlindPlayerId = builder.getSmallBlindPlayerId();
+        this.bigBlindPlayerId = builder.getBigBlindPlayerId();
+        this.terminalCarryOverSettled = builder.isTerminalCarryOverSettled();
+        this.forfeitPending = builder.isForfeitPending();
+        this.readyCountdownActive = builder.isReadyCountdownActive();
+        this.readyCountdownDeadlineEpochMs = builder.getReadyCountdownDeadlineEpochMs();
+
+        ReadyGateState gateState = builder.getReadyGateState();
+        this.readyGateState = ReadyGate.resolveInitialState(gateState, this.readyCountdownActive);
+
+        this.handNumber = builder.getHandNumber();
+        this.stateRevision = builder.getStateRevision();
+        this.retainedTerminalResult = builder.getRetainedTerminalResult();
+        this.everyoneHasHadInitialTurn = builder.isEveryoneHasHadInitialTurn();
+
+        Set<String> actedPlayersInRound = builder.getActedPlayersInRound();
+        this.actedPlayersInRound = actedPlayersInRound != null ? new HashSet<>(actedPlayersInRound) : new HashSet<>();
+
+        this.scheduledTaskDeadlines = new EnumMap<>(ScheduledGameTask.class);
+        Map<ScheduledGameTask, Long> scheduledTaskDeadlines = builder.getScheduledTaskDeadlines();
+        if (scheduledTaskDeadlines != null) {
+            this.scheduledTaskDeadlines.putAll(scheduledTaskDeadlines);
+        }
+
+        this.scheduledTaskGenerations = new EnumMap<>(ScheduledGameTask.class);
+        Map<ScheduledGameTask, Long> scheduledTaskGenerations = builder.getScheduledTaskGenerations();
+        if (scheduledTaskGenerations != null) {
+            this.scheduledTaskGenerations.putAll(scheduledTaskGenerations);
+        }
     }
 
     /**
@@ -140,240 +229,6 @@ public class Game {
      */
     public static GameRestoreBuilder restoreBuilder() {
         return new GameRestoreBuilder();
-    }
-
-    /**
-     * Builder for reconstructing a game instance from snapshot state.
-     */
-    public static class GameRestoreBuilder {
-        private String gameId;
-        private List<Player> players;
-        private List<String> activePlayerIds;
-        private List<Card> remainingDeck;
-        private List<Card> communityCards;
-        private int pot;
-        private int dealerPosition;
-        private int smallBlindPosition;
-        private int bigBlindPosition;
-        private int currentPlayerPosition;
-        private int currentHighestBet;
-        private int preHandCarryOver;
-        private GamePhase currentPhase;
-        private boolean gameOver;
-        private int smallBlind;
-        private int bigBlind;
-        private Map<String, Integer> handContributions;
-        private HandSettlementResult lastSettlementResult;
-        private Map<String, Integer> lastFullRaiseByStreet = new HashMap<>();
-        private Map<String, Integer> lastActedWagerByPlayer = new HashMap<>();
-        private List<String> handSeatOrder = new ArrayList<>();
-        private String dealerAnchorPlayerId;
-        private String smallBlindPlayerId;
-        private String bigBlindPlayerId;
-        private boolean terminalCarryOverSettled;
-        private boolean forfeitPending;
-        private boolean readyCountdownActive;
-        private Long readyCountdownDeadlineEpochMs;
-        private ReadyGateState readyGateState = ReadyGateState.CLOSED;
-        private long handNumber;
-        private long stateRevision;
-        private boolean everyoneHasHadInitialTurn;
-        private Set<String> actedPlayersInRound;
-        private Map<ScheduledGameTask, Long> scheduledTaskDeadlines;
-        private Map<ScheduledGameTask, Long> scheduledTaskGenerations;
-        private HandEvaluatorService handEvaluator;
-
-        public GameRestoreBuilder gameId(String gameId) {
-            this.gameId = gameId;
-            return this;
-        }
-
-        public GameRestoreBuilder players(List<Player> players) {
-            this.players = players;
-            return this;
-        }
-
-        public GameRestoreBuilder activePlayerIds(List<String> activePlayerIds) {
-            this.activePlayerIds = activePlayerIds;
-            return this;
-        }
-
-        public GameRestoreBuilder remainingDeck(List<Card> remainingDeck) {
-            this.remainingDeck = remainingDeck;
-            return this;
-        }
-
-        public GameRestoreBuilder communityCards(List<Card> communityCards) {
-            this.communityCards = communityCards;
-            return this;
-        }
-
-        public GameRestoreBuilder pot(int pot) {
-            this.pot = pot;
-            return this;
-        }
-
-        public GameRestoreBuilder dealerPosition(int dealerPosition) {
-            this.dealerPosition = dealerPosition;
-            return this;
-        }
-
-        public GameRestoreBuilder smallBlindPosition(int smallBlindPosition) {
-            this.smallBlindPosition = smallBlindPosition;
-            return this;
-        }
-
-        public GameRestoreBuilder bigBlindPosition(int bigBlindPosition) {
-            this.bigBlindPosition = bigBlindPosition;
-            return this;
-        }
-
-        public GameRestoreBuilder currentPlayerPosition(int currentPlayerPosition) {
-            this.currentPlayerPosition = currentPlayerPosition;
-            return this;
-        }
-
-        public GameRestoreBuilder currentHighestBet(int currentHighestBet) {
-            this.currentHighestBet = currentHighestBet;
-            return this;
-        }
-
-        public GameRestoreBuilder preHandCarryOver(int amount) {
-            this.preHandCarryOver = amount;
-            return this;
-        }
-
-        public GameRestoreBuilder currentPhase(GamePhase currentPhase) {
-            this.currentPhase = currentPhase;
-            return this;
-        }
-
-        public GameRestoreBuilder gameOver(boolean gameOver) {
-            this.gameOver = gameOver;
-            return this;
-        }
-
-        public GameRestoreBuilder smallBlind(int smallBlind) {
-            this.smallBlind = smallBlind;
-            return this;
-        }
-
-        public GameRestoreBuilder bigBlind(int bigBlind) {
-            this.bigBlind = bigBlind;
-            return this;
-        }
-
-        public GameRestoreBuilder handContributions(Map<String, Integer> handContributions) {
-            this.handContributions = handContributions;
-            return this;
-        }
-
-        public GameRestoreBuilder lastSettlementResult(HandSettlementResult result) {
-            this.lastSettlementResult = result;
-            return this;
-        }
-
-        public GameRestoreBuilder lastFullRaiseByStreet(Map<String, Integer> value) { this.lastFullRaiseByStreet = value; return this; }
-        public GameRestoreBuilder lastActedWagerByPlayer(Map<String, Integer> value) { this.lastActedWagerByPlayer = value; return this; }
-        public GameRestoreBuilder handSeatOrder(List<String> value) { this.handSeatOrder = value; return this; }
-        public GameRestoreBuilder dealerAnchorPlayerId(String value) { this.dealerAnchorPlayerId = value; return this; }
-        public GameRestoreBuilder smallBlindPlayerId(String value) { this.smallBlindPlayerId = value; return this; }
-        public GameRestoreBuilder bigBlindPlayerId(String value) { this.bigBlindPlayerId = value; return this; }
-        public GameRestoreBuilder terminalCarryOverSettled(boolean value) { this.terminalCarryOverSettled = value; return this; }
-        public GameRestoreBuilder forfeitPending(boolean value) { this.forfeitPending = value; return this; }
-
-        public GameRestoreBuilder readyCountdownActive(boolean readyCountdownActive) {
-            this.readyCountdownActive = readyCountdownActive;
-            return this;
-        }
-
-        public GameRestoreBuilder readyCountdownDeadlineEpochMs(Long readyCountdownDeadlineEpochMs) {
-            this.readyCountdownDeadlineEpochMs = readyCountdownDeadlineEpochMs;
-            return this;
-        }
-
-        public GameRestoreBuilder readyGateState(ReadyGateState value) { this.readyGateState = value; return this; }
-        public GameRestoreBuilder handNumber(long value) { this.handNumber = value; return this; }
-        public GameRestoreBuilder stateRevision(long value) { this.stateRevision = value; return this; }
-        private GameEndResponse retainedTerminalResult;
-        public GameRestoreBuilder retainedTerminalResult(GameEndResponse value) { this.retainedTerminalResult = value; return this; }
-
-        public GameRestoreBuilder everyoneHasHadInitialTurn(boolean everyoneHasHadInitialTurn) {
-            this.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
-            return this;
-        }
-
-        public GameRestoreBuilder actedPlayersInRound(Set<String> actedPlayersInRound) {
-            this.actedPlayersInRound = actedPlayersInRound;
-            return this;
-        }
-
-        public GameRestoreBuilder scheduledTaskDeadlines(Map<ScheduledGameTask, Long> scheduledTaskDeadlines) {
-            this.scheduledTaskDeadlines = scheduledTaskDeadlines;
-            return this;
-        }
-        public GameRestoreBuilder scheduledTaskGenerations(Map<ScheduledGameTask, Long> value) { this.scheduledTaskGenerations = value; return this; }
-
-        public GameRestoreBuilder handEvaluator(HandEvaluatorService handEvaluator) {
-            this.handEvaluator = handEvaluator;
-            return this;
-        }
-
-        public Game build() {
-            Game game = new Game(gameId, players, smallBlind, bigBlind, handEvaluator, true);
-            Map<String, Player> playersById = new HashMap<>();
-            players.forEach(player -> playersById.put(player.getPlayerId(), player));
-            game.activePlayers.clear();
-            for (String playerId : activePlayerIds) {
-                Player player = playersById.get(playerId);
-                if (player == null) {
-                    throw new BadRequestException("Snapshot references an unknown active player");
-                }
-                game.activePlayers.add(player);
-            }
-            game.deck = Deck.restore(remainingDeck);
-            game.communityCards.clear();
-            game.communityCards.addAll(communityCards);
-            game.pot = pot;
-            game.dealerPosition = dealerPosition;
-            game.smallBlindPosition = smallBlindPosition;
-            game.bigBlindPosition = bigBlindPosition;
-            game.currentPlayerPosition = currentPlayerPosition;
-            game.currentHighestBet = currentHighestBet;
-            game.preHandCarryOver = preHandCarryOver;
-            game.currentPhase = currentPhase;
-            game.gameOver = gameOver;
-            game.handContributions.clear();
-            game.handContributions.putAll(handContributions);
-            game.lastSettlementResult = lastSettlementResult;
-            game.lastFullRaiseByStreet.clear();
-            game.lastFullRaiseByStreet.putAll(lastFullRaiseByStreet);
-            game.lastActedWagerByPlayer.clear();
-            game.lastActedWagerByPlayer.putAll(lastActedWagerByPlayer);
-            game.handSeatOrder.clear();
-            game.handSeatOrder.addAll(handSeatOrder.isEmpty() ? players.stream().map(Player::getPlayerId).toList() : handSeatOrder);
-            game.dealerAnchorPlayerId = dealerAnchorPlayerId;
-            game.smallBlindPlayerId = smallBlindPlayerId;
-            game.bigBlindPlayerId = bigBlindPlayerId;
-            game.terminalCarryOverSettled = terminalCarryOverSettled;
-            game.forfeitPending = forfeitPending;
-            game.readyCountdownActive = readyCountdownActive;
-            game.readyCountdownDeadlineEpochMs = readyCountdownDeadlineEpochMs;
-            game.readyGateState = readyGateState == null
-                    ? (readyCountdownActive ? ReadyGateState.COUNTING_DOWN : ReadyGateState.CLOSED)
-                    : readyGateState;
-            game.handNumber = handNumber;
-            game.stateRevision = stateRevision;
-            game.retainedTerminalResult = retainedTerminalResult;
-            game.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
-            game.actedPlayersInRound.clear();
-            game.actedPlayersInRound.addAll(actedPlayersInRound);
-            game.scheduledTaskDeadlines.clear();
-            game.scheduledTaskDeadlines.putAll(scheduledTaskDeadlines);
-            game.scheduledTaskGenerations.clear();
-            if (scheduledTaskGenerations != null) game.scheduledTaskGenerations.putAll(scheduledTaskGenerations);
-            return game;
-        }
     }
 
     /**
@@ -415,9 +270,10 @@ public class Game {
         lastActedWagerByPlayer.clear();
         lastSettlementResult = null;
         terminalCarryOverSettled = false;
-        readyCountdownActive = false;
-        readyCountdownDeadlineEpochMs = null;
-        readyGateState = ReadyGateState.CLOSED;
+        ReadyGate.ReadyGateStateTransition readyReset = ReadyGate.closeCountdown();
+        readyCountdownActive = readyReset.active();
+        readyCountdownDeadlineEpochMs = readyReset.deadlineEpochMs();
+        readyGateState = readyReset.state();
 
         logger.debug("Hand reset complete for game {} | contributions cleared", gameId);
 
@@ -501,11 +357,10 @@ public class Game {
             bigBlindPosition = 0;
             return;
         }
-        // floorMod handles negative indices correctly but this isn't necessary for my
-        // code as I never subtract from the blind positions
-        int tableSize = activePlayers.size();
-        smallBlindPosition = Math.floorMod(smallBlindPosition, tableSize);
-        bigBlindPosition = Math.floorMod(bigBlindPosition, tableSize);
+        TableSeating.BlindPositions positions = TableSeating.normalizeBlindPositions(
+                activePlayers, smallBlindPosition, bigBlindPosition);
+        this.smallBlindPosition = positions.smallBlindPosition();
+        this.bigBlindPosition = positions.bigBlindPosition();
     }
 
     /**
@@ -872,18 +727,7 @@ public class Game {
      * @param amount number of chips newly committed to the pot
      */
     private void trackContribution(Player player, int amount) {
-        if (player == null || amount <= 0) {
-            return;
-        }
-
-        handContributions.merge(player.getPlayerId(), amount, Integer::sum);
-
-        logger.debug("Tracked contribution in game {} | player={} | added={} | totalContribution={} | contributions={}",
-                gameId,
-                player.getName(),
-                amount,
-                handContributions.getOrDefault(player.getPlayerId(), 0),
-                handContributions);
+        PotCalculator.trackContribution(this.handContributions, player, amount, this.gameId);
     }
 
     /**
@@ -1041,11 +885,7 @@ public class Game {
      * @param players list of players whose hands should be evaluated
      */
     private void evaluateHands(List<Player> players) {
-        for (Player player : players) {
-            HandEvaluationResult result = handEvaluator.getBestHand(communityCards, player.getHoleCards());
-            player.setBestHand(result.bestHand());
-            player.setHandRank(result.handRank());
-        }
+        ShowdownResolver.evaluateHands(handEvaluator, communityCards, players);
     }
 
     /**
@@ -1055,85 +895,12 @@ public class Game {
      */
     private List<Player> distributeSidePotsAtShowdown(List<Player> showdownPlayers) {
         logger.info("Distributing side pots for game {}", gameId);
-
-        // Build contested allocations and identify uncalled refunds.
         PotComputationResult computation = computePotAllocationsAndUncalled(showdownPlayers);
-        List<PotAllocation> allocations = computation.allocations();
-        if (logger.isDebugEnabled()) {
-            logger.debug("Side-pot allocations for game {}: {}", gameId, allocationSummary(allocations));
-        }
-
-        Map<String, Integer> refunds = new HashMap<>();
-        // Refund single-owner (uncalled) layers before contested awards.
-        for (Map.Entry<String, Integer> entry : computation.uncalledByPlayer().entrySet()) {
-            Player player = players.stream()
-                    .filter(p -> p.getPlayerId().equals(entry.getKey()))
-                    .findFirst()
-                    .orElse(null);
-
-            if (player == null || player.getHasFolded() || player.getIsOut() || entry.getValue() <= 0) {
-                continue;
-            }
-
-            player.addChips(entry.getValue());
-            refunds.merge(player.getPlayerId(), entry.getValue(), Integer::sum);
-            logger.info("Refunded uncalled chips for game {} | player={} | amount={}",
-                    gameId,
-                    player.getName(),
-                    entry.getValue());
-        }
-
-        Set<Player> uniqueWinners = new LinkedHashSet<>();
-        int remainder = 0;
-        Map<String, Integer> awards = new HashMap<>();
-
-        // Resolve each contested allocation, determine winners, and split chips.
-        for (int i = 0; i < allocations.size(); i++) {
-            PotAllocation allocation = allocations.get(i);
-            List<Player> potWinners = determineWinners(allocation.eligiblePlayers());
-
-            if (potWinners.isEmpty()) {
-                logger.warn("Pot {} has no winners. Keeping {} chips in pot.", i, allocation.amount());
-                remainder += allocation.amount();
-                continue;
-            }
-
-            int share = allocation.amount() / potWinners.size();
-            // Keep modulo chips as table remainder.
-            int potRemainder = allocation.amount() % potWinners.size();
-            remainder += potRemainder;
-
-            logger.info(
-                    "Resolved side pot {} for game {} | amount={} | eligible={} | winners={} | share={} | remainder={}",
-                    i,
-                    gameId,
-                    allocation.amount(),
-                    playerNames(allocation.eligiblePlayers()),
-                    playerNames(potWinners),
-                    share,
-                    potRemainder);
-
-            for (Player winner : potWinners) {
-                winner.addChips(share);
-                awards.merge(winner.getPlayerId(), share, Integer::sum);
-            }
-
-            uniqueWinners.addAll(potWinners);
-        }
-
-        // Keep integer remainders in the table pot for the next hand.
-        pot = remainder;
-        lastSettlementResult = new HandSettlementResult(awards, refunds,
-                uniqueWinners.stream().map(Player::getPlayerId).collect(Collectors.toSet()),
-                remainder, true);
-        logger.info(
-                "Side-pot distribution complete for game {} | uniqueWinners={} | refundedUncalled={} | potRemainder={}",
-                gameId,
-                playerNames(new ArrayList<>(uniqueWinners)),
-                refunds.values().stream().mapToInt(Integer::intValue).sum(),
-                pot);
-
-        return new ArrayList<>(uniqueWinners);
+        ShowdownResolver.Distribution distribution =
+                ShowdownResolver.distribute(gameId, handEvaluator, computation, players);
+        pot = distribution.remainder();
+        lastSettlementResult = distribution.settlement();
+        return distribution.winners();
     }
 
     /**
@@ -1143,164 +910,8 @@ public class Game {
      * @return a full breakdown used for payout distribution and UI pot rendering
      */
     private PotComputationResult computePotAllocationsAndUncalled(List<Player> eligibleHandContenders) {
-        List<PotAllocation> allocations = new ArrayList<>();
-        Map<String, Integer> uncalledByPlayer = new HashMap<>();
-
-        logger.debug("Building pot allocations for game {} | pot={} | contributions={}",
-                gameId,
-                pot,
-                handContributions);
-
-        // Only considering players who contributed chips to the pot.
-        Map<String, Integer> contributions = handContributions.entrySet().stream()
-                .filter(entry -> entry.getValue() > 0)
-                .collect(HashMap::new,
-                        (map, entry) -> map.put(entry.getKey(), entry.getValue()),
-                        HashMap::putAll);
-
-        if (!contributions.isEmpty()) {
-            // Side-pot boundaries are the distinct total contribution amounts.
-            List<Integer> contributionLevels = contributions.values().stream()
-                    .distinct()
-                    .sorted()
-                    .toList();
-
-            logger.debug("Contribution levels for game {}: {}", gameId, contributionLevels);
-
-            int previousLevel = 0;
-            for (int level : contributionLevels) {
-                // Processing each incremental layer between adjacent contribution levels.
-                int layer = level - previousLevel;
-                previousLevel = level;
-
-                if (layer <= 0) {
-                    continue;
-                }
-
-                // The contribution ledger is authoritative for layer size, including
-                // contributors who folded or departed after committing chips.
-                List<String> contributorIds = contributions.entrySet().stream()
-                        .filter(entry -> entry.getValue() >= level)
-                        .map(Map.Entry::getKey)
-                        .toList();
-                List<Player> participants = players.stream()
-                        .filter(player -> contributorIds.contains(player.getPlayerId()))
-                        .toList();
-
-                int amount = layer * contributorIds.size();
-                if (amount <= 0) {
-                    continue;
-                }
-
-                if (contributorIds.size() == 1) {
-                    // Refund only genuinely unmatched excess to a retained eligible owner.
-                    String ownerId = contributorIds.getFirst();
-                    Player owner = players.stream().filter(p -> p.getPlayerId().equals(ownerId)
-                                    && !p.getHasFolded() && !p.getIsOut()).findFirst().orElse(null);
-                    if (owner != null) {
-                        uncalledByPlayer.merge(ownerId, amount, Integer::sum);
-                    } else {
-                        routeDeadLayerToNearestEligible(allocations, amount, eligibleHandContenders);
-                    }
-                    logger.debug("Detected uncalled layer for game {} | level={} | owner={} | amount={}",
-                            gameId,
-                            level,
-                            ownerId,
-                            amount);
-                    continue;
-                }
-
-                List<Player> eligiblePlayers = participants.stream()
-                        .filter(player -> !player.getHasFolded() && !player.getIsOut())
-                        .toList();
-
-                if (!eligiblePlayers.isEmpty()) {
-                    // Multi-participant layers become contested allocations.
-                    appendAllocationCoalescingSameEligibility(allocations, amount, eligiblePlayers);
-                    logger.debug(
-                            "Allocation layer for game {} | level={} | layer={} | participants={} | eligible={} | amount={}",
-                            gameId,
-                            level,
-                            layer,
-                            playerNames(participants),
-                            playerNames(eligiblePlayers),
-                            amount);
-                } else {
-                    // Dead upper layers follow the nearest lower allocation that
-                    // still has an eligible recipient.
-                    routeDeadLayerToNearestEligible(allocations, amount, eligibleHandContenders);
-                }
-            }
-        } else {
-            logger.debug("No tracked contributions for game {} while building allocations", gameId);
-        }
-
-        int uncalledTotal = uncalledByPlayer.values().stream().mapToInt(Integer::intValue).sum();
-        int allocatedAmount = allocations.stream().mapToInt(PotAllocation::amount).sum();
-        int accounted = allocatedAmount + uncalledTotal;
-        int ledgerTotal = contributions.values().stream().mapToInt(Integer::intValue).sum();
-        if (ledgerTotal + preHandCarryOver != pot) {
-            throw new IllegalStateException("Contribution ledger and carry-over do not match the committed pot for game " + gameId);
-        }
-        if (preHandCarryOver > 0) {
-            List<Player> eligible = activePlayers.stream()
-                    .filter(p -> !p.getHasFolded() && !p.getIsOut())
-                    .toList();
-            if (!eligible.isEmpty()) {
-                if (allocations.isEmpty()) allocations.add(new PotAllocation(preHandCarryOver, eligible));
-                else {
-                    PotAllocation main = allocations.getFirst();
-                    allocations.set(0, new PotAllocation(main.amount() + preHandCarryOver, main.eligiblePlayers()));
-                }
-                accounted += preHandCarryOver;
-            }
-        }
-        int unallocatedAmount = pot - accounted;
-
-        logger.debug("Allocation totals for game {} | allocated={} | uncalled={} | unallocated={} | pot={}",
-                gameId,
-                allocatedAmount,
-                uncalledTotal,
-                unallocatedAmount,
-                pot);
-
-        // Unexplained or pre-hand carry-over money remains explicit in the pot.
-
-        if (logger.isDebugEnabled()) {
-            logger.debug("Final allocations for game {}: {}", gameId, allocationSummary(allocations));
-            logger.debug("Uncalled map for game {}: {}", gameId, uncalledByPlayer);
-        }
-
-        return new PotComputationResult(allocations, uncalledByPlayer, uncalledTotal);
-    }
-
-    private static void routeDeadLayerToNearestEligible(List<PotAllocation> allocations, int amount,
-            List<Player> eligibleHandContenders) {
-        for (int i = allocations.size() - 1; i >= 0; i--) {
-            PotAllocation lower = allocations.get(i);
-            if (!lower.eligiblePlayers().isEmpty()) {
-                allocations.set(i, new PotAllocation(lower.amount() + amount, lower.eligiblePlayers()));
-                return;
-            }
-        }
-        if (!eligibleHandContenders.isEmpty()) {
-            allocations.add(0, new PotAllocation(amount, List.copyOf(eligibleHandContenders)));
-        }
-    }
-
-    private static void appendAllocationCoalescingSameEligibility(List<PotAllocation> allocations, int amount,
-            List<Player> eligiblePlayers) {
-        if (!allocations.isEmpty()) {
-            PotAllocation previous = allocations.getLast();
-            Set<String> previousIds = previous.eligiblePlayers().stream().map(Player::getPlayerId).collect(Collectors.toSet());
-            Set<String> currentIds = eligiblePlayers.stream().map(Player::getPlayerId).collect(Collectors.toSet());
-            if (previousIds.equals(currentIds)) {
-                allocations.set(allocations.size() - 1,
-                        new PotAllocation(previous.amount() + amount, previous.eligiblePlayers()));
-                return;
-            }
-        }
-        allocations.add(new PotAllocation(amount, List.copyOf(eligiblePlayers)));
+        return PotCalculator.computePotAllocationsAndUncalled(
+                pot, preHandCarryOver, handContributions, activePlayers, players, eligibleHandContenders, gameId);
     }
 
     /**
@@ -1314,24 +925,6 @@ public class Game {
     }
 
     /**
-     * Represents a single pot layer (main pot or a side pot) and the players
-     * who are eligible to win that layer.
-     */
-    private record PotAllocation(int amount, List<Player> eligiblePlayers) {
-    }
-
-    /**
-     * Result container for pot decomposition:
-     * - allocations: contested pots to award at showdown
-     * - uncalledByPlayer: chips that must be refunded (single-participant layers)
-     * - uncalledTotal: sum of all uncalled chips
-     */
-    private record PotComputationResult(List<PotAllocation> allocations,
-            Map<String, Integer> uncalledByPlayer,
-            int uncalledTotal) {
-    }
-
-    /**
      * Returns the contested pot amounts for display (main pot first, then side
      * pots).
      * Uncalled amounts are intentionally excluded from this list because they are
@@ -1340,70 +933,15 @@ public class Game {
      * @return list of contested pot amounts in showdown order
      */
     public List<Integer> getPotBreakdown() {
-        if (pot <= 0) {
-            logger.debug("Pot breakdown requested for game {} with empty pot", gameId);
-            return List.of();
-        }
-
-        if (lastSettlementResult != null && lastSettlementResult.settled()) {
-            return List.of(pot);
-        }
-
-        boolean hasAllIn = activePlayers.stream()
-                .anyMatch(player -> player.getIsAllIn() && !player.getHasFolded());
-
-        // Live money above an all-in cap remains pending until the owing players
-        // respond. Do not present it as a finalized refund or expose temporary
-        // side-pot boundaries while the street is still open.
-        boolean pendingResponse = hasActionablePlayerOwingCall();
-        if (pendingResponse) {
-            int maxAllInCap = handContributions.entrySet().stream()
-                    .filter(entry -> activePlayers.stream().anyMatch(player -> player.getPlayerId().equals(entry.getKey())
-                            && player.getIsAllIn() && !player.getHasFolded() && !player.getIsOut()))
-                    .mapToInt(Map.Entry::getValue).max().orElse(0);
-            boolean owingBelowCap = activePlayers.stream().anyMatch(player -> !player.getHasFolded()
-                    && !player.getIsOut() && !player.getIsAllIn() && currentHighestBet > player.getCurrentBet()
-                    && handContributions.getOrDefault(player.getPlayerId(), 0) < maxAllInCap);
-            if (owingBelowCap || maxAllInCap == 0) return List.of(pot);
-
-            List<Integer> caps = handContributions.entrySet().stream()
-                    .filter(entry -> activePlayers.stream().anyMatch(player -> player.getPlayerId().equals(entry.getKey())
-                            && player.getIsAllIn() && !player.getHasFolded() && !player.getIsOut()))
-                    .map(Map.Entry::getValue).distinct().sorted().toList();
-            List<Integer> liveLayers = new ArrayList<>();
-            int previousCap = 0;
-            for (int cap : caps) {
-                int layerWidth = cap - previousCap;
-                int lowerBoundary = previousCap;
-                int layer = handContributions.values().stream()
-                        .mapToInt(value -> Math.max(0, Math.min(value - lowerBoundary, layerWidth)))
-                        .sum();
-                if (liveLayers.isEmpty()) layer = Math.addExact(layer, preHandCarryOver);
-                if (layer > 0) liveLayers.add(layer);
-                previousCap = cap;
-            }
-            int projected = liveLayers.stream().mapToInt(Integer::intValue).sum();
-            if (pot > projected) liveLayers.add(pot - projected);
-            return List.copyOf(liveLayers);
-        }
-
-        if (!hasAllIn) {
-            logger.debug("Pot breakdown for game {} without all-ins: [{}]", gameId, pot);
-            return List.of(pot);
-        }
-
-        PotComputationResult computation = computePotAllocationsAndUncalled(activePlayers.stream()
-                .filter(player -> !player.getHasFolded() && !player.getIsOut()).toList());
-        List<Integer> breakdown = computation.allocations().stream()
-                .map(PotAllocation::amount)
-                .toList();
-
-        logger.debug("Pot breakdown for game {} with all-ins: {} | uncalled={}",
-                gameId,
-                breakdown,
-                computation.uncalledTotal());
-
-        return breakdown;
+        return PotCalculator.getPotBreakdown(
+                pot,
+                preHandCarryOver,
+                handContributions,
+                activePlayers,
+                players,
+                lastSettlementResult,
+                currentHighestBet,
+                gameId);
     }
 
     /**
@@ -1413,46 +951,29 @@ public class Game {
      * @return total chips that should be refunded to players as uncalled
      */
     public int getUncalledAmount() {
-        if (pot <= 0) {
-            return 0;
-        }
-
-        if (lastSettlementResult != null && lastSettlementResult.settled()) {
-            return 0;
-        }
-
-        boolean hasAllIn = activePlayers.stream()
-                .anyMatch(player -> player.getIsAllIn() && !player.getHasFolded());
-
-        boolean pendingResponse = hasActionablePlayerOwingCall();
-        if (pendingResponse) return 0;
-
-        if (!hasAllIn) {
-            return 0;
-        }
-
-        return computePotAllocationsAndUncalled(activePlayers.stream()
-                .filter(player -> !player.getHasFolded() && !player.getIsOut()).toList()).uncalledTotal();
+        return PotCalculator.getUncalledAmount(
+                pot,
+                preHandCarryOver,
+                handContributions,
+                activePlayers,
+                players,
+                lastSettlementResult,
+                currentHighestBet,
+                gameId);
     }
 
     /**
      * Helper for concise player-name logging in side-pot diagnostics.
      */
     private List<String> playerNames(List<Player> players) {
-        return players.stream().map(Player::getName).toList();
+        return PotCalculator.playerNames(players);
     }
 
     /**
      * Helper for concise allocation logging in side-pot diagnostics.
      */
     private List<String> allocationSummary(List<PotAllocation> allocations) {
-        List<String> summary = new ArrayList<>();
-        for (int i = 0; i < allocations.size(); i++) {
-            PotAllocation allocation = allocations.get(i);
-            summary.add("pot[" + i + "] amount=" + allocation.amount() + " eligible="
-                    + playerNames(allocation.eligiblePlayers()));
-        }
-        return summary;
+        return PotCalculator.allocationSummary(allocations);
     }
 
     /**
@@ -1464,43 +985,7 @@ public class Game {
      *         tie)
      */
     private List<Player> determineWinners(List<Player> players) {
-        // Create a mutable copy of the list for sorting
-        List<Player> sortablePlayers = new ArrayList<>(players);
-        sortablePlayers.sort(Comparator.comparing(Player::getHandRank).reversed());
-
-        if (sortablePlayers.isEmpty()) {
-            return new ArrayList<>();
-        }
-
-        Player bestPlayer = sortablePlayers.getFirst();
-        List<Player> winners = new ArrayList<>();
-        winners.add(bestPlayer);
-
-        for (int i = 1; i < sortablePlayers.size(); i++) {
-            Player currentPlayer = sortablePlayers.get(i);
-            if (currentPlayer.getHandRank() == bestPlayer.getHandRank()) {
-                boolean challengerBeatsBest = handEvaluator.isBetterHandOfSameRank(
-                        currentPlayer.getBestHand(),
-                        bestPlayer.getBestHand(),
-                        bestPlayer.getHandRank());
-
-                boolean bestBeatsChallenger = handEvaluator.isBetterHandOfSameRank(
-                        bestPlayer.getBestHand(),
-                        currentPlayer.getBestHand(),
-                        bestPlayer.getHandRank());
-
-                if (challengerBeatsBest && !bestBeatsChallenger) {
-                    bestPlayer = currentPlayer;
-                    winners.clear();
-                    winners.add(currentPlayer);
-                } else if (!challengerBeatsBest && !bestBeatsChallenger) {
-                    winners.add(currentPlayer);
-                }
-            } else {
-                break;
-            }
-        }
-        return winners;
+        return ShowdownResolver.determineWinners(handEvaluator, players);
     }
 
     /**
@@ -1509,24 +994,19 @@ public class Game {
      */
     public void advancePositions() {
         if (activePlayers.isEmpty()) return;
-        int anchorIndex = handSeatOrder.indexOf(dealerAnchorPlayerId);
-        for (int offset = 1; offset <= handSeatOrder.size(); offset++) {
-            String candidateId = handSeatOrder.get(Math.floorMod(anchorIndex + offset, handSeatOrder.size()));
-            int activeIndex = indexOfActivePlayer(candidateId);
-            if (activeIndex >= 0 && !activePlayers.get(activeIndex).getIsOut()) {
-                dealerPosition = activeIndex;
-                dealerAnchorPlayerId = candidateId;
-                break;
-            }
-        }
-        updatePositionsForCurrentTable();
+        TableSeating.PositionRotationResult result = TableSeating.advancePositions(
+                activePlayers, handSeatOrder, dealerAnchorPlayerId);
+        this.dealerPosition = result.dealerPosition();
+        this.dealerAnchorPlayerId = result.dealerAnchorPlayerId();
+        this.smallBlindPosition = result.smallBlindPosition();
+        this.bigBlindPosition = result.bigBlindPosition();
+        this.currentPlayerPosition = result.currentPlayerPosition();
         smallBlindPlayerId = null;
         bigBlindPlayerId = null;
     }
 
     private int indexOfActivePlayer(String playerId) {
-        for (int i = 0; i < activePlayers.size(); i++) if (activePlayers.get(i).getPlayerId().equals(playerId)) return i;
-        return -1;
+        return TableSeating.indexOfActivePlayer(activePlayers, playerId);
     }
 
     /**
@@ -1535,19 +1015,11 @@ public class Game {
      * first pre-flop.
      */
     private void updatePositionsForCurrentTable() {
-        int tableSize = activePlayers.size();
-
-        if (tableSize == 2) {
-            // Heads-up: dealer posts small blind and acts first pre-flop.
-            smallBlindPosition = dealerPosition;
-            bigBlindPosition = (dealerPosition + 1) % tableSize;
-            currentPlayerPosition = dealerPosition;
-            return;
-        }
-
-        smallBlindPosition = (dealerPosition + 1) % tableSize;
-        bigBlindPosition = (smallBlindPosition + 1) % tableSize;
-        currentPlayerPosition = (bigBlindPosition + 1) % tableSize;
+        TableSeating.TablePositions positions = TableSeating.updatePositionsForCurrentTable(
+                activePlayers, dealerPosition);
+        this.smallBlindPosition = positions.smallBlindPosition();
+        this.bigBlindPosition = positions.bigBlindPosition();
+        this.currentPlayerPosition = positions.currentPlayerPosition();
     }
 
     /**
@@ -1601,44 +1073,42 @@ public class Game {
      * @param deadlineEpochMs UTC epoch milliseconds when countdown expires
      */
     public void openReadyCountdown(long deadlineEpochMs) {
-        readyCountdownActive = true;
-        readyCountdownDeadlineEpochMs = deadlineEpochMs;
-        readyGateState = ReadyGateState.COUNTING_DOWN;
-        for (Player player : players) {
-            player.setReadyForNextHand(false);
-        }
+        ReadyGate.ReadyGateStateTransition transition = ReadyGate.openCountdown(players, deadlineEpochMs);
+        this.readyCountdownActive = transition.active();
+        this.readyCountdownDeadlineEpochMs = transition.deadlineEpochMs();
+        this.readyGateState = transition.state();
     }
 
     /**
      * Closes the ready-confirmation gate.
      */
     public void closeReadyCountdown() {
-        readyCountdownActive = false;
-        readyCountdownDeadlineEpochMs = null;
-        readyGateState = ReadyGateState.CLOSED;
+        ReadyGate.ReadyGateStateTransition transition = ReadyGate.closeCountdown();
+        this.readyCountdownActive = transition.active();
+        this.readyCountdownDeadlineEpochMs = transition.deadlineEpochMs();
+        this.readyGateState = transition.state();
     }
 
     /** Closes ticking readiness while keeping the completed hand available for review. */
     public void waitForReadyPlayers() {
-        readyCountdownActive = false;
-        readyCountdownDeadlineEpochMs = null;
-        readyGateState = ReadyGateState.WAITING_FOR_PLAYERS;
-        for (Player player : players) player.setReadyForNextHand(false);
+        ReadyGate.ReadyGateStateTransition transition = ReadyGate.waitForPlayers(players);
+        this.readyCountdownActive = transition.active();
+        this.readyCountdownDeadlineEpochMs = transition.deadlineEpochMs();
+        this.readyGateState = transition.state();
     }
 
     /** Begins a new numbered hand after the previous hand has settled. */
     public long beginHand() {
-        if (handNumber == 0) handNumber = 1;
-        else handNumber++;
-        this.stateRevision = 1;
-        return handNumber;
+        this.handNumber = ReadyGate.beginHand(this.handNumber);
+        this.stateRevision = GameScheduling.resetStateRevisionForNewHand();
+        return this.handNumber;
     }
 
     public long getHandNumber() { return handNumber; }
 
     public ReadyGateState getReadyGateState() { return readyGateState; }
 
-    public int getReadyEligibleCount() { return getReadyEligiblePlayers().size(); }
+    public int getReadyEligibleCount() { return ReadyGate.getReadyEligibleCount(players); }
 
     /**
      * Returns whether the ready countdown gate is currently active.
@@ -1668,20 +1138,14 @@ public class Game {
      * @return true if all eligible players are ready, false otherwise
      */
     public boolean areAllReadyEligiblePlayersReady() {
-        List<Player> eligiblePlayers = getReadyEligiblePlayers();
-        if (eligiblePlayers.size() < 2) {
-            return false;
-        }
-        return eligiblePlayers.stream().allMatch(Player::getIsReadyForNextHand);
+        return ReadyGate.areAllEligiblePlayersReady(players);
     }
 
     /**
      * Marks all currently eligible players as ready.
      */
     public void forceReadyForEligiblePlayers() {
-        for (Player player : getReadyEligiblePlayers()) {
-            player.setReadyForNextHand(true);
-        }
+        ReadyGate.forceReadyForEligiblePlayers(players);
     }
 
     /**
@@ -1703,11 +1167,7 @@ public class Game {
      * @return players whose readiness is required
      */
     private List<Player> getReadyEligiblePlayers() {
-        return players.stream()
-                .filter(player -> !player.getIsOut())
-                .filter(player -> !player.getIsDisconnected())
-                .filter(player -> player.getChips() > 0)
-                .toList();
+        return ReadyGate.getEligiblePlayers(players);
     }
 
     /**
@@ -1765,66 +1225,31 @@ public class Game {
             return;
         }
 
-        Player previousCurrent = null;
-        if (!activePlayers.isEmpty()) {
-            normalizeCurrentPlayerPosition();
-            previousCurrent = activePlayers.get(currentPlayerPosition);
-        }
-
-        players.remove(playerToRemove);
-        activePlayers.remove(playerToRemove);
         actedPlayersInRound.remove(playerToRemove.getPlayerId());
         lastActedWagerByPlayer.remove(playerToRemove.getPlayerId());
 
-        // Keep position indexes aligned with retained identities where possible.
-        // The anchor itself remains even if the dealer has left this hand.
-        int anchoredDealerIndex = indexOfActivePlayer(dealerAnchorPlayerId);
-        if (anchoredDealerIndex >= 0) dealerPosition = anchoredDealerIndex;
-        if (smallBlindPlayerId != null) smallBlindPosition = indexOfActivePlayer(smallBlindPlayerId);
-        if (bigBlindPlayerId != null) bigBlindPosition = indexOfActivePlayer(bigBlindPlayerId);
+        TableSeating.PlayerRemovalResult result = TableSeating.removePlayerFromGame(
+                players,
+                activePlayers,
+                playerToRemove,
+                dealerPosition,
+                smallBlindPosition,
+                bigBlindPosition,
+                currentPlayerPosition,
+                dealerAnchorPlayerId,
+                smallBlindPlayerId,
+                bigBlindPlayerId
+        );
 
-        if (activePlayers.isEmpty()) {
-            currentPlayerPosition = 0;
-            return;
-        }
-
-        String sbId = smallBlindPlayerId;
-        String bbId = bigBlindPlayerId;
-
-        // Preserve the same player turn when someone else leaves and that player is
-        // still present.
-        if (previousCurrent != null && !previousCurrent.equals(playerToRemove)) {
-            int preservedIndex = activePlayers.indexOf(previousCurrent);
-            if (preservedIndex >= 0) {
-                currentPlayerPosition = preservedIndex;
-                return;
-            }
-        }
-
-        if (sbId != null) smallBlindPosition = Math.max(0, indexOfActivePlayer(sbId));
-        if (bbId != null) bigBlindPosition = Math.max(0, indexOfActivePlayer(bbId));
-
-        // If current player left, point to the successor seat and skip non-actionable
-        // seats.
-        normalizeCurrentPlayerPosition();
-        Player current = activePlayers.get(currentPlayerPosition);
-        if (current.getHasFolded() || current.getIsAllIn()) {
-            nextPlayer();
-        }
+        this.dealerPosition = result.dealerPosition();
+        this.smallBlindPosition = result.smallBlindPosition();
+        this.bigBlindPosition = result.bigBlindPosition();
+        this.currentPlayerPosition = result.currentPlayerPosition();
     }
 
     private int firstActionableSeatAfterDealerAnchor() {
-        if (activePlayers.isEmpty()) return 0;
-        int anchorIndex = handSeatOrder.indexOf(dealerAnchorPlayerId);
-        if (anchorIndex < 0) anchorIndex = Math.max(0, Math.min(dealerPosition, handSeatOrder.size() - 1));
-        for (int offset = 1; offset <= handSeatOrder.size(); offset++) {
-            String candidateId = handSeatOrder.get(Math.floorMod(anchorIndex + offset, handSeatOrder.size()));
-            int activeIndex = indexOfActivePlayer(candidateId);
-            if (activeIndex < 0) continue;
-            Player candidate = activePlayers.get(activeIndex);
-            if (!candidate.getHasFolded() && !candidate.getIsAllIn() && !candidate.getIsOut()) return activeIndex;
-        }
-        return 0;
+        return TableSeating.firstActionableSeatAfterDealerAnchor(
+                activePlayers, handSeatOrder, dealerAnchorPlayerId, dealerPosition);
     }
 
     /**
@@ -1832,13 +1257,7 @@ public class Game {
      * players list.
      */
     private void normalizeCurrentPlayerPosition() {
-        if (activePlayers.isEmpty()) {
-            currentPlayerPosition = 0;
-            return;
-        }
-        // floorMod handles negative indices correctly but this isn't necessary for my
-        // code as I never subtract from currentPlayerPosition
-        currentPlayerPosition = Math.floorMod(currentPlayerPosition, activePlayers.size());
+        this.currentPlayerPosition = TableSeating.normalizeCurrentPlayerPosition(activePlayers, currentPlayerPosition);
     }
 
     /**
@@ -1859,19 +1278,7 @@ public class Game {
      * Advances to the next player in turn order.
      */
     public void nextPlayer() {
-        if (activePlayers.isEmpty()) {
-            currentPlayerPosition = 0;
-            return;
-        }
-
-        normalizeCurrentPlayerPosition();
-
-        int originalPosition = currentPlayerPosition;
-        do {
-            currentPlayerPosition = (currentPlayerPosition + 1) % activePlayers.size();
-        } while ((activePlayers.get(currentPlayerPosition).getHasFolded() ||
-                activePlayers.get(currentPlayerPosition).getIsAllIn()) &&
-                currentPlayerPosition != originalPosition);
+        this.currentPlayerPosition = TableSeating.nextPlayer(activePlayers, currentPlayerPosition);
     }
 
     /**
@@ -2104,8 +1511,7 @@ public class Game {
      * @param deadlineEpochMs absolute execution deadline
      */
     public void scheduleTask(ScheduledGameTask task, long deadlineEpochMs) {
-        scheduledTaskDeadlines.put(task, deadlineEpochMs);
-        scheduledTaskGenerations.merge(task, 1L, Long::sum);
+        GameScheduling.scheduleTask(scheduledTaskDeadlines, scheduledTaskGenerations, task, deadlineEpochMs);
     }
 
     /**
@@ -2116,10 +1522,16 @@ public class Game {
      * @return current absolute deadline, or {@code null} when not scheduled
      */
     public Long getScheduledTaskDeadline(ScheduledGameTask task) {
-        return scheduledTaskDeadlines.get(task);
+        return GameScheduling.getScheduledTaskDeadline(scheduledTaskDeadlines, task);
     }
-    public long getScheduledTaskGeneration(ScheduledGameTask task) { return scheduledTaskGenerations.getOrDefault(task, 0L); }
-    public Map<ScheduledGameTask, Long> getScheduledTaskGenerationsSnapshot() { return Map.copyOf(scheduledTaskGenerations); }
+
+    public long getScheduledTaskGeneration(ScheduledGameTask task) {
+        return GameScheduling.getScheduledTaskGeneration(scheduledTaskGenerations, task);
+    }
+
+    public Map<ScheduledGameTask, Long> getScheduledTaskGenerationsSnapshot() {
+        return GameScheduling.getScheduledTaskGenerationsSnapshot(scheduledTaskGenerations);
+    }
 
     /**
      * Clears durable intent in the same mutation that performs the work, making
@@ -2128,15 +1540,12 @@ public class Game {
      * @param task completed delayed work type
      */
     public void clearScheduledTask(ScheduledGameTask task) {
-        scheduledTaskDeadlines.remove(task);
-        scheduledTaskGenerations.merge(task, 1L, Long::sum);
+        GameScheduling.clearScheduledTask(scheduledTaskDeadlines, scheduledTaskGenerations, task);
     }
 
     /** Invalidates all durable work except terminal cleanup. */
     public void invalidateProgressionTasks() {
-        for (ScheduledGameTask task : List.copyOf(scheduledTaskDeadlines.keySet())) {
-            if (task != ScheduledGameTask.CLEANUP) clearScheduledTask(task);
-        }
+        GameScheduling.invalidateProgressionTasks(scheduledTaskDeadlines, scheduledTaskGenerations);
     }
 
     /**
@@ -2146,7 +1555,7 @@ public class Game {
      * @return immutable task-to-deadline map
      */
     public Map<ScheduledGameTask, Long> getScheduledTaskDeadlinesSnapshot() {
-        return Map.copyOf(scheduledTaskDeadlines);
+        return GameScheduling.getScheduledTaskDeadlinesSnapshot(scheduledTaskDeadlines);
     }
 
     public long getStateRevision() {
@@ -2154,7 +1563,7 @@ public class Game {
     }
 
     public void incrementStateRevision() {
-        this.stateRevision++;
+        this.stateRevision = GameScheduling.incrementStateRevision(this.stateRevision);
     }
 
     /**
