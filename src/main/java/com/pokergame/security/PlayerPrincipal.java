@@ -1,5 +1,7 @@
 package com.pokergame.security;
 
+import com.pokergame.exception.UnauthorisedActionException;
+
 import java.security.Principal;
 
 /**
@@ -21,6 +23,39 @@ public record PlayerPrincipal(String playerName, String roomId, String membershi
      */
     public PlayerPrincipal(String playerName, String roomId) {
         this(playerName, roomId, null);
+    }
+
+    /**
+     * Asserts this principal's token is bound to the given room/game identity.
+     * <p>
+     * Centralizes the token-to-room binding check that every secured endpoint performs.
+     * Null-safe: a {@code null} bound {@code roomId} is treated as a mismatch and rejected
+     * rather than throwing a {@link NullPointerException}, so callers need not guard it
+     * separately.
+     * </p>
+     *
+     * @param expectedRoomId the room or game identifier the request targets
+     * @throws UnauthorisedActionException if this principal is bound to no room or to a different room
+     */
+    public void assertBoundTo(String expectedRoomId) {
+        if (this.roomId == null || !this.roomId.equals(expectedRoomId)) {
+            throw new UnauthorisedActionException("Token is not valid for this room.");
+        }
+    }
+
+    /**
+     * Asserts this principal's token is bound to the given room/game identity, using a
+     * caller-supplied rejection message so transport-specific wording (for example "game"
+     * versus "room") is preserved.
+     *
+     * @param expectedRoomId the room or game identifier the request targets
+     * @param rejectionMessage client-safe message for the thrown exception on mismatch
+     * @throws UnauthorisedActionException if this principal is bound to no room or to a different room
+     */
+    public void assertBoundTo(String expectedRoomId, String rejectionMessage) {
+        if (this.roomId == null || !this.roomId.equals(expectedRoomId)) {
+            throw new UnauthorisedActionException(rejectionMessage);
+        }
     }
 
     /**

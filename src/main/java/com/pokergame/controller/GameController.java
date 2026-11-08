@@ -80,9 +80,7 @@ public class GameController {
         logger.debug("Player {} requested game state for {}", playerName, gameId);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
-        }
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
@@ -107,9 +105,7 @@ public class GameController {
         logger.debug("Player {} requested private state for {}", playerName, gameId);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
-        }
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
@@ -161,9 +157,7 @@ public class GameController {
         logger.info("Processing player action for game {} by {}: {}", gameId, playerName, actionRequest);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
-        }
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
@@ -186,9 +180,7 @@ public class GameController {
         logger.info("Processing READY confirmation for game {} by {}", gameId, playerName);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
-        }
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
@@ -210,9 +202,7 @@ public class GameController {
         logger.info("Processing UNREADY for game {} by {}", gameId, playerName);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
-        }
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
@@ -237,9 +227,7 @@ public class GameController {
         logger.info("Player {} requesting to leave game {}", playerName, gameId);
 
         // Security check: ensure the token is actually for THIS game
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
-        }
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
@@ -270,10 +258,8 @@ public class GameController {
         String playerName = playerPrincipal.playerName();
         logger.debug("Player {} requested game review for {}", playerName, gameId);
 
-        // Security check: ensure the token is actually for THIS game/room
-        if (playerPrincipal.roomId() == null || !playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
-        }
+        // Security check: ensure the token is actually for THIS game/room (null-safe)
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
         // Security check: ensure querying player name matches the authenticated principal
         if (requestedPlayerName != null && !requestedPlayerName.isBlank() && !requestedPlayerName.equals(playerName)) {
@@ -306,10 +292,8 @@ public class GameController {
         String playerName = playerPrincipal.playerName();
         logger.info("Player {} attempting to claim win in game {}", playerName, gameId);
 
-        // Security check: ensure the token is actually for THIS game/room
-        if (playerPrincipal.roomId() == null || !playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
-        }
+        // Security check: ensure the token is actually for THIS game/room (null-safe)
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());

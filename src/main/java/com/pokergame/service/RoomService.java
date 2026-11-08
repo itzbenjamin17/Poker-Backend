@@ -2,6 +2,7 @@ package com.pokergame.service;
 
 import com.pokergame.util.RoomPasswordPolicy;
 import com.pokergame.dto.internal.PlayerJoinInfo;
+import com.pokergame.dto.internal.RoomEntryResult;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
@@ -127,6 +128,25 @@ public class RoomService {
     }
 
     /**
+     * Creates a room and returns both its identity and the canonical (sanitized) host
+     * name as stored in the room. This is the entry point for callers that must bind a
+     * credential to the stored name (for example the REST controller issuing a JWT),
+     * so sanitization happens exactly once here in the service rather than being
+     * repeated by the caller.
+     *
+     * @param request validated room configuration
+     * @return the created room id paired with the canonical host name
+     * @throws BadRequestException if the room name is already taken
+     */
+    public RoomEntryResult createRoomForEntry(CreateRoomRequest request) {
+        String roomId = createRoom(request);
+        // The host is stored under its sanitized name; getCurrentHost returns that
+        // canonical value, so no second sanitization pass is needed.
+        String canonicalPlayerName = getCurrentHost(roomId);
+        return new RoomEntryResult(roomId, canonicalPlayerName);
+    }
+
+    /**
      * Creates a room through an explicit identity seam so the prepare record can be
      * written before the room exists in memory. Generating the ID outside this method
      * avoids trying to infer a WAL filename from state that has not yet been created.
@@ -215,6 +235,26 @@ public class RoomService {
         }
 
         return (self == null ? this : self).joinRoom(room.getRoomId(), joinRequest);
+    }
+
+    /**
+     * Joins a room and returns both its identity and the canonical (sanitized) player
+     * name as stored in the room. This is the entry point for callers that must bind a
+     * credential to the stored name (for example the REST controller issuing a JWT),
+     * so sanitization happens exactly once here in the service rather than being
+     * repeated by the caller.
+     *
+     * @param joinRequest validated join request
+     * @return the joined room id paired with the canonical player name
+     * @throws ResourceNotFoundException if the room isn't found
+     * @throws BadRequestException if the password is invalid, the player name is taken, or the room is full
+     */
+    public RoomEntryResult joinRoomForEntry(JoinRoomRequest joinRequest) {
+        String roomId = joinRoom(joinRequest);
+        // The player is stored under its sanitized name; sanitize once here (in the
+        // service) to recover the canonical key, then confirm it against stored state.
+        String canonicalPlayerName = InputSanitizer.sanitize(joinRequest.playerName());
+        return new RoomEntryResult(roomId, canonicalPlayerName);
     }
 
     /**

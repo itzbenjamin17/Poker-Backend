@@ -11,7 +11,7 @@ import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
 import com.pokergame.security.PlayerPrincipal;
-import com.pokergame.util.InputSanitizer;
+import com.pokergame.dto.internal.RoomEntryResult;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -74,23 +74,23 @@ public class RoomController {
             @Valid @RequestBody CreateRoomRequest createRequest,
             HttpServletRequest request) {
         logger.info("Creating new room with request: {}", createRequest);
-        
-        // Sanitize names first to ensure consistency between token and storage
-        InputSanitizer.sanitize(createRequest.getRoomName());
-        String sanitizedPlayerName = InputSanitizer.sanitize(createRequest.getPlayerName());
-        
-        String roomId = roomService.createRoom(createRequest);
+
+        // Sanitization is owned by the room service; it returns the canonical player
+        // name so the token binds to exactly the name that was stored.
+        RoomEntryResult entry = roomService.createRoomForEntry(createRequest);
+        String roomId = entry.roomId();
+        String canonicalPlayerName = entry.canonicalPlayerName();
 
         Room room = roomService.getRoom(roomId);
-        String membershipId = room != null ? room.getMembershipId(sanitizedPlayerName) : null;
+        String membershipId = room != null ? room.getMembershipId(canonicalPlayerName) : null;
 
         // Generate JWT token for this player, bound to this room and membership
         String token = membershipId != null
-                ? jwtService.generateToken(sanitizedPlayerName, roomId, membershipId)
-                : jwtService.generateToken(sanitizedPlayerName, roomId);
+                ? jwtService.generateToken(canonicalPlayerName, roomId, membershipId)
+                : jwtService.generateToken(canonicalPlayerName, roomId);
 
         logger.info("Room created successfully with ID: {}", roomId);
-        TokenResponse tokenResponse = new TokenResponse(token, roomId, sanitizedPlayerName);
+        TokenResponse tokenResponse = new TokenResponse(token, roomId, canonicalPlayerName);
         return ResponseEntity.ok(ApiResponse.success("Room created successfully", tokenResponse));
     }
 
@@ -107,23 +107,23 @@ public class RoomController {
             @Valid @RequestBody JoinRoomRequest joinRequest,
             HttpServletRequest request) {
         logger.info("Player {} attempting to join room: {}", joinRequest.playerName(), joinRequest.roomName());
-        
-        // Sanitize names first to ensure consistency between token and storage
-        InputSanitizer.sanitize(joinRequest.roomName());
-        String sanitizedPlayerName = InputSanitizer.sanitize(joinRequest.playerName());
-        
-        String roomId = roomService.joinRoom(joinRequest);
+
+        // Sanitization is owned by the room service; it returns the canonical player
+        // name so the token binds to exactly the name that was stored.
+        RoomEntryResult entry = roomService.joinRoomForEntry(joinRequest);
+        String roomId = entry.roomId();
+        String canonicalPlayerName = entry.canonicalPlayerName();
 
         Room room = roomService.getRoom(roomId);
-        String membershipId = room != null ? room.getMembershipId(sanitizedPlayerName) : null;
+        String membershipId = room != null ? room.getMembershipId(canonicalPlayerName) : null;
 
         // Generate JWT token for this player, bound to this room and membership
         String token = membershipId != null
-                ? jwtService.generateToken(sanitizedPlayerName, roomId, membershipId)
-                : jwtService.generateToken(sanitizedPlayerName, roomId);
+                ? jwtService.generateToken(canonicalPlayerName, roomId, membershipId)
+                : jwtService.generateToken(canonicalPlayerName, roomId);
 
-        logger.info("Player {} successfully joined room: {}", sanitizedPlayerName, joinRequest.roomName());
-        TokenResponse tokenResponse = new TokenResponse(token, roomId, sanitizedPlayerName);
+        logger.info("Player {} successfully joined room: {}", canonicalPlayerName, joinRequest.roomName());
+        TokenResponse tokenResponse = new TokenResponse(token, roomId, canonicalPlayerName);
         return ResponseEntity.ok(ApiResponse.success("Successfully joined room", tokenResponse));
     }
 
@@ -142,9 +142,7 @@ public class RoomController {
         String playerName = playerPrincipal.playerName();
         logger.info("Player {} requesting to leave room {}", playerName, roomId);
         // Security check: ensure the token is actually for THIS room
-        if (!playerPrincipal.roomId().equals(roomId)) {
-            throw new UnauthorisedActionException("Token is not valid for this room.");
-        }
+        playerPrincipal.assertBoundTo(roomId);
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
@@ -167,9 +165,7 @@ public class RoomController {
             @PathVariable String roomId,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         // Check binding before exposing resource existence
-        if (!playerPrincipal.roomId().equals(roomId)) {
-            throw new UnauthorisedActionException("Token is not valid for this room.");
-        }
+        playerPrincipal.assertBoundTo(roomId);
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
             gameLifecycleService.validatePlayerMembership(roomId, playerPrincipal.playerName(), playerPrincipal.membershipId());
@@ -179,6 +175,11 @@ public class RoomController {
                 logger.warn("Room not found: {}", roomId);
                 return ResponseEntity.notFound().build();
             }
+            // The room lease (acquireRoomLock) and this Room intrinsic monitor are DISTINCT locks
+            // guarding different concerns: the lease serializes durable mutations on the room, while
+            // this monitor guards Room's own mutable fields and enforces the room -> game lock
+            // ordering. Both are held intentionally so the membership check and the room-data read
+            // are atomic against a concurrent removePlayer. Do not "simplify" by dropping either.
             synchronized (room) {
                 if (!room.getPlayers().contains(playerPrincipal.playerName())) {
                     throw new UnauthorisedActionException("You are not a member of this room.");
@@ -207,9 +208,7 @@ public class RoomController {
         logger.info("Player {} attempting to start game for room {}", playerName, roomId);
 
         // Security check: ensure the token is actually for THIS room
-        if (!playerPrincipal.roomId().equals(roomId)) {
-            throw new UnauthorisedActionException("Token is not valid for this room.");
-        }
+        playerPrincipal.assertBoundTo(roomId);
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());

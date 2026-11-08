@@ -2,6 +2,7 @@ package com.pokergame.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pokergame.dto.internal.PlayerJoinInfo;
+import com.pokergame.dto.internal.RoomEntryResult;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.RoomDataResponse;
@@ -138,7 +139,8 @@ class RoomControllerTest {
     void createRoom_ShouldReturnTokenResponse() throws Exception {
         CreateRoomRequest request = new CreateRoomRequest("Room1", "Player1", 6, 10, 20, 1000, null);
         String roomId = "room-123";
-        when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn(roomId);
+        when(roomService.createRoomForEntry(any(CreateRoomRequest.class)))
+                .thenReturn(new RoomEntryResult(roomId, "Player1"));
         when(jwtService.generateToken("Player1", roomId)).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/create")
@@ -150,7 +152,7 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.data.roomId").value(roomId))
                 .andExpect(jsonPath("$.data.playerName").value("Player1"));
 
-        verify(roomService).createRoom(any(CreateRoomRequest.class));
+        verify(roomService).createRoomForEntry(any(CreateRoomRequest.class));
         verify(jwtService).generateToken("Player1", roomId);
     }
 
@@ -162,7 +164,8 @@ class RoomControllerTest {
     void joinRoom_ShouldReturnTokenResponse() throws Exception {
         JoinRoomRequest request = new JoinRoomRequest("Room1", "Player2", null);
         String roomId = "room-123";
-        when(roomService.joinRoom(any(JoinRoomRequest.class))).thenReturn(roomId);
+        when(roomService.joinRoomForEntry(any(JoinRoomRequest.class)))
+                .thenReturn(new RoomEntryResult(roomId, "Player2"));
         when(jwtService.generateToken("Player2", roomId)).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/join")
@@ -174,7 +177,7 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.data.roomId").value(roomId))
                 .andExpect(jsonPath("$.data.playerName").value("Player2"));
 
-        verify(roomService).joinRoom(any(JoinRoomRequest.class));
+        verify(roomService).joinRoomForEntry(any(JoinRoomRequest.class));
         verify(jwtService).generateToken("Player2", roomId);
     }
 
@@ -414,7 +417,8 @@ class RoomControllerTest {
     @DisplayName("POST /api/room/create - Whitespace-only password treated as absent")
     void createRoom_WhitespaceOnlyPassword_TreatedAsAbsent() throws Exception {
         ArgumentCaptor<CreateRoomRequest> captor = ArgumentCaptor.forClass(CreateRoomRequest.class);
-        when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn("room-123");
+        when(roomService.createRoomForEntry(any(CreateRoomRequest.class)))
+                .thenReturn(new RoomEntryResult("room-123", "Player1"));
         when(jwtService.generateToken("Player1", "room-123")).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/create")
@@ -422,7 +426,7 @@ class RoomControllerTest {
                 .content("{\"roomName\":\"Room1\",\"playerName\":\"Player1\",\"maxPlayers\":6,\"smallBlind\":10,\"bigBlind\":20,\"buyIn\":1000,\"password\":\"   \"}"))
                 .andExpect(status().isOk());
 
-        verify(roomService).createRoom(captor.capture());
+        verify(roomService).createRoomForEntry(captor.capture());
         assertThat(captor.getValue().getPassword()).isNull();
         assertThat(captor.getValue().hasPassword()).isFalse();
     }
@@ -434,7 +438,8 @@ class RoomControllerTest {
     @DisplayName("POST /api/room/create - Password preserves spaces")
     void createRoom_PasswordPreservesSpaces() throws Exception {
         ArgumentCaptor<CreateRoomRequest> captor = ArgumentCaptor.forClass(CreateRoomRequest.class);
-        when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn("room-123");
+        when(roomService.createRoomForEntry(any(CreateRoomRequest.class)))
+                .thenReturn(new RoomEntryResult("room-123", "Player1"));
         when(jwtService.generateToken("Player1", "room-123")).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/create")
@@ -442,7 +447,7 @@ class RoomControllerTest {
                 .content("{\"roomName\":\"Room1\",\"playerName\":\"Player1\",\"maxPlayers\":6,\"smallBlind\":10,\"bigBlind\":20,\"buyIn\":1000,\"password\":\"  secret123  \"}"))
                 .andExpect(status().isOk());
 
-        verify(roomService).createRoom(captor.capture());
+        verify(roomService).createRoomForEntry(captor.capture());
         assertThat(captor.getValue().getPassword()).isEqualTo("  secret123  ");
         assertThat(captor.getValue().hasPassword()).isTrue();
     }
@@ -540,7 +545,8 @@ class RoomControllerTest {
     @DisplayName("POST /api/room/join - Whitespace-only password treated as null")
     void joinRoom_WhitespaceOnlyPassword_TreatedAsNull() throws Exception {
         ArgumentCaptor<JoinRoomRequest> captor = ArgumentCaptor.forClass(JoinRoomRequest.class);
-        when(roomService.joinRoom(any(JoinRoomRequest.class))).thenReturn("room-123");
+        when(roomService.joinRoomForEntry(any(JoinRoomRequest.class)))
+                .thenReturn(new RoomEntryResult("room-123", "Player2"));
         when(jwtService.generateToken("Player2", "room-123")).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/join")
@@ -548,7 +554,7 @@ class RoomControllerTest {
                 .content("{\"roomName\":\"Room1\",\"playerName\":\"Player2\",\"password\":\"   \"}"))
                 .andExpect(status().isOk());
 
-        verify(roomService).joinRoom(captor.capture());
+        verify(roomService).joinRoomForEntry(captor.capture());
         assertThat(captor.getValue().password()).isNull();
     }
 
@@ -559,7 +565,8 @@ class RoomControllerTest {
     @DisplayName("POST /api/room/join - Password preserves spaces")
     void joinRoom_PasswordPreservesSpaces() throws Exception {
         ArgumentCaptor<JoinRoomRequest> captor = ArgumentCaptor.forClass(JoinRoomRequest.class);
-        when(roomService.joinRoom(any(JoinRoomRequest.class))).thenReturn("room-123");
+        when(roomService.joinRoomForEntry(any(JoinRoomRequest.class)))
+                .thenReturn(new RoomEntryResult("room-123", "Player2"));
         when(jwtService.generateToken("Player2", "room-123")).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/join")
@@ -567,7 +574,7 @@ class RoomControllerTest {
                 .content("{\"roomName\":\"Room1\",\"playerName\":\"Player2\",\"password\":\"  secret123  \"}"))
                 .andExpect(status().isOk());
 
-        verify(roomService).joinRoom(captor.capture());
+        verify(roomService).joinRoomForEntry(captor.capture());
         assertThat(captor.getValue().password()).isEqualTo("  secret123  ");
     }
 
@@ -616,7 +623,8 @@ class RoomControllerTest {
 
         // Consume the limit (5 per 15 minutes). We don't need to simulate failures
         // because the rate limit properly applies to successful requests too.
-        when(roomService.createRoom(any())).thenReturn("room-123");
+        when(roomService.createRoomForEntry(any()))
+                .thenReturn(new RoomEntryResult("room-123", "Player1"));
 
         // Consume the limit (5 per 15 minutes)
         for (int i = 0; i < 5; i++) {
@@ -685,7 +693,8 @@ class RoomControllerTest {
         Room room = new Room(roomId, "RoomMem", "HostAlice", 6, 10, 20, 1000, null);
         String expectedMembershipId = room.addPlayer("HostAlice");
 
-        when(roomService.createRoom(any(CreateRoomRequest.class))).thenReturn(roomId);
+        when(roomService.createRoomForEntry(any(CreateRoomRequest.class)))
+                .thenReturn(new RoomEntryResult(roomId, "HostAlice"));
         when(roomService.getRoom(roomId)).thenReturn(room);
         when(jwtService.generateToken("HostAlice", roomId, expectedMembershipId)).thenReturn("token-with-mid");
 
@@ -709,7 +718,8 @@ class RoomControllerTest {
         room.addPlayer("HostAlice");
         String expectedMembershipId = room.addPlayer("Bob");
 
-        when(roomService.joinRoom(any(JoinRoomRequest.class))).thenReturn(roomId);
+        when(roomService.joinRoomForEntry(any(JoinRoomRequest.class)))
+                .thenReturn(new RoomEntryResult(roomId, "Bob"));
         when(roomService.getRoom(roomId)).thenReturn(room);
         when(jwtService.generateToken("Bob", roomId, expectedMembershipId)).thenReturn("token-with-mid-bob");
 

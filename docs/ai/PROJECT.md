@@ -90,6 +90,16 @@ Use [WebSocketConfig](../../src/main/java/com/pokergame/config/WebSocketConfig.j
 
 Public game DTOs contain chips, players, board cards, turn/phase/pot information, and optional showdown, readiness, disconnect, or claim-win metadata. Private state carries player ID and hole cards. Preserve the backend/frontend distinction between `ApiResponse` command/room-event wrappers and direct game-state snapshots; optional/null payload fields must remain compatible with frontend decoders.
 
+### Response Envelope Convention
+
+Responses follow a deliberate split; keep new endpoints consistent with it rather than wrapping everything uniformly:
+
+- **Commands (mutations) return `ApiResponse<T>`** with an outcome `message` and a `data` payload. This covers `POST /api/room/create`, `/api/room/join`, `/api/room/{roomId}/leave`, `/api/room/{roomId}/start-game`, `/api/game/{gameId}/leave`, and `/api/game/{gameId}/claim-win`, plus the room-event broadcasts published to `/room/{roomId}`.
+- **Queries return the resource DTO directly** (no envelope). This covers `GET /api/room/{roomId}` (`RoomDataResponse`), `GET /api/game/{gameId}/state`, `/private-state`, and `/review`. The `message` field carries no meaning for a read, so a GET exposes the resource at the top level.
+- **Errors use a consistent error body** through [the controller advice](../../src/main/java/com/pokergame/advice/), including `application/problem+json`, independent of the success-envelope shape.
+
+This matches the client in `../frontend-poker/src/services/api.ts`, which unwraps `message`/`data` only on command responses and decodes query responses as bare DTOs (notably `getReview`, which decodes the review object at the top level). Do not retrofit an envelope onto a query response without a coordinated frontend decoder change — the two repos must move together.
+
 ## Security And Boundaries
 
 HTTP is stateless JWT authentication. Room create/join, the WebSocket handshake, and health/info endpoints are public; remaining HTTP paths require authentication under [SecurityConfig](../../src/main/java/com/pokergame/config/SecurityConfig.java).
