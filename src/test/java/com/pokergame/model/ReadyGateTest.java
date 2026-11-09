@@ -2,13 +2,6 @@ package com.pokergame.model;
 
 import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.enums.*;
-import com.pokergame.exception.BadRequestException;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.junit.jupiter.MockitoSettings;
-import org.mockito.quality.Strictness;
-import static org.mockito.Mockito.*;
-
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.service.HandEvaluatorService;
@@ -18,6 +11,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -1626,6 +1623,325 @@ class ReadyGateTest {
                 game.getPlayers().get(2).setReadyForNextHand(true);
                 // Player 1 has 0 chips, so with player 0 and 2 ready, all eligible should be ready
                 assertTrue(game.areAllReadyEligiblePlayersReady());
+        }
+    }
+
+    // =========================================================================
+    // Direct Tests: startOrWait, expireCountdown, normalizeRecoveredCountdown
+    // =========================================================================
+
+    @Nested
+    @DisplayName("Countdown State Machine Transitions")
+    class CountdownStateMachineTransitionTests {
+
+        @Test
+        @DisplayName("startOrWait ignores when forfeit is pending")
+        void startOrWait_WhenForfeitPending_ReturnsIgnore() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+
+            ReadyGate.CountdownStartTransition transition = ReadyGate.startOrWait(
+                    List.of(p1, p2), true, false, false, GamePhase.SHOWDOWN, 50_000L);
+
+            assertEquals(Game.ReadyCountdownStartOutcome.IGNORE, transition.outcome());
+            assertNull(transition.gateTransition());
+        }
+
+        @Test
+        @DisplayName("startOrWait ignores when game is over")
+        void startOrWait_WhenGameOver_ReturnsIgnore() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+
+            ReadyGate.CountdownStartTransition transition = ReadyGate.startOrWait(
+                    List.of(p1, p2), false, true, false, GamePhase.SHOWDOWN, 50_000L);
+
+            assertEquals(Game.ReadyCountdownStartOutcome.IGNORE, transition.outcome());
+            assertNull(transition.gateTransition());
+        }
+
+        @Test
+        @DisplayName("startOrWait returns TOURNAMENT_OVER when tournament is over")
+        void startOrWait_WhenTournamentOver_ReturnsTournamentOver() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 0);
+
+            ReadyGate.CountdownStartTransition transition = ReadyGate.startOrWait(
+                    List.of(p1, p2), false, false, true, GamePhase.SHOWDOWN, 50_000L);
+
+            assertEquals(Game.ReadyCountdownStartOutcome.TOURNAMENT_OVER, transition.outcome());
+            assertNull(transition.gateTransition());
+        }
+
+        @Test
+        @DisplayName("startOrWait ignores when phase is not SHOWDOWN")
+        void startOrWait_WhenNotShowdown_ReturnsIgnore() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+
+            ReadyGate.CountdownStartTransition transition = ReadyGate.startOrWait(
+                    List.of(p1, p2), false, false, false, GamePhase.TURN, 50_000L);
+
+            assertEquals(Game.ReadyCountdownStartOutcome.IGNORE, transition.outcome());
+            assertNull(transition.gateTransition());
+        }
+
+        @Test
+        @DisplayName("startOrWait transitions to WAITING_FOR_PLAYERS when fewer than 2 eligible players exist")
+        void startOrWait_WhenFewerThanTwoEligible_TransitionsToWaiting() {
+            Player p1 = player("p1", "Alice", 1000, false, false, true);
+            Player p2 = player("p2", "Bob", 0); // Broke
+
+            ReadyGate.CountdownStartTransition transition = ReadyGate.startOrWait(
+                    List.of(p1, p2), false, false, false, GamePhase.SHOWDOWN, 50_000L);
+
+            assertEquals(Game.ReadyCountdownStartOutcome.WAITING_FOR_PLAYERS, transition.outcome());
+            assertNotNull(transition.gateTransition());
+            assertFalse(transition.gateTransition().active());
+            assertNull(transition.gateTransition().deadlineEpochMs());
+            assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, transition.gateTransition().state());
+            assertFalse(p1.getIsReadyForNextHand(), "Flags must be reset");
+        }
+
+        @Test
+        @DisplayName("startOrWait opens countdown when at least 2 eligible players and resets ready flags")
+        void startOrWait_WhenTwoEligible_OpensCountdown() {
+            Player p1 = player("p1", "Alice", 1000, false, false, true);
+            Player p2 = player("p2", "Bob", 1000, false, false, true);
+
+            ReadyGate.CountdownStartTransition transition = ReadyGate.startOrWait(
+                    List.of(p1, p2), false, false, false, GamePhase.SHOWDOWN, 50_000L);
+
+            // openCountdown resets ready flags to false, so outcome is OPENED
+            assertEquals(Game.ReadyCountdownStartOutcome.OPENED, transition.outcome());
+            assertNotNull(transition.gateTransition());
+            assertTrue(transition.gateTransition().active());
+            assertEquals(50_000L, transition.gateTransition().deadlineEpochMs());
+            assertEquals(ReadyGateState.COUNTING_DOWN, transition.gateTransition().state());
+            assertFalse(p1.getIsReadyForNextHand());
+            assertFalse(p2.getIsReadyForNextHand());
+        }
+
+        @Test
+        @DisplayName("expireCountdown ignores when forfeit is pending, inactive, or stale deadline")
+        void expireCountdown_StaleOrInactiveScenarios_ReturnsIgnoreStale() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+
+            // forfeit pending
+            assertEquals(Game.ReadyCountdownTimeoutOutcome.IGNORE_STALE,
+                    ReadyGate.expireCountdown(List.of(p1, p2), true, true, 1000L, 1000L).outcome());
+
+            // inactive
+            assertEquals(Game.ReadyCountdownTimeoutOutcome.IGNORE_STALE,
+                    ReadyGate.expireCountdown(List.of(p1, p2), false, false, 1000L, 1000L).outcome());
+
+            // deadline mismatch
+            assertEquals(Game.ReadyCountdownTimeoutOutcome.IGNORE_STALE,
+                    ReadyGate.expireCountdown(List.of(p1, p2), false, true, 2000L, 1000L).outcome());
+        }
+
+        @Test
+        @DisplayName("expireCountdown transitions to WAITING_FOR_PLAYERS when fewer than 2 eligible players")
+        void expireCountdown_FewerThanTwoEligible_TransitionsToWaiting() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 0); // Broke
+
+            ReadyGate.CountdownTimeoutTransition transition = ReadyGate.expireCountdown(
+                    List.of(p1, p2), false, true, 1000L, 1000L);
+
+            assertEquals(Game.ReadyCountdownTimeoutOutcome.WAITING_FOR_PLAYERS, transition.outcome());
+            assertNotNull(transition.gateTransition());
+            assertFalse(transition.gateTransition().active());
+            assertNull(transition.gateTransition().deadlineEpochMs());
+            assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, transition.gateTransition().state());
+        }
+
+        @Test
+        @DisplayName("expireCountdown forces ready for eligible players and returns FORCED_READY")
+        void expireCountdown_ValidTimeout_ForcesReady() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 800);
+            Player pOut = player("p3", "Charlie", 0, true, false, false);
+
+            ReadyGate.CountdownTimeoutTransition transition = ReadyGate.expireCountdown(
+                    List.of(p1, p2, pOut), false, true, 1000L, 1000L);
+
+            assertEquals(Game.ReadyCountdownTimeoutOutcome.FORCED_READY, transition.outcome());
+            assertNull(transition.gateTransition());
+            assertTrue(p1.getIsReadyForNextHand());
+            assertTrue(p2.getIsReadyForNextHand());
+            assertFalse(pOut.getIsReadyForNextHand());
+        }
+
+        @Test
+        @DisplayName("normalizeRecoveredCountdown returns null if inactive or deadline already present")
+        void normalizeRecoveredCountdown_NoNormalizationNeeded_ReturnsNull() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+
+            // inactive
+            assertNull(ReadyGate.normalizeRecoveredCountdown(List.of(p1, p2), false, null, 5000L));
+
+            // deadline already present
+            assertNull(ReadyGate.normalizeRecoveredCountdown(List.of(p1, p2), true, 4000L, 5000L));
+        }
+
+        @Test
+        @DisplayName("normalizeRecoveredCountdown transitions to WAITING_FOR_PLAYERS if active with null deadline and < 2 eligible")
+        void normalizeRecoveredCountdown_FewerThanTwoEligible_TransitionsToWaiting() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 0);
+
+            ReadyGate.ReadyGateStateTransition transition = ReadyGate.normalizeRecoveredCountdown(
+                    List.of(p1, p2), true, null, 5000L);
+
+            assertNotNull(transition);
+            assertFalse(transition.active());
+            assertNull(transition.deadlineEpochMs());
+            assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, transition.state());
+        }
+
+        @Test
+        @DisplayName("normalizeRecoveredCountdown opens countdown if active with null deadline and >= 2 eligible")
+        void normalizeRecoveredCountdown_AtLeastTwoEligible_OpensCountdown() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+
+            ReadyGate.ReadyGateStateTransition transition = ReadyGate.normalizeRecoveredCountdown(
+                    List.of(p1, p2), true, null, 5000L);
+
+            assertNotNull(transition);
+            assertTrue(transition.active());
+            assertEquals(5000L, transition.deadlineEpochMs());
+            assertEquals(ReadyGateState.COUNTING_DOWN, transition.state());
+        }
+    }
+
+    // =========================================================================
+    // Game Ready Gate Transitions Delegation
+    // =========================================================================
+
+    @Nested
+    @DisplayName("Game Ready Gate Transitions")
+    class GameReadyGateTransitionTests {
+
+        @Test
+        @DisplayName("startOrWaitReadyCountdown with < 2 eligible clears READY_TIMEOUT task and waits")
+        void startOrWaitReadyCountdown_FewerThanTwoEligible_ClearsTaskAndWaits() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+            Game game = new Game("test-game", List.of(p1, p2), 10, 20, new HandEvaluatorService());
+            game.conductShowdown();
+            p2.setDisconnected(true);
+            game.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 99_999L);
+
+            Game.ReadyCountdownStartOutcome outcome = game.startOrWaitReadyCountdown(50_000L);
+
+            assertEquals(Game.ReadyCountdownStartOutcome.WAITING_FOR_PLAYERS, outcome);
+            assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, game.getReadyGateState());
+            assertFalse(game.isReadyCountdownActive());
+            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        }
+
+        @Test
+        @DisplayName("startOrWaitReadyCountdown with >= 2 eligible schedules READY_TIMEOUT task and opens")
+        void startOrWaitReadyCountdown_TwoEligible_SchedulesTaskAndOpens() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+            Game game = new Game("test-game", List.of(p1, p2), 10, 20, new HandEvaluatorService());
+            game.conductShowdown();
+
+            Game.ReadyCountdownStartOutcome outcome = game.startOrWaitReadyCountdown(50_000L);
+
+            assertEquals(Game.ReadyCountdownStartOutcome.OPENED, outcome);
+            assertEquals(ReadyGateState.COUNTING_DOWN, game.getReadyGateState());
+            assertTrue(game.isReadyCountdownActive());
+            assertEquals(50_000L, game.getReadyCountdownDeadlineEpochMs());
+            assertEquals(50_000L, game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        }
+
+        @Test
+        @DisplayName("expireReadyCountdown with < 2 eligible clears READY_TIMEOUT task and waits")
+        void expireReadyCountdown_FewerThanTwoEligible_ClearsTaskAndWaits() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+            Game game = new Game("test-game", List.of(p1, p2), 10, 20, new HandEvaluatorService());
+            game.openReadyCountdown(50_000L);
+            game.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 50_000L);
+
+            // Disconnect Bob so eligible count becomes 1
+            p2.setDisconnected(true);
+
+            Game.ReadyCountdownTimeoutOutcome outcome = game.expireReadyCountdown(50_000L);
+
+            assertEquals(Game.ReadyCountdownTimeoutOutcome.WAITING_FOR_PLAYERS, outcome);
+            assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, game.getReadyGateState());
+            assertFalse(game.isReadyCountdownActive());
+            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        }
+
+        @Test
+        @DisplayName("expireReadyCountdown with valid timeout forces eligible players ready")
+        void expireReadyCountdown_ValidTimeout_ForcesReady() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+            Game game = new Game("test-game", List.of(p1, p2), 10, 20, new HandEvaluatorService());
+            game.openReadyCountdown(50_000L);
+
+            Game.ReadyCountdownTimeoutOutcome outcome = game.expireReadyCountdown(50_000L);
+
+            assertEquals(Game.ReadyCountdownTimeoutOutcome.FORCED_READY, outcome);
+            assertTrue(p1.getIsReadyForNextHand());
+            assertTrue(p2.getIsReadyForNextHand());
+        }
+
+        @Test
+        @DisplayName("normalizeRecoveredReadyCountdown repairs missing deadline when active")
+        void normalizeRecoveredReadyCountdown_RepairsMissingDeadline() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+            Game game = Game.restoreBuilder()
+                    .gameId("test-game")
+                    .players(List.of(p1, p2))
+                    .activePlayerIds(List.of(p1.getPlayerId(), p2.getPlayerId()))
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .currentPhase(GamePhase.SHOWDOWN)
+                    .readyCountdownActive(true)
+                    .readyCountdownDeadlineEpochMs(null)
+                    .handEvaluator(new HandEvaluatorService())
+                    .build();
+
+            boolean normalized = game.normalizeRecoveredReadyCountdown(60_000L);
+
+            assertTrue(normalized);
+            assertTrue(game.isReadyCountdownActive());
+            assertEquals(60_000L, game.getReadyCountdownDeadlineEpochMs());
+            assertEquals(60_000L, game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        }
+
+        @Test
+        @DisplayName("normalizeRecoveredReadyCountdown reschedules task if deadline not yet tracked")
+        void normalizeRecoveredReadyCountdown_ReschedulesTaskIfDeadlineDiffers() {
+            Player p1 = player("p1", "Alice", 1000);
+            Player p2 = player("p2", "Bob", 1000);
+            Game game = Game.restoreBuilder()
+                    .gameId("test-game")
+                    .players(List.of(p1, p2))
+                    .activePlayerIds(List.of(p1.getPlayerId(), p2.getPlayerId()))
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .currentPhase(GamePhase.SHOWDOWN)
+                    .readyCountdownActive(true)
+                    .readyCountdownDeadlineEpochMs(70_000L)
+                    .handEvaluator(new HandEvaluatorService())
+                    .build();
+
+            boolean normalized = game.normalizeRecoveredReadyCountdown(60_000L);
+
+            assertFalse(normalized, "No transition normalization needed since deadline already present");
+            assertEquals(70_000L, game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
         }
     }
 }

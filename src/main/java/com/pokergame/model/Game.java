@@ -895,33 +895,127 @@ public class Game {
     }
 
     /**
-     * Opens the ready-confirmation gate and clears prior ready states.
+     * Applies a ready-gate state transition to this game's fields.
      *
-     * @param deadlineEpochMs UTC epoch milliseconds when countdown expires
+     * @param transition state transition to apply, or {@code null} if no-op
      */
-    public void openReadyCountdown(long deadlineEpochMs) {
-        ReadyGate.ReadyGateStateTransition transition = ReadyGate.openCountdown(players, deadlineEpochMs);
+    private void applyReadyGateTransition(ReadyGate.ReadyGateStateTransition transition) {
+        if (transition == null) return;
         this.readyCountdownActive = transition.active();
         this.readyCountdownDeadlineEpochMs = transition.deadlineEpochMs();
         this.readyGateState = transition.state();
     }
 
     /**
+     * Opens the ready-confirmation gate and clears prior ready states.
+     *
+     * @param deadlineEpochMs UTC epoch milliseconds when countdown expires
+     */
+    public void openReadyCountdown(long deadlineEpochMs) {
+        applyReadyGateTransition(ReadyGate.openCountdown(players, deadlineEpochMs));
+    }
+
+    /**
      * Closes the ready-confirmation gate.
      */
     public void closeReadyCountdown() {
-        ReadyGate.ReadyGateStateTransition transition = ReadyGate.closeCountdown();
-        this.readyCountdownActive = transition.active();
-        this.readyCountdownDeadlineEpochMs = transition.deadlineEpochMs();
-        this.readyGateState = transition.state();
+        applyReadyGateTransition(ReadyGate.closeCountdown());
     }
 
     /** Closes ticking readiness while keeping the completed hand available for review. */
     public void waitForReadyPlayers() {
-        ReadyGate.ReadyGateStateTransition transition = ReadyGate.waitForPlayers(players);
-        this.readyCountdownActive = transition.active();
-        this.readyCountdownDeadlineEpochMs = transition.deadlineEpochMs();
-        this.readyGateState = transition.state();
+        applyReadyGateTransition(ReadyGate.waitForPlayers(players));
+    }
+
+    /**
+     * Possible outcomes when attempting to start or wait for the ready countdown.
+     */
+    public enum ReadyCountdownStartOutcome {
+        /** Countdown is ignored because game is over, forfeit pending, or phase is not showdown. */
+        IGNORE,
+        /** Tournament is over because one or zero players with chips remain. */
+        TOURNAMENT_OVER,
+        /** Gating transitioned to waiting for players because fewer than 2 eligible players exist. */
+        WAITING_FOR_PLAYERS,
+        /** Ready countdown was opened with a scheduled deadline. */
+        OPENED,
+        /** Countdown was opened and all eligible players are already ready. */
+        ALL_READY
+    }
+
+    /**
+     * Possible outcomes when a ready countdown timer expires.
+     */
+    public enum ReadyCountdownTimeoutOutcome {
+        /** Expiration is ignored because the callback is stale or a forfeit is pending. */
+        IGNORE_STALE,
+        /** Countdown expired with fewer than 2 eligible players, transitioning to waiting. */
+        WAITING_FOR_PLAYERS,
+        /** Countdown expired with at least 2 eligible players, forcing ready. */
+        FORCED_READY
+    }
+
+    /**
+     * Evaluates table readiness conditions and either opens the ready countdown gate
+     * or transitions to waiting for players.
+     *
+     * @param deadlineEpochMs UTC epoch milliseconds when countdown expires if opened
+     * @return the outcome of evaluating readiness gating
+     */
+    public ReadyCountdownStartOutcome startOrWaitReadyCountdown(long deadlineEpochMs) {
+        ReadyGate.CountdownStartTransition transition = ReadyGate.startOrWait(
+                players, forfeitPending, gameOver, isTournamentOver(), currentPhase, deadlineEpochMs);
+        applyReadyGateTransition(transition.gateTransition());
+        if (transition.outcome() == ReadyCountdownStartOutcome.WAITING_FOR_PLAYERS) {
+            clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
+        } else if (transition.outcome() == ReadyCountdownStartOutcome.OPENED
+                || transition.outcome() == ReadyCountdownStartOutcome.ALL_READY) {
+            scheduleTask(ScheduledGameTask.READY_TIMEOUT, deadlineEpochMs);
+        }
+        return transition.outcome();
+    }
+
+    /**
+     * Evaluates expiration of the ready countdown gate, transitioning to waiting for
+     * players or forcing eligible players ready if the timeout is valid.
+     *
+     * @param expectedDeadlineEpochMs expected deadline token for staleness validation
+     * @return the outcome of evaluating countdown expiration
+     */
+    public ReadyCountdownTimeoutOutcome expireReadyCountdown(long expectedDeadlineEpochMs) {
+        ReadyGate.CountdownTimeoutTransition transition = ReadyGate.expireCountdown(
+                players, forfeitPending, readyCountdownActive, readyCountdownDeadlineEpochMs, expectedDeadlineEpochMs);
+        applyReadyGateTransition(transition.gateTransition());
+        if (transition.outcome() == ReadyCountdownTimeoutOutcome.WAITING_FOR_PLAYERS) {
+            clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
+        }
+        return transition.outcome();
+    }
+
+    /**
+     * Normalizes recovered ready countdown state after crash or restart, repairing
+     * missing deadlines and ensuring task intent consistency.
+     *
+     * @param freshDeadlineEpochMs fallback deadline if a recovered countdown was missing a deadline
+     * @return true if state was repaired and requires a snapshot broadcast
+     */
+    public boolean normalizeRecoveredReadyCountdown(long freshDeadlineEpochMs) {
+        ReadyGate.ReadyGateStateTransition transition = ReadyGate.normalizeRecoveredCountdown(
+                players, readyCountdownActive, readyCountdownDeadlineEpochMs, freshDeadlineEpochMs);
+        boolean normalized = transition != null;
+        if (normalized) {
+            applyReadyGateTransition(transition);
+            if (transition.active()) {
+                scheduleTask(ScheduledGameTask.READY_TIMEOUT, freshDeadlineEpochMs);
+            } else {
+                clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
+            }
+        }
+        if (readyCountdownActive && readyCountdownDeadlineEpochMs != null
+                && !Objects.equals(getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT), readyCountdownDeadlineEpochMs)) {
+            scheduleTask(ScheduledGameTask.READY_TIMEOUT, readyCountdownDeadlineEpochMs);
+        }
+        return normalized;
     }
 
     /** Begins a new numbered hand after the previous hand has settled. */
@@ -1162,6 +1256,64 @@ public class Game {
     public boolean isSettledTerminal() {
         return !forfeitPending && (gameOver || (isHandSettled() && isTournamentOver()));
     }
+
+    /**
+     * Derives whether an already-ended game without a retained terminal result
+     * concluded via forfeit rather than a settled showdown.
+     *
+     * @return {@code true} if the hand was not settled in {@link GamePhase#SHOWDOWN}
+     */
+    public boolean isFallbackForfeit() {
+        return currentPhase != GamePhase.SHOWDOWN || !isHandSettled();
+    }
+
+    /**
+     * Marks forfeited players out, settles any in-flight hand and carry-over, resolves the
+     * final tournament winner, and transitions the game aggregate into its terminal state.
+     *
+     * @param preferredWinner  explicit forfeit survivor, or {@code null} for chip-based resolution
+     * @param forfeitedPlayers names of players who forfeited before settlement
+     * @return resolved tournament winner, or {@code null} if no winner could be determined
+     */
+    public Player settleTerminalState(Player preferredWinner, Set<String> forfeitedPlayers) {
+        if (forfeitedPlayers != null) {
+            for (Player player : players) {
+                if (forfeitedPlayers.contains(player.getName())) {
+                    player.setIsOut();
+                }
+            }
+        }
+        if (!isHandSettled()) {
+            conductShowdown();
+        }
+        Player winner = resolveWinnerOrFallback(preferredWinner);
+        completeGameSettlement(winner);
+        if (preferredWinner == null) {
+            Player resolvedWinner = resolveGameWinner();
+            if (resolvedWinner != null) {
+                winner = resolvedWinner;
+            }
+        }
+        markGameOver();
+        closeReadyCountdown();
+        invalidateProgressionTasks();
+        return winner;
+    }
+
+    /**
+     * Checks whether {@code playerName} belongs to the frozen terminal roster or current game roster.
+     *
+     * @param playerName player name to check
+     * @param retained   retained or projected terminal result
+     * @return {@code true} if the player is part of the terminal roster
+     */
+    public boolean isParticipantInTerminalRoster(String playerName, GameEndResponse retained) {
+        return (retained != null && retained.finalState() != null
+                && retained.finalState().players() != null
+                && retained.finalState().players().stream().anyMatch(p -> p.name().equals(playerName)))
+                || (players != null && players.stream().anyMatch(p -> p.getName().equals(playerName)));
+    }
+
 
     /**
      * Resolves the tournament winner, preferring {@code preferredWinner} when still
@@ -1412,6 +1564,56 @@ public class Game {
      */
     public Map<ScheduledGameTask, Long> getScheduledTaskDeadlinesSnapshot() {
         return GameScheduling.getScheduledTaskDeadlinesSnapshot(scheduledTaskDeadlines);
+    }
+
+    /**
+     * Outcome of claiming execution for a scheduled task callback under the game lock.
+     */
+    public enum TaskExecutionClaim {
+        /** The task is current, matches persisted state, and should proceed with execution. */
+        EXECUTE,
+        /** The game has concluded; non-cleanup progression work must be cancelled. */
+        CANCEL_GAME_OVER,
+        /** The callback is stale, superseded, or blocked by a pending forfeit and must be ignored. */
+        IGNORE
+    }
+
+    /**
+     * Claims execution of a scheduled task callback against current game state.
+     * Stale callbacks, superseded generations, or tasks blocked by a pending forfeit are ignored;
+     * non-cleanup tasks on finished games are cancelled.
+     *
+     * @param task delayed work type
+     * @param expectedDeadline deadline captured when scheduled
+     * @param expectedHandNumber hand number captured when scheduled
+     * @param expectedGeneration generation token captured when scheduled
+     * @return claim outcome (EXECUTE, CANCEL_GAME_OVER, or IGNORE)
+     */
+    public TaskExecutionClaim claimScheduledTaskExecution(
+            ScheduledGameTask task,
+            long expectedDeadline,
+            long expectedHandNumber,
+            long expectedGeneration) {
+        return GameScheduling.claimTaskExecution(
+                scheduledTaskDeadlines,
+                scheduledTaskGenerations,
+                forfeitPending,
+                gameOver,
+                handNumber,
+                task,
+                expectedDeadline,
+                expectedHandNumber,
+                expectedGeneration);
+    }
+
+    /**
+     * Checks if this game has reached its scheduled cleanup deadline.
+     *
+     * @param nowEpochMs current epoch millisecond timestamp
+     * @return {@code true} if cleanup deadline is set and current time is at or past it
+     */
+    public boolean isCleanupExpired(long nowEpochMs) {
+        return GameScheduling.isExpired(scheduledTaskDeadlines, nowEpochMs);
     }
 
     public long getStateRevision() {

@@ -1,5 +1,6 @@
 package com.pokergame.model;
 
+import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.exception.UnauthorisedActionException;
 
@@ -59,8 +60,8 @@ final class ReadyGate {
      * @param deadlineEpochMs epoch millisecond deadline for the countdown, or null if inactive
      * @param state resulting gate state enum
      */
-    record ReadyGateStateTransition(boolean active, Long deadlineEpochMs, ReadyGateState state) {
-        ReadyGateStateTransition {
+    public record ReadyGateStateTransition(boolean active, Long deadlineEpochMs, ReadyGateState state) {
+        public ReadyGateStateTransition {
             if (state == null) {
                 state = active ? ReadyGateState.COUNTING_DOWN : ReadyGateState.CLOSED;
             }
@@ -229,5 +230,106 @@ final class ReadyGate {
             return gateState;
         }
         return readyCountdownActive ? ReadyGateState.COUNTING_DOWN : ReadyGateState.CLOSED;
+    }
+
+    /**
+     * Container holding the outcome and resulting gate transition of starting or waiting for a ready countdown.
+     *
+     * @param outcome the start outcome category
+     * @param gateTransition the resulting ready gate state transition, or null if ignored
+     */
+    record CountdownStartTransition(Game.ReadyCountdownStartOutcome outcome, ReadyGateStateTransition gateTransition) {}
+
+    /**
+     * Evaluates table readiness gating conditions when a hand completes.
+     *
+     * @param tablePlayers list of seated table players
+     * @param forfeitPending whether a forfeit is pending
+     * @param gameOver whether the game is flagged as over
+     * @param tournamentOver whether the tournament is over (one or zero players with chips remain)
+     * @param currentPhase current phase of the game
+     * @param deadlineEpochMs target expiration timestamp for the countdown if opened
+     * @return transition result containing the outcome and state changes
+     */
+    static CountdownStartTransition startOrWait(
+            List<Player> tablePlayers,
+            boolean forfeitPending,
+            boolean gameOver,
+            boolean tournamentOver,
+            GamePhase currentPhase,
+            long deadlineEpochMs) {
+        if (forfeitPending || gameOver) {
+            return new CountdownStartTransition(Game.ReadyCountdownStartOutcome.IGNORE, null);
+        }
+        if (tournamentOver) {
+            return new CountdownStartTransition(Game.ReadyCountdownStartOutcome.TOURNAMENT_OVER, null);
+        }
+        if (currentPhase != GamePhase.SHOWDOWN) {
+            return new CountdownStartTransition(Game.ReadyCountdownStartOutcome.IGNORE, null);
+        }
+        if (getReadyEligibleCount(tablePlayers) < 2) {
+            return new CountdownStartTransition(Game.ReadyCountdownStartOutcome.WAITING_FOR_PLAYERS, waitForPlayers(tablePlayers));
+        }
+        ReadyGateStateTransition opened = openCountdown(tablePlayers, deadlineEpochMs);
+        Game.ReadyCountdownStartOutcome outcome = areAllEligiblePlayersReady(tablePlayers)
+                ? Game.ReadyCountdownStartOutcome.ALL_READY
+                : Game.ReadyCountdownStartOutcome.OPENED;
+        return new CountdownStartTransition(outcome, opened);
+    }
+
+    /**
+     * Container holding the outcome and resulting gate transition of expiring a ready countdown.
+     *
+     * @param outcome the timeout outcome category
+     * @param gateTransition the resulting ready gate state transition, or null if not transitioning state
+     */
+    record CountdownTimeoutTransition(Game.ReadyCountdownTimeoutOutcome outcome, ReadyGateStateTransition gateTransition) {}
+
+    /**
+     * Evaluates expiration of an active ready countdown gate.
+     *
+     * @param tablePlayers list of seated table players
+     * @param forfeitPending whether a forfeit is pending
+     * @param readyCountdownActive whether the ready countdown is currently active
+     * @param currentDeadlineEpochMs currently registered countdown deadline
+     * @param expectedDeadlineEpochMs deadline token captured when the callback was scheduled
+     * @return transition result containing the timeout outcome and state changes
+     */
+    static CountdownTimeoutTransition expireCountdown(
+            List<Player> tablePlayers,
+            boolean forfeitPending,
+            boolean readyCountdownActive,
+            Long currentDeadlineEpochMs,
+            long expectedDeadlineEpochMs) {
+        if (forfeitPending || !readyCountdownActive || !Objects.equals(currentDeadlineEpochMs, expectedDeadlineEpochMs)) {
+            return new CountdownTimeoutTransition(Game.ReadyCountdownTimeoutOutcome.IGNORE_STALE, null);
+        }
+        if (getReadyEligibleCount(tablePlayers) < 2) {
+            return new CountdownTimeoutTransition(Game.ReadyCountdownTimeoutOutcome.WAITING_FOR_PLAYERS, waitForPlayers(tablePlayers));
+        }
+        forceReadyForEligiblePlayers(tablePlayers);
+        return new CountdownTimeoutTransition(Game.ReadyCountdownTimeoutOutcome.FORCED_READY, null);
+    }
+
+    /**
+     * Normalizes ready countdown state after crash recovery or restart.
+     *
+     * @param tablePlayers list of seated table players
+     * @param readyCountdownActive whether the ready countdown was active
+     * @param currentDeadlineEpochMs restored deadline epoch milliseconds
+     * @param freshDeadlineEpochMs fallback deadline if a restored active countdown was missing its deadline
+     * @return resulting gate transition to apply, or null if no normalization is needed
+     */
+    static ReadyGateStateTransition normalizeRecoveredCountdown(
+            List<Player> tablePlayers,
+            boolean readyCountdownActive,
+            Long currentDeadlineEpochMs,
+            long freshDeadlineEpochMs) {
+        if (!readyCountdownActive || currentDeadlineEpochMs != null) {
+            return null;
+        }
+        return getReadyEligibleCount(tablePlayers) < 2
+                ? waitForPlayers(tablePlayers)
+                : openCountdown(tablePlayers, freshDeadlineEpochMs);
     }
 }

@@ -914,5 +914,123 @@ class GameSchedulingTest {
         }
     }
 
+    // =========================================================================
+    // 15. Task Claim and Expiry Tests
+    // =========================================================================
+
+    @Nested
+    @DisplayName("Task Claim and Expiry")
+    class TaskClaimAndExpiryTests {
+
+        @Test
+        @DisplayName("claimTaskExecution returns IGNORE when forfeit is pending")
+        void claimTaskExecution_WhenForfeitPending_ReturnsIgnore() {
+            GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.NEW_HAND, 5000L);
+            long gen = GameScheduling.getGeneration(generations, ScheduledGameTask.NEW_HAND);
+
+            Game.TaskExecutionClaim claim = GameScheduling.claimTaskExecution(
+                    deadlines, generations, true, false, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, gen);
+
+            assertEquals(Game.TaskExecutionClaim.IGNORE, claim);
+            assertEquals(5000L, GameScheduling.getDeadline(deadlines, ScheduledGameTask.NEW_HAND));
+            assertEquals(gen, GameScheduling.getGeneration(generations, ScheduledGameTask.NEW_HAND));
+        }
+
+        @Test
+        @DisplayName("claimTaskExecution returns IGNORE when hand number is stale")
+        void claimTaskExecution_WhenHandNumberStale_ReturnsIgnore() {
+            GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.NEW_HAND, 5000L);
+            long gen = GameScheduling.getGeneration(generations, ScheduledGameTask.NEW_HAND);
+
+            Game.TaskExecutionClaim claim = GameScheduling.claimTaskExecution(
+                    deadlines, generations, false, false, 2L, ScheduledGameTask.NEW_HAND, 5000L, 1L, gen);
+
+            assertEquals(Game.TaskExecutionClaim.IGNORE, claim);
+            assertEquals(5000L, GameScheduling.getDeadline(deadlines, ScheduledGameTask.NEW_HAND));
+        }
+
+        @Test
+        @DisplayName("claimTaskExecution returns IGNORE when generation token is stale")
+        void claimTaskExecution_WhenGenerationStale_ReturnsIgnore() {
+            GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.NEW_HAND, 5000L);
+            GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.NEW_HAND, 6000L);
+            long currentGen = GameScheduling.getGeneration(generations, ScheduledGameTask.NEW_HAND);
+
+            Game.TaskExecutionClaim claim = GameScheduling.claimTaskExecution(
+                    deadlines, generations, false, false, 1L, ScheduledGameTask.NEW_HAND, 6000L, 1L, currentGen - 1);
+
+            assertEquals(Game.TaskExecutionClaim.IGNORE, claim);
+            assertEquals(6000L, GameScheduling.getDeadline(deadlines, ScheduledGameTask.NEW_HAND));
+        }
+
+        @Test
+        @DisplayName("claimTaskExecution on game over clears non-cleanup task and returns CANCEL_GAME_OVER")
+        void claimTaskExecution_WhenGameOverAndNonCleanup_ClearsAndReturnsCancelGameOver() {
+            GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.AUTO_ADVANCE, 5000L);
+            long gen = GameScheduling.getGeneration(generations, ScheduledGameTask.AUTO_ADVANCE);
+
+            Game.TaskExecutionClaim claim = GameScheduling.claimTaskExecution(
+                    deadlines, generations, false, true, 1L, ScheduledGameTask.AUTO_ADVANCE, 5000L, 1L, gen);
+
+            assertEquals(Game.TaskExecutionClaim.CANCEL_GAME_OVER, claim);
+            assertNull(GameScheduling.getDeadline(deadlines, ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(gen + 1, GameScheduling.getGeneration(generations, ScheduledGameTask.AUTO_ADVANCE));
+        }
+
+        @Test
+        @DisplayName("claimTaskExecution on game over allows CLEANUP to EXECUTE without clearing")
+        void claimTaskExecution_WhenGameOverAndCleanup_ReturnsExecuteAndRetainsDeadline() {
+            GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.CLEANUP, 5000L);
+            long gen = GameScheduling.getGeneration(generations, ScheduledGameTask.CLEANUP);
+
+            Game.TaskExecutionClaim claim = GameScheduling.claimTaskExecution(
+                    deadlines, generations, false, true, 1L, ScheduledGameTask.CLEANUP, 5000L, 1L, gen);
+
+            assertEquals(Game.TaskExecutionClaim.EXECUTE, claim);
+            assertEquals(5000L, GameScheduling.getDeadline(deadlines, ScheduledGameTask.CLEANUP));
+            assertEquals(gen, GameScheduling.getGeneration(generations, ScheduledGameTask.CLEANUP));
+        }
+
+        @Test
+        @DisplayName("claimTaskExecution returns IGNORE when deadline is null or mismatched")
+        void claimTaskExecution_WhenDeadlineToExecuteMismatched_ReturnsIgnore() {
+            GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.NEW_HAND, 5000L);
+            long gen = GameScheduling.getGeneration(generations, ScheduledGameTask.NEW_HAND);
+
+            Game.TaskExecutionClaim claimMismatched = GameScheduling.claimTaskExecution(
+                    deadlines, generations, false, false, 1L, ScheduledGameTask.NEW_HAND, 4000L, 1L, gen);
+            assertEquals(Game.TaskExecutionClaim.IGNORE, claimMismatched);
+
+            Game.TaskExecutionClaim claimUnscheduled = GameScheduling.claimTaskExecution(
+                    deadlines, generations, false, false, 1L, ScheduledGameTask.READY_OPEN, 5000L, 1L, 0L);
+            assertEquals(Game.TaskExecutionClaim.IGNORE, claimUnscheduled);
+        }
+
+        @Test
+        @DisplayName("claimTaskExecution successfully claims EXECUTE and clears non-cleanup task")
+        void claimTaskExecution_Success_ClearsNonCleanupTask() {
+            GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.NEW_HAND, 5000L);
+            long gen = GameScheduling.getGeneration(generations, ScheduledGameTask.NEW_HAND);
+
+            Game.TaskExecutionClaim claim = GameScheduling.claimTaskExecution(
+                    deadlines, generations, false, false, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, gen);
+
+            assertEquals(Game.TaskExecutionClaim.EXECUTE, claim);
+            assertNull(GameScheduling.getDeadline(deadlines, ScheduledGameTask.NEW_HAND));
+            assertEquals(gen + 1, GameScheduling.getGeneration(generations, ScheduledGameTask.NEW_HAND));
+        }
+
+        @Test
+        @DisplayName("isExpired returns true only when cleanup deadline is reached or past")
+        void isExpired_EvaluatesCleanupDeadlineCorrectly() {
+            assertFalse(GameScheduling.isExpired(deadlines, 1000L));
+
+            GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.CLEANUP, 5000L);
+            assertFalse(GameScheduling.isExpired(deadlines, 4999L));
+            assertTrue(GameScheduling.isExpired(deadlines, 5000L));
+            assertTrue(GameScheduling.isExpired(deadlines, 5001L));
+        }
+    }
+
 }
 

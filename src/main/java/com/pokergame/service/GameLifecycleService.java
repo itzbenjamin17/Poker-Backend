@@ -55,6 +55,15 @@ public class GameLifecycleService {
     @Value("${poker.ready-countdown-ms:30000}")
     private long configuredReadyCountdownMs = 30000;
 
+    /**
+     * Returns the configured ready countdown duration in milliseconds for package collaborators.
+     *
+     * @return ready countdown duration in milliseconds
+     */
+    long getConfiguredReadyCountdownMs() {
+        return configuredReadyCountdownMs;
+    }
+
     private final RoomService roomService;
 
     private final HandEvaluatorService handEvaluator;
@@ -65,7 +74,11 @@ public class GameLifecycleService {
 
 
     private final GameRuntimeTimers runtimeTimers;
+    private final GameTerminalSettlement terminalSettlement;
+    private final GameParticipantDepartureHandler departureHandler;
     private GameLifecycleService self;
+
+    private final Map<String, Game> activeGames = new ConcurrentHashMap<>();
 
     /**
      * Creates the lifecycle service with the scheduler that owns runtime timers.
@@ -88,6 +101,8 @@ public class GameLifecycleService {
         this.gameStateService = gameStateService;
         this.messagingTemplate = messagingTemplate;
         this.runtimeTimers = new GameRuntimeTimers(taskScheduler);
+        this.terminalSettlement = new GameTerminalSettlement(gameStateService, runtimeTimers);
+        this.departureHandler = new GameParticipantDepartureHandler(this, roomService, gameStateService, terminalSettlement, activeGames);
     }
 
     /**
@@ -104,8 +119,6 @@ public class GameLifecycleService {
     void setSelf(@Lazy GameLifecycleService self) {
         this.self = self;
     }
-
-    private final Map<String, Game> activeGames = new ConcurrentHashMap<>();
 
     /**
      * Single durable entry point for participant departure across room and game
@@ -127,7 +140,7 @@ public class GameLifecycleService {
             Game game = getGame(roomId);
             if (game == null || game.isGameOver()) return;
             synchronized (game) {
-                departParticipantsUnderLock(roomId, playerNames, null, game);
+                departureHandler.departParticipantsUnderLock(roomId, playerNames, null, game);
             }
             return;
         }
@@ -136,257 +149,8 @@ public class GameLifecycleService {
             if (roomService.getRoom(roomId) != room) return;
             Game game = getGame(roomId);
             synchronized (game == null ? room : game) {
-                departParticipantsUnderLock(roomId, playerNames, room, game);
+                departureHandler.departParticipantsUnderLock(roomId, playerNames, room, game);
             }
-        }
-    }
-
-    /**
-     * Reconciles host succession following participant departure.
-     * Selects:
-     * 1. Preserves current host if still present.
-     * 2. First remaining connected contender in room join order.
-     * 3. First remaining disconnected contender in room join order.
-     * 4. First remaining member in room join order as spectator/terminal fallback.
-     * 5. Null if no members remain.
-     */
-    private String determineSurvivingHost(Room room, Game game, Collection<String> departingMembers) {
-        if (room == null) return null;
-        String currentHost = roomService.getCurrentHost(room.getRoomId());
-        List<String> remaining = room.getPlayers().stream()
-                .filter(name -> departingMembers == null || !departingMembers.contains(name))
-                .toList();
-        if (remaining.isEmpty()) {
-            return null;
-        }
-        if (currentHost != null && remaining.contains(currentHost)) {
-            return currentHost;
-        }
-        if (game != null) {
-            // Priority 1: first remaining connected contender in room join order
-            for (String name : remaining) {
-                Player player = game.getPlayers().stream()
-                        .filter(p -> p.getName().equals(name))
-                        .findFirst()
-                        .orElse(null);
-                if (player != null && TournamentEligibility.isContender(game, player) && !player.getIsDisconnected()) {
-                    return name;
-                }
-            }
-            // Priority 2: first remaining disconnected contender in room join order
-            for (String name : remaining) {
-                Player player = game.getPlayers().stream()
-                        .filter(p -> p.getName().equals(name))
-                        .findFirst()
-                        .orElse(null);
-                if (player != null && TournamentEligibility.isContender(game, player)) {
-                    return name;
-                }
-            }
-        }
-        // Priority 3: first remaining member in room join order (spectator/terminal fallback)
-        return remaining.getFirst();
-    }
-
-    private void departParticipantsUnderLock(String roomId, Collection<String> playerNames, Room room, Game game) {
-        if (playerNames == null || playerNames.isEmpty()) return;
-        List<String> departing = playerNames.stream()
-                .filter(Objects::nonNull)
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .distinct()
-                .toList();
-        if (departing.isEmpty()) return;
-
-        // If no game exists or game is not started (lobby phase)
-        if (game == null) {
-            if (room == null) return;
-            List<String> roomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
-            if (roomMembers.isEmpty()) return;
-
-            String currentHost = roomService.getCurrentHost(roomId);
-            boolean hostLeaving = currentHost != null && roomMembers.contains(currentHost);
-            if (hostLeaving) {
-                // Lobby host leaves destroys room
-                roomService.leaveRoom(roomId, currentHost);
-            } else {
-                roomService.leavePlayersBatch(roomId, roomMembers, currentHost);
-            }
-            return;
-        }
-
-        // Game exists. If room is null (already cleaned up or missing)
-        if (room == null) {
-            logger.info("Room {} not found while removing players from game. Cleaning up game without broadcast.", roomId);
-            activeGames.remove(roomId);
-            if (gameStateService != null) {
-                gameStateService.clearRetainedSettlement(roomId);
-            }
-            return;
-        }
-
-        // Both room and game exist
-        boolean anyRoomMember = departing.stream().anyMatch(room.getPlayers()::contains);
-        List<Player> departingGamePlayers = game.getPlayers().stream()
-                .filter(p -> departing.contains(p.getName()))
-                .toList();
-
-        if (!anyRoomMember && departingGamePlayers.isEmpty()) {
-            return;
-        }
-
-        // A pending forfeit retains departed OUT rows for final standings. Ignore
-        // retries for those detached players, and let only actual Room members leave.
-        if (game.isForfeitPending()) {
-            List<String> roomMembersToLeave = departing.stream().filter(room.getPlayers()::contains).toList();
-            if (roomMembersToLeave.isEmpty()) return;
-            for (Player departingPlayer : departingGamePlayers) {
-                if (roomMembersToLeave.contains(departingPlayer.getName())
-                        && TournamentEligibility.isContender(game, departingPlayer)) {
-                    departingPlayer.setIsOut();
-                }
-            }
-            List<String> membersToDetach = TournamentEligibility.countContenders(game) == 0
-                    ? room.getPlayers() : roomMembersToLeave;
-            String survivingHost = determineSurvivingHost(room, game, membersToDetach);
-            roomService.leavePlayersBatch(roomId, membersToDetach, survivingHost);
-            if (roomService.getRoom(roomId) != null) gameStateService.broadcastGameState(roomId, game);
-            cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
-            return;
-        }
-
-        // Terminal game check: once terminal, roster, winner, balances, results are frozen.
-        // Later departures update Room membership only.
-        if (game.isSettledTerminal()) {
-            if (room != null) {
-                room.setTerminal(true);
-            }
-            if (!game.isGameOver() || !game.isTerminalCarryOverSettled()) {
-                handleGameEnd(roomId, false);
-            }
-            List<String> roomMembersToLeave = departing.stream().filter(room.getPlayers()::contains).toList();
-            if (!roomMembersToLeave.isEmpty()) {
-                String survivingHost = determineSurvivingHost(room, game, roomMembersToLeave);
-                roomService.leavePlayersBatch(roomId, roomMembersToLeave, survivingHost);
-            }
-            return;
-        }
-
-        // Active game: if no game members are departing (e.g. spectator in room)
-        if (departingGamePlayers.isEmpty()) {
-            List<String> roomMembersToLeave = departing.stream().filter(room.getPlayers()::contains).toList();
-            if (!roomMembersToLeave.isEmpty()) {
-                String survivingHost = determineSurvivingHost(room, game, roomMembersToLeave);
-                roomService.leavePlayersBatch(roomId, roomMembersToLeave, survivingHost);
-            }
-            return;
-        }
-
-        // Determine contenders using TournamentEligibility
-        int contendersBefore = TournamentEligibility.countContenders(game);
-        List<Player> departingContenders = departingGamePlayers.stream()
-                .filter(p -> TournamentEligibility.isContender(game, p))
-                .toList();
-        int contendersRemaining = contendersBefore - departingContenders.size();
-
-        // Check if departure causes completion
-        if (contendersRemaining == 1 && contendersBefore >= 2) {
-            Player survivor = game.getPlayers().stream()
-                    .filter(candidate -> !departing.contains(candidate.getName()))
-                    .filter(candidate -> TournamentEligibility.isContender(game, candidate))
-                    .findFirst().orElse(null);
-
-            if (survivor != null) {
-                if (survivor.getIsDisconnected()) {
-                    for (Player departingPlayer : departingGamePlayers) {
-                        departingPlayer.setIsOut();
-                    }
-                    game.setForfeitPending(true);
-                    game.waitForReadyPlayers();
-                    game.invalidateProgressionTasks();
-                    cancelRuntimeTasks(roomId, false);
-                    List<String> roomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
-                    if (!roomMembers.isEmpty() && roomService.getRoom(roomId) != null) {
-                        String survivingHost = determineSurvivingHost(room, game, roomMembers);
-                        roomService.leavePlayersBatch(roomId, roomMembers, survivingHost);
-                    }
-                    if (roomService.getRoom(roomId) != null) gameStateService.broadcastGameState(roomId, game);
-                    cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
-                } else {
-                    handleGameEndWithForfeits(roomId, survivor, departingGamePlayers.stream().map(Player::getName).collect(Collectors.toSet()));
-                    if (room != null) {
-                        room.setTerminal(true);
-                    }
-                    List<String> roomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
-                    if (!roomMembers.isEmpty() && roomService.getRoom(roomId) != null) {
-                        String survivingHost = determineSurvivingHost(room, game, roomMembers);
-                        roomService.leavePlayersBatch(roomId, roomMembers, survivingHost);
-                    }
-                }
-                return;
-            }
-        }
-
-        if (contendersRemaining <= 0) {
-            for (Player departingPlayer : departingGamePlayers) {
-                game.removePlayerFromGame(departingPlayer);
-            }
-            List<String> roomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
-            if (!roomMembers.isEmpty() && roomService.getRoom(roomId) != null) {
-                String survivingHost = determineSurvivingHost(room, game, roomMembers);
-                roomService.leavePlayersBatch(roomId, roomMembers, survivingHost);
-            }
-            cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
-            return;
-        }
-
-        // contendersRemaining > 1: remove departing players from game and update room
-        for (Player departingPlayer : departingGamePlayers) {
-            game.removePlayerFromGame(departingPlayer);
-        }
-        List<String> roomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
-        if (!roomMembers.isEmpty() && roomService.getRoom(roomId) != null) {
-            String survivingHost = determineSurvivingHost(room, game, roomMembers);
-            roomService.leavePlayersBatch(roomId, roomMembers, survivingHost);
-        }
-
-        if (roomService.getRoom(roomId) == null) {
-            logger.info("Room {} was destroyed during leave flow. Cleaning up active game state.", roomId);
-            activeGames.remove(roomId);
-            if (gameStateService != null) {
-                gameStateService.clearRetainedSettlement(roomId);
-            }
-            return;
-        }
-
-        if (game.getPlayers().isEmpty()) {
-            activeGames.remove(roomId);
-            if (gameStateService != null) {
-                gameStateService.clearRetainedSettlement(roomId);
-            }
-            roomService.destroyRoom(roomId);
-            return;
-        }
-
-        if (game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive()) {
-            gameStateService.broadcastGameState(roomId, game);
-        } else {
-            applyTurnOutcome(roomId, game, game.reconcileAfterPlayerRemoval());
-        }
-
-        if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
-            completeReadyCountdownAndStartNextHand(roomId, game);
-        }
-    }
-
-    private void cleanupAbandonedGameIfRoomEmpty(String gameId, Room room, Game game) {
-        if (TournamentEligibility.countContenders(game) != 0 || !room.getPlayers().isEmpty()) return;
-        game.closeReadyCountdown();
-        for (ScheduledGameTask task : ScheduledGameTask.values()) game.clearScheduledTask(task);
-        cancelRuntimeTasks(gameId, false);
-        activeGames.remove(gameId, game);
-        if (gameStateService != null) {
-            gameStateService.clearRetainedSettlement(gameId);
         }
     }
 
@@ -512,7 +276,7 @@ public class GameLifecycleService {
         }
     }
 
-    private void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome) {
+    void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome) {
         applyTurnOutcomeUnderLock(gameId, game, outcome, false);
     }
 
@@ -640,66 +404,25 @@ public class GameLifecycleService {
 
     private void handleGameEndInternal(String gameId, boolean isForfeit, Player preferredWinner, Set<String> forfeitedPlayers) {
         Game game = getGame(gameId);
-        if (game == null)
-            return;
+        if (game == null) return;
 
         Room room = roomService.getRoom(gameId);
-        int maxPlayers = room == null ? 0 : room.getMaxPlayers();
-        Player winner;
-        GameEndResponse event;
+        GameTerminalSettlement.SettlementOutcome outcome;
         synchronized (game) {
-            if (game.isForfeitPending() && preferredWinner == null) return;
-            // Freeze the terminal winner and event once carry-over has been paid.
-            // Membership can change during the result display window, so delayed
-            // callbacks must not resolve a different winner from mutable players.
-            if (game.isGameOver() && game.isTerminalCarryOverSettled()) return;
-            // Forfeit participants leave the hand before settlement so they cannot
-            // win a pot after abandoning the game. Their already committed chips
-            // remain eligible dead money; uncommitted stacks are never transferred.
-            for (Player player : game.getPlayers()) {
-                if (forfeitedPlayers.contains(player.getName())) player.setIsOut();
-            }
-            // Resolve any in-flight hand and its carried remainder inside the same
-            // game lock before choosing the final game winner or freezing its DTO.
-            if (!game.isHandSettled()) {
-                game.conductShowdown();
-            }
-            winner = game.resolveWinnerOrFallback(preferredWinner);
-
-            game.completeGameSettlement(winner);
-            if (preferredWinner == null) {
-                Player resolvedWinner = game.resolveGameWinner();
-                if (resolvedWinner != null) winner = resolvedWinner;
-            }
-
-            game.markGameOver();
-            game.closeReadyCountdown();
-            game.invalidateProgressionTasks();
-            cancelRuntimeTasks(gameId, true);
-            if (gameStateService != null) {
-                gameStateService.clearRetainedSettlement(gameId);
-            }
-            if (game.getRetainedTerminalResult() != null) {
-                event = game.getRetainedTerminalResult();
-            } else {
-                event = gameStateService.captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
-                game.setRetainedTerminalResult(event);
-            }
+            outcome = terminalSettlement.settleUnderLock(gameId, game, room, isForfeit, preferredWinner, forfeitedPlayers);
+            if (!outcome.settledNow()) return;
         }
 
         if (room != null) {
             room.setTerminal(true);
         }
-
-        if (winner == null) {
+        if (outcome.winner() == null) {
             logger.warn("Cannot broadcast game end for {} - no winner could be determined", gameId);
             return;
         }
-
-        if (event != null) gameStateService.sendGameEnd(event);
-
-        // Wait a few seconds for players to see the result, then destroy the room and
-        // game, on a different thread
+        if (outcome.event() != null) {
+            gameStateService.sendGameEnd(outcome.event());
+        }
         scheduleGameCleanup(gameId, gameEndDisplayDelayMs);
     }
 
@@ -825,25 +548,8 @@ public class GameLifecycleService {
             boolean normalized = false;
             int rebuiltCount;
             synchronized (game) {
-                if (game.isReadyCountdownActive() && game.getReadyCountdownDeadlineEpochMs() == null) {
-                    if (game.getReadyEligibleCount() < 2) {
-                        game.waitForReadyPlayers();
-                        game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
-                    } else {
-                        long freshDeadline = System.currentTimeMillis() + configuredReadyCountdownMs;
-                        game.openReadyCountdown(freshDeadline);
-                        game.scheduleTask(ScheduledGameTask.READY_TIMEOUT, freshDeadline);
-                    }
-                    normalized = true;
-                }
-                if (game.isReadyCountdownActive()) {
-                    Long deadline = game.getReadyCountdownDeadlineEpochMs();
-                    if (deadline != null && !Objects.equals(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT), deadline))
-                        game.scheduleTask(ScheduledGameTask.READY_TIMEOUT, deadline);
-                }
-                Map<ScheduledGameTask, Long> deadlines = game.getScheduledTaskDeadlinesSnapshot();
-                intents = deadlines.entrySet().stream()
-                        .map(entry -> GameRuntimeTimers.captureIntent(gameId, game, entry.getKey(), entry.getValue())).toList();
+                normalized = game.normalizeRecoveredReadyCountdown(System.currentTimeMillis() + configuredReadyCountdownMs);
+                intents = GameRuntimeTimers.captureAllIntents(gameId, game);
                 rebuiltCount = intents.size();
             }
             DurableTransactionContext.afterCommit(() -> intents.forEach(this::scheduleRuntimeTask));
@@ -864,8 +570,7 @@ public class GameLifecycleService {
         if (game == null) return;
         List<TaskIntent> intents;
         synchronized (game) {
-            intents = game.getScheduledTaskDeadlinesSnapshot().entrySet().stream()
-                    .map(entry -> GameRuntimeTimers.captureIntent(gameId, game, entry.getKey(), entry.getValue())).toList();
+            intents = GameRuntimeTimers.captureAllIntents(gameId, game);
         }
         intents.forEach(this::scheduleRuntimeTask);
     }
@@ -974,19 +679,14 @@ public class GameLifecycleService {
         }
         boolean cleanupRequested = false;
         synchronized (game) {
-            if (game.isForfeitPending()) return;
-            if (game.getHandNumber() != expectedHandNumber || game.getScheduledTaskGeneration(task) != expectedGeneration) return;
-            if (game.isGameOver() && task != ScheduledGameTask.CLEANUP) {
-                game.clearScheduledTask(task);
-                runtimeTimers.cancelTask(gameId, task);
-                return;
+            switch (game.claimScheduledTaskExecution(task, expectedDeadline, expectedHandNumber, expectedGeneration)) {
+                case IGNORE -> { return; }
+                case CANCEL_GAME_OVER -> {
+                    runtimeTimers.cancelTask(gameId, task);
+                    return;
+                }
+                case EXECUTE -> { }
             }
-            Long currentDeadline = game.getScheduledTaskDeadline(task);
-            if (currentDeadline == null || currentDeadline != expectedDeadline) {
-                logger.debug("Ignoring stale task {} for game {} expected={} current={}", task, gameId, expectedDeadline, currentDeadline);
-                return;
-            }
-            if (task != ScheduledGameTask.CLEANUP) game.clearScheduledTask(task);
             logger.debug("Executing task {} for game {}", task, gameId);
             switch (task) {
                 case NEW_HAND -> startNewHand(gameId);
@@ -1055,9 +755,7 @@ public class GameLifecycleService {
      * @return true if cleanup deadline is set and current time is at or past it
      */
     public boolean isGameExpired(Game game) {
-        if (game == null) return true;
-        Long cleanupDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
-        return cleanupDeadline != null && System.currentTimeMillis() >= cleanupDeadline;
+        return game == null || game.isCleanupExpired(System.currentTimeMillis());
     }
 
     /**
@@ -1140,31 +838,7 @@ public class GameLifecycleService {
         }
 
         synchronized (game) {
-            if (game.isForfeitPending()) return;
-            if (game.isGameOver()) return;
-            Player player = game.findPlayerByName(playerName);
-
-            if (player == null) {
-                logger.debug("Cannot mark player disconnected: player {} not found in game {}", playerName, gameId);
-                return;
-            }
-            if (player.getIsDisconnected()) {
-                logger.debug("Player {} already disconnected in game {}", playerName, gameId);
-                return;
-            }
-
-            player.setDisconnected(true);
-            player.setReadyForNextHand(false);
-            player.setDisconnectDeadlineEpochMs(disconnectDeadlineEpochMs);
-            logger.info("Player {} marked disconnected in game {} with deadlineEpochMs={}", playerName, gameId, disconnectDeadlineEpochMs);
-
-            if (roomService.getRoom(gameId) != null) {
-                gameStateService.broadcastGameState(gameId, game);
-            }
-
-            if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
-                completeReadyCountdownAndStartNextHand(gameId, game);
-            }
+            departureHandler.markPlayerDisconnectedUnderLock(gameId, game, playerName, disconnectDeadlineEpochMs);
         }
     }
 
@@ -1183,59 +857,19 @@ public class GameLifecycleService {
                 Game game = getGame(gameId);
                 if (game != null) {
                     synchronized (game) {
-                        reconcilePlayerReconnectedUnderLock(gameId, playerName, room, game);
+                        departureHandler.reconcilePlayerReconnectedUnderLock(gameId, playerName, room, game);
                     }
                 } else {
-                    reconcilePlayerReconnectedUnderLock(gameId, playerName, room, null);
+                    departureHandler.reconcilePlayerReconnectedUnderLock(gameId, playerName, room, null);
                 }
             }
         } else {
             Game game = getGame(gameId);
             if (game != null) {
                 synchronized (game) {
-                    reconcilePlayerReconnectedUnderLock(gameId, playerName, null, game);
+                    departureHandler.reconcilePlayerReconnectedUnderLock(gameId, playerName, null, game);
                 }
             }
-        }
-    }
-
-    private void reconcilePlayerReconnectedUnderLock(String gameId, String playerName, Room room, Game game) {
-        if (game != null) {
-            if (game.isGameOver()) {
-                logger.debug("Skipping reconnect for player {} because game {} is already over", playerName, gameId);
-                return;
-            }
-            Player player = game.findPlayerByName(playerName);
-
-            if (player != null && player.getIsDisconnected()) {
-                player.setDisconnected(false);
-                player.setDisconnectDeadlineEpochMs(null);
-                logger.info("Player {} marked reconnected in game {}", playerName, gameId);
-
-                if (game.isForfeitPending() && TournamentEligibility.countContenders(game) == 1
-                        && TournamentEligibility.isContender(game, player)) {
-                    game.setForfeitPending(false);
-                    handleGameEndWithForfeits(gameId, player, Set.of());
-                    if (room != null && room.hasPlayer(playerName)) {
-                        room.setPlayerConnected(playerName, true);
-                        room.setAbsenceDeadline(playerName, null);
-                    }
-                    return;
-                }
-
-                if (room != null) {
-                    gameStateService.broadcastGameState(gameId, game);
-                }
-                if (game.getReadyGateState() == ReadyGateState.WAITING_FOR_PLAYERS
-                        && game.getReadyEligibleCount() >= 2) {
-                    startReadyCountdown(gameId, configuredReadyCountdownMs);
-                }
-            }
-        }
-
-        if (room != null && room.hasPlayer(playerName)) {
-            room.setPlayerConnected(playerName, true);
-            room.setAbsenceDeadline(playerName, null);
         }
     }
 
@@ -1253,41 +887,33 @@ public class GameLifecycleService {
             return;
         }
 
-        long deadlineEpochMs;
+        long deadlineEpochMs = System.currentTimeMillis() + countdownMs;
         TaskIntent readyIntent;
         synchronized (game) {
-            if (game.isForfeitPending()) return;
-            if (game.isGameOver()) return;
-            if (game.isTournamentOver()) {
-                DurableTransactionContext.afterCommit(() -> mutationProxy().handleGameEnd(gameId, false));
-                return;
-            }
-            if (game.getCurrentPhase() != GamePhase.SHOWDOWN) {
-                logger.debug("Skipping ready countdown for game {}: phase is {} (not SHOWDOWN)", gameId, game.getCurrentPhase());
-                return;
-            }
-
-            if (game.getReadyEligibleCount() < 2) {
-                game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
-                cancelReadyTimeout(gameId);
-                game.waitForReadyPlayers();
-                gameStateService.broadcastGameState(gameId, game);
-                return;
-            }
-
-            deadlineEpochMs = System.currentTimeMillis() + countdownMs;
-            game.openReadyCountdown(deadlineEpochMs);
-            game.scheduleTask(ScheduledGameTask.READY_TIMEOUT, deadlineEpochMs);
-            readyIntent = GameRuntimeTimers.captureIntent(gameId, game, ScheduledGameTask.READY_TIMEOUT, deadlineEpochMs);
-            logger.info("Opened ready countdown for game {} with deadlineEpochMs={}", gameId, deadlineEpochMs);
-            gameStateService.broadcastGameState(gameId, game);
-
-            if (game.areAllReadyEligiblePlayersReady()) {
-                completeReadyCountdownAndStartNextHand(gameId, game);
-                return;
+            Game.ReadyCountdownStartOutcome outcome = game.startOrWaitReadyCountdown(deadlineEpochMs);
+            switch (outcome) {
+                case IGNORE -> { return; }
+                case TOURNAMENT_OVER -> {
+                    DurableTransactionContext.afterCommit(() -> mutationProxy().handleGameEnd(gameId, false));
+                    return;
+                }
+                case WAITING_FOR_PLAYERS -> {
+                    cancelReadyTimeout(gameId);
+                    gameStateService.broadcastGameState(gameId, game);
+                    return;
+                }
+                case ALL_READY -> {
+                    gameStateService.broadcastGameState(gameId, game);
+                    completeReadyCountdownAndStartNextHand(gameId, game);
+                    return;
+                }
+                case OPENED -> {
+                    readyIntent = GameRuntimeTimers.captureIntent(gameId, game, ScheduledGameTask.READY_TIMEOUT, deadlineEpochMs);
+                    gameStateService.broadcastGameState(gameId, game);
+                }
+                default -> throw new IllegalStateException("Unexpected ready start outcome: " + outcome);
             }
         }
-
         DurableTransactionContext.afterCommit(() -> scheduleRuntimeTask(readyIntent));
     }
 
@@ -1353,24 +979,14 @@ public class GameLifecycleService {
         }
 
         synchronized (game) {
-            if (game.isForfeitPending()) return;
-            if (!game.isReadyCountdownActive()
-                    || !Objects.equals(game.getReadyCountdownDeadlineEpochMs(), expectedDeadlineEpochMs)) {
-                logger.debug("Ignoring stale ready countdown timeout for game {} expected={} current={}",
-                        gameId, expectedDeadlineEpochMs, game.getReadyCountdownDeadlineEpochMs());
-                return;
+            switch (game.expireReadyCountdown(expectedDeadlineEpochMs)) {
+                case IGNORE_STALE -> { }
+                case WAITING_FOR_PLAYERS -> {
+                    cancelReadyTimeout(gameId);
+                    gameStateService.broadcastGameState(gameId, game);
+                }
+                case FORCED_READY -> completeReadyCountdownAndStartNextHand(gameId, game);
             }
-
-            logger.info("Ready countdown timed out for game {}: forcing ready for eligible players", gameId);
-            if (game.getReadyEligibleCount() < 2) {
-                game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
-                cancelReadyTimeout(gameId);
-                game.waitForReadyPlayers();
-                gameStateService.broadcastGameState(gameId, game);
-                return;
-            }
-            game.forceReadyForEligiblePlayers();
-            completeReadyCountdownAndStartNextHand(gameId, game);
         }
     }
 
@@ -1381,7 +997,7 @@ public class GameLifecycleService {
      * @param gameId game leaving the ready gate
      * @param game   authoritative game state
      */
-    private void completeReadyCountdownAndStartNextHand(String gameId, Game game) {
+    void completeReadyCountdownAndStartNextHand(String gameId, Game game) {
         cancelReadyTimeout(gameId);
 
         game.closeReadyCountdown();
@@ -1413,26 +1029,7 @@ public class GameLifecycleService {
         if (room == null) throw new ResourceNotFoundException("Room not found");
         synchronized (room) {
             synchronized (game) {
-                if (game.isGameOver()) {
-                    return resolveTerminalResultForParticipant(gameId, game, room, playerName, true);
-                }
-
-                if (!canPlayerClaimWin(game, playerName)) throw new UnauthorisedActionException("Cannot claim win right now.");
-                List<String> opponents = game.getPlayers().stream()
-                        .filter(player -> !player.getName().equals(playerName))
-                        .filter(player -> TournamentEligibility.isContender(game, player) && player.getIsDisconnected())
-                        .map(Player::getName)
-                        .toList();
-                departParticipantsUnderLock(gameId, opponents, room, game);
-                GameEndResponse retained = game.getRetainedTerminalResult();
-                if (retained == null && game.isGameOver()) {
-                    Player claimant = game.findPlayerByName(playerName);
-                    if (claimant != null && gameStateService != null) {
-                        retained = gameStateService.captureGameEnd(gameId, game, claimant, true, room.getMaxPlayers());
-                        game.setRetainedTerminalResult(retained);
-                    }
-                }
-                return retained;
+                return departureHandler.claimWinUnderLock(gameId, game, room, playerName);
             }
         }
     }
@@ -1456,74 +1053,8 @@ public class GameLifecycleService {
             }
 
             Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            return resolveTerminalResultForParticipant(gameId, game, room, playerName, false);
+            return terminalSettlement.resolveTerminalResultForParticipant(gameId, game, room, playerName, false);
         }
-    }
-
-    /**
-     * Resolves or synthesizes the terminal {@link GameEndResponse} for an already
-     * finished game and verifies that {@code playerName} is part of its terminal roster.
-     * Read-only callers ({@code persistIfSynthesized == false}) project the fallback
-     * response without incrementing {@code stateRevision} or mutating durable state.
-     */
-    private GameEndResponse resolveTerminalResultForParticipant(
-            String gameId,
-            Game game,
-            Room room,
-            String playerName,
-            boolean persistIfSynthesized) {
-        GameEndResponse retained = game.getRetainedTerminalResult();
-        if (retained == null) {
-            Player winner = game.resolveWinnerOrFallback(null);
-            if (winner != null && gameStateService != null) {
-                int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
-                boolean isForfeit = isFallbackForfeit(game);
-                if (persistIfSynthesized) {
-                    retained = gameStateService.captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
-                    game.setRetainedTerminalResult(retained);
-                } else {
-                    retained = gameStateService.projectGameEnd(gameId, game, winner, isForfeit, maxPlayers);
-                }
-            }
-        }
-        if (retained == null) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-
-        boolean authorized = (retained.finalState() != null
-                && retained.finalState().players() != null
-                && retained.finalState().players().stream().anyMatch(p -> p.name().equals(playerName)))
-                || (game.getPlayers() != null && game.getPlayers().stream().anyMatch(p -> p.getName().equals(playerName)));
-
-        if (!authorized) {
-            throw new UnauthorisedActionException("You are not part of this game's terminal result.");
-        }
-
-        return retained;
-    }
-
-    /**
-     * Derives whether an already-ended game without a retained terminal result
-     * concluded via forfeit vs a settled showdown.
-     */
-    private boolean isFallbackForfeit(Game game) {
-        return game.getCurrentPhase() != GamePhase.SHOWDOWN
-                || !game.isHandSettled();
-    }
-
-    /**
-     * Allows a claim only when one connected participant remains against at least one
-     * disconnected opponent. This prevents ordinary heads-up games or disconnected
-     * claimants from bypassing gameplay.
-     *
-     * @param game       game being evaluated
-     * @param playerName prospective claimant
-     * @return whether an immediate disconnect win is legal
-     */
-    private boolean canPlayerClaimWin(Game game, String playerName) {
-        return TournamentEligibility.canClaim(game) && game.getPlayers().stream()
-                .anyMatch(player -> player.getName().equals(playerName) && TournamentEligibility.isContender(game, player)
-                        && !player.getIsDisconnected());
     }
 
     /**
@@ -1556,31 +1087,14 @@ public class GameLifecycleService {
 
             Game game = getGame(gameId);
             if (game == null) {
-                if (hasDisconnectGraceExpired(room, null, playerName, expectedDeadlineEpochMs)) {
-                    departParticipantsUnderLock(gameId, List.of(playerName), room, null);
-                }
+                departureHandler.removeDisconnectedPlayerUnderLock(gameId, room, null, playerName, expectedDeadlineEpochMs);
                 return;
             }
 
             synchronized (game) {
-                if (hasDisconnectGraceExpired(room, game, playerName, expectedDeadlineEpochMs)) {
-                    departParticipantsUnderLock(gameId, List.of(playerName), room, game);
-                }
+                departureHandler.removeDisconnectedPlayerUnderLock(gameId, room, game, playerName, expectedDeadlineEpochMs);
             }
         }
-    }
-
-    private boolean hasDisconnectGraceExpired(Room room, Game game, String playerName, long expectedDeadlineEpochMs) {
-        Player player = game == null ? null : game.findPlayerByName(playerName);
-        boolean disconnected = player == null ? !room.isPlayerConnected(playerName) : player.getIsDisconnected();
-        if (!disconnected) return false;
-
-        Long deadline = player == null ? room.getAbsenceDeadline(playerName) : player.getDisconnectDeadlineEpochMs();
-        if (deadline == null && player != null && game.isSettledTerminal()) {
-            deadline = room.getAbsenceDeadline(playerName);
-        }
-        return deadline != null && deadline == expectedDeadlineEpochMs
-                && System.currentTimeMillis() >= expectedDeadlineEpochMs;
     }
 
     /**

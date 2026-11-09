@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.TaskScheduler;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -66,6 +67,13 @@ final class GameRuntimeTimers {
     /** Captures the task identity while the caller holds the game lock. */
     static TaskIntent captureIntent(String gameId, Game game, ScheduledGameTask task, long deadline) {
         return new TaskIntent(gameId, task, deadline, game.getHandNumber(), game.getScheduledTaskGeneration(task));
+    }
+
+    /** Captures all currently scheduled task intents while the caller holds the game lock. */
+    static List<TaskIntent> captureAllIntents(String gameId, Game game) {
+        return game.getScheduledTaskDeadlinesSnapshot().entrySet().stream()
+                .map(entry -> captureIntent(gameId, game, entry.getKey(), entry.getValue()))
+                .toList();
     }
 
     /**

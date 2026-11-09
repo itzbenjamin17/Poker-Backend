@@ -219,4 +219,63 @@ final class GameScheduling {
     static long resetStateRevisionForNewHand() {
         return INITIAL_HAND_REVISION;
     }
+
+    /**
+     * Evaluates whether a scheduled task callback can proceed with execution against the
+     * current domain state. If eligible, non-cleanup tasks are cleared from domain intent
+     * to ensure idempotent execution.
+     *
+     * @param scheduledTaskDeadlines live map of task deadlines
+     * @param scheduledTaskGenerations live map of task generations
+     * @param forfeitPending whether a forfeit is currently pending
+     * @param gameOver whether the game is over
+     * @param currentHandNumber current game hand number
+     * @param task delayed work type
+     * @param expectedDeadline deadline captured when scheduled
+     * @param expectedHandNumber hand number captured when scheduled
+     * @param expectedGeneration generation token captured when scheduled
+     * @return claim outcome (EXECUTE, CANCEL_GAME_OVER, or IGNORE)
+     */
+    static Game.TaskExecutionClaim claimTaskExecution(
+            Map<ScheduledGameTask, Long> scheduledTaskDeadlines,
+            Map<ScheduledGameTask, Long> scheduledTaskGenerations,
+            boolean forfeitPending,
+            boolean gameOver,
+            long currentHandNumber,
+            ScheduledGameTask task,
+            long expectedDeadline,
+            long expectedHandNumber,
+            long expectedGeneration) {
+        if (forfeitPending) {
+            return Game.TaskExecutionClaim.IGNORE;
+        }
+        if (currentHandNumber != expectedHandNumber
+                || getGeneration(scheduledTaskGenerations, task) != expectedGeneration) {
+            return Game.TaskExecutionClaim.IGNORE;
+        }
+        if (gameOver && task != ScheduledGameTask.CLEANUP) {
+            clearTask(scheduledTaskDeadlines, scheduledTaskGenerations, task);
+            return Game.TaskExecutionClaim.CANCEL_GAME_OVER;
+        }
+        Long currentDeadline = getDeadline(scheduledTaskDeadlines, task);
+        if (currentDeadline == null || currentDeadline != expectedDeadline) {
+            return Game.TaskExecutionClaim.IGNORE;
+        }
+        if (task != ScheduledGameTask.CLEANUP) {
+            clearTask(scheduledTaskDeadlines, scheduledTaskGenerations, task);
+        }
+        return Game.TaskExecutionClaim.EXECUTE;
+    }
+
+    /**
+     * Determines if a game has expired based on its cleanup task deadline.
+     *
+     * @param scheduledTaskDeadlines live map of task deadlines
+     * @param nowEpochMs current epoch millisecond timestamp
+     * @return true if cleanup deadline exists and current time is at or past it
+     */
+    static boolean isExpired(Map<ScheduledGameTask, Long> scheduledTaskDeadlines, long nowEpochMs) {
+        Long cleanupDeadline = getDeadline(scheduledTaskDeadlines, ScheduledGameTask.CLEANUP);
+        return cleanupDeadline != null && nowEpochMs >= cleanupDeadline;
+    }
 }
