@@ -17,6 +17,16 @@ final class ReadyGate {
         // Utility collaborator class, prevent instantiation
     }
 
+    /**
+     * Validates that the ready gate is open and that the named player is eligible to
+     * change their readiness flag, then updates the player's readiness state.
+     *
+     * @param tablePlayers         seated table players
+     * @param readyCountdownActive whether the ready countdown gate is currently open
+     * @param playerName           player requesting the readiness change
+     * @param ready                {@code true} to mark ready, {@code false} to unmark
+     * @throws UnauthorisedActionException if the gate is closed or the player is ineligible
+     */
     static void setPlayerReady(
             List<Player> tablePlayers, boolean readyCountdownActive, String playerName, boolean ready) {
         if (!readyCountdownActive) {

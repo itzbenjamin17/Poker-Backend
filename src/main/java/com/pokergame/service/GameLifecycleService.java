@@ -519,6 +519,11 @@ public class GameLifecycleService {
     /**
      * Applies progression and publishes an outcome from the current durable mutation.
      * Callers must derive the outcome from this game under the same room lease.
+     *
+     * @param gameId                     game identifier
+     * @param game                       authoritative game state
+     * @param outcome                    turn outcome produced by the game
+     * @param notifyImmediateAutoAdvance {@code true} to emit the initial all-in notification banner
      */
     @DurableMutation(roomId = "#gameId")
     public void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {

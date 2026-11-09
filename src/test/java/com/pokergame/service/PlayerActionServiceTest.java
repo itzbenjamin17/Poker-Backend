@@ -74,6 +74,21 @@ class PlayerActionServiceTest {
         testGame.resetForNewHand();
         testGame.dealHoleCards();
         testGame.postBlinds();
+        lenient().doAnswer(invocation -> {
+            String gId = invocation.getArgument(0);
+            Game g = invocation.getArgument(1);
+            TurnOutcome outcome = invocation.getArgument(2);
+            switch (outcome.type()) {
+                case NEXT_PLAYER, PHASE_ADVANCED -> gameStateService.broadcastGameState(gId, g);
+                case AUTO_ADVANCING -> {
+                    gameLifecycleService.scheduleAutoAdvance(gId);
+                    gameStateService.broadcastAutoAdvanceNotification(gId, g);
+                }
+                case SHOWDOWN -> gameStateService.broadcastShowdownResults(
+                        gId, g, outcome.winners(), outcome.winningsPerPlayer());
+            }
+            return null;
+        }).when(gameLifecycleService).applyTurnOutcome(anyString(), any(Game.class), any(TurnOutcome.class), anyBoolean());
     }
 
     // ==================== processPlayerAction - Basic Tests ====================
@@ -188,7 +203,7 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
         assertTrue(currentPlayer.getHasFolded());
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     /**
@@ -205,7 +220,7 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
         assertTrue(currentPlayer.getChips() < initialChips || currentPlayer.getCurrentBet() > 0);
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     /**
@@ -251,7 +266,7 @@ class PlayerActionServiceTest {
         assertEquals(GamePhase.FLOP, testGame.getCurrentPhase(),
                 "The big blind's check completes the pre-flop round and advances to the flop");
         assertNotNull(testGame.getCurrentPlayer(), "The flop must have a current actor");
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     // ==================== processPlayerAction - Raise Tests ====================
@@ -269,7 +284,7 @@ class PlayerActionServiceTest {
 
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     /**
@@ -347,7 +362,7 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
         // Action should process without error even when all-in players are present.
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     /**
@@ -396,7 +411,7 @@ class PlayerActionServiceTest {
 
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     // ==================== Broadcasting Tests ====================
@@ -413,7 +428,7 @@ class PlayerActionServiceTest {
 
         playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName());
 
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     // ==================== Game Progression Tests ====================
@@ -441,7 +456,7 @@ class PlayerActionServiceTest {
         playerActionService.processPlayerAction(GAME_ID, callRequest, currentPlayer.getName());
 
         // Game state should be broadcast
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     /**
@@ -678,7 +693,7 @@ class PlayerActionServiceTest {
                 "One of three players calling does not complete the pre-flop round");
         assertNotEquals(currentPlayer.getPlayerId(), testGame.getCurrentPlayer().getPlayerId(),
                 "Action advances to the next player after a call that does not close the round");
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     /**
@@ -731,7 +746,7 @@ class PlayerActionServiceTest {
         playerActionService.processPlayerAction(GAME_ID, allInRequest, currentPlayer.getName());
 
         // Player should either be all-in or have made the equivalent call
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     // ==================== Concurrent Access Tests ====================
@@ -1026,8 +1041,8 @@ class PlayerActionServiceTest {
     }
 
     @Test
-    @DisplayName("an all-in call that leaves nobody able to act delegates the auto-advance outcome")
-    void processPlayerAction_AllInLeavesNobodyToAct_DelegatesOutcome() {
+    @DisplayName("an all-in call that leaves nobody able to act schedules the auto-advance and notifies clients")
+    void processPlayerAction_AllInLeavesNobodyToAct_ShouldScheduleAutoAdvanceAndNotify() {
         List<Player> players = new ArrayList<>();
         players.add(new Player("P1", UUID.randomUUID().toString(), 100));
         players.add(new Player("P2", UUID.randomUUID().toString(), 100));
@@ -1049,8 +1064,11 @@ class PlayerActionServiceTest {
 
         assertTrue(first.getIsAllIn());
         assertTrue(second.getIsAllIn());
-        verify(gameLifecycleService).applyTurnOutcome(eq(GAME_ID), eq(game),
-                argThat(result -> result.type() == TurnOutcome.TurnOutcomeType.AUTO_ADVANCING), eq(true));
+        verify(gameLifecycleService).scheduleAutoAdvance(GAME_ID);
+        verify(gameStateService).broadcastAutoAdvanceNotification(GAME_ID, game);
+        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
+        verify(gameStateService, never()).broadcastShowdownResults(anyString(), any(Game.class), any(), anyInt());
+
     }
 
     /**
@@ -1071,8 +1089,8 @@ class PlayerActionServiceTest {
     }
 
     @Test
-    @DisplayName("a real betting round that completes before showdown delegates the phase advance")
-    void processPlayerAction_RealBettingRoundCompletes_DelegatesPhaseAdvance() {
+    @DisplayName("a real betting round that completes before showdown advances the phase and broadcasts state")
+    void processPlayerAction_RealBettingRoundCompletes_AdvancesPhaseAndBroadcasts() {
         List<Player> players = new ArrayList<>();
         players.add(new Player("A", UUID.randomUUID().toString(), 1000));
         players.add(new Player("B", UUID.randomUUID().toString(), 1000));
@@ -1091,13 +1109,14 @@ class PlayerActionServiceTest {
         assertEquals(GamePhase.FLOP, game.getCurrentPhase());
         assertTrue(game.getPot() >= potAfterBlinds, "Completing the pre-flop round cannot shrink the pot");
         assertEquals(2 * game.getBigBlind(), game.getPot(), "Both players matched the big blind pre-flop");
-        verify(gameLifecycleService).applyTurnOutcome(eq(GAME_ID), eq(game),
-                argThat(result -> result.type() == TurnOutcome.TurnOutcomeType.PHASE_ADVANCED), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(GAME_ID, game);
+        verify(gameLifecycleService, never()).scheduleAutoAdvance(anyString());
+        verify(gameStateService, never()).broadcastShowdownResults(anyString(), any(Game.class), any(), anyInt());
     }
 
     @Test
-    @DisplayName("a real hand played to the river delegates its showdown outcome")
-    void processPlayerAction_RealRiverShowdown_DelegatesOutcome() {
+    @DisplayName("a real hand played to the river showdown broadcasts showdown results")
+    void processPlayerAction_RealRiverShowdown_BroadcastsResults() {
         List<Player> players = new ArrayList<>();
         players.add(new Player("A", UUID.randomUUID().toString(), 1000));
         players.add(new Player("B", UUID.randomUUID().toString(), 1000));
@@ -1122,9 +1141,7 @@ class PlayerActionServiceTest {
 
         assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase(), "A limped hand reaches a river showdown");
         assertFalse(game.isTournamentOver(), "Both players still hold chips");
-        verify(gameLifecycleService).applyTurnOutcome(eq(GAME_ID), eq(game),
-                argThat(result -> result.type() == TurnOutcome.TurnOutcomeType.SHOWDOWN
-                        && !result.winners().isEmpty()), eq(true));
+        verify(gameStateService).broadcastShowdownResults(eq(GAME_ID), eq(game), argThat(winners -> !winners.isEmpty()), anyInt());
     }
 
     // ==================== processPlayerAction - Post-processing Failures ====================
@@ -1355,7 +1372,7 @@ class PlayerActionServiceTest {
         assertEquals(highestBet, currentPlayer.getCurrentBet(), "A null-amount call matches the outstanding wager");
         assertEquals(potBefore + owed, testGame.getPot(), "The pot grows by exactly the owed call");
         assertNotEquals(currentPlayer.getName(), testGame.getCurrentPlayer().getName(), "The turn moves to the opponent");
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 
     @Test
@@ -1377,6 +1394,6 @@ class PlayerActionServiceTest {
 
         assertEquals(betBefore, currentPlayer.getCurrentBet(), "A check commits no chips");
         assertNotEquals(currentPlayer.getName(), testGame.getCurrentPlayer().getName(), "The turn moves on after a check");
-        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
     }
 }

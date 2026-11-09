@@ -14,6 +14,12 @@ public final class TournamentEligibility {
         return unsettled || player.getChips() > 0;
     }
 
+    /**
+     * Counts the players in the game who still qualify as tournament contenders.
+     *
+     * @param game active game aggregate
+     * @return number of contending players
+     */
     public static int countContenders(Game game) {
         return (int) game.getPlayers().stream().filter(player -> isContender(game, player)).count();
     }

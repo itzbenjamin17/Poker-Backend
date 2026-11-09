@@ -856,10 +856,23 @@ public class Game {
         return activePlayerCount <= 1;
     }
 
+    /**
+     * Finds a player in this game's roster by exact display name.
+     *
+     * @param playerName player name to match
+     * @return matching player, or {@code null} if not present
+     */
     public Player findPlayerByName(String playerName) {
         return findPlayerByName(players, playerName);
     }
 
+    /**
+     * Finds a player in the given table roster by exact display name.
+     *
+     * @param tablePlayers seated table players
+     * @param playerName   player name to match
+     * @return matching player, or {@code null} if not present
+     */
     static Player findPlayerByName(List<Player> tablePlayers, String playerName) {
         if (tablePlayers == null) return null;
         return tablePlayers.stream()
@@ -869,6 +882,14 @@ public class Game {
                 .orElse(null);
     }
 
+    /**
+     * Validates readiness eligibility and updates the player's ready state during an
+     * active inter-hand countdown.
+     *
+     * @param playerName player name requesting the change
+     * @param ready      {@code true} to mark ready, {@code false} to unmark
+     * @throws UnauthorisedActionException if the countdown is inactive or the player is ineligible
+     */
     public void setPlayerReadyForNextHand(String playerName, boolean ready) {
         ReadyGate.setPlayerReady(players, readyCountdownActive, playerName, ready);
     }
@@ -1123,14 +1144,33 @@ public class Game {
         gameOver = true;
     }
 
+    /**
+     * Returns whether the current or most recent hand has completed pot settlement.
+     *
+     * @return {@code true} if the hand settlement result has been recorded and settled
+     */
     public boolean isHandSettled() {
         return lastSettlementResult != null && lastSettlementResult.settled();
     }
 
+    /**
+     * Returns whether the game has reached a settled terminal state (either marked
+     * game-over or settled with at most one contender remaining) without a pending forfeit.
+     *
+     * @return {@code true} if the game is settled and terminal
+     */
     public boolean isSettledTerminal() {
         return !forfeitPending && (gameOver || (isHandSettled() && isTournamentOver()));
     }
 
+    /**
+     * Resolves the tournament winner, preferring {@code preferredWinner} when still
+     * seated, otherwise delegating to {@link #resolveGameWinner()} and falling back
+     * to the first connected non-out player or the first seated player.
+     *
+     * @param preferredWinner explicit forfeit survivor, or {@code null} for chip-based resolution
+     * @return resolved winner, or {@code null} if the roster is empty
+     */
     public Player resolveWinnerOrFallback(Player preferredWinner) {
         Player winner = preferredWinner != null && players.contains(preferredWinner)
                 ? preferredWinner : resolveGameWinner();
