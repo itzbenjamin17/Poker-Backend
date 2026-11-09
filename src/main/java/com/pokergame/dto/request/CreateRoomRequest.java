@@ -102,7 +102,6 @@ public class CreateRoomRequest {
      *
      * @param playerName player name to retain
      */
-    @SuppressWarnings("unused")
     public void setPlayerName(String playerName) {
         this.playerName = playerName;
     }

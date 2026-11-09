@@ -1,6 +1,5 @@
 package com.pokergame.model;
 
-import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.enums.*;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.ScheduledGameTask;

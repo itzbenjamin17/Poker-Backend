@@ -4,10 +4,7 @@ import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
-import com.pokergame.dto.response.ApiResponse;
-import com.pokergame.dto.internal.PlayerJoinInfo;
 import org.mockito.ArgumentCaptor;
-import com.pokergame.exception.ConflictException;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
@@ -16,7 +13,6 @@ import com.pokergame.enums.ReadyGateState;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
 import com.pokergame.model.HandEvaluationResult;
-import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
@@ -31,10 +27,8 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import tools.jackson.databind.json.JsonMapper;
 import static org.junit.jupiter.api.Assertions.*;
-import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -43,13 +37,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.mockito.Mockito.*;
 import com.pokergame.dto.internal.PlayerDecision;
-import java.time.Instant;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.EnumMap;
 import java.util.stream.Collectors;
 import org.mockito.Mockito;
 import org.mockito.stubbing.Answer;
-import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * Unit tests for GameParticipantDepartureHandler and participant departure lifecycle flows.

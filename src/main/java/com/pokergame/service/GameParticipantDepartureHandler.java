@@ -450,7 +450,7 @@ class GameParticipantDepartureHandler {
         if (!disconnected) return false;
 
         Long deadline = player == null ? room.getAbsenceDeadline(playerName) : player.getDisconnectDeadlineEpochMs();
-        if (deadline == null && player != null && game.isSettledTerminal()) {
+        if (deadline == null && player != null && game != null && game.isSettledTerminal()) {
             deadline = room.getAbsenceDeadline(playerName);
         }
         return deadline != null && deadline == expectedDeadlineEpochMs

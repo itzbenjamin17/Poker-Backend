@@ -13,7 +13,6 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.model.TournamentEligibility;
 import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.persistence.transaction.DurableTransactionContext;
 import com.pokergame.service.GameRuntimeTimers.TaskIntent;
@@ -31,9 +30,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 import com.pokergame.enums.GamePhase;
-import com.pokergame.enums.ReadyGateState;
 
 /**
  * Service class responsible for game lifecycle management.
