@@ -1,4 +1,4 @@
-# 0012: Room Lifecycle Notifications via Application Events
+# 0010: Room Lifecycle Notifications via Application Events
 
 We decided that `RoomService` announces accepted membership and room changes by publishing Spring application events, and `WebSocketEventListener` subscribes to them, rather than `RoomService` holding and calling the listener directly.
 
@@ -19,7 +19,7 @@ All three calls already ran inside `DurableTransactionContext.afterCommit(...)`,
 ## Consequences
 
 - `RoomService` no longer depends on `WebSocketEventListener`. The construction cycle and its `@Lazy` are gone, along with the null guards.
-- Delivery is synchronous on the publishing thread, as `ApplicationEventPublisher` is by default, so ordering, locking order (ADR 0009), and exception behaviour match the previous direct calls. Listeners must not be made asynchronous without revisiting those guarantees.
+- Delivery is synchronous on the publishing thread, as `ApplicationEventPublisher` is by default, so ordering, locking order (ADR 0007), and exception behaviour match the previous direct calls. Listeners must not be made asynchronous without revisiting those guarantees.
 - The call path from a room mutation to transient session cleanup is now indirect. Tracing it requires following the three event types rather than a method reference.
 - Constructing `RoomService` without a real publisher (tests) silently drops notifications. `RoomServiceTest` asserts the published events, and `RoomEventsAfterCommitTest` asserts that they follow the durable transaction's accept-or-discard outcome.
 - Remaining `@Lazy` use is unchanged: `RoomService.setSelf`, `GameLifecycleService.setSelf`, `WebSocketAuthInterceptor`'s `RoomService`, and `WebSocketConfig`'s broker scheduler.

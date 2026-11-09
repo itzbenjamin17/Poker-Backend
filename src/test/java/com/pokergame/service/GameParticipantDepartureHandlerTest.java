@@ -1035,7 +1035,7 @@ class GameParticipantDepartureHandlerTest {
 
             boolean finished = doneLatch.await(3, TimeUnit.SECONDS);
             assertTrue(finished, "Deadlock detected between handleGameEnd and handlePlayerLeave at iteration " + i);
-            // Bounded completion alone is not enough: the Room-before-Game lock order (ADR-0009)
+            // Bounded completion alone is not enough: the Room-before-Game lock order (ADR-0007)
             // must also keep both operations failure-free under the race.
             assertTrue(unexpectedFailures.isEmpty(),
                     "Concurrent handleGameEnd/departParticipants failed at iteration " + i + ": " + unexpectedFailures);

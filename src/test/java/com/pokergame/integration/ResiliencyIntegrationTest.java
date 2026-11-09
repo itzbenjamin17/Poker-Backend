@@ -25,7 +25,7 @@ import org.springframework.web.socket.messaging.WebSocketStompClient;
 class ResiliencyIntegrationTest extends AbstractIntegrationTestSupport {
 
     /**
-     * Protects ADR-0011 last-session disconnect and reconnect-driven grace cancellation through the real
+     * Protects ADR-0009 last-session disconnect and reconnect-driven grace cancellation through the real
      * socket lifecycle: closing a player's only session must flip the projection to DISCONNECTED, and
      * reconnecting the same membership on a fresh live session must restore ACTIVE and let the player act. No
      * direct lifecycle calls are used; disconnect/reconnect are driven entirely by SessionDisconnectEvent and
@@ -51,7 +51,7 @@ class ResiliencyIntegrationTest extends AbstractIntegrationTestSupport {
         WebSocketStompClient stompClient = createStompClient();
         StompSession currentSession = connectSession(stompClient, currentToken);
         // The other player holds one live session; closing it below is therefore a genuine last-session
-        // disconnect that ADR-0011 must surface as DISCONNECTED.
+        // disconnect that ADR-0009 must surface as DISCONNECTED.
         StompSession otherSession = connectSession(stompClient, otherToken);
 
         // 1. Current player acts (Pre-flop: Call)

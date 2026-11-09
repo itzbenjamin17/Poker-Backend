@@ -9,8 +9,8 @@ JWT tokens were previously validated solely through cryptographic signature veri
 ## Decision
 
 1. **Session Membership Nonce**: Whenever a player creates or joins a room, generate a random UUID `membershipId` stored in `Room.playerMembershipIds`.
-2. **Token Claim Binding**: Embed this `membershipId` as a custom claim inside the JWT token and expose it through `PlayerPrincipal`.
-3. **Endpoint Validation**: In `GameLifecycleService.validatePlayerMembership()`, compare the token's claimed `membershipId` against the room's active `getMembershipId(playerName)`. If mismatched or null, reject immediately with `AccessDeniedException` (mapped to HTTP 401 Unauthorized).
+2. **Token Claim & User-Destination Binding**: Embed this `membershipId` as a custom claim inside the JWT token and expose it through `PlayerPrincipal`. `PlayerPrincipal.getName()` formats the Spring user-destination identity as `playerName:roomId:membershipId` so a socket retained after leaving a room cannot receive a replacement membership's `/user/queue/private` frames.
+3. **Endpoint & Frame Validation**: In `GameLifecycleService.validatePlayerMembership()` and `WebSocketAuthInterceptor`, compare the token's claimed `membershipId` against the room's active `getMembershipId(playerName)`. If mismatched or null, reject immediately.
 
 ## Consequences
 

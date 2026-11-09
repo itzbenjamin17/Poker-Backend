@@ -1,4 +1,4 @@
-# 0007: Unified Room and Game Identity Lifecycle
+# 0006: Unified Room and Game Identity Lifecycle
 
 We decided that a Game aggregate reuses the exact same UUID as its parent Room aggregate, sharing the same cryptographic token and messaging channels throughout the entire table lifecycle.
 

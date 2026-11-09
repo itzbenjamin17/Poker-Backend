@@ -6,7 +6,7 @@ This is the canonical project context for agents. Root `AGENTS.md` and `GEMINI.m
 
 A Java 25 and Spring Boot 4.0.6 server for real-time multiplayer Texas Hold'em, paired with the React client in `../frontend-poker`. It owns room membership, poker rules, chip accounting, hand progression, deadlines, public/private projections, and player authorization.
 
-Live rooms and games reside in memory. Optional encrypted state-image persistence restores their exact state after a single-server restart. There is no database, account-registration flow, or multi-node writer design.
+Live rooms and games reside in memory, with encrypted state-image WAL persistence restoring their exact state after a single-server restart (disabled by default only for local development and non-persistence tests). There is no database, account-registration flow, or multi-node writer design.
 
 [pom.xml](../../pom.xml) defines versions and dependencies: Spring Web/Security/WebSocket/Actuator/Validation/AspectJ, JJWT, Bucket4j, dotenv, and Spring-managed JUnit/AssertJ/Awaitility testing support. Avoid copying test-framework versions from older README tables; Maven dependency management is authoritative.
 
@@ -110,7 +110,7 @@ HTTP is stateless JWT authentication. Room create/join, the WebSocket handshake,
 
 JWTs contain player-name subject, room claim, and a unique session `membershipId` claim ([ADR-0004](../adr/0004-stateless-jwt-session-membership-validation.md)). [PlayerPrincipal](../../src/main/java/com/pokergame/security/PlayerPrincipal.java) exposes the membership-bound `playerName:roomId:membershipId` identity for user-destination routing. Runtime connection tracking and rate-limit buckets use a separate `playerName:roomId` key. Derive actions from the authenticated principal, verify room/game and active membership binding, and apply membership/host checks where required.
 
-`WebSocketAuthInterceptor` authenticates CONNECT, checks room/game subscription binding, and enforces `/app/` destination prefix whitelisting, room-targeted destination authorization ([ADR-0005](../adr/0005-stomp-send-prefix-whitelisting-and-authorization.md)), and active `membershipId` validation on STOMP frames. Controller/service checks protect actions. Private messages use user destinations rather than predictable private room topics.
+`WebSocketAuthInterceptor` authenticates CONNECT, checks room/game subscription binding, and enforces `/app/` destination prefix whitelisting, room-targeted destination authorization, and active `membershipId` validation on STOMP frames. Controller/service checks protect actions. Private messages use user destinations rather than predictable private room topics.
 
 Preserve payload-size rejection, endpoint and STOMP throttling, validation, name sanitization, configured CORS, and trusted-proxy handling. Exact bounds live in DTOs/filters/services; disabling these controls in test profiles does not establish production protection.
 

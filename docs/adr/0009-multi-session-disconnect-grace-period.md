@@ -1,6 +1,6 @@
-# 0011: Multi-Session Disconnect Tracking with Reconnect Grace Period
+# 0009: Multi-Session Disconnect Tracking with Reconnect Grace Period
 
-We decided to track multiple active STOMP session IDs per composite player identity and apply an absolute 60-second grace period before evicting disconnected players or folding active hands.
+We decided to track multiple active STOMP session IDs per composite player identity and apply a configurable reconnect grace period (default 120 seconds) before evicting disconnected players or folding active hands.
 
 ## Context
 
@@ -11,7 +11,7 @@ In web-based multiplayer games, players frequently refresh their browser tab, na
 1. **Multi-Session Set Tracking**: In `WebSocketEventListener`, maintain a concurrent mapping from composite player identity (`playerName:roomId`) to a set of active STOMP session IDs (`userSessions`). A player is only considered disconnected when their active session set becomes empty.
 2. **Scheduled Grace Period**: When a player's last active session disconnects:
    - Mark the player as `disconnected = true` on the `Game` and `Room` aggregates.
-   - Assign an absolute disconnect deadline (`System.currentTimeMillis() + disconnectGracePeriodMs`, default 60 seconds).
+   - Assign an absolute disconnect deadline (`System.currentTimeMillis() + disconnectGracePeriodMs`, default 120 seconds).
    - Schedule a delayed eviction task with `TaskScheduler`.
 3. **Seamless Reconnection Cancellation**: When the player re-establishes a WebSocket connection (`SessionSubscribeEvent`) before the deadline expires:
    - Clear the `disconnected` flag.
@@ -22,4 +22,4 @@ In web-based multiplayer games, players frequently refresh their browser tab, na
 
 - Prevents accidental folds and buy-in forfeiture during transient network hiccups, browser refreshes, or tab switches.
 - Accurately tracks multi-tab players without cross-tab disconnect races.
-- If the player fails to reconnect within the 60-second window, the scheduled cleanup auto-folds their hand, awards any uncalled chips, and vacates their seat to protect the table from stalling.
+- If the player fails to reconnect within the configured grace window, the scheduled cleanup auto-folds their hand, awards any uncalled chips, and vacates their seat to protect the table from stalling.

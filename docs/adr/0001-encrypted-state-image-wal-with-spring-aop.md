@@ -1,4 +1,4 @@
-# ADR-0001: Encrypted state-image WAL behind Spring mutation services
+# 0001: Encrypted State-Image WAL Behind Spring Mutation Services
 
 - Status: Accepted
 - Date: 2026-07-12

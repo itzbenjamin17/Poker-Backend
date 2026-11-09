@@ -23,13 +23,12 @@ Single-context repo:
 │   ├── 0002-quarantine-corrupted-wal-during-startup-recovery.md
 │   ├── 0003-in-memory-aggregate-rollback-on-mutation-failure.md
 │   ├── 0004-stateless-jwt-session-membership-validation.md
-│   ├── 0005-stomp-send-prefix-whitelisting-and-authorization.md
-│   ├── 0006-authoritative-in-memory-domain-model-without-external-database.md
-│   ├── 0007-unified-room-and-game-identity-lifecycle.md
-│   ├── 0008-dual-channel-public-private-state-projection.md
-│   ├── 0009-hierarchical-monitor-locking-order.md
-│   ├── 0010-epoch-deadline-lifecycle-scheduling.md
-│   └── 0011-multi-session-disconnect-grace-period.md
+│   ├── 0005-authoritative-in-memory-domain-model-without-external-database.md
+│   ├── 0006-unified-room-and-game-identity-lifecycle.md
+│   ├── 0007-hierarchical-monitor-locking-order.md
+│   ├── 0008-epoch-deadline-lifecycle-scheduling.md
+│   ├── 0009-multi-session-disconnect-grace-period.md
+│   └── 0010-room-lifecycle-notifications-via-application-events.md
 └── src/
 ```
 
