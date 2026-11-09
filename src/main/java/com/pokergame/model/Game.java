@@ -856,6 +856,23 @@ public class Game {
         return activePlayerCount <= 1;
     }
 
+    public Player findPlayerByName(String playerName) {
+        return findPlayerByName(players, playerName);
+    }
+
+    static Player findPlayerByName(List<Player> tablePlayers, String playerName) {
+        if (tablePlayers == null) return null;
+        return tablePlayers.stream()
+                .filter(Objects::nonNull)
+                .filter(player -> player.getName().equals(playerName))
+                .findFirst()
+                .orElse(null);
+    }
+
+    public void setPlayerReadyForNextHand(String playerName, boolean ready) {
+        ReadyGate.setPlayerReady(players, readyCountdownActive, playerName, ready);
+    }
+
     /**
      * Opens the ready-confirmation gate and clears prior ready states.
      *
@@ -1104,6 +1121,26 @@ public class Game {
      */
     public void markGameOver() {
         gameOver = true;
+    }
+
+    public boolean isHandSettled() {
+        return lastSettlementResult != null && lastSettlementResult.settled();
+    }
+
+    public boolean isSettledTerminal() {
+        return !forfeitPending && (gameOver || (isHandSettled() && isTournamentOver()));
+    }
+
+    public Player resolveWinnerOrFallback(Player preferredWinner) {
+        Player winner = preferredWinner != null && players.contains(preferredWinner)
+                ? preferredWinner : resolveGameWinner();
+        if (winner != null || players.isEmpty()) {
+            return winner;
+        }
+        return players.stream()
+                .filter(player -> !player.getIsOut() && !player.getIsDisconnected())
+                .findFirst()
+                .orElse(players.getFirst());
     }
 
     /**

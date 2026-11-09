@@ -9,6 +9,7 @@ import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Card;
@@ -202,14 +203,22 @@ class PersistenceRestartIntegrationTest {
     @Test
     void overduePersistedCleanupExecutesOnceAfterRecovery() {
         String roomId;
+        long cleanupDeadline;
         try (ConfigurableApplicationContext first = startApplication()) {
             RoomService rooms = first.getBean(RoomService.class);
             roomId = rooms.createRoom(new CreateRoomRequest("Cleanup Room", "Alice", 6, 5, 10, 1000, null));
             rooms.joinRoom(new JoinRoomRequest("Cleanup Room", "Bob", null));
             GameLifecycleService games = first.getBean(GameLifecycleService.class);
             games.createGameFromRoom(roomId);
-            games.scheduleGameCleanup(roomId, 300);
+            games.markPlayerReconnected(roomId, "Alice");
+            games.departParticipants(roomId, List.of("Bob"));
+            Long deadline = games.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
+            assertNotNull(deadline);
+            cleanupDeadline = deadline;
         }
+
+        assertTrue(Files.exists(walDirectory.resolve(roomId + ".wal")));
+        await().atMost(Duration.ofSeconds(2)).until(() -> System.currentTimeMillis() >= cleanupDeadline);
 
         try (ConfigurableApplicationContext second = startApplication()) {
             RoomService rooms = second.getBean(RoomService.class);
@@ -237,7 +246,7 @@ class PersistenceRestartIntegrationTest {
             games.createGameFromRoom(roomId);
 
             // Bob leaves the game, ending the game and triggering the cleanup schedule
-            games.leaveGame(roomId, "Bob");
+            games.departParticipants(roomId, List.of("Bob"));
 
             // Wait for display delay (7s) plus a bit extra for cleanup task to execute
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
@@ -315,7 +324,7 @@ class PersistenceRestartIntegrationTest {
             assertEquals("Alice", originalResult.winner());
 
             // Alice leaves the finished game -> room becomes empty
-            games.leaveGame(roomId, "Alice");
+            games.departParticipants(roomId, List.of("Alice"));
             Room room = rooms.getRoom(roomId);
             assertNotNull(room);
             assertTrue(room.getPlayers().isEmpty());

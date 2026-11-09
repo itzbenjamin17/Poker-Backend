@@ -1,6 +1,7 @@
 package com.pokergame.model;
 
 import com.pokergame.enums.ReadyGateState;
+import com.pokergame.exception.UnauthorisedActionException;
 
 import java.util.List;
 import java.util.Objects;
@@ -14,6 +15,31 @@ final class ReadyGate {
 
     private ReadyGate() {
         // Utility collaborator class, prevent instantiation
+    }
+
+    static void setPlayerReady(
+            List<Player> tablePlayers, boolean readyCountdownActive, String playerName, boolean ready) {
+        if (!readyCountdownActive) {
+            throw new UnauthorisedActionException("Ready countdown is not active.");
+        }
+        Player player = Game.findPlayerByName(tablePlayers, playerName);
+        if (player == null) {
+            throw new UnauthorisedActionException("You are no longer part of this game.");
+        }
+        if (player.getIsOut()) {
+            throw new UnauthorisedActionException("You are out of this game.");
+        }
+        if (ready) {
+            if (player.getIsDisconnected()) {
+                throw new UnauthorisedActionException("Reconnect before marking ready.");
+            }
+            if (player.getChips() <= 0) {
+                throw new UnauthorisedActionException("Players without chips cannot mark ready.");
+            }
+        } else if (player.getIsDisconnected() || player.getChips() <= 0) {
+            throw new UnauthorisedActionException("You are not eligible to change readiness.");
+        }
+        player.setReadyForNextHand(ready);
     }
 
     /**

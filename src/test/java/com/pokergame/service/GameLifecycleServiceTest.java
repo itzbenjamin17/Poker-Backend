@@ -7,6 +7,7 @@ import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.dto.internal.PlayerJoinInfo;
+import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.ResponseMessage;
 import org.mockito.ArgumentCaptor;
 import java.time.LocalDateTime;
@@ -133,6 +134,70 @@ class GameLifecycleServiceTest {
                 .thenAnswer(buildResponse);
         lenient().when(gameStateService.projectGameEnd(anyString(), any(Game.class), any(Player.class), anyBoolean(), anyInt()))
                 .thenAnswer(buildResponse);
+    }
+
+    @Test
+    void applyTurnOutcome_ShowdownWithoutDelay_OpensReadyCountdown() {
+        Game game = createShowdownGame();
+        TurnOutcome outcome = showdownOutcome(game);
+
+        gameLifecycleService.applyTurnOutcome(ROOM_ID, game, outcome, true);
+
+        assertTrue(game.isReadyCountdownActive());
+        assertEquals(game.getReadyCountdownDeadlineEpochMs(),
+                game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
+        verify(gameStateService).broadcastShowdownResults(ROOM_ID, game, outcome.winners(), outcome.winningsPerPlayer());
+    }
+
+    @Test
+    void applyTurnOutcome_ShowdownWithDelay_SchedulesReadyCountdownOpen() {
+        Game game = createShowdownGame();
+        TurnOutcome outcome = showdownOutcome(game);
+        ReflectionTestUtils.setField(gameLifecycleService, "roundEndDisplayDelayMs", 2_500L);
+        long before = System.currentTimeMillis();
+
+        gameLifecycleService.applyTurnOutcome(ROOM_ID, game, outcome, true);
+
+        assertFalse(game.isReadyCountdownActive());
+        Long deadline = game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN);
+        assertNotNull(deadline);
+        assertTrue(deadline >= before + 2_500);
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
+        verify(gameStateService).broadcastShowdownResults(ROOM_ID, game, outcome.winners(), outcome.winningsPerPlayer());
+    }
+
+    @Test
+    void applyTurnOutcome_FinalShowdown_SchedulesGameEnd() {
+        Game game = createShowdownGame();
+        TurnOutcome outcome = showdownOutcome(game);
+        game.getPlayers().getLast().setChips(0);
+        assertTrue(game.isTournamentOver());
+        long before = System.currentTimeMillis();
+
+        gameLifecycleService.applyTurnOutcome(ROOM_ID, game, outcome, true);
+
+        assertFalse(game.isReadyCountdownActive());
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        Long deadline = game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END);
+        assertNotNull(deadline);
+        assertTrue(deadline >= before + GameLifecycleService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
+        verify(gameStateService).broadcastShowdownResults(ROOM_ID, game, outcome.winners(), outcome.winningsPerPlayer());
+    }
+
+    private Game createShowdownGame() {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        game.conductShowdown();
+        return game;
+    }
+
+    private TurnOutcome showdownOutcome(Game game) {
+        return new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null, List.of(game.getPlayers().getFirst()), 10);
     }
 
     // ==================== createGameFromRoom Tests ====================
@@ -446,6 +511,7 @@ class GameLifecycleServiceTest {
         when(roomService.getRoom(room.getRoomId())).thenReturn(room);
         GameLifecycleService lifecycle = new GameLifecycleService(roomService, handEvaluator, gameStateService,
                 messagingTemplate, taskScheduler);
+        ReflectionTestUtils.setField(lifecycle, "roundEndDisplayDelayMs", 2_500L);
         List<Card> board = List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES),
                 new Card(Rank.QUEEN, Suit.SPADES));
         List<Card> deck = List.of(new Card(Rank.JACK, Suit.SPADES), new Card(Rank.TEN, Suit.SPADES));
@@ -469,11 +535,16 @@ class GameLifecycleServiceTest {
         Runnable staleAutoAdvance = callbacks.getValue();
         int winnerChipsBefore = a.getChips();
 
-        lifecycle.leaveGame(room.getRoomId(), "C");
+        long before = System.currentTimeMillis();
+        lifecycle.departParticipants(room.getRoomId(), List.of("C"));
         assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
         assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
         assertEquals(3, game.getCommunityCards().size());
         assertEquals(100, a.getChips() - winnerChipsBefore);
+        assertFalse(game.isReadyCountdownActive());
+        Long readyOpen = game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN);
+        assertNotNull(readyOpen);
+        assertTrue(readyOpen >= before + 2_500);
         HandSettlementResult settled = game.getLastSettlementResult();
 
         staleAutoAdvance.run();
@@ -501,7 +572,7 @@ class GameLifecycleServiceTest {
         game.getPlayers().stream().filter(player -> List.of("A", "B").contains(player.getName()))
                 .forEach(player -> player.setReadyForNextHand(true));
 
-        lifecycle.leaveGame(room.getRoomId(), "D");
+        lifecycle.departParticipants(room.getRoomId(), List.of("D"));
 
         assertTrue(game.isReadyCountdownActive());
         assertEquals(readyDeadline, game.getReadyCountdownDeadlineEpochMs());
@@ -542,7 +613,7 @@ class GameLifecycleServiceTest {
      */
     @Test
     void leaveGame_WhenGameNotFound_IsIdempotent() {
-        assertDoesNotThrow(() -> gameLifecycleService.leaveGame("nonexistent-id", "Player"));
+        assertDoesNotThrow(() -> gameLifecycleService.departParticipants("nonexistent-id", List.of("Player")));
     }
 
     /**
@@ -553,7 +624,7 @@ class GameLifecycleServiceTest {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
 
-        assertDoesNotThrow(() -> gameLifecycleService.leaveGame(ROOM_ID, "NonexistentPlayer"));
+        assertDoesNotThrow(() -> gameLifecycleService.departParticipants(ROOM_ID, List.of("NonexistentPlayer")));
     }
 
     /**
@@ -567,7 +638,7 @@ class GameLifecycleServiceTest {
         Game game = gameLifecycleService.getGame(ROOM_ID);
         String playerToLeave = game.getPlayers().getFirst().getName();
 
-        gameLifecycleService.leaveGame(ROOM_ID, playerToLeave);
+        gameLifecycleService.departParticipants(ROOM_ID, List.of(playerToLeave));
 
         verify(gameStateService).sendGameEnd(any(GameEndResponse.class));
     }
@@ -584,7 +655,7 @@ class GameLifecycleServiceTest {
         reset(gameStateService);
         stubGameEndCapture();
 
-        gameLifecycleService.leaveGame(ROOM_ID, "Player2");
+        gameLifecycleService.departParticipants(ROOM_ID, List.of("Player2"));
 
         assertNotNull(gameLifecycleService.getGame(ROOM_ID));
         assertTrue(gameLifecycleService.playerExistsInGame(ROOM_ID, "Host"));
@@ -630,7 +701,7 @@ class GameLifecycleServiceTest {
                 .findFirst()
                 .orElseThrow();
 
-        gameLifecycleService.leaveGame(ROOM_ID, playerToLeave.getName());
+        gameLifecycleService.departParticipants(ROOM_ID, List.of(playerToLeave.getName()));
 
         assertEquals(2, gameLifecycleService.getGame(ROOM_ID).getPlayers().size());
         verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
@@ -660,7 +731,7 @@ class GameLifecycleServiceTest {
                 .findFirst()
                 .orElseThrow();
 
-        assertDoesNotThrow(() -> gameLifecycleService.leaveGame(ROOM_ID, playerToLeave.getName()));
+        assertDoesNotThrow(() -> gameLifecycleService.departParticipants(ROOM_ID, List.of(playerToLeave.getName())));
         assertNotNull(game.getCurrentPlayer());
         verify(gameStateService).broadcastGameState(eq(ROOM_ID), any(Game.class));
     }
@@ -680,7 +751,7 @@ class GameLifecycleServiceTest {
 
         when(roomService.getRoom(ROOM_ID)).thenReturn(null);
 
-        assertDoesNotThrow(() -> gameLifecycleService.leaveGame(ROOM_ID, playerToLeave));
+        assertDoesNotThrow(() -> gameLifecycleService.departParticipants(ROOM_ID, List.of(playerToLeave)));
 
         assertNull(gameLifecycleService.getGame(ROOM_ID));
         verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
@@ -704,7 +775,7 @@ class GameLifecycleServiceTest {
                 .findFirst()
                 .orElseThrow();
 
-        assertDoesNotThrow(() -> gameLifecycleService.leaveGame(ROOM_ID, playerToLeave.getName()));
+        assertDoesNotThrow(() -> gameLifecycleService.departParticipants(ROOM_ID, List.of(playerToLeave.getName())));
 
         assertNull(gameLifecycleService.getGame(ROOM_ID));
         verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
@@ -1042,7 +1113,7 @@ class GameLifecycleServiceTest {
         reset(gameStateService);
         stubGameEndCapture();
 
-        gameLifecycleService.leavePlayer(ROOM_ID, "Player2");
+        gameLifecycleService.departParticipants(ROOM_ID, List.of("Player2"));
 
         verify(gameStateService).sendGameEnd(argThat(event -> event != null && event.winner().equals("Host")));
         assertTrue(game.isGameOver());
@@ -1388,7 +1459,7 @@ class GameLifecycleServiceTest {
                 lifecycle.markPlayerDisconnected(gameId, smallBlind.getName(), System.currentTimeMillis() + 60_000);
             }
             if (ending.equals("leave")) {
-                lifecycle.leaveGame(gameId, smallBlind.getName());
+                lifecycle.departParticipants(gameId, List.of(smallBlind.getName()));
             } else if (ending.equals("claim")) {
                 lifecycle.claimWin(gameId, bigBlind.getName());
             } else {
@@ -1648,7 +1719,7 @@ class GameLifecycleServiceTest {
                 ready.countDown();
                 try {
                     start.await(2, TimeUnit.SECONDS);
-                    gameLifecycleService.leaveGame(roomId, leavingPlayer.getName());
+                    gameLifecycleService.departParticipants(roomId, List.of(leavingPlayer.getName()));
                 } catch (Throwable t) {
                     failures.add(t);
                 } finally {
@@ -1699,7 +1770,7 @@ class GameLifecycleServiceTest {
         for (Player player : nonCurrentPlayers) {
             executor.submit(() -> {
                 try {
-                    gameLifecycleService.leaveGame(ROOM_ID, player.getName());
+                    gameLifecycleService.departParticipants(ROOM_ID, List.of(player.getName()));
                     successfulLeaves.incrementAndGet();
                 } catch (Exception e) {
                     // May fail if player already removed by concurrent thread
@@ -1845,7 +1916,7 @@ class GameLifecycleServiceTest {
                     try {
                         ready.countDown();
                         assertTrue(start.await(2, TimeUnit.SECONDS));
-                        gameLifecycleService.leaveGame(ROOM_ID, leaverName);
+                        gameLifecycleService.departParticipants(ROOM_ID, List.of(leaverName));
                     } catch (Throwable t) {
                         // leaveGame is specified idempotent, so no interleaving may throw: capture any
                         // failure instead of swallowing it so the assertions below can surface it.

@@ -21,7 +21,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -189,7 +188,7 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
         assertTrue(currentPlayer.getHasFolded());
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 
     /**
@@ -206,7 +205,7 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
         assertTrue(currentPlayer.getChips() < initialChips || currentPlayer.getCurrentBet() > 0);
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 
     /**
@@ -252,7 +251,7 @@ class PlayerActionServiceTest {
         assertEquals(GamePhase.FLOP, testGame.getCurrentPhase(),
                 "The big blind's check completes the pre-flop round and advances to the flop");
         assertNotNull(testGame.getCurrentPlayer(), "The flop must have a current actor");
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 
     // ==================== processPlayerAction - Raise Tests ====================
@@ -270,7 +269,7 @@ class PlayerActionServiceTest {
 
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 
     /**
@@ -348,7 +347,7 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
         // Action should process without error even when all-in players are present.
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 
     /**
@@ -397,7 +396,7 @@ class PlayerActionServiceTest {
 
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 
     // ==================== Broadcasting Tests ====================
@@ -414,7 +413,7 @@ class PlayerActionServiceTest {
 
         playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName());
 
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 
     // ==================== Game Progression Tests ====================
@@ -442,7 +441,7 @@ class PlayerActionServiceTest {
         playerActionService.processPlayerAction(GAME_ID, callRequest, currentPlayer.getName());
 
         // Game state should be broadcast
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 
     /**
@@ -679,7 +678,7 @@ class PlayerActionServiceTest {
                 "One of three players calling does not complete the pre-flop round");
         assertNotEquals(currentPlayer.getPlayerId(), testGame.getCurrentPlayer().getPlayerId(),
                 "Action advances to the next player after a call that does not close the round");
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 
     /**
@@ -732,7 +731,7 @@ class PlayerActionServiceTest {
         playerActionService.processPlayerAction(GAME_ID, allInRequest, currentPlayer.getName());
 
         // Player should either be all-in or have made the equivalent call
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 
     // ==================== Concurrent Access Tests ====================
@@ -1027,8 +1026,8 @@ class PlayerActionServiceTest {
     }
 
     @Test
-    @DisplayName("an all-in call that leaves nobody able to act schedules the auto-advance and notifies clients")
-    void processPlayerAction_AllInLeavesNobodyToAct_ShouldScheduleAutoAdvanceAndNotify() {
+    @DisplayName("an all-in call that leaves nobody able to act delegates the auto-advance outcome")
+    void processPlayerAction_AllInLeavesNobodyToAct_DelegatesOutcome() {
         List<Player> players = new ArrayList<>();
         players.add(new Player("P1", UUID.randomUUID().toString(), 100));
         players.add(new Player("P2", UUID.randomUUID().toString(), 100));
@@ -1050,11 +1049,8 @@ class PlayerActionServiceTest {
 
         assertTrue(first.getIsAllIn());
         assertTrue(second.getIsAllIn());
-        verify(gameLifecycleService).scheduleAutoAdvance(GAME_ID);
-        verify(gameStateService).broadcastAutoAdvanceNotification(GAME_ID, game);
-        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
-        verify(gameStateService, never()).broadcastShowdownResults(anyString(), any(Game.class), any(), anyInt());
-        verify(gameLifecycleService, never()).startReadyCountdown(anyString(), anyLong());
+        verify(gameLifecycleService).applyTurnOutcome(eq(GAME_ID), eq(game),
+                argThat(result -> result.type() == TurnOutcome.TurnOutcomeType.AUTO_ADVANCING), eq(true));
     }
 
     /**
@@ -1075,8 +1071,8 @@ class PlayerActionServiceTest {
     }
 
     @Test
-    @DisplayName("a real betting round that completes before showdown advances the phase and broadcasts state")
-    void processPlayerAction_RealBettingRoundCompletes_AdvancesPhaseAndBroadcasts() {
+    @DisplayName("a real betting round that completes before showdown delegates the phase advance")
+    void processPlayerAction_RealBettingRoundCompletes_DelegatesPhaseAdvance() {
         List<Player> players = new ArrayList<>();
         players.add(new Player("A", UUID.randomUUID().toString(), 1000));
         players.add(new Player("B", UUID.randomUUID().toString(), 1000));
@@ -1095,14 +1091,13 @@ class PlayerActionServiceTest {
         assertEquals(GamePhase.FLOP, game.getCurrentPhase());
         assertTrue(game.getPot() >= potAfterBlinds, "Completing the pre-flop round cannot shrink the pot");
         assertEquals(2 * game.getBigBlind(), game.getPot(), "Both players matched the big blind pre-flop");
-        verify(gameStateService, atLeastOnce()).broadcastGameState(GAME_ID, game);
-        verify(gameLifecycleService, never()).scheduleAutoAdvance(anyString());
-        verify(gameStateService, never()).broadcastShowdownResults(anyString(), any(Game.class), any(), anyInt());
+        verify(gameLifecycleService).applyTurnOutcome(eq(GAME_ID), eq(game),
+                argThat(result -> result.type() == TurnOutcome.TurnOutcomeType.PHASE_ADVANCED), eq(true));
     }
 
     @Test
-    @DisplayName("a real hand played to the river showdown broadcasts results and opens the ready gate")
-    void processPlayerAction_RealRiverShowdown_BroadcastsResultsAndStartsReadyCountdown() {
+    @DisplayName("a real hand played to the river delegates its showdown outcome")
+    void processPlayerAction_RealRiverShowdown_DelegatesOutcome() {
         List<Player> players = new ArrayList<>();
         players.add(new Player("A", UUID.randomUUID().toString(), 1000));
         players.add(new Player("B", UUID.randomUUID().toString(), 1000));
@@ -1115,11 +1110,6 @@ class PlayerActionServiceTest {
         // does not drive progression to showdown, which comes from the real river betting round.
         when(handEvaluator.getBestHand(anyList(), anyList()))
                 .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
-        // Both players still hold chips after a limped hand, so the tournament is not over and the
-        // ready gate opens. No display delay means the countdown starts immediately.
-        ReflectionTestUtils.setField(playerActionService, "roundEndDelayMs", 0L);
-        ReflectionTestUtils.setField(playerActionService, "readyCountdownMs", 12_000L);
-
         // Check/call every street until the river betting round completes and the hand resolves.
         for (int guard = 0; guard < 40 && game.getCurrentPhase() != GamePhase.SHOWDOWN; guard++) {
             Player actor = game.getCurrentPlayer();
@@ -1132,84 +1122,9 @@ class PlayerActionServiceTest {
 
         assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase(), "A limped hand reaches a river showdown");
         assertFalse(game.isTournamentOver(), "Both players still hold chips");
-        verify(gameStateService).broadcastShowdownResults(eq(GAME_ID), eq(game), anyList(), anyInt());
-        verify(gameLifecycleService).startReadyCountdown(GAME_ID, 12_000L);
-        verify(gameLifecycleService, never()).scheduleGameEnd(anyString(), anyLong());
-        verify(gameLifecycleService, never()).scheduleReadyCountdownOpen(anyString(), anyLong());
-    }
-
-    @Test
-    @DisplayName("a real river showdown with a display delay schedules the ready gate to open later")
-    void processPlayerAction_RealRiverShowdownWithDisplayDelay_SchedulesReadyGateOpen() {
-        List<Player> players = new ArrayList<>();
-        players.add(new Player("A", UUID.randomUUID().toString(), 1000));
-        players.add(new Player("B", UUID.randomUUID().toString(), 1000));
-        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
-        game.resetForNewHand();
-        game.dealHoleCards();
-        game.postBlinds();
-        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(game);
-        when(handEvaluator.getBestHand(anyList(), anyList()))
-                .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
-        ReflectionTestUtils.setField(playerActionService, "roundEndDelayMs", 2_500L);
-
-        for (int guard = 0; guard < 40 && game.getCurrentPhase() != GamePhase.SHOWDOWN; guard++) {
-            Player actor = game.getCurrentPlayer();
-            List<PlayerAction> legal = game.getLegalActionsFor(actor);
-            if (legal.isEmpty()) break;
-            PlayerAction choice = legal.contains(PlayerAction.CHECK) ? PlayerAction.CHECK : PlayerAction.CALL;
-            playerActionService.processPlayerAction(GAME_ID,
-                    new PlayerActionRequest(choice, null), actor.getName());
-        }
-
-        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
-        assertFalse(game.isTournamentOver());
-        verify(gameStateService).broadcastShowdownResults(eq(GAME_ID), eq(game), anyList(), anyInt());
-        verify(gameLifecycleService).scheduleReadyCountdownOpen(GAME_ID, 2_500L);
-        verify(gameLifecycleService, never()).startReadyCountdown(anyString(), anyLong());
-        verify(gameLifecycleService, never()).scheduleGameEnd(anyString(), anyLong());
-    }
-
-    @Test
-    @DisplayName("[orchestration] a PHASE_ADVANCED outcome broadcasts the game state")
-    void processPlayerAction_PhaseAdvanced_ShouldBroadcastGameState() {
-        // Orchestration coverage: a fabricated PHASE_ADVANCED verifies the service's broadcast
-        // routing in isolation. The behavioral guarantee that a legal action truly yields
-        // PHASE_ADVANCED is covered by processPlayerAction_RealBettingRoundCompletes_*.
-        Game spyGame = spy(testGame);
-        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
-        doReturn(outcome(TurnOutcome.TurnOutcomeType.PHASE_ADVANCED)).when(spyGame).processPlayerDecision(any(), any());
-
-        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.FOLD, null),
-                spyGame.getCurrentPlayer().getName());
-
-        verify(gameStateService).broadcastGameState(GAME_ID, spyGame);
-        verify(gameLifecycleService, never()).scheduleAutoAdvance(anyString());
-    }
-
-    @Test
-    @DisplayName("[orchestration] a SHOWDOWN that ends the tournament schedules the game end and does not open the ready gate")
-    void processPlayerAction_ShowdownTournamentOver_ShouldScheduleGameEndWithoutReadyGate() {
-        // Orchestration coverage: reaching the SHOWDOWN arm of processPlayerDecision with the
-        // tournament already over is not reachable through a single legal action. A player loses
-        // their whole stack only by going all-in, and a called all-in leaves the hand to an
-        // auto-runout (AUTO_ADVANCING) whose showdown happens in advanceAutoAdvanceStep, not in
-        // processPlayerDecision. This fabricated outcome therefore stands as the only coverage of
-        // the tournament-over branch; the non-tournament-over SHOWDOWN arm is driven by real play.
-        Game spyGame = spy(testGame);
-        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
-        List<Player> winners = List.of(testPlayers.getFirst());
-        doReturn(new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null, winners, 40))
-                .when(spyGame).processPlayerDecision(any(), any());
-        doReturn(true).when(spyGame).isTournamentOver();
-
-        playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.FOLD, null),
-                spyGame.getCurrentPlayer().getName());
-
-        verify(gameLifecycleService).scheduleGameEnd(GAME_ID, GameLifecycleService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
-        verify(gameLifecycleService, never()).startReadyCountdown(anyString(), anyLong());
-        verify(gameLifecycleService, never()).scheduleReadyCountdownOpen(anyString(), anyLong());
-        verify(gameStateService).broadcastShowdownResults(GAME_ID, spyGame, winners, 40);
+        verify(gameLifecycleService).applyTurnOutcome(eq(GAME_ID), eq(game),
+                argThat(result -> result.type() == TurnOutcome.TurnOutcomeType.SHOWDOWN
+                        && !result.winners().isEmpty()), eq(true));
     }
 
     // ==================== processPlayerAction - Post-processing Failures ====================
@@ -1221,7 +1136,7 @@ class PlayerActionServiceTest {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
         doReturn(outcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING)).when(spyGame).processPlayerDecision(any(), any());
         doThrow(new IllegalStateException("scheduler unavailable")).when(gameLifecycleService)
-                .scheduleAutoAdvance(GAME_ID);
+                .applyTurnOutcome(eq(GAME_ID), eq(spyGame), any(TurnOutcome.class), eq(true));
 
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID,
                 new PlayerActionRequest(PlayerAction.FOLD, null), spyGame.getCurrentPlayer().getName()));
@@ -1234,6 +1149,8 @@ class PlayerActionServiceTest {
     @DisplayName("a failing re-broadcast after a post-processing failure is swallowed and the action still succeeds")
     void processPlayerAction_PostProcessingAndRebroadcastFail_ShouldStillSucceed() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
+        doThrow(new IllegalStateException("progression failed")).when(gameLifecycleService)
+                .applyTurnOutcome(eq(GAME_ID), eq(testGame), any(TurnOutcome.class), eq(true));
         doThrow(new IllegalStateException("broadcast failed")).when(gameStateService)
                 .broadcastGameState(anyString(), any(Game.class));
 
@@ -1242,7 +1159,7 @@ class PlayerActionServiceTest {
                 new PlayerActionRequest(PlayerAction.FOLD, null), currentPlayer.getName()));
 
         assertTrue(currentPlayer.getHasFolded());
-        verify(gameStateService, times(2)).broadcastGameState(GAME_ID, testGame);
+        verify(gameStateService).broadcastGameState(GAME_ID, testGame);
     }
 
     // ==================== processPlayerAction - Rejection Paths ====================
@@ -1438,7 +1355,7 @@ class PlayerActionServiceTest {
         assertEquals(highestBet, currentPlayer.getCurrentBet(), "A null-amount call matches the outstanding wager");
         assertEquals(potBefore + owed, testGame.getPot(), "The pot grows by exactly the owed call");
         assertNotEquals(currentPlayer.getName(), testGame.getCurrentPlayer().getName(), "The turn moves to the opponent");
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 
     @Test
@@ -1460,6 +1377,6 @@ class PlayerActionServiceTest {
 
         assertEquals(betBefore, currentPlayer.getCurrentBet(), "A check commits no chips");
         assertNotEquals(currentPlayer.getName(), testGame.getCurrentPlayer().getName(), "The turn moves on after a check");
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameLifecycleService, atLeastOnce()).applyTurnOutcome(eq(GAME_ID), any(Game.class), any(TurnOutcome.class), eq(true));
     }
 }

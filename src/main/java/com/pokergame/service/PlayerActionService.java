@@ -13,7 +13,6 @@ import com.pokergame.model.Player;
 import com.pokergame.persistence.transaction.DurableMutation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 
@@ -28,12 +27,6 @@ import com.pokergame.enums.ScheduledGameTask;
 public class PlayerActionService {
 
     private static final Logger logger = LoggerFactory.getLogger(PlayerActionService.class);
-
-    @Value("${poker.round-end.display-delay-ms:0}")
-    private long roundEndDelayMs = 0;
-
-    @Value("${poker.ready-countdown-ms:30000}")
-    private long readyCountdownMs = 30000;
 
     private final GameLifecycleService gameLifecycleService;
 
@@ -128,26 +121,7 @@ public class PlayerActionService {
             }
 
             try {
-                switch (outcome.type()) {
-                    case NEXT_PLAYER -> {
-                        gameStateService.broadcastGameState(gameId, game);
-                    }
-                    case PHASE_ADVANCED -> {
-                        gameStateService.broadcastGameState(gameId, game);
-                    }
-                    case AUTO_ADVANCING -> {
-                        gameLifecycleService.scheduleAutoAdvance(gameId);
-                        gameStateService.broadcastAutoAdvanceNotification(gameId, game);
-                    }
-                    case SHOWDOWN -> {
-                        if (game.isTournamentOver()) {
-                            gameLifecycleService.scheduleGameEnd(gameId, GameLifecycleService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
-                        } else {
-                            openReadyCountdownGate(gameId);
-                        }
-                        gameStateService.broadcastShowdownResults(gameId, game, outcome.winners(), outcome.winningsPerPlayer());
-                    }
-                }
+                gameLifecycleService.applyTurnOutcome(gameId, game, outcome, true);
             } catch (Exception e) {
                 logger.error("Error in post-processing for game {} (action was successful): {}", gameId, e.getMessage(), e);
                 // Re-broadcast to ensure clients have the updated state
@@ -196,22 +170,4 @@ public class PlayerActionService {
         }
         return currentPlayer;
     }
-
-
-
-    /**
-     * Opens immediately when no display delay is configured; otherwise it persists an
-     * absolute opening deadline so a crash cannot lose the transition.
-     *
-     * @param gameId game that completed showdown
-     */
-    private void openReadyCountdownGate(String gameId) {
-        if (roundEndDelayMs <= 0) {
-            gameLifecycleService.startReadyCountdown(gameId, readyCountdownMs);
-            return;
-        }
-
-        gameLifecycleService.scheduleReadyCountdownOpen(gameId, roundEndDelayMs);
-    }
-
 }

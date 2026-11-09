@@ -10,13 +10,16 @@ public final class TournamentEligibility {
     public static boolean isContender(Game game, Player player) {
         if (player.getIsOut()) return false;
         boolean unsettled = game.getCurrentPhase() != GamePhase.SHOWDOWN
-                || game.getLastSettlementResult() == null || !game.getLastSettlementResult().settled();
+                || !game.isHandSettled();
         return unsettled || player.getChips() > 0;
     }
 
+    public static int countContenders(Game game) {
+        return (int) game.getPlayers().stream().filter(player -> isContender(game, player)).count();
+    }
+
     public static boolean canClaim(Game game) {
-        if (game.isGameOver() || (game.getLastSettlementResult() != null
-                && game.getLastSettlementResult().settled() && game.isTournamentOver())) return false;
+        if (game.isGameOver() || (game.isHandSettled() && game.isTournamentOver())) return false;
         List<Player> contenders = game.getPlayers().stream().filter(player -> isContender(game, player)).toList();
         List<Player> connected = contenders.stream().filter(player -> !player.getIsDisconnected()).toList();
         return contenders.size() >= 2 && connected.size() == 1
