@@ -82,6 +82,14 @@ final class GameTerminalSettlement {
                 } else {
                     retained = gameStateService.projectGameEnd(gameId, game, winner, isForfeit, maxPlayers);
                 }
+            } else if (gameStateService != null) {
+                int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
+                if (persistIfSynthesized) {
+                    retained = gameStateService.captureAbandonment(gameId, game, maxPlayers);
+                    game.setRetainedTerminalResult(retained);
+                } else {
+                    retained = gameStateService.projectAbandonment(gameId, game, maxPlayers);
+                }
             }
         }
         if (retained == null) {

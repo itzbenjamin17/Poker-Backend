@@ -69,7 +69,7 @@ public class Room {
     private final LocalDateTime createdAt;
     private boolean isGameStarted;
     private volatile boolean isTerminal;
-    private Long inactivityDeadlineEpochMs;
+    private volatile Long inactivityDeadlineEpochMs;
 
     /**
      * Recognizes an existing BCrypt hash so restored room credentials are not hashed again.
@@ -450,10 +450,10 @@ public class Room {
     }
 
     /** @return absolute lobby inactivity deadline, or null once gameplay starts */
-    public synchronized Long getInactivityDeadlineEpochMs() { return inactivityDeadlineEpochMs; }
+    public Long getInactivityDeadlineEpochMs() { return inactivityDeadlineEpochMs; }
 
     /** @param deadlineEpochMs persisted absolute lobby inactivity deadline */
-    public synchronized void setInactivityDeadlineEpochMs(Long deadlineEpochMs) {
+    public void setInactivityDeadlineEpochMs(Long deadlineEpochMs) {
         inactivityDeadlineEpochMs = deadlineEpochMs;
     }
 
@@ -615,7 +615,6 @@ public class Room {
      */
     public synchronized void setGameStarted(boolean gameStarted) {
         this.isGameStarted = gameStarted;
-        if (gameStarted) inactivityDeadlineEpochMs = null;
     }
 
     /**

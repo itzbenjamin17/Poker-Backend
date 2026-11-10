@@ -489,6 +489,15 @@ public class GameStateService {
         return projectGameEnd(gameId, game, winner, isForfeit, maxPlayers);
     }
 
+    /** Captures the immutable terminal abandonment event while the caller holds the game lock. */
+    public GameEndResponse captureAbandonment(String gameId, Game game, int maxPlayers) {
+        clearRetainedSettlement(gameId);
+        if (game != null) {
+            game.incrementStateRevision();
+        }
+        return projectAbandonment(gameId, game, maxPlayers);
+    }
+
     /**
      * Projects a terminal event snapshot without mutating the game's stateRevision
      * or process-local state, suitable for read-only review queries.
@@ -502,9 +511,88 @@ public class GameStateService {
                 winner.getChips(), isForfeit, message, finalState);
     }
 
+    /**
+     * Projects a terminal abandonment snapshot without mutating stateRevision,
+     * suitable for read-only review queries.
+     */
+    public GameEndResponse projectAbandonment(String gameId, Game game, int maxPlayers) {
+        String message = "Game abandoned due to inactivity.";
+        PublicGameStateResponse finalState = game == null ? null
+                : buildAbandonmentFinalStateResponse(gameId, game, maxPlayers);
+        return new GameEndResponse(ResponseMessage.GAME_END.getMessage(), gameId, null,
+                null, false, true, "INACTIVITY", message, finalState);
+    }
+
     /** Publishes the frozen terminal result after the accepted mutation completes. */
     public void sendGameEnd(GameEndResponse response) {
         if (response != null) sendAfterCommit("/game/" + response.gameId(), response);
+    }
+
+    private int resolveMaxPlayers(String gameId, Game game, int maxPlayers) {
+        if (maxPlayers >= 2 && maxPlayers <= 10) {
+            return maxPlayers;
+        }
+        Room room = roomService != null ? roomService.getRoom(gameId) : null;
+        if (room != null && room.getMaxPlayers() >= 2 && room.getMaxPlayers() <= 10) {
+            return room.getMaxPlayers();
+        }
+        int retainedPlayerCount = game != null && game.getPlayers() != null ? game.getPlayers().size() : 2;
+        return Math.max(2, Math.min(10, retainedPlayerCount));
+    }
+
+    private PublicGameStateResponse buildAbandonmentFinalStateResponse(String gameId, Game game, int maxPlayers) {
+        game = requireNonNull(game, "game");
+        int resolvedMaxPlayers = resolveMaxPlayers(gameId, game, maxPlayers);
+
+        String smallBlindPlayerId = game.getSmallBlindPlayerId();
+        String bigBlindPlayerId = game.getBigBlindPlayerId();
+
+        List<PublicPlayerState> playersList = game.getPlayers().stream().map(player ->
+            toPublicPlayerState(
+                    player,
+                    false,
+                    smallBlindPlayerId,
+                    bigBlindPlayerId,
+                    null,
+                    List.of(),
+                    false,
+                    null,
+                    null)
+        ).toList();
+
+        List<String> winnerNames = List.of();
+        boolean handSettled = game.getLastSettlementResult() != null && game.getLastSettlementResult().settled();
+
+        return new PublicGameStateResponse(
+                resolvedMaxPlayers,
+                game.getPot(),
+                game.getPotBreakdown(),
+                game.getUncalledAmount(),
+                game.getCurrentPhase(),
+                game.getCurrentHighestBet(),
+                game.getCommunityCards(),
+                playersList,
+                null,
+                null,
+                winnerNames,
+                null,
+                false,
+                null,
+                false,
+                null,
+                false,
+                null,
+                handSettled,
+                null,
+                List.of(),
+                null,
+                null,
+                game.getHandNumber(),
+                ReadyGateState.CLOSED,
+                System.currentTimeMillis(),
+                game.getStateRevision(),
+                null,
+                null);
     }
 
     /**
@@ -523,19 +611,7 @@ public class GameStateService {
     private PublicGameStateResponse buildFinalStateResponse(String gameId, Game game, Player winner,
             boolean isForfeit, int maxPlayers) {
         game = requireNonNull(game, "game");
-        int resolvedMaxPlayers;
-        if (maxPlayers >= 2 && maxPlayers <= 10) {
-            resolvedMaxPlayers = maxPlayers;
-        } else {
-            Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            if (room != null && room.getMaxPlayers() >= 2 && room.getMaxPlayers() <= 10) {
-                resolvedMaxPlayers = room.getMaxPlayers();
-            } else {
-                int retainedPlayerCount = game != null && game.getPlayers() != null ? game.getPlayers().size() : 2;
-                resolvedMaxPlayers = Math.max(2, Math.min(10, retainedPlayerCount));
-            }
-        }
-        resolvedMaxPlayers = Math.max(2, Math.min(10, resolvedMaxPlayers));
+        int resolvedMaxPlayers = resolveMaxPlayers(gameId, game, maxPlayers);
 
         boolean contestedShowdown = game.getCurrentPhase() == GamePhase.SHOWDOWN
                 && game.getLastSettlementResult() != null && game.getLastSettlementResult().settled()
@@ -687,7 +763,8 @@ public class GameStateService {
                 currentPlayer == null ? null : game.getBigBlind(),
                 currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer),
                 game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
-                game.getStateRevision(), currentPlayer == null ? null : game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+                game.getStateRevision(), currentPlayer == null ? null : game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT),
+                room != null ? room.getInactivityDeadlineEpochMs() : null);
 
     }
 

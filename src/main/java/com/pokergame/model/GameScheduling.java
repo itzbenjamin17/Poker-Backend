@@ -249,7 +249,7 @@ final class GameScheduling {
         if (forfeitPending) {
             return Game.TaskExecutionClaim.IGNORE;
         }
-        if (currentHandNumber != expectedHandNumber
+        if ((task != ScheduledGameTask.CLEANUP && currentHandNumber != expectedHandNumber)
                 || getGeneration(scheduledTaskGenerations, task) != expectedGeneration) {
             return Game.TaskExecutionClaim.IGNORE;
         }

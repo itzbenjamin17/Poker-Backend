@@ -175,10 +175,10 @@ class LobbyInactivityIntegrationTest extends AbstractIntegrationTestSupport {
         // Advance past the 30-minute mark from creation
         when(clock.millis()).thenReturn(T0 + THIRTY_MINUTES_MS + 60_000L);
 
-        // The running game is NOT destroyed by the lobby inactivity timeout
+        // The running game is NOT destroyed by the lobby inactivity timeout, and has active-game inactivity deadline
         JsonNode room = getRoom(roomId, hostToken);
         assertThat(room.path("gameStarted").asBoolean()).isTrue();
-        assertThat(room.path("inactivityDeadlineEpochMs").isNull()).isTrue();
+        assertThat(room.path("inactivityDeadlineEpochMs").asLong()).isEqualTo(T0 + 2 * 60_000L + 15 * 60_000L);
     }
 
     private JsonNode getRoom(String roomId, String token) throws Exception {

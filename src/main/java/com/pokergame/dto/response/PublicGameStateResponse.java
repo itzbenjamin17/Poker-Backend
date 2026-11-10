@@ -77,7 +77,8 @@ public record PublicGameStateResponse(
                 ReadyGateState readyGateState,
                 long serverTimeEpochMs,
                 long stateRevision,
-                Long turnDeadlineEpochMs) {
+                Long turnDeadlineEpochMs,
+                @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Long inactivityDeadlineEpochMs) {
 
         public PublicGameStateResponse {
                 pots = pots == null ? null : List.copyOf(pots);
@@ -85,6 +86,24 @@ public record PublicGameStateResponse(
                 players = players == null ? null : List.copyOf(players);
                 winners = winners == null ? null : List.copyOf(winners);
                 legalActions = legalActions == null ? null : List.copyOf(legalActions);
+        }
+
+        /** Backward-compatible constructor for callers predating active game inactivity deadlines. */
+        public PublicGameStateResponse(int maxPlayers, int pot, List<Integer> pots, Integer uncalledAmount,
+                        GamePhase phase, int currentBet, List<Card> communityCards, List<PublicPlayerState> players,
+                        String currentPlayerName, String currentPlayerId, List<String> winners,
+                        Integer winningsPerPlayer, Boolean isAutoAdvancing, String autoAdvanceMessage,
+                        Boolean isReadyCountdownActive, Long readyCountdownDeadlineEpochMs,
+                        Boolean claimWinAvailable, String claimWinPlayerName, Boolean handSettled,
+                        Integer carryOverAmount, List<PlayerAction> legalActions, Integer minimumBetAmount,
+                        Integer minimumRaiseAmount, long handNumber, ReadyGateState readyGateState,
+                        long serverTimeEpochMs, long stateRevision, Long turnDeadlineEpochMs) {
+                this(maxPlayers, pot, pots, uncalledAmount, phase, currentBet, communityCards, players,
+                        currentPlayerName, currentPlayerId, winners, winningsPerPlayer, isAutoAdvancing,
+                        autoAdvanceMessage, isReadyCountdownActive, readyCountdownDeadlineEpochMs,
+                        claimWinAvailable, claimWinPlayerName, handSettled, carryOverAmount,
+                        legalActions, minimumBetAmount, minimumRaiseAmount, handNumber, readyGateState,
+                        serverTimeEpochMs, stateRevision, turnDeadlineEpochMs, null);
         }
 
         /** Backward-compatible constructor for callers predating turn deadlines. */

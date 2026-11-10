@@ -140,8 +140,10 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
             String type,
             String gameId,
             String winner,
-            int winnerChips,
+            @JsonInclude(JsonInclude.Include.NON_NULL) Integer winnerChips,
             boolean isForfeit,
+            @JsonInclude(JsonInclude.Include.NON_NULL) Boolean abandoned,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String reason,
             String message,
             FinalGameState finalState) {
     }

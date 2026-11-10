@@ -93,6 +93,13 @@ public class PlayerActionService {
             }
 
             Long turnDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT);
+            Long inactivityDeadline = gameLifecycleService.getInactivityDeadline(gameId);
+            if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
+                logger.warn("Player {} attempted to act in game {} at or after inactivity deadline (now={}, deadline={})",
+                        playerName, gameId, clock.millis(), inactivityDeadline);
+                gameLifecycleService.abandonGameDueToInactivity(gameId);
+                throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
+            }
             if (turnDeadline != null && clock.millis() >= turnDeadline) {
                 logger.warn("Player {} attempted to act in game {} at or after turn deadline (now={}, deadline={})",
                         playerName, gameId, clock.millis(), turnDeadline);
@@ -133,6 +140,7 @@ public class PlayerActionService {
 
             TurnOutcome outcome = game.processPlayerDecision(currentPlayer, decision);
             logger.debug("Decision processed successfully");
+            gameLifecycleService.resetGameInactivity(gameId);
 
             // If there was a conversion, notify the player
             if (outcome.conversionMessage() != null) {

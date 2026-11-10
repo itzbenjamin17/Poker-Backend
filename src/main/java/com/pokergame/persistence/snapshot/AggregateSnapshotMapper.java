@@ -413,11 +413,14 @@ public final class AggregateSnapshotMapper {
         if (state.gameId() == null || !state.gameId().equals(expectedGameId)) {
             throw new PersistenceException("Retained terminal result gameId does not match game identity");
         }
-        if (state.winner() == null || state.winner().trim().isEmpty()) {
-            throw new PersistenceException("Retained terminal result missing winner name");
-        }
-        if (state.winnerChips() < 0) {
-            throw new PersistenceException("Retained terminal result has invalid negative winner chips");
+        boolean isAbandoned = Boolean.TRUE.equals(state.abandoned()) || "INACTIVITY".equals(state.reason());
+        if (!isAbandoned) {
+            if (state.winner() == null || state.winner().trim().isEmpty()) {
+                throw new PersistenceException("Retained terminal result missing winner name");
+            }
+            if (state.winnerChips() != null && state.winnerChips() < 0) {
+                throw new PersistenceException("Retained terminal result has invalid negative winner chips");
+            }
         }
         if (state.message() == null || state.message().trim().isEmpty()) {
             throw new PersistenceException("Retained terminal result missing message");
@@ -544,6 +547,8 @@ public final class AggregateSnapshotMapper {
                 response.winner(),
                 response.winnerChips(),
                 response.isForfeit(),
+                response.abandoned() ? Boolean.TRUE : null,
+                response.reason(),
                 response.message(),
                 toFinalGameState(response.finalState()));
     }
@@ -628,6 +633,8 @@ public final class AggregateSnapshotMapper {
                 state.winner(),
                 state.winnerChips(),
                 state.isForfeit(),
+                Boolean.TRUE.equals(state.abandoned()),
+                state.reason(),
                 state.message(),
                 fromFinalGameState(state.finalState()));
     }

@@ -3,6 +3,7 @@ package com.pokergame.persistence;
 import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
+import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
 import org.springframework.boot.ApplicationArguments;
@@ -156,6 +157,26 @@ public final class PersistenceRecovery implements ApplicationRunner {
                         roomsDeleted++;
                         continue;
                     }
+                } else {
+                    if (game.isGameOver() && game.isCleanupExpired(clock.millis())) {
+                        logger.info("Game {} cleanup deadline expired during restart downtime (now: {}); deleting",
+                                roomId, clock.millis());
+                        store.delete(roomId);
+                        roomsDeleted++;
+                        continue;
+                    }
+
+                    Long inactivityDeadline = aggregate.room().getInactivityDeadlineEpochMs();
+                    if (inactivityDeadline != null && clock.millis() >= inactivityDeadline && !game.isGameOver()) {
+                        logger.info("Game {} expired due to room inactivity during restart downtime (deadline: {}, now: {}); abandoning",
+                                roomId, inactivityDeadline, clock.millis());
+                        roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
+                        gameLifecycleService.restoreGame(game);
+                        gameLifecycleService.abandonGameDueToInactivity(roomId);
+                        roomsRestored++;
+                        gamesRestored++;
+                        continue;
+                    }
                 }
 
                 for (String playerName : aggregate.room().getPlayers()) {
@@ -176,6 +197,9 @@ public final class PersistenceRecovery implements ApplicationRunner {
                 roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
                 if (game != null) {
                     gameLifecycleService.restoreGame(game);
+                    if (!game.isGameOver() && aggregate.room().getInactivityDeadlineEpochMs() != null) {
+                        gameLifecycleService.scheduleGameInactivity(roomId, aggregate.room().getInactivityDeadlineEpochMs());
+                    }
                 } else if (aggregate.room().getInactivityDeadlineEpochMs() != null) {
                     roomService.scheduleLobbyInactivity(roomId, aggregate.room().getInactivityDeadlineEpochMs());
                 }

@@ -132,7 +132,8 @@ final class GameRuntimeTimers {
     /** Cancels a game's runtime registrations, optionally retaining its cleanup registration. */
     void cancelAllForGame(String gameId, boolean keepCleanup) {
         runtimeTasks.forEach((key, registration) -> {
-            if (key.gameId().equals(gameId) && (!keepCleanup || key.task() != ScheduledGameTask.CLEANUP)
+            if (key.gameId().equals(gameId)
+                    && (!keepCleanup || key.task() != ScheduledGameTask.CLEANUP)
                     && runtimeTasks.remove(key, registration)) registration.cancel();
         });
     }
