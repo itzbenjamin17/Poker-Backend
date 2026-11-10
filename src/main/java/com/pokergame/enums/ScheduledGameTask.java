@@ -10,5 +10,6 @@ public enum ScheduledGameTask {
     READY_TIMEOUT,
     NEW_HAND,
     CLEANUP,
+    TURN_TIMEOUT,
     GAME_END
 }

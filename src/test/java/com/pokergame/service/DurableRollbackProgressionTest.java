@@ -181,7 +181,7 @@ class DurableRollbackProgressionTest {
             throw new IllegalArgumentException("late action");
         }));
         assertEquals(deadlines, games.getGame(ID).getScheduledTaskDeadlinesSnapshot());
-        assertEquals(3, games.getRuntimeTaskCount(ID), "Restored aggregate must retain executable progression");
+        assertEquals(4, games.getRuntimeTaskCount(ID), "Restored aggregate must retain executable progression");
         acceptedFutures.forEach(future -> verify(future).cancel(false));
         assertTrue(effects.isEmpty());
         int cleanupIndex = 0;

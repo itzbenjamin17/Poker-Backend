@@ -687,7 +687,7 @@ public class GameStateService {
                 currentPlayer == null ? null : game.getBigBlind(),
                 currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer),
                 game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
-                game.getStateRevision());
+                game.getStateRevision(), currentPlayer == null ? null : game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
 
     }
 

@@ -482,12 +482,13 @@ class GameSchedulingTest {
         @Test
         @DisplayName("invalidateProgressionTasks preserves CLEANUP deadline and generation unconditionally when all tasks active")
         void testInvalidateProgressionTasks_PreservesCleanup_DeadlinesAndGenerationIntact() {
-            // Schedule all 6 tasks with distinct deadlines
+            // Schedule all tasks with distinct deadlines
             GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.AUTO_ADVANCE, 1001L);
             GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.READY_OPEN, 1002L);
             GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.READY_TIMEOUT, 1003L);
             GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.NEW_HAND, 1004L);
             GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.GAME_END, 1005L);
+            GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.TURN_TIMEOUT, 1006L);
             GameScheduling.scheduleTask(deadlines, generations, ScheduledGameTask.CLEANUP, 999999L);
 
             // Verify initial generations are all 1L
@@ -503,7 +504,8 @@ class GameSchedulingTest {
                     ScheduledGameTask.READY_OPEN,
                     ScheduledGameTask.READY_TIMEOUT,
                     ScheduledGameTask.NEW_HAND,
-                    ScheduledGameTask.GAME_END
+                    ScheduledGameTask.GAME_END,
+                    ScheduledGameTask.TURN_TIMEOUT
             };
             for (ScheduledGameTask task : progressionTasks) {
                 assertNull(GameScheduling.getScheduledTaskDeadline(deadlines, task),

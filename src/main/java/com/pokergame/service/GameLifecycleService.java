@@ -42,6 +42,14 @@ public class GameLifecycleService {
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
     public static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = 6000;
     private static final long AUTO_ADVANCE_STEP_DELAY_MS = 4000;
+    private static final long TURN_ALLOWANCE_MS = 60_000;
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    /** Supplies the authoritative clock without changing legacy construction. */
+    @Autowired(required = false)
+    void setClock(java.time.Clock clock) { this.clock = clock; }
+
+    public java.time.Clock getClock() { return clock; }
 
     @Value("${poker.game-end.display-delay-ms:20000}")
     private long gameEndDisplayDelayMs = 20000;
@@ -297,9 +305,18 @@ public class GameLifecycleService {
         switch (outcome.type()) {
             case NEXT_PLAYER, PHASE_ADVANCED -> {
                 game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
+                runtimeTimers.cancelTask(gameId, ScheduledGameTask.AUTO_ADVANCE);
+                if (game.getCurrentPlayer() != null) {
+                    persistScheduledTask(gameId, ScheduledGameTask.TURN_TIMEOUT, clock.millis() + TURN_ALLOWANCE_MS);
+                } else {
+                    game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
+                    runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
+                }
                 gameStateService.broadcastGameState(gameId, game);
             }
             case AUTO_ADVANCING -> {
+                game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
+                runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
                 if (game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE) == null) {
                     scheduleAutoAdvance(gameId);
                 }
@@ -311,6 +328,8 @@ public class GameLifecycleService {
             }
             case SHOWDOWN -> {
                 game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
+                game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
+                runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
                 schedulePostShowdownProgression(gameId, game);
                 gameStateService.broadcastShowdownResults(gameId, game, outcome.winners(), outcome.winningsPerPlayer());
             }
@@ -675,6 +694,7 @@ public class GameLifecycleService {
             return;
         }
         boolean cleanupRequested = false;
+        String actorToDepart = null;
         synchronized (game) {
             switch (game.claimScheduledTaskExecution(task, expectedDeadline, expectedHandNumber, expectedGeneration)) {
                 case IGNORE -> { return; }
@@ -704,7 +724,16 @@ public class GameLifecycleService {
                                 System.currentTimeMillis() + AUTO_ADVANCE_STEP_DELAY_MS);
                     }
                 }
+                case TURN_TIMEOUT -> {
+                    Player actor = game.getCurrentPlayer();
+                    if (actor != null) {
+                        actorToDepart = actor.getName();
+                    }
+                }
             }
+        }
+        if (actorToDepart != null) {
+            departParticipants(gameId, List.of(actorToDepart));
         }
         if (cleanupRequested) {
             DurableTransactionContext.afterCommit(() -> mutationProxy().performGameCleanup(gameId));
@@ -996,14 +1025,20 @@ public class GameLifecycleService {
      */
     void completeReadyCountdownAndStartNextHand(String gameId, Game game) {
         cancelReadyTimeout(gameId);
+        cancelTurnTimeout(gameId);
 
         game.closeReadyCountdown();
         game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
+        game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
         startNewHand(gameId);
     }
 
     private void cancelReadyTimeout(String gameId) {
         runtimeTimers.cancelTask(gameId, ScheduledGameTask.READY_TIMEOUT);
+    }
+
+    public void cancelTurnTimeout(String gameId) {
+        runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
     }
 
     /**

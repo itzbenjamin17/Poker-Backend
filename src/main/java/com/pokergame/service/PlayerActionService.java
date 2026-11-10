@@ -32,6 +32,13 @@ public class PlayerActionService {
 
     private final GameStateService gameStateService;
 
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setClock(java.time.Clock clock) {
+        this.clock = clock;
+    }
+
     /**
      * Creates the action orchestrator with lifecycle scheduling and client-state
      * publishing behind the same room durability boundary.
@@ -42,6 +49,9 @@ public class PlayerActionService {
     public PlayerActionService(GameLifecycleService gameLifecycleService, GameStateService gameStateService) {
         this.gameLifecycleService = gameLifecycleService;
         this.gameStateService = gameStateService;
+        if (gameLifecycleService != null && gameLifecycleService.getClock() != null) {
+            this.clock = gameLifecycleService.getClock();
+        }
     }
 
     /**
@@ -82,6 +92,13 @@ public class PlayerActionService {
                 throw new BadRequestException("Actions are not allowed while the game is auto-advancing.", "HAND_ADVANCING", "Wait for the next turn");
             }
 
+            Long turnDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT);
+            if (turnDeadline != null && clock.millis() >= turnDeadline) {
+                logger.warn("Player {} attempted to act in game {} at or after turn deadline (now={}, deadline={})",
+                        playerName, gameId, clock.millis(), turnDeadline);
+                throw new BadRequestException("Turn deadline expired.", "TURN_EXPIRED", "Your turn has expired");
+            }
+
             Player currentPlayer = getCurrentPlayer(actionRequest, game);
 
             logger.debug("Processing player action - Game: {}, Player: {}, Action: {}",
@@ -110,6 +127,9 @@ public class PlayerActionService {
                     currentPlayer.getPlayerId());
 
             logger.debug("Processing decision: {}", decision);
+
+            game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
+            gameLifecycleService.cancelTurnTimeout(gameId);
 
             TurnOutcome outcome = game.processPlayerDecision(currentPlayer, decision);
             logger.debug("Decision processed successfully");

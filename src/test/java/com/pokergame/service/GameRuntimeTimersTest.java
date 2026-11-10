@@ -132,6 +132,7 @@ class GameRuntimeTimersTest {
         @DisplayName("captureAllIntents returns empty list when no tasks scheduled")
         void captureAllIntents_WhenNoTasks_ReturnsEmptyList() {
             Game game = startedGame();
+            game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
             List<TaskIntent> intents = GameRuntimeTimers.captureAllIntents(ROOM_ID, game);
             assertTrue(intents.isEmpty());
         }
@@ -140,6 +141,7 @@ class GameRuntimeTimersTest {
         @DisplayName("captureAllIntents captures all scheduled tasks with accurate tokens")
         void captureAllIntents_WithMultipleTasks_CapturesCorrectIntents() {
             Game game = startedGame();
+            game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
             game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 10_000L);
             game.scheduleTask(ScheduledGameTask.CLEANUP, 60_000L);
 
@@ -178,6 +180,7 @@ class GameRuntimeTimersTest {
         @DisplayName("schedule ignores task when handNumber, generation, or deadline is mismatched under lock")
         void schedule_WhenTokensMismatched_DoesNotSchedule() {
             Game game = startedGame();
+            clearInvocations(taskScheduler);
             game.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
             long gen = game.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND);
 
@@ -499,6 +502,9 @@ class GameRuntimeTimersTest {
         ScheduledFuture<Object> future = mock(ScheduledFuture.class);
         doReturn(future).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
         Game game = startedGame();
+        game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
+        gameLifecycleService.cancelTurnTimeout(ROOM_ID);
+        clearInvocations(future);
         gameLifecycleService.scheduleAutoAdvance(ROOM_ID);
         long deadline = game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE);
         long generation = game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
@@ -618,6 +624,7 @@ class GameRuntimeTimersTest {
         long deadline = scheduleForTest(game, ScheduledGameTask.AUTO_ADVANCE);
         long before = System.currentTimeMillis();
 
+        clearInvocations(taskScheduler);
         runScheduled(game, ScheduledGameTask.AUTO_ADVANCE, deadline);
         long after = System.currentTimeMillis();
 
@@ -662,6 +669,7 @@ class GameRuntimeTimersTest {
         long deadline = scheduleForTest(game, ScheduledGameTask.AUTO_ADVANCE);
         long before = System.currentTimeMillis();
 
+        clearInvocations(taskScheduler);
         runScheduled(game, ScheduledGameTask.AUTO_ADVANCE, deadline);
         long after = System.currentTimeMillis();
 
@@ -683,6 +691,7 @@ class GameRuntimeTimersTest {
         long deadline = scheduleForTest(game, ScheduledGameTask.AUTO_ADVANCE);
         long before = System.currentTimeMillis();
 
+        clearInvocations(taskScheduler);
         runScheduled(game, ScheduledGameTask.AUTO_ADVANCE, deadline);
         long after = System.currentTimeMillis();
 
