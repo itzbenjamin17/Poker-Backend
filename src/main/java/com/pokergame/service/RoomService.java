@@ -29,9 +29,14 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
 import java.util.stream.Collectors;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.beans.factory.annotation.Qualifier;
 
 /**
  * Service class responsible for poker room management.
@@ -47,6 +52,19 @@ public class RoomService {
     private final long disconnectGracePeriodMs;
     private final PasswordEncoder passwordEncoder;
     private RoomService self;
+    private Clock clock = Clock.systemUTC();
+    private TaskScheduler taskScheduler;
+    private final Map<String, ScheduledFuture<?>> inactivityFutures = new ConcurrentHashMap<>();
+    private static final long LOBBY_INACTIVITY_MS = 30 * 60_000L;
+
+    /** @param clock authoritative lifecycle time source */
+    @Autowired
+    void setClock(Clock clock) { this.clock = clock; }
+
+    @Autowired(required = false)
+    void setTaskScheduler(@Qualifier("taskScheduler") TaskScheduler taskScheduler) {
+        this.taskScheduler = taskScheduler;
+    }
 
     /**
      * Creates the room registry with the publisher used for committed lobby state.
@@ -187,6 +205,10 @@ public class RoomService {
 
             // Add the host as the first player
             room.addPlayer(sanitizedPlayerName);
+            room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
+            scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
+            room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
+            scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
             long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
             room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
 
@@ -269,7 +291,8 @@ public class RoomService {
      */
     public String joinRoom(String roomId, String playerName, String password) {
         Room room = rooms.get(roomId);
-        if (room == null) {
+        if (room == null || isLobbyExpired(room)) {
+            checkAndCloseIfExpired(roomId);
             throw new ResourceNotFoundException("Room not found");
         }
         return (self == null ? this : self).joinRoom(roomId, new JoinRoomRequest(room.getRoomName(), playerName, password));
@@ -306,6 +329,11 @@ public class RoomService {
                 throw new BadRequestException("Cannot join room. The game has already started.");
             }
 
+            if (isLobbyExpired(room)) {
+                logger.warn("Join attempt failed: room {} has expired due to inactivity", room.getRoomName());
+                throw new BadRequestException("Room has expired due to inactivity.");
+            }
+
             // Check password if the room is private
             if (room.hasPassword() && !room.checkPassword(joinRequest.password(), passwordEncoder)) {
                 logger.warn("Invalid password attempt for room {} by player {}", room.getRoomName(),
@@ -336,6 +364,8 @@ public class RoomService {
                 }
                 throw e;
             }
+            room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
+            scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
             long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
             room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
 
@@ -391,6 +421,7 @@ public class RoomService {
             String membershipId = room.getMembershipId(playerName);
 
             if (isHost) {
+                cancelLobbyInactivity(roomId);
                 // Host is leaving the lobby phase - destroy the room.
                 logger.info("Host {} leaving room {} during lobby phase, destroying room", playerName,
                         room.getRoomName());
@@ -405,6 +436,7 @@ public class RoomService {
                 logger.info("Player {} left room: {}", playerName, room.getRoomName());
 
                 if (room.getPlayers().isEmpty()) {
+                    cancelLobbyInactivity(roomId);
                     if (room.isTerminal()) {
                         roomHosts.remove(roomId);
                         logger.info("No players remaining in terminal room {}, preserving container until cleanup", room.getRoomName());
@@ -417,6 +449,8 @@ public class RoomService {
                         destroyRoom(roomId);
                     }
                 } else {
+                    room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
+                    scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
                     sendAfterCommit("/room/" + roomId,
                             new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
                 }
@@ -462,6 +496,7 @@ public class RoomService {
                     retiredMemberships.forEach((name, mid) ->
                             eventPublisher.publishEvent(new RoomMembershipRetired(roomId, name, mid))));
             if (room.getPlayers().isEmpty()) {
+                cancelLobbyInactivity(roomId);
                 roomHosts.remove(roomId);
                 if (room.isTerminal()) {
                     sendAfterCommit("/room/" + roomId,
@@ -472,6 +507,10 @@ public class RoomService {
                     destroyRoom(roomId);
                 }
             } else {
+                if (!room.isGameStarted()) {
+                    room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
+                    scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
+                }
                 if (survivingHost != null && room.getPlayers().contains(survivingHost)) {
                     roomHosts.put(roomId, survivingHost);
                 } else if (!roomHosts.containsKey(roomId) || !room.getPlayers().contains(roomHosts.get(roomId))) {
@@ -507,7 +546,10 @@ public class RoomService {
             throw new BadRequestException("Room ID cannot be null");
         }
         Room room = rooms.get(roomId);
-        if (room == null) {
+        if (room == null || isLobbyExpired(room)) {
+            if (room != null) {
+                checkAndCloseIfExpired(roomId);
+            }
             logger.warn("Room data request failed: room not found for id {}", roomId);
             throw new ResourceNotFoundException("Room not found");
         }
@@ -541,7 +583,7 @@ public class RoomService {
                     playerObjects,
                     playerObjects.size(),
                     !room.isGameStarted() && playerObjects.size() >= 2,
-                    room.isGameStarted());
+                    room.isGameStarted(), room.getInactivityDeadlineEpochMs(), clock.millis());
         }
     }
 
@@ -553,7 +595,12 @@ public class RoomService {
      * @return the Room object if found, null otherwise
      */
     public Room getRoom(String roomId) {
-        return rooms.get(roomId);
+        Room room = rooms.get(roomId);
+        if (room != null && isLobbyExpired(room)) {
+            checkAndCloseIfExpired(roomId);
+            return null;
+        }
+        return room;
     }
 
     /**
@@ -578,10 +625,15 @@ public class RoomService {
      * @return the Room object if found, null otherwise
      */
     public Room findRoomByName(String roomName) {
-        return rooms.values().stream()
-                .filter(room -> room.getRoomName().equalsIgnoreCase(roomName))
+        Room room = rooms.values().stream()
+                .filter(r -> r.getRoomName().equalsIgnoreCase(roomName))
                 .findFirst()
                 .orElse(null);
+        if (room != null && isLobbyExpired(room)) {
+            checkAndCloseIfExpired(room.getRoomId());
+            return null;
+        }
+        return room;
     }
 
     /**
@@ -699,12 +751,108 @@ public class RoomService {
      */
     @DurableMutation(roomId = "#roomId")
     public void destroyRoom(String roomId) {
+        cancelLobbyInactivity(roomId);
         Room room = rooms.remove(roomId);
         roomHosts.remove(roomId);
         if (room != null) {
             synchronized (room) {
                 logger.info("Room destroyed: {} (ID: {})", room.getRoomName(), roomId);
             }
+        }
+        DurableTransactionContext.afterCommit(() -> eventPublisher.publishEvent(new RoomDestroyed(roomId)));
+    }
+
+    /**
+     * Schedules the authoritative lobby inactivity expiration task.
+     *
+     * @param roomId room identity
+     * @param deadlineEpochMs absolute deadline timestamp
+     */
+    public void scheduleLobbyInactivity(String roomId, Long deadlineEpochMs) {
+        if (taskScheduler == null || deadlineEpochMs == null) return;
+        cancelLobbyInactivity(roomId);
+        long delay = Math.max(0, deadlineEpochMs - clock.millis());
+        try {
+            ScheduledFuture<?> future = taskScheduler.schedule(
+                    () -> {
+                        try {
+                            (self != null ? self : this).closeLobbyDueToInactivity(roomId, deadlineEpochMs);
+                        } catch (Exception e) {
+                            logger.error("Error executing scheduled lobby inactivity for room {}", roomId, e);
+                        }
+                    },
+                    Instant.ofEpochMilli(System.currentTimeMillis() + delay)
+            );
+            inactivityFutures.put(roomId, future);
+        } catch (Exception e) {
+            logger.warn("Scheduler rejected lobby inactivity for room {}", roomId, e);
+        }
+    }
+
+    /** Cancels pending lobby inactivity expiration task for the room. */
+    public void cancelLobbyInactivity(String roomId) {
+        ScheduledFuture<?> future = inactivityFutures.remove(roomId);
+        if (future != null) {
+            future.cancel(false);
+        }
+    }
+
+    /**
+     * @param room room candidate
+     * @return true if room is an unstarted lobby whose inactivity deadline has elapsed
+     */
+    public boolean isLobbyExpired(Room room) {
+        if (room == null) return false;
+        synchronized (room) {
+            return !room.isGameStarted()
+                    && room.getInactivityDeadlineEpochMs() != null
+                    && clock.millis() >= room.getInactivityDeadlineEpochMs();
+        }
+    }
+
+    /**
+     * Checks if a lobby has expired and closes it if so.
+     *
+     * @param roomId room identity
+     * @return true if room was closed due to inactivity
+     */
+    public boolean checkAndCloseIfExpired(String roomId) {
+        Room room = rooms.get(roomId);
+        if (room == null) return false;
+        if (!room.isGameStarted() && room.getInactivityDeadlineEpochMs() != null
+                && clock.millis() >= room.getInactivityDeadlineEpochMs()) {
+            (self != null ? self : this).closeLobbyDueToInactivity(roomId, room.getInactivityDeadlineEpochMs());
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Closes an inactive lobby authoritatively, marks it terminal/destroyed,
+     * and broadcasts ROOM_CLOSED with an inactivity reason.
+     *
+     * @param roomId room identity
+     * @param deadlineEpochMs deadline at which closure was scheduled
+     */
+    @DurableMutation(roomId = "#roomId")
+    public void closeLobbyDueToInactivity(String roomId, long deadlineEpochMs) {
+        Room room = rooms.get(roomId);
+        if (room == null) return;
+        synchronized (room) {
+            if (rooms.get(roomId) != room) return;
+            if (room.isGameStarted()) return;
+            Long currentDeadline = room.getInactivityDeadlineEpochMs();
+            if (currentDeadline == null) return;
+            if (currentDeadline > deadlineEpochMs && clock.millis() < currentDeadline) return;
+            if (clock.millis() < currentDeadline) return;
+
+            cancelLobbyInactivity(roomId);
+            room.setTerminal(true);
+            rooms.remove(roomId);
+            roomHosts.remove(roomId);
+            logger.info("Lobby {} closed due to inactivity after deadline {}", roomId, currentDeadline);
+            sendAfterCommit("/room/" + roomId,
+                    new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), Map.of("roomId", roomId, "reason", "INACTIVITY")));
         }
         DurableTransactionContext.afterCommit(() -> eventPublisher.publishEvent(new RoomDestroyed(roomId)));
     }
@@ -717,6 +865,7 @@ public class RoomService {
      */
     private boolean isRoomNameTaken(String roomName) {
         return rooms.values().stream()
+                .filter(room -> !isLobbyExpired(room))
                 .anyMatch(room -> room.getRoomName().equalsIgnoreCase(roomName));
     }
 

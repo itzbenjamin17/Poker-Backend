@@ -143,9 +143,10 @@ public class PersistenceConfiguration {
             GameLifecycleService gameLifecycleService,
             WebSocketEventListener webSocketEventListener,
             ApplicationContext applicationContext,
-            @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
+            @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs,
+            java.time.Clock clock) {
         return new PersistenceRecovery(store, mapper, roomService, gameLifecycleService, webSocketEventListener,
-                applicationContext, disconnectGracePeriodMs);
+                applicationContext, disconnectGracePeriodMs, clock);
     }
 
     /**

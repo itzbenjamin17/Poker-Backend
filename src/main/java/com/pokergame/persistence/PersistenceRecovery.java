@@ -43,6 +43,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
     private final WebSocketEventListener webSocketEventListener;
     private final ApplicationContext applicationContext;
     private final long disconnectGracePeriodMs;
+    private final java.time.Clock clock;
     private volatile boolean complete;
 
     /**
@@ -60,6 +61,13 @@ public final class PersistenceRecovery implements ApplicationRunner {
     public PersistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper, RoomService roomService,
             GameLifecycleService gameLifecycleService, WebSocketEventListener webSocketEventListener,
             ApplicationContext applicationContext, long disconnectGracePeriodMs) {
+        this(store, mapper, roomService, gameLifecycleService, webSocketEventListener, applicationContext,
+                disconnectGracePeriodMs, java.time.Clock.systemUTC());
+    }
+
+    public PersistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper, RoomService roomService,
+            GameLifecycleService gameLifecycleService, WebSocketEventListener webSocketEventListener,
+            ApplicationContext applicationContext, long disconnectGracePeriodMs, java.time.Clock clock) {
         this.store = store;
         this.mapper = mapper;
         this.roomService = roomService;
@@ -67,6 +75,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
         this.webSocketEventListener = webSocketEventListener;
         this.applicationContext = applicationContext;
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
+        this.clock = clock != null ? clock : java.time.Clock.systemUTC();
     }
 
     /**
@@ -138,6 +147,17 @@ public final class PersistenceRecovery implements ApplicationRunner {
             String roomId = aggregate.room().getRoomId();
             try {
                 Game game = aggregate.game();
+                if (game == null) {
+                    Long inactivityDeadline = aggregate.room().getInactivityDeadlineEpochMs();
+                    if (inactivityDeadline != null && clock.millis() >= inactivityDeadline) {
+                        logger.info("Lobby {} expired during restart downtime (deadline: {}, now: {}); deleting",
+                                roomId, inactivityDeadline, clock.millis());
+                        store.delete(roomId);
+                        roomsDeleted++;
+                        continue;
+                    }
+                }
+
                 for (String playerName : aggregate.room().getPlayers()) {
                     Player gamePlayer = game == null ? null : game.getPlayers().stream()
                             .filter(player -> player.getName().equals(playerName))
@@ -156,6 +176,8 @@ public final class PersistenceRecovery implements ApplicationRunner {
                 roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
                 if (game != null) {
                     gameLifecycleService.restoreGame(game);
+                } else if (aggregate.room().getInactivityDeadlineEpochMs() != null) {
+                    roomService.scheduleLobbyInactivity(roomId, aggregate.room().getInactivityDeadlineEpochMs());
                 }
                 for (String playerName : aggregate.room().getPlayers()) {
                     // Tell the system to kick the player if they don't reconnect by the deadline

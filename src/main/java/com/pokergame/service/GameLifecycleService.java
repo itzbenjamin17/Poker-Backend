@@ -180,6 +180,11 @@ public class GameLifecycleService {
 
         synchronized (room) {
             if (roomService.getRoom(roomId) != room) throw new ResourceNotFoundException("Room not found");
+            if (roomService.isLobbyExpired(room)) {
+                logger.warn("Game creation failed: lobby {} has expired due to inactivity", roomId);
+                roomService.checkAndCloseIfExpired(roomId);
+                throw new BadRequestException("Room has expired due to inactivity.");
+            }
             if (activeGames.containsKey(roomId) || room.isGameStarted()) {
                 logger.warn("Game creation failed: game already exists for room {}", roomId);
                 throw new BadRequestException("Game has already started for this room.");
@@ -211,6 +216,7 @@ public class GameLifecycleService {
 
             // Mark room started and capture start event payload before scheduling broadcast
             room.setGameStarted(true);
+            roomService.cancelLobbyInactivity(roomId);
             RoomDataResponse startPayload = roomService.getRoomData(roomId);
 
             DurableTransactionContext.afterCommit(() -> messagingTemplate.convertAndSend("/room/" + roomId,

@@ -9,6 +9,7 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.ReadyGateState;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -51,7 +52,8 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
     public record RoomState(String roomId, String roomName, String originalHost, int maxPlayers, int smallBlind,
             int bigBlind, int buyIn, String password, LocalDateTime createdAt,
             Map<String, LocalDateTime> playersWithJoinTime, Map<String, String> playerMembershipIds,
-            boolean gameStarted) {
+            boolean gameStarted,
+            @JsonInclude(JsonInclude.Include.NON_NULL) Long inactivityDeadlineEpochMs) {
         @JsonCreator
         public RoomState {
             playerMembershipIds = playerMembershipIds == null
@@ -61,9 +63,17 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
 
         public RoomState(String roomId, String roomName, String originalHost, int maxPlayers, int smallBlind,
                 int bigBlind, int buyIn, String password, LocalDateTime createdAt,
+                Map<String, LocalDateTime> playersWithJoinTime, Map<String, String> playerMembershipIds,
+                boolean gameStarted) {
+            this(roomId, roomName, originalHost, maxPlayers, smallBlind, bigBlind, buyIn, password, createdAt,
+                    playersWithJoinTime, playerMembershipIds, gameStarted, null);
+        }
+
+        public RoomState(String roomId, String roomName, String originalHost, int maxPlayers, int smallBlind,
+                int bigBlind, int buyIn, String password, LocalDateTime createdAt,
                 Map<String, LocalDateTime> playersWithJoinTime, boolean gameStarted) {
             this(roomId, roomName, originalHost, maxPlayers, smallBlind, bigBlind, buyIn, password, createdAt,
-                    playersWithJoinTime, Map.of(), gameStarted);
+                    playersWithJoinTime, Map.of(), gameStarted, null);
         }
     }
 
