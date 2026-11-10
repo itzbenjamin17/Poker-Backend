@@ -1,39 +1,79 @@
 package com.pokergame.integration;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.enums.PlayerAction;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
+import com.pokergame.security.JwtService;
+import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.GameStateService;
 import org.awaitility.Awaitility;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompFrameHandler;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
+import org.springframework.messaging.simp.user.SimpUser;
+import org.springframework.messaging.simp.user.SimpUserRegistry;
+import org.springframework.messaging.simp.user.UserDestinationResolver;
+import org.springframework.messaging.support.AbstractMessageChannel;
+import org.springframework.messaging.support.ChannelInterceptor;
+import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
 
 import java.lang.reflect.Type;
 import java.time.Duration;
+import java.util.Collection;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.enums.PlayerAction;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.LinkedBlockingQueue;
 
 /** Tests WebSocket security behavior. */
 @Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
+@TestPropertySource(properties = "poker.ready-countdown-ms=30000")
 public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
+
+    @Autowired
+    private JwtService jwtService;
+
+    @Autowired
+    private SimpUserRegistry userRegistry;
+
+    @Autowired
+    private UserDestinationResolver userDestinationResolver;
+
+    @Autowired
+    @Qualifier("clientOutboundChannel")
+    private AbstractMessageChannel outboundChannel;
+
+    @Autowired
+    private GameLifecycleService gameLifecycleService;
+
+    @Autowired
+    private GameStateService gameStateService;
 
     /**
      * Protects the contract that the system should prevent player from subscribing to another player's private topic.
@@ -69,103 +109,115 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
                 .untilAsserted(() -> assertThat(session1.isConnected()).isFalse());
     }
 
-    /**
-     * Protects the contract that a player's subscription to its own secure user destination is actually
-     * registered by the broker. This replaces an earlier oracle that only checked the socket stayed open:
-     * here we prove the SUBSCRIBE reached the broker's registry, an observable effect of processing.
-     */
+    /** Checks both live delivery and the full set of broker dispatches for a single broadcast. */
     @Test
-    @DisplayName("should register a player's subscription to its own secure user destination")
-    void givenAuthenticatedPlayer_whenSubscribesToOwnPrivate_thenSubscriptionRegistered() throws Exception {
-        String roomName = uniqueName("WSSecurityRoom2");
-        JsonNode player1 = createRoom(roomName, "Player1", 6);
-
-        WebSocketStompClient stompClient = createStompClient();
-        StompSession session1 = connectSession(stompClient, player1.path("token").asText());
-
-        // Subscribe to the public game topic alongside the private queue; because STOMP preserves per-session
-        // frame order, observing the public subscription in the broker registry proves the private SUBSCRIBE
-        // (sent first) was processed too. This is an observable effect rather than a mere open socket.
-        String roomId = player1.path("roomId").asText();
-        session1.subscribe("/user/queue/private", new StompFrameHandler() {
-            /** {@inheritDoc} */
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) { return Object.class; }
-            /** {@inheritDoc} */
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {}
-        });
-        session1.subscribe("/game/" + roomId, new StompFrameHandler() {
-            /** {@inheritDoc} */
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) { return Object.class; }
-            /** {@inheritDoc} */
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {}
-        });
-
-        awaitBrokerSubscription("/game/" + roomId);
-        assertThat(session1.isConnected()).isTrue();
-    }
-
-    /**
-     * Protects the contract that two players subscribed to their own {@code /user/queue/private} destinations
-     * each receive ONLY their own membership's private projection (player identity and hole cards) and never
-     * the other player's. Drives a real two-player game over live sockets.
-     */
-    @Test
-    @DisplayName("should deliver each live player only its own private hole cards, never the other's")
-    void givenTwoLivePlayers_whenPrivateStateBroadcast_thenEachReceivesOnlyItsOwnHoleCards() throws Exception {
+    void eachLivePrivateSubscriptionReceivesOnlyItsAuthenticatedProjection() throws Exception {
         String roomName = uniqueName("WSPrivateIsolation");
-        JsonNode player1 = createRoom(roomName, "Player1", 2);
-        JsonNode player2 = joinRoom(roomName, "Player2");
-        String roomId = player1.path("roomId").asText();
-        String hostToken = player1.path("token").asText();
-        String guestToken = player2.path("token").asText();
+        JsonNode host = createRoom(roomName, "Player1", 2);
+        JsonNode guest = joinRoom(roomName, "Player2");
+        String roomId = host.path("roomId").asText();
+        String hostToken = host.path("token").asText();
+        String guestToken = guest.path("token").asText();
 
         WebSocketStompClient stompClient = createStompClient();
-        StompSession session1 = connectSession(stompClient, hostToken);
-        StompSession session2 = connectSession(stompClient, guestToken);
-
-        CompletableFuture<PrivateProjection> private1 = new CompletableFuture<>();
-        CompletableFuture<PrivateProjection> private2 = new CompletableFuture<>();
-        subscribePrivateAndPublic(session1, roomId, private1);
-        subscribePrivateAndPublic(session2, roomId, private2);
-
-        // Wait until both sessions' subscriptions are registered before any broadcast fires, so no private
-        // projection can be published into an unsubscribed session.
-        awaitBrokerSubscriptions("/game/" + roomId, 2);
-
-        // Start the game (deals hole cards), then drive a legal pre-flop action so the server emits a full
-        // game-state broadcast, which delivers each player its own private projection on /user/queue/private.
+        StompSession hostSession = connectSession(stompClient, hostToken);
+        StompSession guestSession = connectSession(stompClient, guestToken);
         assertThat(startGame(roomId, hostToken).path("message").asText()).isEqualTo("Game started successfully");
-        String currentPlayerName = readGameState(roomId, hostToken).path("currentPlayerName").asText();
-        StompSession actingSession = "Player1".equals(currentPlayerName) ? session1 : session2;
-        actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.CALL, null));
 
-        PrivateProjection state1 = private1.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-        PrivateProjection state2 = private2.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+        PrivateProjection hostProjection = readPrivateProjection(roomId, hostToken);
+        PrivateProjection guestProjection = readPrivateProjection(roomId, guestToken);
+        JsonNode table = readGameState(roomId, hostToken);
+        assertThat(hostProjection.playerId()).isEqualTo(playerState(table, "Player1").path("id").asText());
+        assertThat(guestProjection.playerId()).isEqualTo(playerState(table, "Player2").path("id").asText());
+        assertThat(hostProjection.holeCards()).hasSize(2).doesNotContainAnyElementsOf(guestProjection.holeCards());
+        assertThat(guestProjection.holeCards()).hasSize(2);
 
-        // Each session receives its own two hole cards and a distinct player identity; the two hands never
-        // overlap, proving neither session ever saw the other membership's private cards. Hole cards are the
-        // compact wire codes (e.g. "AS") the server publishes.
-        assertThat(state1.holeCards()).hasSize(2);
-        assertThat(state2.holeCards()).hasSize(2);
-        assertThat(state1.playerId()).isNotEqualTo(state2.playerId());
-        assertThat(state1.holeCards()).doesNotContainAnyElementsOf(state2.holeCards());
-        assertThat(state2.holeCards()).doesNotContainAnyElementsOf(state1.holeCards());
+        BlockingQueue<PrivateProjection> hostFrames = new LinkedBlockingQueue<>();
+        BlockingQueue<PrivateProjection> guestFrames = new LinkedBlockingQueue<>();
+        String hostBrokerSession = subscribePrivate(hostSession, hostToken, hostFrames);
+        String guestBrokerSession = subscribePrivate(guestSession, guestToken, guestFrames);
+        Set<String> sessionIds = Set.of(hostBrokerSession, guestBrokerSession);
+
+        // Broker dispatch on the publishing thread is complete when broadcastGameState returns.
+        // Capture there so the assertion covers all dispatches, including frames still queued for socket I/O.
+        var dispatches = new ConcurrentLinkedQueue<Message<?>>();
+        ChannelInterceptor capture = new ChannelInterceptor() {
+            @Override
+            public Message<?> preSend(Message<?> message, MessageChannel channel) {
+                String sessionId = SimpMessageHeaderAccessor.getSessionId(message.getHeaders());
+                if (sessionId != null && sessionIds.contains(sessionId)
+                        && SimpMessageHeaderAccessor.getMessageType(message.getHeaders()) == SimpMessageType.MESSAGE) {
+                    dispatches.add(message);
+                }
+                return message;
+            }
+        };
+        outboundChannel.addInterceptor(capture);
+        try {
+            gameStateService.broadcastGameState(roomId, gameLifecycleService.getGame(roomId));
+
+            assertThat(hostFrames.poll(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS)).isEqualTo(hostProjection);
+            assertThat(guestFrames.poll(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS)).isEqualTo(guestProjection);
+            assertPrivateDispatches(dispatches, hostBrokerSession, hostProjection);
+            assertPrivateDispatches(dispatches, guestBrokerSession, guestProjection);
+        } finally {
+            outboundChannel.removeInterceptor(capture);
+        }
     }
 
-    /**
-     * Minimal view of a player's private projection as it travels on the wire: the server serialises each
-     * hole {@code Card} to a compact string code (via {@code @JsonValue}), so the test reads them as strings
-     * rather than reconstructing {@code Card} instances.
-     *
-     * @param playerId  the receiving player's game identity
-     * @param handNumber the hand this projection belongs to
-     * @param holeCards the player's hole cards as compact wire codes
-     */
-    private record PrivateProjection(String playerId, long handNumber, java.util.List<String> holeCards) {
+    /** Mirrors the private state DTO's compact card codes on both REST and STOMP. */
+    private record PrivateProjection(String playerId, long handNumber, List<String> holeCards) {}
+
+    /** Reads the server's authoritative projection for the session's authenticated membership. */
+    private PrivateProjection readPrivateProjection(String roomId, String token) throws Exception {
+        String body = restClient.get()
+                .uri("/api/game/" + roomId + "/private-state")
+                .header("Authorization", "Bearer " + token)
+                .retrieve()
+                .body(String.class);
+        return objectMapper.readValue(body, PrivateProjection.class);
+    }
+
+    /** Awaits the actual resolved private subscription before any game projection is published. */
+    private String subscribePrivate(StompSession session, String token, BlockingQueue<PrivateProjection> frames) {
+        String identity = jwtService.extractPrincipal(token).getName();
+        SimpUser user = Awaitility.await().atMost(DEFAULT_TIMEOUT).until(
+                () -> userRegistry.getUser(identity), registered -> registered != null && registered.hasSessions());
+        assertThat(user.getSessions()).hasSize(1);
+        String sessionId = user.getSessions().iterator().next().getId();
+        String destination = "/user/queue/private";
+
+        session.subscribe(destination, new StompFrameHandler() {
+            @Override
+            public Type getPayloadType(@NonNull StompHeaders headers) {
+                return PrivateProjection.class;
+            }
+
+            @Override
+            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
+                frames.add((PrivateProjection) payload);
+            }
+        });
+
+        var headers = SimpMessageHeaderAccessor.create(SimpMessageType.SUBSCRIBE);
+        headers.setSessionId(sessionId);
+        headers.setDestination(destination);
+        var subscription = MessageBuilder.createMessage(new byte[0], headers.getMessageHeaders());
+        var resolved = userDestinationResolver.resolveDestination(subscription);
+        assertThat(resolved.getTargetDestinations()).hasSize(1);
+        awaitBrokerSubscription(resolved.getTargetDestinations().iterator().next());
+        return sessionId;
+    }
+
+    /** Verifies the complete broker dispatch set for one socket, including delayed outbound frames. */
+    private void assertPrivateDispatches(
+            Collection<Message<?>> dispatches, String sessionId, PrivateProjection expected) throws Exception {
+        List<Message<?>> forSession = dispatches.stream()
+                .filter(frame -> sessionId.equals(SimpMessageHeaderAccessor.getSessionId(frame.getHeaders())))
+                .toList();
+        assertThat(forSession).hasSize(1);
+        byte[] payload = (byte[]) forSession.getFirst().getPayload();
+        assertThat(objectMapper.readValue(payload, PrivateProjection.class)).isEqualTo(expected);
     }
 
     /**
@@ -186,39 +238,6 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
                 ExecutionException.class,
                 () -> attempt.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS));
         assertThat(failure.getCause()).isNotNull();
-    }
-
-    /**
-     * Subscribes a session to its private queue (completing the given future with the first private
-     * projection) and to the public game topic. Subscribing the private queue first means that observing the
-     * public subscription in the broker registry also implies the private one is registered.
-     *
-     * @param session connected player session
-     * @param roomId game identifier whose public topic to also subscribe
-     * @param privateState future completed with the first private projection received
-     */
-    private void subscribePrivateAndPublic(
-            StompSession session, String roomId, CompletableFuture<PrivateProjection> privateState) {
-        session.subscribe("/user/queue/private", new StompFrameHandler() {
-            /** {@inheritDoc} */
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) { return PrivateProjection.class; }
-            /** {@inheritDoc} */
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                if (payload instanceof PrivateProjection state && !privateState.isDone()) {
-                    privateState.complete(state);
-                }
-            }
-        });
-        session.subscribe("/game/" + roomId, new StompFrameHandler() {
-            /** {@inheritDoc} */
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) { return Object.class; }
-            /** {@inheritDoc} */
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {}
-        });
     }
 
     /**
@@ -271,6 +290,8 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
                 receivedFrames.add(String.valueOf(payload));
             }
         });
+
+        awaitBrokerSubscription("/game/" + roomId);
 
         // Player 1 attempts to publish directly to the game broker topic
         AtomicBoolean errorReceived = new AtomicBoolean(false);
@@ -468,26 +489,60 @@ public class WebSocketSecurityTest extends AbstractIntegrationTestSupport {
                 .untilAsserted(() -> assertThat(session1.isConnected()).isFalse());
     }
 
-    /**
-     * Protects the contract that authorized SEND frames to own room destinations succeed without disconnecting.
-     */
+    /** Drives both commands through a real gate and checks their authenticated player's public state. */
     @Test
-    @DisplayName("should allow authorized SEND frames to own room /ready and /unready destinations")
-    void givenAuthorizedPlayer_whenSendToOwnRoomReadyAndUnready_thenSessionRemainsConnected() throws Exception {
+    void readyAndUnreadyCommandsChangeOnlyTheActingPlayersReadiness() throws Exception {
         String roomName = uniqueName("WSAuthorizedSend");
-        JsonNode player1 = createRoom(roomName, "Player1", 6);
-        String roomId = player1.path("roomId").asText();
+        JsonNode host = createRoom(roomName, "Player1", 2);
+        JsonNode guest = joinRoom(roomName, "Player2");
+        String roomId = host.path("roomId").asText();
+        String hostToken = host.path("token").asText();
 
         WebSocketStompClient stompClient = createStompClient();
-        StompSession session1 = connectSession(stompClient, player1.path("token").asText());
+        StompSession hostSession = connectSession(stompClient, hostToken);
+        StompSession guestSession = connectSession(stompClient, guest.path("token").asText());
+        startGame(roomId, hostToken);
 
-        session1.send("/app/" + roomId + "/ready", "");
-        session1.send("/app/" + roomId + "/unready", "");
+        String actor = readGameState(roomId, hostToken).path("currentPlayerName").asText();
+        assertThat(actor).isIn("Player1", "Player2");
+        StompSession actingSession = "Player1".equals(actor) ? hostSession : guestSession;
+        actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
 
-        // Session must remain alive and connected
-        Awaitility.await()
-                .atMost(Duration.ofSeconds(2))
-                .untilAsserted(() -> assertThat(session1.isConnected()).isTrue());
+        JsonNode opened = Awaitility.await().atMost(DEFAULT_TIMEOUT).until(
+                () -> readGameState(roomId, hostToken),
+                state -> "COUNTING_DOWN".equals(state.path("readyGateState").asText()));
+        long handNumber = opened.path("handNumber").asLong();
+        assertThat(handNumber).isPositive();
+        assertThat(playerState(opened, "Player1").path("isReadyForNextHand").asText()).isEqualTo("false");
+        assertThat(playerState(opened, "Player2").path("isReadyForNextHand").asText()).isEqualTo("false");
+
+        hostSession.send("/app/" + roomId + "/ready", "");
+        long readyRevision = awaitReadiness(roomId, hostToken, handNumber, opened.path("stateRevision").asLong(), true);
+        hostSession.send("/app/" + roomId + "/unready", "");
+        awaitReadiness(roomId, hostToken, handNumber, readyRevision, false);
+        assertThat(hostSession.isConnected()).isTrue();
+    }
+
+    /** Correlates each transition with a newer projection of the same open gate and hand. */
+    private long awaitReadiness(String roomId, String token, long handNumber, long previousRevision, boolean ready) {
+        JsonNode updated = Awaitility.await().atMost(DEFAULT_TIMEOUT).until(
+                () -> readGameState(roomId, token),
+                state -> state.path("stateRevision").asLong() > previousRevision
+                        && state.path("handNumber").asLong() == handNumber
+                        && "COUNTING_DOWN".equals(state.path("readyGateState").asText())
+                        && Boolean.toString(ready).equals(playerState(state, "Player1").path("isReadyForNextHand").asText()));
+        assertThat(playerState(updated, "Player2").path("isReadyForNextHand").asText()).isEqualTo("false");
+        return updated.path("stateRevision").asLong();
+    }
+
+    /** Finds a required player in the public projection. */
+    private JsonNode playerState(JsonNode state, String playerName) {
+        for (JsonNode player : state.path("players")) {
+            if (playerName.equals(player.path("name").asText())) {
+                return player;
+            }
+        }
+        throw new AssertionError("Missing player in public projection: " + playerName);
     }
 
     /**

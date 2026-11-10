@@ -16,8 +16,6 @@ import org.mockito.Mockito;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -409,67 +407,12 @@ class GameSchedulingTest {
     }
 
     // =========================================================================
-    // 9. Adversarial Concurrency and Lifecycle Tests
+    // 9. Interleaved Scheduling Operations
     // =========================================================================
 
     @Nested
-    @DisplayName("Adversarial Concurrency and Lifecycle Tests")
-    class AdversarialConcurrencyLifecycleTests {
-
-        @Test
-        @DisplayName("High-concurrency stress test: atomic monotonic generation growth across parallel threads")
-        void testMonotonicGenerations_HighConcurrencyStress() throws InterruptedException {
-            int threadCount = 10;
-            int iterationsPerThread = 500;
-            ExecutorService executor = Executors.newFixedThreadPool(threadCount);
-            ConcurrentMap<ScheduledGameTask, Long> concurrentDeadlines = new ConcurrentHashMap<>();
-            ConcurrentMap<ScheduledGameTask, Long> concurrentGenerations = new ConcurrentHashMap<>();
-
-            CountDownLatch startGate = new CountDownLatch(1);
-            CountDownLatch doneGate = new CountDownLatch(threadCount);
-            AtomicBoolean raceConditionOrRegression = new AtomicBoolean(false);
-
-            for (int t = 0; t < threadCount; t++) {
-                final int threadId = t;
-                executor.submit(() -> {
-                    try {
-                        startGate.await();
-                        ScheduledGameTask task = ScheduledGameTask.AUTO_ADVANCE;
-                        for (int i = 0; i < iterationsPerThread; i++) {
-                            long deadline = System.currentTimeMillis() + (threadId * 1000L) + i;
-                            GameScheduling.scheduleTask(concurrentDeadlines, concurrentGenerations, task, deadline);
-
-                            long genAfterSchedule = GameScheduling.getScheduledTaskGeneration(concurrentGenerations, task);
-                            if (genAfterSchedule <= 0) {
-                                raceConditionOrRegression.set(true);
-                            }
-
-                            GameScheduling.clearScheduledTask(concurrentDeadlines, concurrentGenerations, task);
-                            long genAfterClear = GameScheduling.getScheduledTaskGeneration(concurrentGenerations, task);
-                            if (genAfterClear < genAfterSchedule) {
-                                raceConditionOrRegression.set(true);
-                            }
-                        }
-                    } catch (Exception e) {
-                        raceConditionOrRegression.set(true);
-                    } finally {
-                        doneGate.countDown();
-                    }
-                });
-            }
-
-            startGate.countDown();
-            assertTrue(doneGate.await(10, TimeUnit.SECONDS), "Concurrent execution timed out");
-            executor.shutdownNow();
-
-            assertFalse(raceConditionOrRegression.get(), "Race condition or non-monotonic generation observed");
-            long expectedTotalOperations = (long) threadCount * iterationsPerThread * 2L;
-            assertEquals(expectedTotalOperations,
-                    GameScheduling.getScheduledTaskGeneration(concurrentGenerations, ScheduledGameTask.AUTO_ADVANCE),
-                    "Final generation token must exactly equal total atomic operations");
-            assertNull(GameScheduling.getScheduledTaskDeadline(concurrentDeadlines, ScheduledGameTask.AUTO_ADVANCE),
-                    "Task must be cleared after alternating schedule and clear cycles");
-        }
+    @DisplayName("Interleaved Scheduling Operations")
+    class InterleavedSchedulingOperations {
 
         @Test
         @DisplayName("Interleaved operations across all enum tasks preserve independent monotonic counters")

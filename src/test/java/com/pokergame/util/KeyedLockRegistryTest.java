@@ -4,14 +4,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static com.pokergame.util.ConcurrentTestSupport.stopExecutor;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
@@ -42,7 +44,7 @@ class KeyedLockRegistryTest {
                 Future<LockLease> concurrent = pool.submit(() -> lockRegistry.tryAcquire(key));
                 assertThat(concurrent.get(2, TimeUnit.SECONDS)).isNull();
             } finally {
-                pool.shutdown();
+                stopExecutor(pool);
             }
             // Failed tryAcquire should not leave an orphaned reservation
             assertThat(lockRegistry.reservationCount(key)).isEqualTo(1);
@@ -142,46 +144,44 @@ class KeyedLockRegistryTest {
     }
 
     @Test
-    @DisplayName("deterministically queue a waiter during final release: at most one operation executes at once")
     void concurrentWaitersAndReleasesMaintainMutualExclusion() throws Exception {
         String key = "concurrent-key";
         int threads = 10;
         int iterations = 100;
         ExecutorService executor = Executors.newFixedThreadPool(threads);
-        AtomicInteger activeExecutions = new AtomicInteger(0);
-        AtomicBoolean overlapDetected = new AtomicBoolean(false);
-        CountDownLatch startLatch = new CountDownLatch(1);
-        CountDownLatch doneLatch = new CountDownLatch(threads);
+        AtomicInteger activeExecutions = new AtomicInteger();
+        CountDownLatch ready = new CountDownLatch(threads);
+        CountDownLatch start = new CountDownLatch(1);
 
-        for (int t = 0; t < threads; t++) {
-            executor.submit(() -> {
-                try {
-                    startLatch.await();
-                    for (int i = 0; i < iterations; i++) {
+        try {
+            List<Future<?>> workers = new ArrayList<>();
+            for (int index = 0; index < threads; index++) {
+                workers.add(executor.submit(() -> {
+                    ready.countDown();
+                    assertThat(start.await(5, TimeUnit.SECONDS)).isTrue();
+                    for (int iteration = 0; iteration < iterations; iteration++) {
                         try (LockLease _ = lockRegistry.acquire(key)) {
-                            int current = activeExecutions.incrementAndGet();
-                            if (current > 1) {
-                                overlapDetected.set(true);
+                            try {
+                                assertThat(activeExecutions.incrementAndGet()).isEqualTo(1);
+                                Thread.yield();
+                            } finally {
+                                activeExecutions.decrementAndGet();
                             }
-                            Thread.yield();
-                            activeExecutions.decrementAndGet();
                         }
                     }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } finally {
-                    doneLatch.countDown();
-                }
-            });
+                    return null;
+                }));
+            }
+
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            for (Future<?> worker : workers) {
+                worker.get(10, TimeUnit.SECONDS);
+            }
+            assertThat(lockRegistry.reservationCount(key)).isEqualTo(0);
+            assertThat(lockRegistry.activeKeyCount()).isEqualTo(0);
+        } finally {
+            stopExecutor(executor);
         }
-
-        startLatch.countDown();
-        assertThat(doneLatch.await(10, TimeUnit.SECONDS)).isTrue();
-        executor.shutdown();
-        executor.awaitTermination(2, TimeUnit.SECONDS);
-
-        assertThat(overlapDetected.get()).as("No concurrent executions should overlap").isFalse();
-        assertThat(lockRegistry.reservationCount(key)).isEqualTo(0);
-        assertThat(lockRegistry.activeKeyCount()).isEqualTo(0);
     }
 }

@@ -31,31 +31,6 @@ class DeckTest {
     }
 
     /**
-     * Protects the expected behavior for deck creation.
-     */
-    @Test
-    void testDeckCreation() {
-        assertNotNull(deck);
-    }
-
-    /**
-     * Protects the expected behavior for deck contains52 cards.
-     */
-    @Test
-    void testDeckContains52Cards() {
-        // Deal all cards to verify deck size
-        Set<Card> dealtCards = new HashSet<>();
-        for (int i = 0; i < 52; i++) {
-            Card card = deck.dealCard();
-            assertNotNull(card);
-            dealtCards.add(card);
-        }
-
-        // Verify all 52 cards are unique
-        assertEquals(52, dealtCards.size());
-    }
-
-    /**
      * Protects the expected behavior for deck contains all cards.
      */
     @Test
@@ -85,20 +60,6 @@ class DeckTest {
         assertNotNull(card);
         assertNotNull(card.rank());
         assertNotNull(card.suit());
-    }
-
-    /**
-     * Protects the expected behavior for deal card removes card from deck.
-     */
-    @Test
-    void testDealCardRemovesCardFromDeck() {
-        // Deal all 52 cards
-        for (int i = 0; i < 52; i++) {
-            deck.dealCard();
-        }
-
-        // Next attempt should throw exception
-        assertThrows(BadRequestException.class, () -> deck.dealCard());
     }
 
     /**

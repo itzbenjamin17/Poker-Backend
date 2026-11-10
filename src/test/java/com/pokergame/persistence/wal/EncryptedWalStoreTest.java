@@ -5,11 +5,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
@@ -84,51 +86,10 @@ class EncryptedWalStoreTest {
         assertFalse(recovering.isHealthy());
     }
 
-    /**
-     * Protects the contract that when a WAL file ends with 1 to 7 bytes of a partial header,
-     * readWal / recoverLatest truncates the partial header to the valid offset and recovers the last committed state,
-     * subsequent prepare() and commit() writes succeed, and a fresh store recovers the new commit.
-     */
+    /** Exercises every incomplete header length, including a missing record length after the magic. */
     @Test
     void partialFrameHeaderIsTruncatedSoSubsequentWritesDoNotCorruptWal() throws Exception {
-        for (int headerBytes = 1; headerBytes < 8; headerBytes++) {
-            String roomId = "room-partial-hdr-" + headerBytes;
-            EncryptionKeyring keys = keyring("current", (byte) (10 + headerBytes));
-            EncryptedWalStore store = new EncryptedWalStore(directory, keys);
-            WalTransaction tx1 = store.prepare(roomId);
-            byte[] payload1 = ("payload-init-" + headerBytes).getBytes(StandardCharsets.UTF_8);
-            store.commit(tx1, payload1);
-
-            Path walPath = directory.resolve(roomId + ".wal");
-            long validLength = Files.size(walPath);
-
-            // Append headerBytes (1 to 7 bytes) simulating crash during header write
-            byte[] partialHeader = new byte[headerBytes];
-            for (int i = 0; i < headerBytes; i++) {
-                partialHeader[i] = (byte) (0x50 + i);
-            }
-            Files.write(walPath, partialHeader, StandardOpenOption.APPEND);
-            assertEquals(validLength + headerBytes, Files.size(walPath));
-
-            // recoverLatest discovers partial header and truncates file back to validLength
-            EncryptedWalStore recoveringStore = new EncryptedWalStore(directory, keys);
-            Optional<byte[]> recovered = recoveringStore.recoverLatest(roomId);
-            assertTrue(recovered.isPresent());
-            assertArrayEquals(payload1, recovered.get());
-            assertEquals(validLength, Files.size(walPath), "Partial header must be truncated on disk to validLength");
-
-            // Subsequent prepare() and commit() writes succeed
-            EncryptedWalStore writerStore = new EncryptedWalStore(directory, keys);
-            WalTransaction tx2 = writerStore.prepare(roomId);
-            byte[] payload2 = ("payload-subsequent-" + headerBytes).getBytes(StandardCharsets.UTF_8);
-            writerStore.commit(tx2, payload2);
-
-            // Fresh store recovers new commit with zero corruption or exceptions
-            EncryptedWalStore freshStore = new EncryptedWalStore(directory, keys);
-            Optional<byte[]> latest = freshStore.recoverLatest(roomId);
-            assertTrue(latest.isPresent());
-            assertArrayEquals(payload2, latest.get());
-        }
+        assertTornCommitsRecoverAndAllowLaterAppends("partial-header", List.of(1, 2, 3, 4, 5, 6, 7));
     }
 
     /**
@@ -287,47 +248,43 @@ class EncryptedWalStoreTest {
         assertNull(store.lastError());
     }
 
-    /**
-     * Protects the contract that crash recovery truncates torn trailing frames to valid offset,
-     * preventing subsequent appends from splicing onto corrupt bytes.
-     */
+    /** Exercises interrupted bodies after a complete header, through metadata and ciphertext. */
     @Test
     void tornTrailingFrameIsTruncatedSoSubsequentWritesDoNotCorruptWal() throws Exception {
+        assertTornCommitsRecoverAndAllowLaterAppends("partial-body", List.of(8, 18, 24, 43, 88));
+    }
+
+    /** Repeatedly interrupts a real commit frame after its complete prepare, then reopens the repaired file. */
+    private void assertTornCommitsRecoverAndAllowLaterAppends(String roomId, List<Integer> framePrefixes)
+            throws Exception {
         EncryptionKeyring keys = keyring("current", (byte) 13);
-        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
-        WalTransaction tx1 = store.prepare("room-b10-2");
-        byte[] payload1 = "initial-payload".getBytes(StandardCharsets.UTF_8);
-        store.commit(tx1, payload1);
+        Path wal = directory.resolve(roomId + ".wal");
+        EncryptedWalStore writer = new EncryptedWalStore(directory, keys);
+        byte[] accepted = {0};
+        writer.commit(writer.prepare(roomId), accepted);
 
-        Path walPath = directory.resolve("room-b10-2.wal");
-        long validLength = Files.size(walPath);
+        for (int framePrefix : framePrefixes) {
+            WalTransaction interrupted = writer.prepare(roomId);
+            long prepareEnd = Files.size(wal);
+            writer.commit(interrupted, new byte[128]);
+            assertTrue(Files.size(wal) > prepareEnd + framePrefix);
+            try (FileChannel channel = FileChannel.open(wal, StandardOpenOption.WRITE)) {
+                channel.truncate(prepareEnd + framePrefix);
+            }
 
-        // Append torn trailing frame: valid header (MAGIC + frameLength) followed by partial body bytes
-        ByteBuffer tornFrame = ByteBuffer.allocate(24);
-        tornFrame.putInt(0x504B574C); // MAGIC
-        tornFrame.putInt(64);         // frameLength (64 bytes expected)
-        tornFrame.put(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}); // only 16 body bytes
-        Files.write(walPath, tornFrame.array(), StandardOpenOption.APPEND);
-        assertEquals(validLength + 24, Files.size(walPath));
+            EncryptedWalStore recovery = new EncryptedWalStore(directory, keys);
+            assertArrayEquals(accepted, recovery.recoverLatest(roomId).orElseThrow());
+            assertEquals(prepareEnd, Files.size(wal), "Torn commit prefix: " + framePrefix);
 
-        // Call recoverLatest() which discovers the torn trailing frame and truncates the file on disk
-        EncryptedWalStore recoveringStore = new EncryptedWalStore(directory, keys);
-        Optional<byte[]> recovered = recoveringStore.recoverLatest("room-b10-2");
-        assertTrue(recovered.isPresent());
-        assertArrayEquals(payload1, recovered.get());
-        assertEquals(validLength, Files.size(walPath), "Torn trailing frame must be truncated on disk to validLength");
+            writer = new EncryptedWalStore(directory, keys);
+            accepted = new byte[]{(byte) framePrefix};
+            writer.commit(writer.prepare(roomId), accepted);
+        }
 
-        // Perform a subsequent prepare() and commit() on a writer store
-        EncryptedWalStore writerStore = new EncryptedWalStore(directory, keys);
-        WalTransaction tx2 = writerStore.prepare("room-b10-2");
-        byte[] payload2 = "subsequent-payload".getBytes(StandardCharsets.UTF_8);
-        writerStore.commit(tx2, payload2);
-
-        // In a fresh EncryptedWalStore instance, call recoverLatest() and assert it cleanly decodes the new payload
-        EncryptedWalStore freshStore = new EncryptedWalStore(directory, keys);
-        Optional<byte[]> latest = freshStore.recoverLatest("room-b10-2");
-        assertTrue(latest.isPresent());
-        assertArrayEquals(payload2, latest.get());
+        EncryptedWalStore fresh = new EncryptedWalStore(directory, keys);
+        assertArrayEquals(accepted, fresh.recoverLatest(roomId).orElseThrow());
+        assertTrue(fresh.isHealthy());
+        assertNull(fresh.lastError());
     }
 
     /**
@@ -498,10 +455,7 @@ class EncryptedWalStoreTest {
         assertFalse(all.containsKey("room-to-quarantine"));
     }
 
-    /**
-     * Protects the contract that recoverAll() quarantines corrupted WAL files on disk
-     * and returns valid rooms without throwing.
-     */
+    /** Keeps frame-header corruption and authenticated-body corruption in the same recovery scan. */
     @Test
     void recoverAllQuarantinesCorruptedWalFilesAndRecoversRemainingValidRooms() throws Exception {
         EncryptionKeyring keys = keyring("current", (byte) 46);
@@ -522,7 +476,9 @@ class EncryptedWalStoreTest {
         walBytes[walBytes.length / 2] ^= 0x5A; // tamper ciphertext
         Files.write(corruptWalPath, walBytes);
 
-        // 3. recoverAll() should not throw, should quarantine room-corrupt, and should recover room-valid
+        Path badHeader = directory.resolve("room-bad-header.wal");
+        Files.write(badHeader, ByteBuffer.allocate(32).putInt(0xDEADBEEF).putInt(24).array());
+
         Map<String, byte[]> recovered = assertDoesNotThrow(store::recoverAll);
 
         assertEquals(1, recovered.size());
@@ -534,6 +490,9 @@ class EncryptedWalStoreTest {
         Path expectedQuarantinePath = directory.resolve("room-corrupt.wal.corrupted");
         assertTrue(Files.exists(expectedQuarantinePath), "Corrupted WAL must be moved to .wal.corrupted");
         assertFalse(Files.exists(corruptWalPath), "Original corrupted .wal must no longer exist");
+        assertTrue(Files.exists(directory.resolve("room-bad-header.wal.corrupted")));
+        assertFalse(Files.exists(badHeader));
+        assertTrue(store.recoverLatest("room-bad-header").isEmpty());
 
         // Verify store remains healthy
         assertTrue(store.isHealthy(), "Store should be healthy after recoverAll isolates corrupted WAL");

@@ -5,23 +5,33 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.HandEvaluatorService;
+import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.service.RoomService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.context.support.GenericApplicationContext;
 
+import tools.jackson.databind.json.JsonMapper;
+
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 import com.pokergame.persistence.wal.EncryptedWalStore;
@@ -234,6 +244,64 @@ class PersistenceRecoveryTest {
         assertTrue(charlieDeadlineCaptor.getValue() <= afterRun + DISCONNECT_GRACE_PERIOD_MS);
 
         assertTrue(recovery.isComplete());
+    }
+
+    /** Runs recovery with real encrypted state images and isolates faults in decoding and registration. */
+    @Test
+    void startupQuarantinesUnreadableAndUnrestorableRoomsWhileKeepingValidRooms(@TempDir Path directory) {
+        EncryptionKeyring keys = new EncryptionKeyring("current",
+                Map.of("current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore realStore = new EncryptedWalStore(directory, keys);
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+
+        Room active = roomForRecovery("valid-game", "Alice");
+        active.addPlayer("Bob");
+        active.setGameStarted(true);
+        Game game = new Game(active.getRoomId(),
+                List.of(new Player("Alice", "p1", 950), new Player("Bob", "p2", 950)), 10, 20, evaluator);
+        Room waiting = roomForRecovery("valid-room", "Eve");
+        Room unrestorable = roomForRecovery("unrestorable", "Dave");
+        for (Room room : List.of(active, waiting, unrestorable)) {
+            Game activeGame = room == active ? game : null;
+            realStore.commit(realStore.prepare(room.getRoomId()),
+                    realMapper.serialize(realMapper.captureStateImage(room, room.getHostName(), activeGame)));
+        }
+        realStore.commit(realStore.prepare("malformed-json"), "{".getBytes(StandardCharsets.UTF_8));
+        doAnswer(invocation -> {
+            Room restored = invocation.getArgument(0);
+            if (unrestorable.getRoomId().equals(restored.getRoomId())) {
+                throw new IllegalStateException("Injected room registration failure");
+            }
+            return null;
+        }).when(roomService).restoreRoom(any(Room.class), anyString());
+
+        PersistenceRecovery recovery = new PersistenceRecovery(realStore, realMapper, roomService,
+                gameLifecycleService, webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+        recovery.run(new DefaultApplicationArguments());
+
+        assertTrue(recovery.isComplete());
+        assertTrue(realStore.isHealthy());
+        assertNull(realStore.lastError());
+        assertEquals(2, realStore.walCount());
+        for (String roomId : List.of("unrestorable", "malformed-json")) {
+            assertFalse(Files.exists(directory.resolve(roomId + ".wal")));
+            assertTrue(Files.exists(directory.resolve(roomId + ".wal.corrupted")));
+        }
+        for (Room room : List.of(active, waiting)) {
+            assertTrue(Files.exists(directory.resolve(room.getRoomId() + ".wal")));
+            verify(roomService).restoreRoom(argThat(restored -> room.getRoomId().equals(restored.getRoomId())),
+                    eq(room.getHostName()));
+        }
+        verify(gameLifecycleService).restoreGame(argThat(restored -> active.getRoomId().equals(restored.getGameId())));
+    }
+
+    /** Registers a host so the captured room has a valid membership and roster. */
+    private Room roomForRecovery(String roomId, String host) {
+        Room room = new Room(roomId, roomId, host, 6, 10, 20, 1000, null);
+        room.addPlayer(host);
+        return room;
     }
 
     /**

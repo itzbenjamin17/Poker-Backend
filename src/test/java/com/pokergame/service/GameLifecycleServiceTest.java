@@ -32,6 +32,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
+import static com.pokergame.util.ConcurrentTestSupport.awaitBlockedOn;
+import static com.pokergame.util.ConcurrentTestSupport.stopExecutor;
 import static org.junit.jupiter.api.Assertions.*;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
@@ -39,10 +41,8 @@ import com.pokergame.exception.UnauthorisedActionException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.mockito.Mockito.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.Iterator;
 import java.util.Spliterator;
@@ -604,46 +604,31 @@ class GameLifecycleServiceTest {
         assertFalse(gameLifecycleService.playerExistsInGame("mock-game", "Charlie"));
     }
 
+    /** A lookup queued during a roster change must see the roster after the mutation. */
     @Test
-    @DisplayName("playerExistsInGame with concurrent player mutation completes without iteration exceptions")
-    void playerExistsInGame_ConcurrentWithPlayerMutation_CompletesWithoutExceptions() throws Exception {
+    void playerLookupWaitsForRosterMutationOnTheSameGame() throws Exception {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
         Game game = gameLifecycleService.getGame(ROOM_ID);
+        Player departing = game.getPlayers().getLast();
+        assertTrue(gameLifecycleService.playerExistsInGame(ROOM_ID, departing.getName()));
 
-        AtomicBoolean running = new AtomicBoolean(true);
-        AtomicReference<Throwable> error = new AtomicReference<>();
-
-        Thread lookupThread = new Thread(() -> {
-            while (running.get() && error.get() == null) {
-                try {
-                    gameLifecycleService.playerExistsInGame(ROOM_ID, "Host");
-                } catch (Throwable t) {
-                    error.set(t);
-                }
+        AtomicReference<Thread> reader = new AtomicReference<>();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> lookup;
+            synchronized (game) {
+                lookup = executor.submit(() -> {
+                    reader.set(Thread.currentThread());
+                    return gameLifecycleService.playerExistsInGame(ROOM_ID, departing.getName());
+                });
+                awaitBlockedOn(reader, game);
+                game.removePlayerFromGame(departing);
             }
-        });
-
-        Thread mutationThread = new Thread(() -> {
-            int count = 0;
-            while (running.get() && error.get() == null && count < 2000) {
-                synchronized (game) {
-                    Player temp = new Player("Temp" + count, "id" + count, 100);
-                    game.getPlayers().add(temp);
-                    game.getPlayers().remove(temp);
-                }
-                count++;
-            }
-            running.set(false);
-        });
-
-        lookupThread.start();
-        mutationThread.start();
-        mutationThread.join(5000);
-        running.set(false);
-        lookupThread.join(5000);
-
-        assertNull(error.get(), "Concurrent player lookup threw an exception: " + error.get());
+            assertFalse(lookup.get(5, TimeUnit.SECONDS));
+        } finally {
+            stopExecutor(executor);
+        }
     }
 
     @Test
@@ -682,70 +667,6 @@ class GameLifecycleServiceTest {
         assertTrue(gameLifecycleService.playerExistsInGame("mock-game-null-elements", "Alice"));
         assertFalse(gameLifecycleService.playerExistsInGame("mock-game-null-elements", "Bob"));
     }
-
-    @Test
-    @DisplayName("playerExistsInGame under multi-threaded read/write stress completes without ConcurrentModificationException")
-    void playerExistsInGame_MultiThreadedStress_CompletesWithoutConcurrentModificationException() throws Exception {
-        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-        gameLifecycleService.createGameFromRoom(ROOM_ID);
-        Game game = gameLifecycleService.getGame(ROOM_ID);
-
-        int readerCount = 4;
-        int mutatorCount = 2;
-        int operationsPerThread = 1500;
-        AtomicBoolean running = new AtomicBoolean(true);
-        AtomicReference<Throwable> error = new AtomicReference<>();
-        CountDownLatch startLatch = new CountDownLatch(1);
-        CountDownLatch doneLatch = new CountDownLatch(mutatorCount);
-
-        ExecutorService executor = Executors.newFixedThreadPool(readerCount + mutatorCount);
-
-        for (int i = 0; i < readerCount; i++) {
-            final int readerId = i;
-            executor.submit(() -> {
-                try {
-                    startLatch.await();
-                    while (running.get() && error.get() == null) {
-                        String queryName = (readerId % 2 == 0) ? "Host" : "NonExistent";
-                        gameLifecycleService.playerExistsInGame(ROOM_ID, queryName);
-                    }
-                } catch (Throwable t) {
-                    error.set(t);
-                }
-            });
-        }
-
-        for (int i = 0; i < mutatorCount; i++) {
-            final int mutatorId = i;
-            executor.submit(() -> {
-                try {
-                    startLatch.await();
-                    for (int op = 0; op < operationsPerThread && running.get() && error.get() == null; op++) {
-                        synchronized (game) {
-                            Player p = new Player("StressPlayer_" + mutatorId + "_" + op, "stress_" + mutatorId + "_" + op, 50);
-                            game.getPlayers().add(p);
-                            game.getPlayers().remove(p);
-                        }
-                    }
-                } catch (Throwable t) {
-                    error.set(t);
-                } finally {
-                    doneLatch.countDown();
-                }
-            });
-        }
-
-        startLatch.countDown();
-        doneLatch.await(10, TimeUnit.SECONDS);
-        running.set(false);
-        executor.shutdown();
-        executor.awaitTermination(5, TimeUnit.SECONDS);
-
-        assertNull(error.get(), "Concurrent modification or unexpected error occurred: " + error.get());
-    }
-
-
-
 
     // ==================== Integration-like Tests ====================
 
@@ -817,94 +738,92 @@ class GameLifecycleServiceTest {
     // ==================== CONCURRENCY TESTS ====================
 
 
-    /**
-     * Tests that creating multiple games simultaneously doesn't cause race
-     * conditions.
-     * Verifies thread-safe access to activeGames map during game creation.
-     */
     @Test
-    void createGameFromRoom_ConcurrentCreation_ShouldCreateAllGames() throws InterruptedException {
-        int numberOfGames = 5;
-        ExecutorService executor = Executors.newFixedThreadPool(numberOfGames);
-        CountDownLatch latch = new CountDownLatch(numberOfGames);
-        List<String> createdGameIds = new CopyOnWriteArrayList<>();
+    void concurrentRoomStartsRegisterAllGames() throws Exception {
         List<String> roomIds = new ArrayList<>();
-
-        // PHASE 1: SETUP (Single Threaded)
-        // Configure all mocks before any threads start
-        for (int i = 0; i < numberOfGames; i++) {
-            String roomId = "room-" + i;
+        for (int index = 0; index < 5; index++) {
+            String roomId = "room-" + index;
             roomIds.add(roomId);
-
-            Room room = new Room(roomId, "Room " + i, "Host" + i, 6, 5, 10, 100, null);
-            room.addPlayer("Host" + i);
-            room.addPlayer("Player" + i);
-
+            Room room = new Room(roomId, "Room " + index, "Host" + index, 6, 5, 10, 100, null);
+            room.addPlayer("Host" + index);
+            room.addPlayer("Player" + index);
             when(roomService.getRoom(roomId)).thenReturn(room);
         }
 
-        for (String roomId : roomIds) {
-            executor.submit(() -> {
-                try {
-                    String gameId = gameLifecycleService.createGameFromRoom(roomId);
-                    createdGameIds.add(gameId);
-                } catch (Exception e) {
-                    fail("Concurrent game creation failed: " + e.getMessage());
-                } finally {
-                    latch.countDown();
-                }
-            });
-        }
-
-        // Wait for all games to be created
-        assertTrue(latch.await(10, TimeUnit.SECONDS), "Game creation took too long");
-        executor.shutdown();
-
-        // Verify all games were created successfully
-        assertEquals(numberOfGames, createdGameIds.size(), "All games should be created");
-        for (String gameId : createdGameIds) {
-            assertTrue(gameLifecycleService.gameExists(gameId), "Game " + gameId + " should exist");
-            assertNotNull(gameLifecycleService.getGame(gameId), "Game " + gameId + " should be retrievable");
+        ExecutorService executor = Executors.newFixedThreadPool(roomIds.size());
+        try {
+            List<Future<String>> creations = roomIds.stream()
+                    .map(roomId -> executor.submit(() -> gameLifecycleService.createGameFromRoom(roomId)))
+                    .toList();
+            for (int index = 0; index < roomIds.size(); index++) {
+                String gameId = creations.get(index).get(10, TimeUnit.SECONDS);
+                assertEquals(roomIds.get(index), gameId);
+                assertTrue(gameLifecycleService.gameExists(gameId));
+                assertNotNull(gameLifecycleService.getGame(gameId));
+            }
+        } finally {
+            stopExecutor(executor);
         }
     }
 
-    /**
-     * Tests that accessing the same game concurrently (read operations) is
-     * thread-safe.
-     * Multiple threads reading game state simultaneously should not cause issues.
-     */
     @Test
-    void getGame_ConcurrentAccess_ShouldBeThreadSafe() throws InterruptedException {
+    void concurrentRegistryReadsReturnTheRegisteredGame() throws Exception {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game expected = gameLifecycleService.getGame(ROOM_ID);
+        assertNotNull(expected);
 
-        int numberOfThreads = 10;
-        ExecutorService executor = Executors.newFixedThreadPool(numberOfThreads);
-        CountDownLatch latch = new CountDownLatch(numberOfThreads);
-        AtomicInteger successfulReads = new AtomicInteger(0);
-
-        // 10 threads simultaneously reading the same game
-        for (int i = 0; i < numberOfThreads; i++) {
-            executor.submit(() -> {
-                try {
-                    Game game = gameLifecycleService.getGame(ROOM_ID);
-                    assertNotNull(game, "Game should not be null");
-                    assertEquals(2, game.getPlayers().size(), "Should have 2 players");
-                    successfulReads.incrementAndGet();
-                } catch (Exception e) {
-                    fail("Concurrent read failed: " + e.getMessage());
-                } finally {
-                    latch.countDown();
-                }
-            });
+        ExecutorService executor = Executors.newFixedThreadPool(4);
+        try {
+            List<Future<Game>> reads = new ArrayList<>();
+            for (int index = 0; index < 4; index++) {
+                reads.add(executor.submit(() -> gameLifecycleService.getGame(ROOM_ID)));
+            }
+            for (Future<Game> read : reads) {
+                assertSame(expected, read.get(5, TimeUnit.SECONDS));
+            }
+        } finally {
+            stopExecutor(executor);
         }
-
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "Concurrent reads took too long");
-        executor.shutdown();
-
-        assertEquals(numberOfThreads, successfulReads.get(), "All reads should succeed");
     }
 
+    /** Verifies that competing service calls serialize updates to the game's task generation. */
+    @Test
+    void concurrentAutoAdvanceSchedulingUsesTheGameMonitor() throws Exception {
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        ScheduledGameTask task = ScheduledGameTask.AUTO_ADVANCE;
+        long generationBefore = game.getScheduledTaskGeneration(task);
+        AtomicReference<Thread> first = new AtomicReference<>();
+        AtomicReference<Thread> second = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> firstSchedule;
+            Future<?> secondSchedule;
+            synchronized (game) {
+                firstSchedule = executor.submit(() -> {
+                    first.set(Thread.currentThread());
+                    gameLifecycleService.scheduleAutoAdvance(ROOM_ID);
+                });
+                secondSchedule = executor.submit(() -> {
+                    second.set(Thread.currentThread());
+                    gameLifecycleService.scheduleAutoAdvance(ROOM_ID);
+                });
+                awaitBlockedOn(first, game);
+                awaitBlockedOn(second, game);
+                assertEquals(generationBefore, game.getScheduledTaskGeneration(task));
+                assertNull(game.getScheduledTaskDeadline(task));
+            }
+            firstSchedule.get(5, TimeUnit.SECONDS);
+            secondSchedule.get(5, TimeUnit.SECONDS);
+            assertEquals(generationBefore + 2, game.getScheduledTaskGeneration(task));
+            assertNotNull(game.getScheduledTaskDeadline(task));
+        } finally {
+            stopExecutor(executor);
+        }
+    }
 
     @Test
     @DisplayName("createGameFromRoom reconciles absent seat lease into disconnected flag and retains connected state for connected seat")

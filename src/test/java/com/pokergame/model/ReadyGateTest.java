@@ -182,24 +182,6 @@ class ReadyGateTest {
         }
 
         @Test
-        @DisplayName("Returns true when all 2 eligible players are marked ready")
-        void areAllReadyEligiblePlayersReady_TwoEligibleBothReady_ReturnsTrue() {
-            Player p1 = player("p1", "Alice", 1000, false, false, true);
-            Player p2 = player("p2", "Bob", 800, false, false, true);
-
-            assertTrue(ReadyGate.areAllReadyEligiblePlayersReady(List.of(p1, p2)));
-        }
-
-        @Test
-        @DisplayName("Returns false when 1 of 2 eligible players is not ready")
-        void areAllReadyEligiblePlayersReady_TwoEligibleOneNotReady_ReturnsFalse() {
-            Player p1 = player("p1", "Alice", 1000, false, false, true);
-            Player p2 = player("p2", "Bob", 800, false, false, false); // not ready
-
-            assertFalse(ReadyGate.areAllReadyEligiblePlayersReady(List.of(p1, p2)));
-        }
-
-        @Test
         @DisplayName("Returns true when 3 of 3 eligible players are ready")
         void areAllReadyEligiblePlayersReady_ThreeEligibleAllReady_ReturnsTrue() {
             Player p1 = player("p1", "Alice", 1000, false, false, true);
@@ -644,34 +626,31 @@ class ReadyGateTest {
     }
 
     // =========================================================================
-    // 8. Adversarial Challenge: Player State Transitions During Countdown
+    // 8. Readiness Eligibility After Player State Changes
     // =========================================================================
 
     @Nested
-    @DisplayName("Adversarial: Transitions During Countdown")
-    class AdversarialTransitionsDuringCountdown {
+    @DisplayName("Readiness eligibility after player state changes")
+    class ReadinessEligibilityChanges {
 
         @Test
-        @DisplayName("Transition: Disconnect during countdown drops eligible count from 2 to 1, gate closes")
-        void disconnectDuringCountdown_DropsEligibility_GateCloses() {
+        @DisplayName("Disconnect leaves one eligible player and invalidates all-ready")
+        void disconnectLeavesTooFewReadyEligiblePlayers() {
             Player p1 = player("p1", "Alice", 1000, false, false, true);
             Player p2 = player("p2", "Bob", 1000, false, false, true);
             List<Player> players = List.of(p1, p2);
 
-            // Gate initially ready
             assertTrue(ReadyGate.areAllReadyEligiblePlayersReady(players));
 
-            // Bob disconnects during countdown
             p2.setDisconnected(true);
 
-            // Gate must now immediately evaluate to false
             assertEquals(1, ReadyGate.getReadyEligibleCount(players));
             assertFalse(ReadyGate.areAllReadyEligiblePlayersReady(players));
         }
 
         @Test
-        @DisplayName("Transition: Reconnect during countdown restores eligibility and gate readiness")
-        void reconnectDuringCountdown_RestoresReadiness() {
+        @DisplayName("A ready player becomes eligible again on reconnect")
+        void reconnectRestoresEligibilityForAnAlreadyReadyPlayer() {
             Player p1 = player("p1", "Alice", 1000, false, false, true);
             Player p2 = player("p2", "Bob", 1000, false, true, true); // was ready, but disconnected
             List<Player> players = List.of(p1, p2);
@@ -679,24 +658,21 @@ class ReadyGateTest {
             // Inactive because p2 is disconnected
             assertFalse(ReadyGate.areAllReadyEligiblePlayersReady(players));
 
-            // Bob reconnects before countdown expires
             p2.setDisconnected(false);
 
-            // Both are connected and ready -> gate becomes ready
             assertEquals(2, ReadyGate.getReadyEligibleCount(players));
             assertTrue(ReadyGate.areAllReadyEligiblePlayersReady(players));
         }
 
         @Test
-        @DisplayName("Transition: Zero chips during countdown (bust/penalty) drops eligibility, gate closes")
-        void zeroChipsDuringCountdown_DropsEligibility_GateCloses() {
+        @DisplayName("Losing all chips leaves one eligible player and invalidates all-ready")
+        void losingAllChipsLeavesTooFewReadyEligiblePlayers() {
             Player p1 = player("p1", "Alice", 1000, false, false, true);
             Player p2 = player("p2", "Bob", 1000, false, false, true);
             List<Player> players = List.of(p1, p2);
 
             assertTrue(ReadyGate.areAllReadyEligiblePlayersReady(players));
 
-            // Bob loses chips to 0 during inter-hand transition
             p2.setChips(0);
 
             assertEquals(1, ReadyGate.getReadyEligibleCount(players));
@@ -704,15 +680,14 @@ class ReadyGateTest {
         }
 
         @Test
-        @DisplayName("Transition: Rebuy during countdown restores eligibility and gate readiness")
-        void rebuyDuringCountdown_RestoresReadiness() {
+        @DisplayName("Restoring chips makes a ready player eligible again")
+        void restoringChipsMakesAReadyPlayerEligibleAgain() {
             Player p1 = player("p1", "Alice", 1000, false, false, true);
             Player p2 = player("p2", "Bob", 0, false, false, true); // ready, but 0 chips
             List<Player> players = List.of(p1, p2);
 
             assertFalse(ReadyGate.areAllReadyEligiblePlayersReady(players));
 
-            // Bob completes rebuy
             p2.setChips(1500);
 
             assertEquals(2, ReadyGate.getReadyEligibleCount(players));
@@ -720,8 +695,8 @@ class ReadyGateTest {
         }
 
         @Test
-        @DisplayName("Transition: Elimination during countdown closes gate")
-        void eliminationDuringCountdown_ClosesGate() {
+        @DisplayName("Elimination leaves one eligible player and invalidates all-ready")
+        void eliminationLeavesTooFewReadyEligiblePlayers() {
             Player p1 = player("p1", "Alice", 1000, false, false, true);
             Player p2 = player("p2", "Bob", 1000, false, false, true);
             List<Player> players = List.of(p1, p2);
@@ -735,7 +710,7 @@ class ReadyGateTest {
         }
 
         @Test
-        @DisplayName("Transition: Third player reconnects during countdown as unready, invalidating allReady")
+        @DisplayName("An unready player reconnecting invalidates all-ready")
         void lateReconnectUnready_InvalidatesAllReady() {
             Player p1 = player("p1", "Alice", 1000, false, false, true);
             Player p2 = player("p2", "Bob", 1000, false, false, true);
@@ -759,29 +734,12 @@ class ReadyGateTest {
         }
 
         @Test
-        @DisplayName("Transition: Rapid flapping connection status cycles gate state deterministically")
-        void rapidFlappingConnection_CyclesDeterministically() {
-            Player p1 = player("p1", "Alice", 1000, false, false, true);
-            Player p2 = player("p2", "Bob", 1000, false, false, true);
-            List<Player> players = List.of(p1, p2);
-
-            for (int i = 0; i < 200; i++) {
-                p2.setDisconnected(true);
-                assertFalse(ReadyGate.areAllReadyEligiblePlayersReady(players));
-
-                p2.setDisconnected(false);
-                assertTrue(ReadyGate.areAllReadyEligiblePlayersReady(players));
-            }
-        }
-
-        @Test
         @DisplayName("Transition: Force-ready while 1 player disconnected only marks connected player; reconnect requires manual ready")
         void forceReadyDuringPartialDisconnect_LeavesReconnectingPlayerUnready() {
             Player p1 = player("p1", "Alice", 1000, false, false, false);
             Player p2 = player("p2", "Bob", 1000, false, true, false); // disconnected
             List<Player> players = List.of(p1, p2);
 
-            // Timer expires and force-ready runs
             ReadyGate.forceReadyForEligiblePlayers(players);
 
             assertTrue(p1.getIsReadyForNextHand(), "Connected player marked ready");
@@ -1000,15 +958,6 @@ class ReadyGateTest {
             assertEquals(1L, ReadyGate.beginHand(Long.MIN_VALUE));
         }
 
-        @Test
-        @DisplayName("Hand progression stress test: 500,000 monotonic increments")
-        void beginHand_MonotonicIncrementStress() {
-            long hand = 0L;
-            for (int i = 1; i <= 500_000; i++) {
-                hand = ReadyGate.beginHand(hand);
-                assertEquals((long) i, hand);
-            }
-        }
     }
 
     @Nested

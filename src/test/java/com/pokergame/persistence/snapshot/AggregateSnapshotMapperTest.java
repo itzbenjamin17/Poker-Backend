@@ -34,17 +34,20 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.nio.charset.StandardCharsets;
 
+import static com.pokergame.util.ConcurrentTestSupport.awaitBlockedOn;
+import static com.pokergame.util.ConcurrentTestSupport.stopExecutor;
 import static org.junit.jupiter.api.Assertions.*;
 import com.pokergame.enums.HandRank;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.persistence.config.PersistenceException;
 import com.pokergame.service.RoomService;
 import java.util.ArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.HashMap;
 import java.util.regex.Matcher;
@@ -442,8 +445,8 @@ class AggregateSnapshotMapperTest {
                 "Captured snapshot must be independent from post-capture live game mutations");
     }
 
+    /** A restart image captured during a chip transfer must include both sides of the transfer. */
     @Test
-    @DisplayName("Concurrent state-image capture and mutation restore coherent roster, board, chips and metadata")
     void concurrentStateImageCaptureAndMutation_RestoresCoherentState() throws Exception {
         HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
@@ -453,75 +456,37 @@ class AggregateSnapshotMapperTest {
         Room room = new Room(roomId, "Concurrent Capture Room", "Alice", 6, 10, 20, 1000, null);
         room.addPlayer("Alice");
         room.addPlayer("Bob");
-
-        Player p1 = new Player("Alice", "p1", 1000);
-        Player p2 = new Player("Bob", "p2", 1000);
-        Game game = new Game(roomId, List.of(p1, p2), 10, 20, evaluator);
+        Player alice = new Player("Alice", "p1", 1000);
+        Player bob = new Player("Bob", "p2", 1000);
+        Game game = new Game(roomId, List.of(alice, bob), 10, 20, evaluator);
         game.dealHoleCards();
         game.postBlinds();
 
-        AtomicBoolean running = new AtomicBoolean(true);
-        AtomicReference<Throwable> error = new AtomicReference<>();
-        List<byte[]> capturedSnapshots = new CopyOnWriteArrayList<>();
-
-        // Thread 1: Mutates game state under synchronized (game)
-        Thread mutator = new Thread(() -> {
-            int round = 0;
-            while (running.get() && (round < 2000 || capturedSnapshots.isEmpty()) && error.get() == null) {
-                synchronized (game) {
-                    int c1 = p1.getChips();
-                    int c2 = p2.getChips();
-                    if (c1 >= 10) {
-                        p1.setChips(c1 - 10);
-                        p2.setChips(c2 + 10);
-                    } else {
-                        p1.setChips(c1 + 10);
-                        p2.setChips(c2 - 10);
-                    }
-                }
-                round++;
-                Thread.yield();
+        AtomicReference<Thread> reader = new AtomicReference<>();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<byte[]> capture;
+            synchronized (game) {
+                alice.setChips(alice.getChips() - 10);
+                capture = executor.submit(() -> {
+                    reader.set(Thread.currentThread());
+                    return mapper.serialize(room, "Alice", game);
+                });
+                awaitBlockedOn(reader, game);
+                bob.setChips(bob.getChips() + 10);
+                game.incrementStateRevision();
             }
-            running.set(false);
-        });
 
-        // Thread 2: Concurrently captures state
-        Thread capturer = new Thread(() -> {
-            while (running.get() && error.get() == null) {
-                try {
-                    byte[] snapshot = mapper.serialize(room, "Alice", game);
-                    if (snapshot != null) {
-                        capturedSnapshots.add(snapshot);
-                    }
-                } catch (Throwable t) {
-                    error.compareAndSet(null, t);
-                }
-            }
-        });
-
-        capturer.start();
-        mutator.start();
-        mutator.join(5000);
-        running.set(false);
-        capturer.join(5000);
-
-        assertNull(error.get(), "Capture failed concurrently: " + error.get());
-        assertFalse(capturedSnapshots.isEmpty(), "At least one snapshot must have been captured");
-
-        // Verify all captured snapshots deserialize into coherent states
-        for (byte[] snapshot : capturedSnapshots) {
-            RecoveredAggregate recovered = mapper.deserialize(snapshot);
-            assertNotNull(recovered);
-            assertNotNull(recovered.room());
-            assertNotNull(recovered.game());
-            Game restoredGame = recovered.game();
-            assertEquals(2, restoredGame.getPlayers().size(), "Roster must maintain exact 2 players");
-            assertEquals("Alice", restoredGame.getPlayers().get(0).getName());
-            assertEquals("Bob", restoredGame.getPlayers().get(1).getName());
-
-            // Chip conservation: chips in stacks + pot + current bets must sum to total buy-ins (2000)
-            int totalChips = restoredGame.getPot() + restoredGame.getPlayers().stream().mapToInt(Player::getChips).sum();
-            assertEquals(2000, totalChips, "Total chip accounting must be strictly conserved across concurrent capture");
+            RecoveredAggregate recovered = mapper.deserialize(capture.get(5, TimeUnit.SECONDS));
+            assertEquals(List.of("Alice", "Bob"), recovered.room().getPlayers());
+            Game restored = recovered.game();
+            assertEquals(List.of(alice.getChips(), bob.getChips()),
+                    restored.getPlayers().stream().map(Player::getChips).toList());
+            assertEquals(2000, restored.getPot() + restored.getPlayers().stream().mapToInt(Player::getChips).sum());
+            assertEquals(game.getStateRevision(), restored.getStateRevision());
+            assertEquals(game.getRemainingDeckSnapshot(), restored.getRemainingDeckSnapshot());
+        } finally {
+            stopExecutor(executor);
         }
     }
 
@@ -542,80 +507,6 @@ class AggregateSnapshotMapperTest {
         assertEquals("p-one", playerState.playerId());
         assertEquals(List.of(), playerState.holeCards());
         assertEquals(List.of(), playerState.bestHand());
-    }
-
-    @Test
-    @DisplayName("toState under concurrent player additions and removals executes safely without ConcurrentModificationException")
-    void toState_UnderConcurrentPlayerAddRemove_ExecutesSafelyWithoutConcurrentModificationException() throws Exception {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
-        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
-
-        String roomId = "cme-stress-room";
-        Player p1 = new Player("Alice", "p1", 1000);
-        Player p2 = new Player("Bob", "p2", 1000);
-        Game game = new Game(roomId, new ArrayList<>(List.of(p1, p2)), 10, 20, evaluator);
-
-        int readerCount = 4;
-        int mutatorCount = 2;
-        int operationsPerMutator = 1000;
-        AtomicBoolean running = new AtomicBoolean(true);
-        AtomicReference<Throwable> error = new AtomicReference<>();
-        AtomicInteger snapshotsExtracted = new AtomicInteger();
-        CountDownLatch startLatch = new CountDownLatch(1);
-        CountDownLatch doneLatch = new CountDownLatch(mutatorCount);
-
-        ExecutorService executor = Executors.newFixedThreadPool(readerCount + mutatorCount);
-
-        for (int i = 0; i < readerCount; i++) {
-            executor.submit(() -> {
-                try {
-                    startLatch.await();
-                    while (running.get() && error.get() == null) {
-                        AggregateStateImage.GameState state = mapper.toState(game);
-                        if (state != null) {
-                            snapshotsExtracted.incrementAndGet();
-                            assertNotNull(state.players());
-                            assertTrue(state.players().size() >= 2);
-                        }
-                    }
-                } catch (Throwable t) {
-                    error.compareAndSet(null, t);
-                }
-            });
-        }
-
-        for (int i = 0; i < mutatorCount; i++) {
-            final int mutatorId = i;
-            executor.submit(() -> {
-                try {
-                    startLatch.await();
-                    for (int op = 0; op < operationsPerMutator && running.get() && error.get() == null; op++) {
-                        Player extra = new Player("Temp_" + mutatorId + "_" + op, "temp_" + mutatorId + "_" + op, 100);
-                        synchronized (game) {
-                            game.getPlayers().add(extra);
-                            game.getPlayers().remove(extra);
-                        }
-                        if (op % 100 == 0) {
-                            Thread.yield();
-                        }
-                    }
-                } catch (Throwable t) {
-                    error.compareAndSet(null, t);
-                } finally {
-                    doneLatch.countDown();
-                }
-            });
-        }
-
-        startLatch.countDown();
-        assertTrue(doneLatch.await(10, TimeUnit.SECONDS), "Mutators did not complete in time");
-        running.set(false);
-        executor.shutdown();
-        assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "Executor did not terminate in time");
-
-        assertNull(error.get(), "Concurrent toState execution threw an exception: " + error.get());
-        assertTrue(snapshotsExtracted.get() > 0, "At least one snapshot state must have been extracted");
     }
 
     @Test

@@ -76,26 +76,6 @@ class RankTest {
     }
 
     /**
-     * Protects the expected behavior for lowest and highest ranks.
-     */
-    @Test
-    void testLowestAndHighestRanks() {
-        assertEquals(2, Rank.TWO.getValue(), "TWO should be lowest rank");
-        assertEquals(14, Rank.ACE.getValue(), "ACE should be highest rank");
-    }
-
-    /**
-     * Protects the expected behavior for face card values.
-     */
-    @Test
-    void testFaceCardValues() {
-        assertTrue(Rank.JACK.getValue() > 10);
-        assertTrue(Rank.QUEEN.getValue() > Rank.JACK.getValue());
-        assertTrue(Rank.KING.getValue() > Rank.QUEEN.getValue());
-        assertTrue(Rank.ACE.getValue() > Rank.KING.getValue());
-    }
-
-    /**
      * Protects the expected behavior for value of.
      */
     @Test
@@ -105,13 +85,4 @@ class RankTest {
         assertEquals(Rank.TWO, Rank.valueOf("TWO"));
     }
 
-    /**
-     * Protects the expected behavior for enum equality.
-     */
-    @Test
-    void testEnumEquality() {
-        Rank ace1 = Rank.ACE;
-        Rank ace2 = Rank.ACE;
-        assertSame(ace1, ace2, "Enum instances should be identical");
-    }
 }

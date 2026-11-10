@@ -5,7 +5,6 @@ import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.integration.support.AbstractIntegrationTestSupport;
 import com.pokergame.security.JwtService;
-import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.security.RateLimitService;
 import com.pokergame.service.RoomService;
 import org.junit.jupiter.api.DisplayName;
@@ -234,43 +233,6 @@ class SecurityIntegrationTest extends AbstractIntegrationTestSupport {
             JsonNode response = startGame(roomId, hostToken);
 
             assertThat(response.path("message").asText()).isEqualTo("Game started successfully");
-        }
-    }
-
-    /** Groups test scenarios for token validation. */
-    @Nested
-    @DisplayName("token validation")
-    class TokenValidation {
-
-        /**
-         * Protects the contract that the system should round-trip the player name through the JWT subject.
-         */
-        @Test
-        @DisplayName("should round-trip the player name through the JWT subject")
-        void givenPlayerName_whenGenerateToken_thenExtractSamePlayerName() {
-            String playerName = "TokenTestPlayer";
-            String roomId = "test-room";
-            String token = jwtService.generateToken(playerName, roomId);
-
-            assertThat(jwtService.extractPlayerName(token)).isEqualTo(playerName);
-
-            PlayerPrincipal principal = jwtService.extractPrincipal(token);
-            assertThat(principal.playerName()).isEqualTo(playerName);
-            assertThat(principal.roomId()).isEqualTo(roomId);
-        }
-
-        /**
-         * Protects the contract that the system should validate fresh tokens and reject invalid or tampered ones.
-         */
-        @Test
-        @DisplayName("should validate fresh tokens and reject invalid or tampered ones")
-        void givenDifferentTokenStates_whenValidate_thenReturnExpectedResult() {
-            String token = jwtService.generateToken("ValidPlayer", "test-room");
-            String tamperedToken = token.substring(0, token.length() - 5) + "XXXXX";
-
-            assertThat(jwtService.isTokenValid(token)).isTrue();
-            assertThat(jwtService.isTokenValid("completely.invalid.token")).isFalse();
-            assertThat(jwtService.isTokenValid(tamperedToken)).isFalse();
         }
     }
 

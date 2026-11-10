@@ -14,6 +14,7 @@ import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
+import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
@@ -32,6 +33,7 @@ import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.web.socket.messaging.SessionConnectEvent;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -381,8 +383,11 @@ class PersistenceRestartIntegrationTest {
             TestMutationHelper helper = first.getBean(TestMutationHelper.class);
             assertThrows(IllegalStateException.class, () ->
                     helper.mutateRoomAndThrow(roomId, "DirtyCharlie"));
+            assertEquals(List.of("Alice", "Bob"), rooms.getRoom(roomId).getPlayers());
 
-            // Read operation returns uncorrupted pre-failure state
+            assertThrows(IOException.class, () -> helper.mutateRoomAndThrowChecked(roomId, "DirtyEve"));
+
+            // Both failure types leave the accepted roster intact.
             Room room = rooms.getRoom(roomId);
             assertNotNull(room);
             assertEquals(List.of("Alice", "Bob"), room.getPlayers());
@@ -403,17 +408,13 @@ class PersistenceRestartIntegrationTest {
         }
     }
 
-    /**
-     * When a mutation in GameLifecycleService fails midway,
-     * the aggregate is restored to its pre-failure snapshot and subsequent valid mutations succeed.
-     */
+    /** Alternates failed mutations and legal actions, then verifies the last accepted chip state on restart. */
     @Test
-    void midwayMutationFailureInGameLifecycleServiceRollsBackToSnapshotAndSubsequentMutationSucceeds() throws Exception {
+    void repeatedGameRollbacksPreserveChipsAndRecoverTheLatestAcceptedAction() {
         String roomId;
-        String currentPlayerName;
-        PlayerAction nextAction;
-        int aliceInitialChips;
-
+        List<Integer> acceptedChips;
+        int acceptedPot;
+        String acceptedActor;
         try (ConfigurableApplicationContext first = startApplication()) {
             RoomService rooms = first.getBean(RoomService.class);
             roomId = rooms.createRoom(new CreateRoomRequest("Game Rollback Room", "Alice", 6, 5, 10, 1000, null));
@@ -421,35 +422,43 @@ class PersistenceRestartIntegrationTest {
 
             GameLifecycleService games = first.getBean(GameLifecycleService.class);
             games.createGameFromRoom(roomId);
-            Game game = games.getGame(roomId);
-            aliceInitialChips = game.getPlayers().getFirst().getChips();
-            currentPlayerName = game.getCurrentPlayer().getName();
-            nextAction = game.getCurrentPlayer().getCurrentBet() < game.getCurrentHighestBet()
-                    ? PlayerAction.CALL : PlayerAction.CHECK;
-
             games.markPlayerReconnected(roomId, "Alice");
             games.markPlayerReconnected(roomId, "Bob");
-
             TestMutationHelper helper = first.getBean(TestMutationHelper.class);
-            assertThrows(IllegalStateException.class, () ->
-                    helper.mutateGameAndThrow(roomId));
+            PlayerActionService actions = first.getBean(PlayerActionService.class);
 
-            // Verify chips rolled back to pre-mutation snapshot
-            Game rolledBackGame = games.getGame(roomId);
-            assertNotNull(rolledBackGame);
-            assertEquals(aliceInitialChips, rolledBackGame.getPlayers().getFirst().getChips());
+            for (int cycle = 0; cycle < 3; cycle++) {
+                Game before = games.getGame(roomId);
+                List<Integer> chipsBefore = before.getPlayers().stream().map(Player::getChips).toList();
+                int potBefore = before.getPot();
+                String actorBefore = before.getCurrentPlayer().getName();
+                assertThrows(IllegalStateException.class, () -> helper.mutateGameAndThrow(roomId));
 
-            // Subsequent valid mutation succeeds
-            first.getBean(PlayerActionService.class).processPlayerAction(
-                    roomId, new PlayerActionRequest(nextAction, null), currentPlayerName);
+                Game rolledBack = games.getGame(roomId);
+                assertEquals(chipsBefore, rolledBack.getPlayers().stream().map(Player::getChips).toList());
+                assertEquals(potBefore, rolledBack.getPot());
+                assertEquals(actorBefore, rolledBack.getCurrentPlayer().getName());
+
+                int amountToCall = rolledBack.getCurrentHighestBet() - rolledBack.getCurrentPlayer().getCurrentBet();
+                PlayerAction action = amountToCall > 0 ? PlayerAction.CALL : PlayerAction.CHECK;
+                actions.processPlayerAction(roomId, new PlayerActionRequest(action, null), actorBefore);
+                Game advanced = games.getGame(roomId);
+                assertEquals(potBefore + amountToCall, advanced.getPot());
+                assertEquals(2000, advanced.getPot() + advanced.getPlayers().stream().mapToInt(Player::getChips).sum());
+            }
+
+            Game saved = games.getGame(roomId);
+            acceptedChips = saved.getPlayers().stream().map(Player::getChips).toList();
+            acceptedPot = saved.getPot();
+            acceptedActor = saved.getCurrentPlayer().getName();
         }
 
-        // Restart application and verify uncorrupted game persisted
         try (ConfigurableApplicationContext second = startApplication()) {
-            GameLifecycleService games = second.getBean(GameLifecycleService.class);
-            Game restored = games.getGame(roomId);
+            Game restored = second.getBean(GameLifecycleService.class).getGame(roomId);
             assertNotNull(restored);
-            assertNotEquals(888888, restored.getPlayers().getFirst().getChips());
+            assertEquals(acceptedChips, restored.getPlayers().stream().map(Player::getChips).toList());
+            assertEquals(acceptedPot, restored.getPot());
+            assertEquals(acceptedActor, restored.getCurrentPlayer().getName());
         }
     }
 
@@ -545,6 +554,13 @@ class PersistenceRestartIntegrationTest {
             Room room = roomService.getRoom(roomId);
             room.addPlayer(dirtyPlayer);
             throw new IllegalStateException("Simulated midway mutation failure in room");
+        }
+
+        /** Injects a checked failure after changing the roster under the durable advice. */
+        @DurableMutation(roomId = "#roomId")
+        public void mutateRoomAndThrowChecked(String roomId, String dirtyPlayer) throws IOException {
+            roomService.getRoom(roomId).addPlayer(dirtyPlayer);
+            throw new IOException("Simulated checked failure during room mutation");
         }
 
         @DurableMutation(roomId = "#roomId")

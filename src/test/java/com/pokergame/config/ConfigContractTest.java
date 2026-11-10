@@ -10,9 +10,12 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.StandardEnvironment;
+import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.core.io.ClassPathResource;
 
 import java.io.InputStream;
+import java.util.Map;
 import java.util.Properties;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -26,26 +29,15 @@ class ConfigContractTest {
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withUserConfiguration(JwtService.class);
 
-    /**
-     * Protects the contract that the system should ensure application.properties has no default JWT secret.
-     */
     @Test
-    @DisplayName("should ensure application.properties has no default JWT secret")
-    void givenProductionProperties_whenChecked_thenNoSecretExists() throws Exception {
+    @DisplayName("should obtain the JWT signing secret exclusively from JWT_SECRET")
+    void productionSigningSecretRequiresEnvironmentVariable() throws Exception {
         Properties props = new Properties();
         try (InputStream is = new ClassPathResource("application.properties").getInputStream()) {
             props.load(is);
         }
 
-        String secret = props.getProperty("app.jwt.base64-secret");
-        // Allowing the environment variable placeholder but rejecting any hardcoded literal
-        if (secret != null && secret.contains("${")) {
-            secret = null;
-        }
-        
-        assertThat(secret)
-                .withFailMessage("Production application.properties must NOT contain a default JWT secret fallback.")
-                .isNullOrEmpty();
+        assertThat(props.getProperty("app.jwt.base64-secret")).isEqualTo("${JWT_SECRET}");
     }
 
     /**
@@ -179,31 +171,24 @@ class ConfigContractTest {
                 });
     }
 
-    /**
-     * Protects the contract that when the e2e profile is active, poker.persistence.enabled evaluates to false.
-     */
+    /** Covers the profile's config and CLI precedence over an environment requesting persistence. */
     @Test
-    @DisplayName("should evaluate poker.persistence.enabled to false when e2e profile is active")
-    void givenE2eProfile_whenActive_thenPersistenceIsEnabledFalse() {
+    void persistenceIsDisabledByE2eProfileAndExplicitOverride() {
         try (ConfigurableApplicationContext context = new SpringApplicationBuilder(E2eTestConfig.class)
                 .web(WebApplicationType.NONE)
                 .profiles("e2e")
                 .run("--springdotenv.enabled=false")) {
             assertThat(context.getEnvironment().getProperty("poker.persistence.enabled", Boolean.class)).isFalse();
         }
-    }
 
-    /**
-     * Protects the contract that even if an environment/dotenv source defines POKER_PERSISTENCE_ENABLED=true,
-     * the e2e command line override (--poker.persistence.enabled=false) ensures persistence remains disabled.
-     */
-    @Test
-    @DisplayName("should evaluate poker.persistence.enabled to false when e2e command line argument is provided")
-    void givenE2eProfileWithCliOverride_whenActive_thenPersistenceIsEnabledFalse() {
         try (ConfigurableApplicationContext context = new SpringApplicationBuilder(E2eTestConfig.class)
                 .web(WebApplicationType.NONE)
-                .profiles("e2e")
-                .run("--poker.persistence.enabled=false", "--poker.rate-limiting.enabled=false")) {
+                .initializers(ctx -> ctx.getEnvironment().getPropertySources().addAfter(
+                        StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME,
+                        new SystemEnvironmentPropertySource("persistence-test-environment",
+                                Map.of("POKER_PERSISTENCE_ENABLED", "true"))))
+                .run("--springdotenv.enabled=false", "--poker.persistence.enabled=false")) {
+            assertThat(context.getEnvironment().getProperty("POKER_PERSISTENCE_ENABLED")).isEqualTo("true");
             assertThat(context.getEnvironment().getProperty("poker.persistence.enabled", Boolean.class)).isFalse();
         }
     }

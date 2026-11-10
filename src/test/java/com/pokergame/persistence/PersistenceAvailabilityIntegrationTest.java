@@ -117,7 +117,7 @@ class PersistenceAvailabilityIntegrationTest {
                 broker.unsubscribe(recorder);
             }
         }
-        // After restart with healthy storage, state before failed mutation is recovered
+        // The successful retry saves the latest accepted state for recovery.
         try (ConfigurableApplicationContext recovered = startApplication()) {
             Game game = recovered.getBean(GameLifecycleService.class).getGame(roomId);
             assertNotNull(game);

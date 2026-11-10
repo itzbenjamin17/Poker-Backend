@@ -26,9 +26,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import tools.jackson.databind.json.JsonMapper;
+import static com.pokergame.util.ConcurrentTestSupport.stopExecutor;
 import static org.junit.jupiter.api.Assertions.*;
 import com.pokergame.exception.UnauthorisedActionException;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -695,12 +697,10 @@ class GameParticipantDepartureHandlerTest {
     }
 
 
-    /**
-     * Protects the contract that leave game concurrent with player action non current disconnect should not throw or corrupt turn index.
-     */
+    /** The leaving player is not the actor, so both the departure and the fold can succeed. */
     @Test
     void leaveGame_ConcurrentWithPlayerAction_NonCurrentDisconnect_ShouldNotThrowOrCorruptTurnIndex()
-            throws InterruptedException {
+            throws Exception {
         final int iterations = 20;
         PlayerActionService playerActionService = new PlayerActionService(
                 gameLifecycleService,
@@ -732,43 +732,28 @@ class GameParticipantDepartureHandlerTest {
 
             CountDownLatch ready = new CountDownLatch(2);
             CountDownLatch start = new CountDownLatch(1);
-            CountDownLatch done = new CountDownLatch(2);
-            ConcurrentLinkedQueue<Throwable> failures = new ConcurrentLinkedQueue<>();
             ExecutorService executor = Executors.newFixedThreadPool(2);
-
-            executor.submit(() -> {
-                ready.countDown();
-                try {
-                    start.await(2, TimeUnit.SECONDS);
+            try {
+                Future<?> fold = executor.submit(() -> {
+                    ready.countDown();
+                    assertTrue(start.await(5, TimeUnit.SECONDS));
                     playerActionService.processPlayerAction(
-                            roomId,
-                            new PlayerActionRequest(PlayerAction.FOLD, null),
-                            currentPlayer.getName());
-                } catch (Throwable t) {
-                    failures.add(t);
-                } finally {
-                    done.countDown();
-                }
-            });
-
-            executor.submit(() -> {
-                ready.countDown();
-                try {
-                    start.await(2, TimeUnit.SECONDS);
+                            roomId, new PlayerActionRequest(PlayerAction.FOLD, null), currentPlayer.getName());
+                    return null;
+                });
+                Future<?> leave = executor.submit(() -> {
+                    ready.countDown();
+                    assertTrue(start.await(5, TimeUnit.SECONDS));
                     gameLifecycleService.departParticipants(roomId, List.of(leavingPlayer.getName()));
-                } catch (Throwable t) {
-                    failures.add(t);
-                } finally {
-                    done.countDown();
-                }
-            });
-
-            assertTrue(ready.await(2, TimeUnit.SECONDS), "Workers did not become ready in time");
-            start.countDown();
-            assertTrue(done.await(5, TimeUnit.SECONDS), "Concurrent operations took too long");
-            executor.shutdownNow();
-
-            assertTrue(failures.isEmpty(), "Concurrent leave/action produced failures: " + failures);
+                    return null;
+                });
+                assertTrue(ready.await(5, TimeUnit.SECONDS), "Workers did not become ready in time");
+                start.countDown();
+                fold.get(5, TimeUnit.SECONDS);
+                leave.get(5, TimeUnit.SECONDS);
+            } finally {
+                stopExecutor(executor);
+            }
 
             Game finalGame = gameLifecycleService.getGame(roomId);
             assertNotNull(finalGame, "Game should still exist after non-current leave");
@@ -777,12 +762,8 @@ class GameParticipantDepartureHandlerTest {
         }
     }
 
-    /**
-     * Protects the contract that leave game multiple players concurrently should not corrupt game state.
-     */
     @Test
-    void leaveGame_MultiplePlayersConcurrently_ShouldNotCorruptGameState() throws InterruptedException {
-        // Setup game with 4 players
+    void concurrentDeparturesRemoveBothNonActingPlayers() throws Exception {
         testRoom.addPlayer("Player3");
         testRoom.addPlayer("Player4");
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -790,43 +771,35 @@ class GameParticipantDepartureHandlerTest {
 
         Game game = gameLifecycleService.getGame(ROOM_ID);
         assertEquals(4, game.getPlayers().size());
-
-        // Get two players who are NOT the current player
-        Player currentPlayer = game.getCurrentPlayer();
-        List<Player> nonCurrentPlayers = game.getPlayers().stream()
-                .filter(p -> !p.equals(currentPlayer))
+        List<Player> departing = game.getPlayers().stream()
+                .filter(player -> player != game.getCurrentPlayer())
                 .limit(2)
                 .toList();
+        List<Player> survivors = game.getPlayers().stream().filter(player -> !departing.contains(player)).toList();
+        CountDownLatch ready = new CountDownLatch(departing.size());
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(departing.size());
 
-        // Simulate 2 players leaving at the exact same time
-        ExecutorService executor = Executors.newFixedThreadPool(2);
-        CountDownLatch latch = new CountDownLatch(2);
-        AtomicInteger successfulLeaves = new AtomicInteger(0);
-
-        for (Player player : nonCurrentPlayers) {
-            executor.submit(() -> {
-                try {
+        try {
+            List<Future<?>> departures = new ArrayList<>();
+            for (Player player : departing) {
+                departures.add(executor.submit(() -> {
+                    ready.countDown();
+                    assertTrue(start.await(5, TimeUnit.SECONDS));
                     gameLifecycleService.departParticipants(ROOM_ID, List.of(player.getName()));
-                    successfulLeaves.incrementAndGet();
-                } catch (Exception e) {
-                    // May fail if player already removed by concurrent thread
-                } finally {
-                    latch.countDown();
-                }
-            });
+                    return null;
+                }));
+            }
+            assertTrue(ready.await(5, TimeUnit.SECONDS));
+            start.countDown();
+            for (Future<?> departure : departures) {
+                departure.get(5, TimeUnit.SECONDS);
+            }
+            assertEquals(survivors, gameLifecycleService.getGame(ROOM_ID).getPlayers());
+        } finally {
+            stopExecutor(executor);
         }
-
-        // Wait for both threads to complete
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "Concurrent operations took too long");
-        executor.shutdown();
-
-        // Verify game state is still valid (not corrupted)
-        Game finalGame = gameLifecycleService.getGame(ROOM_ID);
-        assertNotNull(finalGame, "Game should still exist");
-        assertTrue(finalGame.getPlayers().size() >= 2, "At least 2 players should remain");
-        assertFalse(finalGame.getPlayers().isEmpty(), "Game should have players");
     }
-
 
     /**
      * Tests the edge case where game cleanup happens while players are leaving.

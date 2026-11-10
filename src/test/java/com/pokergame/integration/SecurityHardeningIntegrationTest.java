@@ -26,12 +26,13 @@ import org.springframework.web.client.HttpClientErrorException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import static com.pokergame.util.ConcurrentTestSupport.stopExecutor;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -214,48 +215,51 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         assertThat(exception.getStatusCode().value()).isEqualTo(413);
     }
 
-    /**
-     * Protects the contract that the system should prevent oversubscribing room during concurrent joins.
-     */
     @Test
     @DisplayName("should prevent oversubscribing room during concurrent joins")
     void givenMaxPlayers2_whenMultipleJoinConcurrently_thenOnlyLimitSucceeds() throws Exception {
         String roomName = uniqueName("ConcurrentRoom");
-        int maxPlayers = 2;
-        createRoom(roomName, "Host", maxPlayers);
-        
-        ExecutorService executor = Executors.newFixedThreadPool(10);
-        List<CompletableFuture<HttpStatus>> futures = new ArrayList<>();
-        
-        for (int i = 0; i < 8; i++) {
-            final int id = i;
-            futures.add(CompletableFuture.supplyAsync(() -> {
-                try {
-                    restClient.post()
-                            .uri("/api/room/join")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .body(new JoinRoomRequest(roomName, "Player" + id, null))
-                            .retrieve()
-                            .toBodilessEntity();
-                    return HttpStatus.OK;
-                } catch (HttpClientErrorException e) {
-                    return (HttpStatus) (HttpStatus) e.getStatusCode();
-                } catch (Exception e) {
-                    return HttpStatus.INTERNAL_SERVER_ERROR;
+        JsonNode host = createRoom(roomName, "Host", 2);
+        int attempts = 8;
+        CountDownLatch ready = new CountDownLatch(attempts);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(attempts);
+        List<Future<String>> outcomes = new ArrayList<>();
+
+        try {
+            for (int index = 0; index < attempts; index++) {
+                String player = "Player" + index;
+                outcomes.add(executor.submit(() -> {
+                    ready.countDown();
+                    assertThat(start.await(5, TimeUnit.SECONDS)).isTrue();
+                    try {
+                        joinRoom(roomName, player);
+                        return player;
+                    } catch (HttpClientErrorException rejection) {
+                        assertThat(rejection.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                        assertThat(rejection.getResponseBodyAsString()).contains("Room is full");
+                        return null;
+                    }
+                }));
+            }
+
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            List<String> admitted = new ArrayList<>();
+            for (Future<String> outcome : outcomes) {
+                String player = outcome.get(10, TimeUnit.SECONDS);
+                if (player != null) {
+                    admitted.add(player);
                 }
-            }, executor));
+            }
+            assertThat(admitted).hasSize(1);
+            JsonNode room = getRoomData(host.path("roomId").asText(), host.path("token").asText());
+            assertThat(room.path("currentPlayers").asInt()).isEqualTo(2);
+            assertThat(room.path("players")).extracting(player -> player.path("name").asText())
+                    .containsExactlyInAnyOrder("Host", admitted.getFirst());
+        } finally {
+            stopExecutor(executor);
         }
-
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(10, TimeUnit.SECONDS);
-        
-        long successCount = futures.stream()
-                .map(CompletableFuture::join)
-                .filter(s -> s == HttpStatus.OK)
-                .count();
-
-        // 1 host already in. Max 2. So exactly 1 more join should succeed.
-        assertThat(successCount).isEqualTo(1);
-        executor.shutdown();
     }
 
     /**
@@ -305,7 +309,7 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
             assertThat(gamePlayerNames(game)).containsExactlyInAnyOrder("Host", "Player2");
             assertThat(room.hasPlayer("Racer")).isFalse();
         } finally {
-            executor.shutdownNow();
+            stopExecutor(executor);
         }
     }
 
@@ -364,7 +368,7 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
             assertThat(readGameState(roomId, racerToken).path("players"))
                     .anyMatch(player -> "Racer".equals(player.path("name").asText()));
         } finally {
-            executor.shutdownNow();
+            stopExecutor(executor);
         }
     }
 

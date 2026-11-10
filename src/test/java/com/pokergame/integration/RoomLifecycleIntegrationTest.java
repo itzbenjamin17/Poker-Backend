@@ -14,15 +14,15 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.client.HttpClientErrorException;
 
-import java.time.Duration;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
+import static com.pokergame.util.ConcurrentTestSupport.stopExecutor;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -137,53 +137,45 @@ class RoomLifecycleIntegrationTest extends AbstractIntegrationTestSupport {
         }
     }
 
-    /**
-     * Protects the contract that the system should allow only one successful create when the same room name is submitted concurrently.
-     */
     @Test
     @Tag("slow")
     @DisplayName("should allow only one successful create when the same room name is submitted concurrently")
-    void givenConcurrentDuplicateCreates_whenCreateRoom_thenOnlyOneRequestSucceeds() throws InterruptedException {
+    void givenConcurrentDuplicateCreates_whenCreateRoom_thenOnlyOneRequestSucceeds() throws Exception {
         int attempts = 8;
         String roomName = uniqueName("ConcurrentCreate");
         ExecutorService executor = Executors.newFixedThreadPool(attempts);
         CountDownLatch ready = new CountDownLatch(attempts);
         CountDownLatch start = new CountDownLatch(1);
-        CountDownLatch done = new CountDownLatch(attempts);
-        AtomicInteger successCount = new AtomicInteger();
-        Queue<Throwable> unexpectedFailures = new ConcurrentLinkedQueue<>();
+        List<Future<Boolean>> outcomes = new ArrayList<>();
 
-        for (int index = 0; index < attempts; index++) {
-            int currentIndex = index;
-            executor.submit(() -> {
-                try {
+        try {
+            for (int index = 0; index < attempts; index++) {
+                String host = "Host" + index;
+                outcomes.add(executor.submit(() -> {
                     ready.countDown();
-                    assertThat(start.await(3, TimeUnit.SECONDS)).isTrue();
+                    assertThat(start.await(5, TimeUnit.SECONDS)).isTrue();
+                    try {
+                        createRoom(roomName, host, 6);
+                        return true;
+                    } catch (HttpClientErrorException rejection) {
+                        assertThat(rejection.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                        assertThat(rejection.getResponseBodyAsString()).contains("already taken");
+                        return false;
+                    }
+                }));
+            }
 
-                    restClient.post()
-                            .uri("/api/room/create")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .body(new CreateRoomRequest(roomName, "Host" + currentIndex, 6, 10, 20, 1000, null))
-                            .retrieve()
-                            .body(String.class);
-                    successCount.incrementAndGet();
-                } catch (HttpClientErrorException exception) {
-                    assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(exception.getResponseBodyAsString()).contains("already taken");
-                } catch (Throwable throwable) {
-                    unexpectedFailures.add(throwable);
-                } finally {
-                    done.countDown();
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            int successes = 0;
+            for (Future<Boolean> outcome : outcomes) {
+                if (outcome.get(10, TimeUnit.SECONDS)) {
+                    successes++;
                 }
-            });
+            }
+            assertThat(successes).isEqualTo(1);
+        } finally {
+            stopExecutor(executor);
         }
-
-        assertThat(ready.await(3, TimeUnit.SECONDS)).isTrue();
-        start.countDown();
-        assertThat(done.await(Duration.ofSeconds(10).toMillis(), TimeUnit.MILLISECONDS)).isTrue();
-        executor.shutdownNow();
-
-        assertThat(unexpectedFailures).isEmpty();
-        assertThat(successCount).hasValue(1);
     }
 }

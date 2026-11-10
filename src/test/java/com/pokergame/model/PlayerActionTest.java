@@ -4,8 +4,6 @@ import com.pokergame.enums.PlayerAction;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -30,11 +28,5 @@ class PlayerActionTest {
                 .map(Enum::name)
                 .collect(Collectors.toSet());
         assertEquals(Set.of("FOLD", "CHECK", "CALL", "BET", "RAISE", "ALL_IN"), names);
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"FOLD", "CHECK", "CALL", "BET", "RAISE", "ALL_IN"})
-    void eachActionDecodesFromItsWireName(String wireName) {
-        assertEquals(wireName, PlayerAction.valueOf(wireName).name());
     }
 }

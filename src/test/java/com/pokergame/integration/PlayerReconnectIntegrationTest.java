@@ -22,7 +22,7 @@ import org.springframework.web.socket.messaging.WebSocketStompClient;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @DisplayName("Resiliency integration")
-class ResiliencyIntegrationTest extends AbstractIntegrationTestSupport {
+class PlayerReconnectIntegrationTest extends AbstractIntegrationTestSupport {
 
     /**
      * Protects ADR-0009 last-session disconnect and reconnect-driven grace cancellation through the real
