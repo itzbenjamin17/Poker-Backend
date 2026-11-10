@@ -33,5 +33,15 @@ public record RoomDataResponse(
         List<PlayerJoinInfo> players,
         int currentPlayers,
         boolean canStartGame,
-        boolean gameStarted
-) {}
+        boolean gameStarted,
+        Long inactivityDeadlineEpochMs,
+        Long serverTimeEpochMs
+) {
+    /** Compatibility constructor for callers that do not supply timing metadata. */
+    public RoomDataResponse(String roomId, String roomName, int maxPlayers, int buyIn, int smallBlind,
+            int bigBlind, LocalDateTime createdAt, String hostName, List<PlayerJoinInfo> players,
+            int currentPlayers, boolean canStartGame, boolean gameStarted) {
+        this(roomId, roomName, maxPlayers, buyIn, smallBlind, bigBlind, createdAt, hostName, players,
+                currentPlayers, canStartGame, gameStarted, null, null);
+    }
+}

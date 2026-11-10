@@ -5,6 +5,7 @@ import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.TokenResponse;
+import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.security.JwtService;
@@ -145,6 +146,9 @@ public class RoomController {
         playerPrincipal.assertBoundTo(roomId);
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
+            if (roomService.checkAndCloseIfExpired(roomId)) {
+                throw new BadRequestException("Room has expired due to inactivity.");
+            }
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
             gameLifecycleService.departParticipants(roomId, List.of(playerName));
             logger.info("Player {} successfully left room {}", playerName, roomId);
@@ -211,6 +215,9 @@ public class RoomController {
         playerPrincipal.assertBoundTo(roomId);
 
         try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
+            if (roomService.checkAndCloseIfExpired(roomId)) {
+                throw new BadRequestException("Room has expired due to inactivity.");
+            }
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
             if (!roomService.isRoomHost(roomId, playerName)) {
                 logger.warn("Non-host player {} attempted to start game for room {}", playerName, roomId);

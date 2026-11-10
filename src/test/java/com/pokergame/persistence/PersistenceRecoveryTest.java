@@ -523,4 +523,53 @@ class PersistenceRecoveryTest {
 
         assertTrue(recovery.isComplete());
     }
+
+    @Test
+    void lobbyExpiredDuringDowntimeIsDeletedAndNotRestored() {
+        java.time.Clock clock = mock(java.time.Clock.class);
+        when(clock.millis()).thenReturn(1_900_000_000_000L);
+
+        Room room = new Room("expired-lobby", "Expired Room", "Alice", 6, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        room.setInactivityDeadlineEpochMs(1_899_999_000_000L); // overdue
+        RecoveredAggregate aggregate = new RecoveredAggregate(room, "Alice", null, false);
+
+        when(store.recoverAll()).thenReturn(Map.of("expired-lobby", new byte[]{1, 2}));
+        when(mapper.deserialize(any())).thenReturn(aggregate);
+
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                store, mapper, roomService, gameLifecycleService,
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS, clock);
+
+        recovery.run(new DefaultApplicationArguments());
+
+        verify(store).delete("expired-lobby");
+        verifyNoInteractions(roomService);
+        assertTrue(recovery.isComplete());
+    }
+
+    @Test
+    void lobbyWithFutureDeadlinePreservesDeadlineAndSchedulesInactivity() {
+        java.time.Clock clock = mock(java.time.Clock.class);
+        when(clock.millis()).thenReturn(1_900_000_000_000L);
+
+        long futureDeadline = 1_900_001_800_000L;
+        Room room = new Room("future-lobby", "Future Room", "Alice", 6, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        room.setInactivityDeadlineEpochMs(futureDeadline);
+        RecoveredAggregate aggregate = new RecoveredAggregate(room, "Alice", null, false);
+
+        when(store.recoverAll()).thenReturn(Map.of("future-lobby", new byte[]{1, 2}));
+        when(mapper.deserialize(any())).thenReturn(aggregate);
+
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                store, mapper, roomService, gameLifecycleService,
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS, clock);
+
+        recovery.run(new DefaultApplicationArguments());
+
+        verify(roomService).restoreRoom(room, "Alice");
+        verify(roomService).scheduleLobbyInactivity("future-lobby", futureDeadline);
+        assertTrue(recovery.isComplete());
+    }
 }

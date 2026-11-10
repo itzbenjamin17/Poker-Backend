@@ -78,7 +78,8 @@ public final class AggregateSnapshotMapper {
         return new AggregateStateImage.RoomState(
                 room.getRoomId(), room.getRoomName(), room.getHostName(), room.getMaxPlayers(), room.getSmallBlind(),
                 room.getBigBlind(), room.getBuyIn(), room.getPasswordHash(), room.getCreatedAt(),
-                room.getPlayersWithJoinTimeSnapshot(), room.getPlayerMembershipIdsSnapshot(), room.isGameStarted());
+                room.getPlayersWithJoinTimeSnapshot(), room.getPlayerMembershipIdsSnapshot(), room.isGameStarted(),
+                room.getInactivityDeadlineEpochMs());
     }
 
     AggregateStateImage.RoomState toState(Room room, String currentHost) {
@@ -325,6 +326,7 @@ public final class AggregateSnapshotMapper {
                 .playersWithJoinTime(joinTimes)
                 .playerMembershipIds(state.playerMembershipIds())
                 .gameStarted(state.gameStarted())
+                .inactivityDeadlineEpochMs(state.inactivityDeadlineEpochMs())
                 .build();
     }
 

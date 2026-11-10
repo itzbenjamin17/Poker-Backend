@@ -69,6 +69,7 @@ public class Room {
     private final LocalDateTime createdAt;
     private boolean isGameStarted;
     private volatile boolean isTerminal;
+    private Long inactivityDeadlineEpochMs;
 
     /**
      * Recognizes an existing BCrypt hash so restored room credentials are not hashed again.
@@ -262,6 +263,12 @@ public class Room {
         }
 
         private boolean terminal;
+        private Long inactivityDeadlineEpochMs;
+
+        public RoomRestoreBuilder inactivityDeadlineEpochMs(Long inactivityDeadlineEpochMs) {
+            this.inactivityDeadlineEpochMs = inactivityDeadlineEpochMs;
+            return this;
+        }
 
         /**
          * Sets whether the restored room has reached a terminal state (post-game review or closure).
@@ -295,6 +302,7 @@ public class Room {
                 }
                 room.isGameStarted = gameStarted;
                 room.isTerminal = terminal;
+                room.inactivityDeadlineEpochMs = inactivityDeadlineEpochMs;
             }
             return room;
         }
@@ -439,6 +447,14 @@ public class Room {
         String protectedPass = hasPassword() ? "[PROTECTED]" : "none";
         return roomName + " (" + roomId + ")" + " by " + hostName + " with " + playersWithJoinTime.size()
                 + " players [password=" + protectedPass + "]";
+    }
+
+    /** @return absolute lobby inactivity deadline, or null once gameplay starts */
+    public synchronized Long getInactivityDeadlineEpochMs() { return inactivityDeadlineEpochMs; }
+
+    /** @param deadlineEpochMs persisted absolute lobby inactivity deadline */
+    public synchronized void setInactivityDeadlineEpochMs(Long deadlineEpochMs) {
+        inactivityDeadlineEpochMs = deadlineEpochMs;
     }
 
     /**
@@ -599,6 +615,7 @@ public class Room {
      */
     public synchronized void setGameStarted(boolean gameStarted) {
         this.isGameStarted = gameStarted;
+        if (gameStarted) inactivityDeadlineEpochMs = null;
     }
 
     /**
