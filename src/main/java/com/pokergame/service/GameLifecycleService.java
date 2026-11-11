@@ -890,8 +890,8 @@ public class GameLifecycleService {
             }
         }
         if (actorToDepart != null) {
-            logger.info("Player {} timed out after 60 seconds in game {}; removing from seat", actorToDepart, gameId);
             departParticipants(gameId, List.of(actorToDepart));
+            logger.info("Player {} timed out after 60 seconds in game {}; removing from seat", actorToDepart, gameId);
         }
         if (cleanupRequested) {
             DurableTransactionContext.afterCommit(() -> mutationProxy().performGameCleanup(gameId));
