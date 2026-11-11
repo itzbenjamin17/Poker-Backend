@@ -44,17 +44,21 @@ public class GameLifecycleService {
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
     public static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = 6000;
     private static final long AUTO_ADVANCE_STEP_DELAY_MS = 4000;
-    private static final long TURN_ALLOWANCE_MS = 60_000;
+    public static final long TURN_ALLOWANCE_MS = 60_000;
+    public static final long GAME_INACTIVITY_ALLOWANCE_MS = 15 * 60_000L;
     private java.time.Clock clock = java.time.Clock.systemUTC();
 
     /** Supplies the authoritative clock without changing legacy construction. */
     @Autowired(required = false)
-    void setClock(java.time.Clock clock) { this.clock = clock; }
+    public void setClock(java.time.Clock clock) { this.clock = clock; }
 
     public java.time.Clock getClock() { return clock; }
 
     @Value("${poker.game-end.display-delay-ms:20000}")
     private long gameEndDisplayDelayMs = 20000;
+
+    public void setGameEndDisplayDelayMs(long ms) { this.gameEndDisplayDelayMs = ms; }
+    public long getGameEndDisplayDelayMs() { return gameEndDisplayDelayMs; }
 
     @Value("${poker.round-end.display-delay-ms:0}")
     private long roundEndDisplayDelayMs;
@@ -106,7 +110,7 @@ public class GameLifecycleService {
      * @param messagingTemplate    direct messaging collaborator
      * @param taskScheduler        runtime timer scheduler
      */
-    GameLifecycleService(RoomService roomService,
+    public GameLifecycleService(RoomService roomService,
             HandEvaluatorService handEvaluatorService,
             GameStateService gameStateService,
             SimpMessagingTemplate messagingTemplate,
@@ -234,7 +238,7 @@ public class GameLifecycleService {
             // Mark room started and capture start event payload before scheduling broadcast
             room.setGameStarted(true);
             roomService.cancelLobbyInactivity(roomId);
-            long gameInactivityDeadline = clock.millis() + 15 * 60_000L;
+            long gameInactivityDeadline = clock.millis() + GAME_INACTIVITY_ALLOWANCE_MS;
             room.setInactivityDeadlineEpochMs(gameInactivityDeadline);
             scheduleGameInactivity(roomId, gameInactivityDeadline);
             RoomDataResponse startPayload = roomService.getRoomData(roomId);
@@ -546,8 +550,8 @@ public class GameLifecycleService {
         if (event != null && gameStateService != null) {
             gameStateService.sendGameEnd(event);
         }
-        scheduleGameCleanup(gameId, 20_000L);
-        logger.info("Game {} abandoned due to inactivity; scheduled 20s cleanup", gameId);
+        scheduleGameCleanup(gameId, gameEndDisplayDelayMs);
+        logger.info("Game {} abandoned due to inactivity; scheduled {}ms cleanup", gameId, gameEndDisplayDelayMs);
     }
 
     /**
@@ -558,7 +562,7 @@ public class GameLifecycleService {
      */
     void resetGameInactivityUnderLock(String gameId, Game game) {
         if (game == null || game.isGameOver()) return;
-        long newDeadline = clock.millis() + 15 * 60_000L;
+        long newDeadline = clock.millis() + GAME_INACTIVITY_ALLOWANCE_MS;
         Room room = roomService != null ? roomService.getRoom(gameId) : null;
         if (room != null) {
             room.setInactivityDeadlineEpochMs(newDeadline);
@@ -927,6 +931,17 @@ public class GameLifecycleService {
     public Long getInactivityDeadline(String gameId) {
         Room room = roomService != null ? roomService.getRoom(gameId) : null;
         return room != null ? room.getInactivityDeadlineEpochMs() : null;
+    }
+
+    /**
+     * Checks if the active game has reached or passed its inactivity deadline.
+     *
+     * @param gameId game identifier
+     * @return true if an active game inactivity deadline is configured and reached
+     */
+    public boolean isGameInactivityExpired(String gameId) {
+        Long deadline = getInactivityDeadline(gameId);
+        return deadline != null && deadline > 0 && clock.millis() >= deadline;
     }
 
     public int getRuntimeTaskCount(String gameId) {

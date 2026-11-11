@@ -207,8 +207,6 @@ public class RoomService {
             room.addPlayer(sanitizedPlayerName);
             room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
             scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
-            room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
-            scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
             long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
             room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
 
@@ -865,7 +863,6 @@ public class RoomService {
      */
     private boolean isRoomNameTaken(String roomName) {
         return rooms.values().stream()
-                .filter(room -> !isLobbyExpired(room))
                 .anyMatch(room -> room.getRoomName().equalsIgnoreCase(roomName));
     }
 

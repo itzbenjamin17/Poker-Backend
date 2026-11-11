@@ -320,8 +320,8 @@ class GameInactivityIntegrationTest extends AbstractIntegrationTestSupport {
             assertThat(p.isWinner()).isFalse();
         }
 
-        // Cleanup is scheduled 20 seconds later
+        // Cleanup is scheduled respecting configured display delay
         Long cleanupDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
-        assertThat(cleanupDeadline).isEqualTo(clock.now + 20_000L);
+        assertThat(cleanupDeadline).isEqualTo(clock.now + lifecycle.getGameEndDisplayDelayMs());
     }
 }

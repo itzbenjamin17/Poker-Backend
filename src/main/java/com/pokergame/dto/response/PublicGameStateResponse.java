@@ -43,6 +43,11 @@ import com.pokergame.enums.PlayerAction;
  * @param minimumBetAmount              Minimum bet in incremental chip units, nullable when no actor can bet.
  * @param minimumRaiseAmount            Full minimum raise in incremental chip units, including the call amount; a
  *                                      short whole-stack all-in may still be legal below this amount.
+ * @param handNumber                    The sequence number of the current hand.
+ * @param readyGateState                The state of the ready gate between hands.
+ * @param serverTimeEpochMs             The current server time in UTC epoch ms.
+ * @param stateRevision                 The monotonically increasing state revision number.
+ * @param inactivityDeadlineEpochMs     The absolute deadline for active-game inactivity abandonment in UTC epoch ms, null when none.
  */
 public record PublicGameStateResponse(
                 int maxPlayers,

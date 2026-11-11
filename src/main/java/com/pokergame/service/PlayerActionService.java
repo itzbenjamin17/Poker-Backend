@@ -54,6 +54,28 @@ public class PlayerActionService {
         }
     }
 
+    private PlayerActionService self;
+
+    @org.springframework.context.annotation.Lazy
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setSelf(PlayerActionService self) {
+        this.self = self;
+    }
+
+    private PlayerActionService mutationProxy() {
+        return self == null ? this : self;
+    }
+
+    /**
+     * Checks if the game has expired due to inactivity.
+     *
+     * @param gameId unique game identifier
+     * @return true if game inactivity deadline has passed
+     */
+    public boolean isGameInactivityExpired(String gameId) {
+        return gameLifecycleService != null && gameLifecycleService.isGameInactivityExpired(gameId);
+    }
+
     /**
      * Processes a player action request and orchestrates the resulting game state updates.
      * Validates the request, delegates the decision to the Game model, and handles the resulting TurnOutcome by broadcasting changes.
@@ -65,8 +87,26 @@ public class PlayerActionService {
      *                                     current player
      * @throws ResourceNotFoundException   if the game is not found
      */
-    @DurableMutation(roomId = "#gameId")
     public void processPlayerAction(String gameId, PlayerActionRequest actionRequest, String playerName) {
+        if (isGameInactivityExpired(gameId)) {
+            logger.warn("Player {} attempted to act in game {} at or after inactivity deadline (now={})",
+                    playerName, gameId, clock.millis());
+            gameLifecycleService.abandonGameDueToInactivity(gameId);
+            throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
+        }
+
+        mutationProxy().executePlayerAction(gameId, actionRequest, playerName);
+    }
+
+    /**
+     * Executes the authoritative player action within a durable mutation boundary.
+     *
+     * @param gameId        the unique identifier of the game
+     * @param actionRequest the action request containing the action type and amount
+     * @param playerName    the authenticated player name (from JWT Principal)
+     */
+    @DurableMutation(roomId = "#gameId")
+    public void executePlayerAction(String gameId, PlayerActionRequest actionRequest, String playerName) {
         Game game = gameLifecycleService.getGame(gameId);
         if (game == null) {
             logger.warn("Game not found for ID: {} when trying to process player action", gameId);
@@ -93,13 +133,6 @@ public class PlayerActionService {
             }
 
             Long turnDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT);
-            Long inactivityDeadline = gameLifecycleService.getInactivityDeadline(gameId);
-            if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
-                logger.warn("Player {} attempted to act in game {} at or after inactivity deadline (now={}, deadline={})",
-                        playerName, gameId, clock.millis(), inactivityDeadline);
-                gameLifecycleService.abandonGameDueToInactivity(gameId);
-                throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
-            }
             if (turnDeadline != null && clock.millis() >= turnDeadline) {
                 logger.warn("Player {} attempted to act in game {} at or after turn deadline (now={}, deadline={})",
                         playerName, gameId, clock.millis(), turnDeadline);

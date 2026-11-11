@@ -20,6 +20,8 @@ import java.util.List;
  * @param currentPlayers   The current number of players in the room.
  * @param canStartGame     Whether the game can be started.
  * @param gameStarted      Whether the game has started.
+ * @param inactivityDeadlineEpochMs The absolute deadline for lobby inactivity closure in UTC epoch ms, null when none.
+ * @param serverTimeEpochMs         The current server time in UTC epoch ms.
  */
 public record RoomDataResponse(
         String roomId,
