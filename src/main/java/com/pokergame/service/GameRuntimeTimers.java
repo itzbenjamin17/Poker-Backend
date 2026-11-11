@@ -92,13 +92,10 @@ final class GameRuntimeTimers {
         logger.debug("Scheduling runtime task {} for game {} with delayMs={} deadline={}", task, gameId, delay, deadline);
         RuntimeTaskKey key = new RuntimeTaskKey(gameId, task);
         RuntimeTask registration = new RuntimeTask();
-        RuntimeTask replaced;
-        synchronized (game) {
-            if (game.getHandNumber() != intent.handNumber()
-                    || game.getScheduledTaskGeneration(task) != intent.generation()
-                    || !Objects.equals(game.getScheduledTaskDeadline(task), deadline)) return;
-            replaced = runtimeTasks.put(key, registration);
-        }
+        if (game.getHandNumber() != intent.handNumber()
+                || game.getScheduledTaskGeneration(task) != intent.generation()
+                || !Objects.equals(game.getScheduledTaskDeadline(task), deadline)) return;
+        RuntimeTask replaced = runtimeTasks.put(key, registration);
         if (replaced != null) replaced.cancel();
         try {
             ScheduledFuture<?> future = taskScheduler.schedule(() -> {

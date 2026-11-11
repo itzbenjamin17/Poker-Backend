@@ -585,13 +585,15 @@ class GameLifecycleServiceTest {
         List<Player> playerList = new ArrayList<>(List.of(activePlayer, outPlayer)) {
             @Override
             public Spliterator<Player> spliterator() {
-                assertTrue(Thread.holdsLock(game), "Game monitor must be held during playerExistsInGame lookup");
+                assertTrue(gameLifecycleService.getRoomCoordinator().isHeldByCurrentThread("mock-game"),
+                        "Room coordinator lease must be held during playerExistsInGame lookup");
                 return super.spliterator();
             }
 
             @Override
             public Iterator<Player> iterator() {
-                assertTrue(Thread.holdsLock(game), "Game monitor must be held during playerExistsInGame lookup");
+                assertTrue(gameLifecycleService.getRoomCoordinator().isHeldByCurrentThread("mock-game"),
+                        "Room coordinator lease must be held during playerExistsInGame lookup");
                 return super.iterator();
             }
         };
@@ -617,7 +619,7 @@ class GameLifecycleServiceTest {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             Future<Boolean> lookup;
-            synchronized (game) {
+            try (var lease = gameLifecycleService.getRoomCoordinator().acquire(ROOM_ID)) {
                 lookup = executor.submit(() -> {
                     reader.set(Thread.currentThread());
                     return gameLifecycleService.playerExistsInGame(ROOM_ID, departing.getName());
@@ -802,7 +804,7 @@ class GameLifecycleServiceTest {
         try {
             Future<?> firstSchedule;
             Future<?> secondSchedule;
-            synchronized (game) {
+            try (var lease = gameLifecycleService.getRoomCoordinator().acquire(ROOM_ID)) {
                 firstSchedule = executor.submit(() -> {
                     first.set(Thread.currentThread());
                     gameLifecycleService.scheduleAutoAdvance(ROOM_ID);

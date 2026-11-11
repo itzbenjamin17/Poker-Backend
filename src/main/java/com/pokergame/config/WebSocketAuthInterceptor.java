@@ -279,13 +279,11 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         }
         Room room = roomService.getRoom(principal.roomId());
         if (room != null) {
-            synchronized (room) {
-                if (!room.hasPlayer(principal.playerName())
-                        || !principal.membershipId().equals(room.getMembershipId(principal.playerName()))) {
-                    logger.warn("Rejecting STOMP frame: stale or invalid membership for player {} in room {}",
-                            principal.playerName(), principal.roomId());
-                    throw new AccessDeniedException("Token membership is stale or invalid.");
-                }
+            if (!room.hasPlayer(principal.playerName())
+                    || !principal.membershipId().equals(room.getMembershipId(principal.playerName()))) {
+                logger.warn("Rejecting STOMP frame: stale or invalid membership for player {} in room {}",
+                        principal.playerName(), principal.roomId());
+                throw new AccessDeniedException("Token membership is stale or invalid.");
             }
         }
     }

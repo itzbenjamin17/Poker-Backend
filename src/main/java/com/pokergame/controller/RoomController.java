@@ -229,19 +229,12 @@ public class RoomController {
                 logger.warn("Room not found: {}", roomId);
                 return ResponseEntity.notFound().build();
             }
-            // The room lease (roomCoordinator) and this Room intrinsic monitor are DISTINCT locks
-            // guarding different concerns: the lease serializes durable mutations on the room, while
-            // this monitor guards Room's own mutable fields and enforces the room -> game lock
-            // ordering. Both are held intentionally so the membership check and the room-data read
-            // are atomic against a concurrent removePlayer. Do not "simplify" by dropping either.
-            synchronized (room) {
-                if (!room.getPlayers().contains(playerPrincipal.playerName())) {
-                    throw new UnauthorisedActionException("You are not a member of this room.");
-                }
-                RoomDataResponse roomData = roomService.getRoomData(roomId);
-                logger.debug("Room info retrieved successfully for room: {}", roomId);
-                return ResponseEntity.ok(roomData);
+            if (!room.getPlayers().contains(playerPrincipal.playerName())) {
+                throw new UnauthorisedActionException("You are not a member of this room.");
             }
+            RoomDataResponse roomData = roomService.getRoomData(roomId);
+            logger.debug("Room info retrieved successfully for room: {}", roomId);
+            return ResponseEntity.ok(roomData);
         });
     }
 

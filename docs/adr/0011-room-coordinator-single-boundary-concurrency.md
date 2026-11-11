@@ -1,6 +1,6 @@
 # 0011: RoomCoordinator Single-Boundary Concurrency Model
 
-**Status**: Accepted (Supersedes [ADR-0007](0007-hierarchical-monitor-locking-order.md))
+**Status**: Accepted / Final (Supersedes [ADR-0007](0007-hierarchical-monitor-locking-order.md))
 
 We decided to govern concurrent room and game mutations through a single, explicit concurrency boundary per room owned by `RoomCoordinator`, replacing the four-tier lock hierarchy (`Room Lease -> Player Lease -> Room Monitor -> Game Monitor`).
 
@@ -25,12 +25,13 @@ The system requires a single, cohesive, and easily verifiable concurrency bounda
 2. **Stable Lock Identity**: The lock identity is the immutable room identifier (`String roomId`) managed within `KeyedLockRegistry<String>`. Live `Room` and `Game` aggregate instances may be replaced (e.g. during rollback or recovery) without invalidating or splitting the synchronization identity.
 3. **Rejection of Cross-Room Nested Coordination**: A thread holding an active coordination lease for room A is strictly forbidden from acquiring or coordinating room B (`IllegalStateException` is thrown immediately). This invariant is enforced across all entry points in both persistence-enabled and persistence-disabled modes. Multi-room atomic operations are deliberately out of scope.
 4. **Same-Room Reentrancy**: Nested operations on the same room reenter the existing boundary on the current thread without deadlocking, incrementing lease depth and preserving the outer transaction context.
-5. **Intermediate Legacy-Lock Ordering**: During the phased migration (Tickets #19–#23), existing intrinsic monitors (`synchronized (room)`, `synchronized (game)`) and player session locks remain temporarily. They must strictly obey the downward acquisition order:
-   `RoomCoordinator Lease -> Player Session Lease -> Room Monitor -> Game Monitor`
-   No monitor or player lease may be acquired before entering `RoomCoordinator`, and holding a lower lock while waiting for a room lease is forbidden.
-6. **Global-Index Exceptions**: Global state operations (room-name uniqueness checking, room registry maps, session-to-room routing, and lobby enumeration) use concurrent collections or isolated, short-lived synchronization blocks. A thread must never hold a global lock while waiting to acquire a room lease. Global enumeration resolves identities first and inspects rooms independently without requiring a server-wide lock.
-7. **Explicit Ownership Assertions**: `RoomCoordinator.isHeldByCurrentThread(roomId)` and `RoomCoordinator.assertHeldByCurrentThread(roomId)` allow internal domain services to assert caller compliance, failing fast if mutable state is accessed outside the boundary.
-8. **Migration Completion Criteria**: The migration is complete (Ticket #24) when:
+5. **Elimination of Legacy Aggregate Monitors and Player Leases**: With the completion of Ticket #24:
+   - All legacy `synchronized (room)` and `synchronized (game)` monitor blocks across `RoomService`, `GameLifecycleService`, `GameStateService`, `PlayerActionService`, `WebSocketEventListener`, `RoomController`, and `GameController` have been removed.
+   - Redundant player-scoped session leases (`sessionLocks`) in `WebSocketEventListener` have been removed.
+   - The single `RoomCoordinator` boundary is the sole synchronization mechanism protecting room and game mutable state.
+6. **Global-Index Exceptions**: Global state operations (room-name uniqueness checking, room registry maps, session-to-room routing, and lobby enumeration) use concurrent collections or isolated, short-lived synchronization blocks (e.g. `roomRegistrationLock`). A thread must never hold a global lock while waiting to acquire a room lease. Global enumeration resolves identities first and inspects rooms independently without requiring a server-wide lock.
+7. **Explicit Ownership Assertions**: `RoomCoordinator.isHeldByCurrentThread(roomId)` and `RoomCoordinator.assertHeldByCurrentThread(roomId)` allow internal domain services to assert caller compliance, failing fast with `IllegalStateException` if mutable state is accessed outside the boundary.
+8. **Migration Completion Status**: The migration is fully complete:
    - All room-scoped production paths enter via `RoomCoordinator`.
    - Legacy `synchronized (room)` and `synchronized (game)` monitors are completely eliminated.
    - Redundant room-scoped player leases are removed.

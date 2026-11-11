@@ -171,6 +171,10 @@ public class GameLifecycleService {
         return roomCoordinator;
     }
 
+    GameParticipantDepartureHandler getDepartureHandler() {
+        return departureHandler;
+    }
+
     /**
      * We inject a proxy of this exact same service into itself to solve Spring's "self-invocation" problem.
      * <p>
@@ -201,17 +205,15 @@ public class GameLifecycleService {
             return;
         }
 
-        Room room = roomService.getRoom(roomId);
-        if (room == null) {
-            Game game = getGame(roomId);
-            if (game == null || game.isGameOver()) return;
-            synchronized (game) {
+        roomCoordinator.coordinate(roomId, () -> {
+            Room room = roomService.getRoom(roomId);
+            if (room == null) {
+                Game game = getGame(roomId);
+                if (game == null || game.isGameOver()) return;
                 departureHandler.departParticipantsUnderLock(roomId, playerNames, null, game);
+                return;
             }
-            return;
-        }
 
-        synchronized (room) {
             if (roomService.getRoom(roomId) != room) return;
             Game game = getGame(roomId);
             if (game != null) {
@@ -221,10 +223,8 @@ public class GameLifecycleService {
                     return;
                 }
             }
-            synchronized (game == null ? room : game) {
-                departureHandler.departParticipantsUnderLock(roomId, playerNames, room, game);
-            }
-        }
+            departureHandler.departParticipantsUnderLock(roomId, playerNames, room, game);
+        });
     }
 
     /**
@@ -240,13 +240,13 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#roomId")
     public String createGameFromRoom(String roomId) {
-        Room room = roomService.getRoom(roomId);
-        if (room == null) {
-            logger.warn("Game creation failed: room not found for id {}", roomId);
-            throw new ResourceNotFoundException("Room not found");
-        }
+        return roomCoordinator.coordinate(roomId, () -> {
+            Room room = roomService.getRoom(roomId);
+            if (room == null) {
+                logger.warn("Game creation failed: room not found for id {}", roomId);
+                throw new ResourceNotFoundException("Room not found");
+            }
 
-        synchronized (room) {
             if (roomService.getRoom(roomId) != room) throw new ResourceNotFoundException("Room not found");
             if (roomService.isLobbyExpired(room)) {
                 logger.warn("Game creation failed: lobby {} has expired due to inactivity", roomId);
@@ -292,13 +292,13 @@ public class GameLifecycleService {
 
             DurableTransactionContext.afterCommit(() -> messagingTemplate.convertAndSend("/room/" + roomId,
                     new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), startPayload)));
-        }
 
-        logger.info("Game created and started for room: {} with {} players", roomId, room.getPlayers().size());
+            logger.info("Game created and started for room: {} with {} players", roomId, room.getPlayers().size());
 
-        startNewHand(roomId);
+            startNewHand(roomId);
 
-        return roomId;
+            return roomId;
+        });
     }
 
     /**
@@ -309,13 +309,13 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void startNewHand(String gameId) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            logger.warn("Cannot start new hand - game {} not found", gameId);
-            return;
-        }
-        logger.info("Starting new hand for game: {}", gameId);
-        synchronized (game) {
+        roomCoordinator.coordinate(gameId, () -> {
+            Game game = getGame(gameId);
+            if (game == null) {
+                logger.warn("Cannot start new hand - game {} not found", gameId);
+                return;
+            }
+            logger.info("Starting new hand for game: {}", gameId);
             if (game.isForfeitPending()) return;
             if (game.isGameOver()) {
                 if (!game.isTerminalCarryOverSettled()) handleGameEnd(gameId, false);
@@ -349,13 +349,11 @@ public class GameLifecycleService {
             game.dealHoleCards();
             game.postBlinds();
             applyTurnOutcome(gameId, game, game.reconcileAfterForcedBlinds());
-        }
 
-        synchronized (game) {
             logger.info("New hand started successfully for game: {} | Current player: {} | Phase: {} | Pot: {}",
                     gameId, game.getCurrentPlayer() == null ? "none" : game.getCurrentPlayer().getName(),
                     game.getCurrentPhase(), game.getPot());
-        }
+        });
     }
 
     void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome) {
@@ -373,12 +371,13 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
-        synchronized (game) {
+        roomCoordinator.coordinate(gameId, () -> {
             applyTurnOutcomeUnderLock(gameId, game, outcome, notifyImmediateAutoAdvance);
-        }
+        });
     }
 
     private void applyTurnOutcomeUnderLock(String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
+        roomCoordinator.assertHeldByCurrentThread(gameId);
         switch (outcome.type()) {
             case NEXT_PLAYER, PHASE_ADVANCED -> {
                 game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
@@ -431,12 +430,12 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public boolean advanceAutoAdvanceStep(String gameId) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            return true;
-        }
+        return roomCoordinator.coordinate(gameId, () -> {
+            Game game = getGame(gameId);
+            if (game == null) {
+                return true;
+            }
 
-        synchronized (game) {
             if (game.isForfeitPending()) return true;
             if (game.isGameOver()) return true;
             if (game.isHandSettled()
@@ -473,7 +472,7 @@ public class GameLifecycleService {
                     yield true;
                 }
             };
-        }
+        });
     }
 
     /**
@@ -496,27 +495,28 @@ public class GameLifecycleService {
     }
 
     private void handleGameEndInternal(String gameId, boolean isForfeit, Player preferredWinner, Set<String> forfeitedPlayers) {
-        Game game = getGame(gameId);
-        if (game == null) return;
+        roomCoordinator.coordinate(gameId, () -> {
+            roomCoordinator.assertHeldByCurrentThread(gameId);
+            Game game = getGame(gameId);
+            if (game == null) return;
 
-        Room room = roomService.getRoom(gameId);
-        GameTerminalSettlement.SettlementOutcome outcome;
-        synchronized (game) {
+            Room room = roomService.getRoom(gameId);
+            GameTerminalSettlement.SettlementOutcome outcome;
             outcome = terminalSettlement.settleUnderLock(gameId, game, room, isForfeit, preferredWinner, forfeitedPlayers);
             if (!outcome.settledNow()) return;
-        }
 
-        if (room != null) {
-            room.setTerminal(true);
-        }
-        if (outcome.winner() == null) {
-            logger.warn("Cannot broadcast game end for {} - no winner could be determined", gameId);
-            return;
-        }
-        if (outcome.event() != null) {
-            gameStateService.sendGameEnd(outcome.event());
-        }
-        scheduleGameCleanup(gameId, gameEndDisplayDelayMs);
+            if (room != null) {
+                room.setTerminal(true);
+            }
+            if (outcome.winner() == null) {
+                logger.warn("Cannot broadcast game end for {} - no winner could be determined", gameId);
+                return;
+            }
+            if (outcome.event() != null) {
+                gameStateService.sendGameEnd(outcome.event());
+            }
+            scheduleGameCleanup(gameId, gameEndDisplayDelayMs);
+        });
     }
 
     /**
@@ -575,21 +575,17 @@ public class GameLifecycleService {
             if (game == null) {
                 return;
             }
-            synchronized (room) {
-                synchronized (game) {
-                    if (game.isGameOver() && game.getRetainedTerminalResult() != null) {
-                        return;
-                    }
-                    Long currentDeadline = room.getInactivityDeadlineEpochMs();
-                    if (currentDeadline == null || !currentDeadline.equals(expectedDeadlineEpochMs)) {
-                        logger.debug("Skipping inactivity cleanup: deadline changed for game {}", gameId);
-                        return;
-                    }
-                    if (clock.millis() < expectedDeadlineEpochMs) {
-                        logger.debug("Skipping inactivity cleanup: deadline has not elapsed for game {}", gameId);
-                        return;
-                    }
-                }
+            if (game.isGameOver() && game.getRetainedTerminalResult() != null) {
+                return;
+            }
+            Long currentDeadline = room.getInactivityDeadlineEpochMs();
+            if (currentDeadline == null || !currentDeadline.equals(expectedDeadlineEpochMs)) {
+                logger.debug("Skipping inactivity cleanup: deadline changed for game {}", gameId);
+                return;
+            }
+            if (clock.millis() < expectedDeadlineEpochMs) {
+                logger.debug("Skipping inactivity cleanup: deadline has not elapsed for game {}", gameId);
+                return;
             }
             abandonGameDueToInactivity(gameId);
         });
@@ -611,33 +607,29 @@ public class GameLifecycleService {
             if (game == null) return;
             Room room = roomService != null ? roomService.getRoom(gameId) : null;
             GameEndResponse event;
-            synchronized (game) {
-                if (game.isGameOver() && game.getRetainedTerminalResult() != null) {
-                    return;
-                }
-                game.markGameOver();
-                game.closeReadyCountdown();
-                game.invalidateProgressionTasks();
-                runtimeTimers.cancelAllForGame(gameId, true);
-                game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
-                game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-                game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
-                game.clearScheduledTask(ScheduledGameTask.READY_OPEN);
-                game.clearScheduledTask(ScheduledGameTask.NEW_HAND);
-                if (gameStateService != null) {
-                    gameStateService.clearRetainedSettlement(gameId);
-                }
-                int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
-                event = gameStateService != null
-                        ? gameStateService.captureAbandonment(gameId, game, maxPlayers)
-                        : null;
-                game.setRetainedTerminalResult(event);
+            if (game.isGameOver() && game.getRetainedTerminalResult() != null) {
+                return;
             }
+            game.markGameOver();
+            game.closeReadyCountdown();
+            game.invalidateProgressionTasks();
+            runtimeTimers.cancelAllForGame(gameId, true);
+            game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
+            game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
+            game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
+            game.clearScheduledTask(ScheduledGameTask.READY_OPEN);
+            game.clearScheduledTask(ScheduledGameTask.NEW_HAND);
+            if (gameStateService != null) {
+                gameStateService.clearRetainedSettlement(gameId);
+            }
+            int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
+            event = gameStateService != null
+                    ? gameStateService.captureAbandonment(gameId, game, maxPlayers)
+                    : null;
+            game.setRetainedTerminalResult(event);
 
             if (room != null) {
-                synchronized (room) {
-                    room.setTerminal(true);
-                }
+                room.setTerminal(true);
             }
             if (event != null) {
                 gameStateService.sendGameEnd(event);
@@ -654,6 +646,7 @@ public class GameLifecycleService {
      * @param game   game instance
      */
     void resetGameInactivityUnderLock(String gameId, Game game) {
+        roomCoordinator.assertHeldByCurrentThread(gameId);
         if (game == null || game.isGameOver()) return;
         long newDeadline = clock.millis() + GAME_INACTIVITY_ALLOWANCE_MS;
         Room room = roomService != null ? roomService.getRoom(gameId) : null;
@@ -675,9 +668,7 @@ public class GameLifecycleService {
         roomCoordinator.coordinate(gameId, () -> {
             Game game = getGame(gameId);
             if (game == null) return;
-            synchronized (game) {
-                resetGameInactivityUnderLock(gameId, game);
-            }
+            resetGameInactivityUnderLock(gameId, game);
         });
     }
 
@@ -698,11 +689,9 @@ public class GameLifecycleService {
                 return;
             }
             if (game != null) {
-                synchronized (game) {
-                    if (!game.isGameOver() && game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP) == null) {
-                        logger.debug("Skipping terminal cleanup for uncompleted game {}", gameId);
-                        return;
-                    }
+                if (!game.isGameOver() && game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP) == null) {
+                    logger.debug("Skipping terminal cleanup for uncompleted game {}", gameId);
+                    return;
                 }
             }
             performGameCleanup(gameId);
@@ -751,25 +740,17 @@ public class GameLifecycleService {
             return;
         }
         String gameId = game.getGameId();
-        Room room = roomService.getRoom(gameId);
-        Object roomLock = room != null ? room : this;
-        synchronized (roomLock) {
+        roomCoordinator.coordinate(gameId, () -> {
+            Room room = roomService.getRoom(gameId);
             Game existing = activeGames.get(gameId);
-            Object gameLock = existing != null ? existing : game;
-            synchronized (gameLock) {
-                if (existing != null && existing != game) {
-                    synchronized (game) {
-                        applyRestoreGame(game, room, existing);
-                    }
-                } else {
-                    applyRestoreGame(game, room, existing);
-                }
-            }
-        }
+            applyRestoreGame(game, room, existing);
+            return null;
+        });
     }
 
     private void applyRestoreGame(Game game, Room room, Game existing) {
         String gameId = game.getGameId();
+        roomCoordinator.assertHeldByCurrentThread(gameId);
         if (existing != null && existing != game) {
             cancelRuntimeTasks(gameId, false);
         }
@@ -793,23 +774,19 @@ public class GameLifecycleService {
         if (gameId == null) {
             return;
         }
-        Room room = roomService.getRoom(gameId);
-        Object roomLock = room != null ? room : this;
-        synchronized (roomLock) {
-            Game game = activeGames.get(gameId);
-            Object gameLock = game != null ? game : roomLock;
-            synchronized (gameLock) {
-                cancelRuntimeTasks(gameId, false);
-                activeGames.remove(gameId);
-                if (gameStateService != null) {
-                    gameStateService.clearRetainedSettlement(gameId);
-                }
+        roomCoordinator.coordinate(gameId, () -> {
+            Room room = roomService.getRoom(gameId);
+            cancelRuntimeTasks(gameId, false);
+            activeGames.remove(gameId);
+            if (gameStateService != null) {
+                gameStateService.clearRetainedSettlement(gameId);
             }
             if (room != null) {
                 room.setGameStarted(false);
                 room.setTerminal(false);
             }
-        }
+            return null;
+        });
     }
 
     /**
@@ -826,14 +803,9 @@ public class GameLifecycleService {
             return;
         }
         MdcUtils.runWithRoomId(gameId, () -> {
-            List<TaskIntent> intents;
-            boolean normalized;
-            int rebuiltCount;
-            synchronized (game) {
-                normalized = game.normalizeRecoveredReadyCountdown(System.currentTimeMillis() + configuredReadyCountdownMs);
-                intents = GameRuntimeTimers.captureAllIntents(gameId, game);
-                rebuiltCount = intents.size();
-            }
+            boolean normalized = game.normalizeRecoveredReadyCountdown(System.currentTimeMillis() + configuredReadyCountdownMs);
+            List<TaskIntent> intents = GameRuntimeTimers.captureAllIntents(gameId, game);
+            int rebuiltCount = intents.size();
             DurableTransactionContext.afterCommit(() -> intents.forEach(this::scheduleRuntimeTask));
             if (normalized) gameStateService.broadcastGameState(gameId, game);
             logger.info("Resumed {} recovered timers for game {}", rebuiltCount, gameId);
@@ -848,17 +820,18 @@ public class GameLifecycleService {
      * @param gameId restored game whose accepted task intents must run
      */
     public void resumeRollbackTimers(String gameId) {
-        Game game = getGame(gameId);
-        if (game == null) return;
-        List<TaskIntent> intents;
-        synchronized (game) {
-            intents = GameRuntimeTimers.captureAllIntents(gameId, game);
-        }
-        intents.forEach(this::scheduleRuntimeTask);
-        Room room = roomService != null ? roomService.getRoom(gameId) : null;
-        if (room != null && room.getInactivityDeadlineEpochMs() != null && !game.isGameOver()) {
-            scheduleGameInactivity(gameId, room.getInactivityDeadlineEpochMs());
-        }
+        if (gameId == null) return;
+        roomCoordinator.coordinate(gameId, () -> {
+            Game game = getGame(gameId);
+            if (game == null) return null;
+            List<TaskIntent> intents = GameRuntimeTimers.captureAllIntents(gameId, game);
+            intents.forEach(this::scheduleRuntimeTask);
+            Room room = roomService != null ? roomService.getRoom(gameId) : null;
+            if (room != null && room.getInactivityDeadlineEpochMs() != null && !game.isGameOver()) {
+                scheduleGameInactivity(gameId, room.getInactivityDeadlineEpochMs());
+            }
+            return null;
+        });
     }
 
     /**
@@ -921,8 +894,11 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     void scheduleAutoAdvance(String gameId) {
-        persistScheduledTask(gameId, ScheduledGameTask.AUTO_ADVANCE,
-                System.currentTimeMillis() + AUTO_ADVANCE_STEP_DELAY_MS);
+        roomCoordinator.coordinate(gameId, () -> {
+            persistScheduledTask(gameId, ScheduledGameTask.AUTO_ADVANCE,
+                    System.currentTimeMillis() + AUTO_ADVANCE_STEP_DELAY_MS);
+            return null;
+        });
     }
 
     /**
@@ -953,28 +929,26 @@ public class GameLifecycleService {
                 return;
             }
             String actorToDepart = null;
-            synchronized (game) {
-                switch (game.claimScheduledTaskExecution(ScheduledGameTask.TURN_TIMEOUT, expectedDeadlineEpochMs, expectedHandNumber, expectedGeneration)) {
-                    case IGNORE -> { return; }
-                    case CANCEL_GAME_OVER -> {
-                        runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
-                        return;
-                    }
-                    case EXECUTE -> { }
-                }
-                Room room = roomService != null ? roomService.getRoom(gameId) : null;
-                Long inactivityDeadline = room != null ? room.getInactivityDeadlineEpochMs() : null;
-                boolean inactivityDue = inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline;
-
-                if (inactivityDue) {
-                    logger.info("Inactivity deadline expired concurrently with turn timeout for game {}; abandonment takes precedence", gameId);
-                    abandonGameDueToInactivity(gameId);
+            switch (game.claimScheduledTaskExecution(ScheduledGameTask.TURN_TIMEOUT, expectedDeadlineEpochMs, expectedHandNumber, expectedGeneration)) {
+                case IGNORE -> { return; }
+                case CANCEL_GAME_OVER -> {
+                    runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
                     return;
                 }
-                Player actor = game.getCurrentPlayer();
-                if (actor != null) {
-                    actorToDepart = actor.getName();
-                }
+                case EXECUTE -> { }
+            }
+            Room room = roomService != null ? roomService.getRoom(gameId) : null;
+            Long inactivityDeadline = room != null ? room.getInactivityDeadlineEpochMs() : null;
+            boolean inactivityDue = inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline;
+
+            if (inactivityDue) {
+                logger.info("Inactivity deadline expired concurrently with turn timeout for game {}; abandonment takes precedence", gameId);
+                abandonGameDueToInactivity(gameId);
+                return;
+            }
+            Player actor = game.getCurrentPlayer();
+            if (actor != null) {
+                actorToDepart = actor.getName();
             }
             if (actorToDepart != null) {
                 departParticipants(gameId, List.of(actorToDepart));
@@ -1017,27 +991,25 @@ public class GameLifecycleService {
                 logger.debug("Cannot execute auto advance: game not found for gameId={}", gameId);
                 return;
             }
-            synchronized (game) {
-                long generation = expectedGeneration != null ? expectedGeneration : game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
-                switch (game.claimScheduledTaskExecution(ScheduledGameTask.AUTO_ADVANCE, expectedDeadlineEpochMs, expectedHandNumber, generation)) {
-                    case IGNORE -> { return; }
-                    case CANCEL_GAME_OVER -> {
-                        runtimeTimers.cancelTask(gameId, ScheduledGameTask.AUTO_ADVANCE);
-                        return;
-                    }
-                    case EXECUTE -> { }
-                }
-                if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
-                    game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
+            long generation = expectedGeneration != null ? expectedGeneration : game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
+            switch (game.claimScheduledTaskExecution(ScheduledGameTask.AUTO_ADVANCE, expectedDeadlineEpochMs, expectedHandNumber, generation)) {
+                case IGNORE -> { return; }
+                case CANCEL_GAME_OVER -> {
+                    runtimeTimers.cancelTask(gameId, ScheduledGameTask.AUTO_ADVANCE);
                     return;
                 }
-                boolean complete = advanceAutoAdvanceStep(gameId);
-                if (complete) {
-                    schedulePostShowdownProgression(gameId, game);
-                } else {
-                    persistScheduledTask(gameId, ScheduledGameTask.AUTO_ADVANCE,
-                            System.currentTimeMillis() + AUTO_ADVANCE_STEP_DELAY_MS);
-                }
+                case EXECUTE -> { }
+            }
+            if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
+                game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
+                return;
+            }
+            boolean complete = advanceAutoAdvanceStep(gameId);
+            if (complete) {
+                schedulePostShowdownProgression(gameId, game);
+            } else {
+                persistScheduledTask(gameId, ScheduledGameTask.AUTO_ADVANCE,
+                        System.currentTimeMillis() + AUTO_ADVANCE_STEP_DELAY_MS);
             }
         });
     }
@@ -1056,12 +1028,8 @@ public class GameLifecycleService {
         roomCoordinator.coordinate(gameId, () -> {
             Game game = getGame(gameId);
             if (game == null) return;
-            long generation;
-            long handNumber;
-            synchronized (game) {
-                generation = game.getScheduledTaskGeneration(task);
-                handNumber = game.getHandNumber();
-            }
+            long generation = game.getScheduledTaskGeneration(task);
+            long handNumber = game.getHandNumber();
             executeScheduledTask(gameId, task, expectedDeadline, handNumber, generation);
         });
     }
@@ -1104,23 +1072,21 @@ public class GameLifecycleService {
                 return;
             }
             boolean cleanupRequested = false;
-            synchronized (game) {
-                switch (game.claimScheduledTaskExecution(task, expectedDeadline, expectedHandNumber, expectedGeneration)) {
-                    case IGNORE -> { return; }
-                    case CANCEL_GAME_OVER -> {
-                        runtimeTimers.cancelTask(gameId, task);
-                        return;
-                    }
-                    case EXECUTE -> { }
+            switch (game.claimScheduledTaskExecution(task, expectedDeadline, expectedHandNumber, expectedGeneration)) {
+                case IGNORE -> { return; }
+                case CANCEL_GAME_OVER -> {
+                    runtimeTimers.cancelTask(gameId, task);
+                    return;
                 }
-                logger.debug("Executing task {} for game {}", task, gameId);
-                switch (task) {
-                    case NEW_HAND -> startNewHand(gameId);
-                    case READY_OPEN -> startReadyCountdown(gameId, configuredReadyCountdownMs);
-                    case CLEANUP -> cleanupRequested = true;
-                    case GAME_END -> handleGameEnd(gameId, false);
-                    default -> { }
-                }
+                case EXECUTE -> { }
+            }
+            logger.debug("Executing task {} for game {}", task, gameId);
+            switch (task) {
+                case NEW_HAND -> startNewHand(gameId);
+                case READY_OPEN -> startReadyCountdown(gameId, configuredReadyCountdownMs);
+                case CLEANUP -> cleanupRequested = true;
+                case GAME_END -> handleGameEnd(gameId, false);
+                default -> { }
             }
             if (cleanupRequested) {
                 DurableTransactionContext.afterCommit(() -> mutationProxy().performGameCleanup(gameId));
@@ -1141,12 +1107,9 @@ public class GameLifecycleService {
         if (game == null) {
             return;
         }
-        TaskIntent intent;
-        synchronized (game) {
-            if (game.isForfeitPending()) return;
-            game.scheduleTask(task, deadline);
-            intent = GameRuntimeTimers.captureIntent(gameId, game, task, deadline);
-        }
+        if (game.isForfeitPending()) return;
+        game.scheduleTask(task, deadline);
+        TaskIntent intent = GameRuntimeTimers.captureIntent(gameId, game, task, deadline);
         DurableTransactionContext.afterCommit(() -> scheduleRuntimeTask(intent));
     }
 
@@ -1211,12 +1174,12 @@ public class GameLifecycleService {
         if (gameId == null || playerName == null) {
             return false;
         }
-        Game game = getGame(gameId);
-        if (game == null) {
-            return false;
-        }
+        return roomCoordinator.coordinate(gameId, () -> {
+            Game game = getGame(gameId);
+            if (game == null) {
+                return false;
+            }
 
-        synchronized (game) {
             List<Player> players = game.getPlayers();
             if (players == null) {
                 return false;
@@ -1224,7 +1187,7 @@ public class GameLifecycleService {
             return players.stream()
                     .filter(Objects::nonNull)
                     .anyMatch(player -> playerName.equals(player.getName()) && !player.getIsOut());
-        }
+        });
     }
 
     /**
@@ -1262,15 +1225,16 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void markPlayerDisconnected(String gameId, String playerName, long disconnectDeadlineEpochMs) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            logger.debug("Cannot mark player disconnected: game not found for gameId={}", gameId);
-            return;
-        }
+        roomCoordinator.coordinate(gameId, () -> {
+            Game game = getGame(gameId);
+            if (game == null) {
+                logger.debug("Cannot mark player disconnected: game not found for gameId={}", gameId);
+                return null;
+            }
 
-        synchronized (game) {
             departureHandler.markPlayerDisconnectedUnderLock(gameId, game, playerName, disconnectDeadlineEpochMs);
-        }
+            return null;
+        });
     }
 
     /**
@@ -1281,27 +1245,12 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void markPlayerReconnected(String gameId, String playerName) {
-        Room room = roomService.getRoom(gameId);
-        if (room != null) {
-            synchronized (room) {
-                if (roomService.getRoom(gameId) != room) return;
-                Game game = getGame(gameId);
-                if (game != null) {
-                    synchronized (game) {
-                        departureHandler.reconcilePlayerReconnectedUnderLock(gameId, playerName, room, game);
-                    }
-                } else {
-                    departureHandler.reconcilePlayerReconnectedUnderLock(gameId, playerName, room, null);
-                }
-            }
-        } else {
+        roomCoordinator.coordinate(gameId, () -> {
+            Room room = roomService.getRoom(gameId);
             Game game = getGame(gameId);
-            if (game != null) {
-                synchronized (game) {
-                    departureHandler.reconcilePlayerReconnectedUnderLock(gameId, playerName, null, game);
-                }
-            }
-        }
+            departureHandler.reconcilePlayerReconnectedUnderLock(gameId, playerName, room, game);
+            return null;
+        });
     }
 
     /**
@@ -1320,30 +1269,28 @@ public class GameLifecycleService {
 
         long deadlineEpochMs = clock.millis() + countdownMs;
         TaskIntent readyIntent;
-        synchronized (game) {
-            Game.ReadyCountdownStartOutcome outcome = game.startOrWaitReadyCountdown(deadlineEpochMs);
-            switch (outcome) {
-                case IGNORE -> { return; }
-                case TOURNAMENT_OVER -> {
-                    DurableTransactionContext.afterCommit(() -> mutationProxy().handleGameEnd(gameId, false));
-                    return;
-                }
-                case WAITING_FOR_PLAYERS -> {
-                    cancelReadyTimeout(gameId);
-                    gameStateService.broadcastGameState(gameId, game);
-                    return;
-                }
-                case ALL_READY -> {
-                    gameStateService.broadcastGameState(gameId, game);
-                    completeReadyCountdownAndStartNextHand(gameId, game);
-                    return;
-                }
-                case OPENED -> {
-                    readyIntent = GameRuntimeTimers.captureIntent(gameId, game, ScheduledGameTask.READY_TIMEOUT, deadlineEpochMs);
-                    gameStateService.broadcastGameState(gameId, game);
-                }
-                default -> throw new IllegalStateException("Unexpected ready start outcome: " + outcome);
+        Game.ReadyCountdownStartOutcome outcome = game.startOrWaitReadyCountdown(deadlineEpochMs);
+        switch (outcome) {
+            case IGNORE -> { return; }
+            case TOURNAMENT_OVER -> {
+                DurableTransactionContext.afterCommit(() -> mutationProxy().handleGameEnd(gameId, false));
+                return;
             }
+            case WAITING_FOR_PLAYERS -> {
+                cancelReadyTimeout(gameId);
+                gameStateService.broadcastGameState(gameId, game);
+                return;
+            }
+            case ALL_READY -> {
+                gameStateService.broadcastGameState(gameId, game);
+                completeReadyCountdownAndStartNextHand(gameId, game);
+                return;
+            }
+            case OPENED -> {
+                readyIntent = GameRuntimeTimers.captureIntent(gameId, game, ScheduledGameTask.READY_TIMEOUT, deadlineEpochMs);
+                gameStateService.broadcastGameState(gameId, game);
+            }
+            default -> throw new IllegalStateException("Unexpected ready start outcome: " + outcome);
         }
         DurableTransactionContext.afterCommit(() -> scheduleRuntimeTask(readyIntent));
     }
@@ -1356,12 +1303,12 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void markPlayerReadyForNextHand(String gameId, String playerName) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            throw new ResourceNotFoundException("Game not found");
-        }
+        roomCoordinator.coordinate(gameId, () -> {
+            Game game = getGame(gameId);
+            if (game == null) {
+                throw new ResourceNotFoundException("Game not found");
+            }
 
-        synchronized (game) {
             Room room = roomService != null ? roomService.getRoom(gameId) : null;
             Long inactivityDeadline = room != null ? room.getInactivityDeadlineEpochMs() : null;
             if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
@@ -1383,7 +1330,8 @@ public class GameLifecycleService {
             } else {
                 gameStateService.broadcastGameState(gameId, game);
             }
-        }
+            return null;
+        });
     }
 
     /**
@@ -1394,12 +1342,12 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void unmarkPlayerReadyForNextHand(String gameId, String playerName) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            throw new ResourceNotFoundException("Game not found");
-        }
+        roomCoordinator.coordinate(gameId, () -> {
+            Game game = getGame(gameId);
+            if (game == null) {
+                throw new ResourceNotFoundException("Game not found");
+            }
 
-        synchronized (game) {
             Room room = roomService != null ? roomService.getRoom(gameId) : null;
             Long inactivityDeadline = room != null ? room.getInactivityDeadlineEpochMs() : null;
             if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
@@ -1417,7 +1365,8 @@ public class GameLifecycleService {
             logger.debug("Player {} unmarked ready for next hand in game {}", playerName, gameId);
 
             gameStateService.broadcastGameState(gameId, game);
-        }
+            return null;
+        });
     }
 
     /**
@@ -1438,15 +1387,13 @@ public class GameLifecycleService {
                 return;
             }
 
-            synchronized (game) {
-                switch (game.expireReadyCountdown(expectedDeadlineEpochMs)) {
-                    case IGNORE_STALE -> { }
-                    case WAITING_FOR_PLAYERS -> {
-                        cancelReadyTimeout(gameId);
-                        gameStateService.broadcastGameState(gameId, game);
-                    }
-                    case FORCED_READY -> completeReadyCountdownAndStartNextHand(gameId, game);
+            switch (game.expireReadyCountdown(expectedDeadlineEpochMs)) {
+                case IGNORE_STALE -> { }
+                case WAITING_FOR_PLAYERS -> {
+                    cancelReadyTimeout(gameId);
+                    gameStateService.broadcastGameState(gameId, game);
                 }
+                case FORCED_READY -> completeReadyCountdownAndStartNextHand(gameId, game);
             }
         });
     }
@@ -1500,29 +1447,28 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public GameEndResponse claimWin(String gameId, String playerName) {
-        Game game = getGame(gameId);
-        if (game == null || isGameExpired(game)) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-
-        Room room = roomService.getRoom(gameId);
-        if (room == null) throw new ResourceNotFoundException("Room not found");
-        synchronized (room) {
-            synchronized (game) {
-                Long inactivityDeadline = room.getInactivityDeadlineEpochMs();
-                if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
-                    mutationProxy().abandonGameDueToInactivity(gameId);
-                    throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
-                }
-                if (game.isGameOver()) {
-                    GameEndResponse retained = game.getRetainedTerminalResult();
-                    if (retained != null && retained.abandoned()) {
-                        throw new BadRequestException("Game was abandoned due to inactivity.", "GAME_ABANDONED", "Game was abandoned due to inactivity");
-                    }
-                }
-                return departureHandler.claimWinUnderLock(gameId, game, room, playerName);
+        return roomCoordinator.coordinate(gameId, () -> {
+            Game game = getGame(gameId);
+            if (game == null || isGameExpired(game)) {
+                throw new ResourceNotFoundException("Game not found");
             }
-        }
+
+            Room room = roomService.getRoom(gameId);
+            if (room == null) throw new ResourceNotFoundException("Room not found");
+
+            Long inactivityDeadline = room.getInactivityDeadlineEpochMs();
+            if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
+                mutationProxy().abandonGameDueToInactivity(gameId);
+                throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
+            }
+            if (game.isGameOver()) {
+                GameEndResponse retained = game.getRetainedTerminalResult();
+                if (retained != null && retained.abandoned()) {
+                    throw new BadRequestException("Game was abandoned due to inactivity.", "GAME_ABANDONED", "Game was abandoned due to inactivity");
+                }
+            }
+            return departureHandler.claimWinUnderLock(gameId, game, room, playerName);
+        });
     }
 
     /**
@@ -1533,19 +1479,19 @@ public class GameLifecycleService {
      * @return frozen terminal result
      */
     public GameEndResponse getGameReview(String gameId, String playerName) {
-        Game game = getGame(gameId);
-        if (game == null || isGameExpired(game)) {
-            throw new ResourceNotFoundException("Game not found");
-        }
+        return roomCoordinator.coordinate(gameId, () -> {
+            Game game = getGame(gameId);
+            if (game == null || isGameExpired(game)) {
+                throw new ResourceNotFoundException("Game not found");
+            }
 
-        synchronized (game) {
             if (!game.isGameOver()) {
                 throw new ConflictException("Game has not finished");
             }
 
             Room room = roomService != null ? roomService.getRoom(gameId) : null;
             return terminalSettlement.resolveTerminalResultForParticipant(gameId, game, room, playerName, false);
-        }
+        });
     }
 
     /**
@@ -1567,21 +1513,12 @@ public class GameLifecycleService {
                 return;
             }
 
-            synchronized (room) {
-                if (!room.hasPlayer(playerName)) {
-                    return;
-                }
-
-                Game game = getGame(gameId);
-                if (game == null) {
-                    departureHandler.removeDisconnectedPlayerUnderLock(gameId, room, null, playerName, expectedDeadlineEpochMs);
-                    return;
-                }
-
-                synchronized (game) {
-                    departureHandler.removeDisconnectedPlayerUnderLock(gameId, room, game, playerName, expectedDeadlineEpochMs);
-                }
+            if (!room.hasPlayer(playerName)) {
+                return;
             }
+
+            Game game = getGame(gameId);
+            departureHandler.removeDisconnectedPlayerUnderLock(gameId, room, game, playerName, expectedDeadlineEpochMs);
         });
     }
 
@@ -1605,25 +1542,16 @@ public class GameLifecycleService {
                 return;
             }
 
-            synchronized (room) {
-                if (!room.hasPlayer(playerName)) {
-                    return;
-                }
-                String currentMembershipId = room.getMembershipId(playerName);
-                if (!Objects.equals(expectedMembershipId, currentMembershipId)) {
-                    return;
-                }
-
-                Game game = getGame(gameId);
-                if (game == null) {
-                    departureHandler.removeDisconnectedPlayerUnderLock(gameId, room, null, playerName, expectedDeadlineEpochMs);
-                    return;
-                }
-
-                synchronized (game) {
-                    departureHandler.removeDisconnectedPlayerUnderLock(gameId, room, game, playerName, expectedDeadlineEpochMs);
-                }
+            if (!room.hasPlayer(playerName)) {
+                return;
             }
+            String currentMembershipId = room.getMembershipId(playerName);
+            if (!Objects.equals(expectedMembershipId, currentMembershipId)) {
+                return;
+            }
+
+            Game game = getGame(gameId);
+            departureHandler.removeDisconnectedPlayerUnderLock(gameId, room, game, playerName, expectedDeadlineEpochMs);
         });
     }
 
