@@ -12,6 +12,7 @@ import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.dto.internal.RoomEntryResult;
 import jakarta.validation.Valid;
@@ -56,39 +57,14 @@ public class RoomController {
      * @param gameLifecycleService transitions rooms into active games
      * @param jwtService issues room-bound player tokens
      * @param durableMutationAspect supplies the per-room lock shared with durable mutations
-     * @param roomCoordinatorProvider provider for the room-scoped coordinator
+     * @param roomCoordinator coordinator managing the single room concurrency boundary
      */
     @Autowired
     public RoomController(RoomService roomService,
             GameLifecycleService gameLifecycleService,
             JwtService jwtService,
-            DurableMutationAspect durableMutationAspect,
-            ObjectProvider<RoomCoordinator> roomCoordinatorProvider) {
-        this.roomService = roomService;
-        this.gameLifecycleService = gameLifecycleService;
-        this.jwtService = jwtService;
-        this.durableMutationAspect = durableMutationAspect;
-        RoomCoordinator coordinator = roomCoordinatorProvider != null ? roomCoordinatorProvider.getIfAvailable() : null;
-        if (coordinator == null && durableMutationAspect != null) {
-            coordinator = durableMutationAspect.getRoomCoordinator();
-        }
-        this.roomCoordinator = coordinator != null ? coordinator : new RoomCoordinator();
-    }
-
-    /**
-     * Creates the room controller with explicit RoomCoordinator.
-     *
-     * @param roomService owns lobby state and membership
-     * @param gameLifecycleService transitions rooms into active games
-     * @param jwtService issues room-bound player tokens
-     * @param durableMutationAspect supplies the per-room lock shared with durable mutations
-     * @param roomCoordinator coordinator managing room-scoped concurrency boundaries
-     */
-    public RoomController(RoomService roomService,
-            GameLifecycleService gameLifecycleService,
-            JwtService jwtService,
-            DurableMutationAspect durableMutationAspect,
-            RoomCoordinator roomCoordinator) {
+            @Autowired(required = false) DurableMutationAspect durableMutationAspect,
+            @Autowired(required = false) RoomCoordinator roomCoordinator) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.jwtService = jwtService;
@@ -103,7 +79,24 @@ public class RoomController {
     }
 
     /**
-     * Compatibility constructor without explicit RoomCoordinator.
+     * Creates the room controller with explicit RoomCoordinator and DurableMutationAspect.
+     *
+     * @param roomService owns lobby state and membership
+     * @param gameLifecycleService transitions rooms into active games
+     * @param jwtService issues room-bound player tokens
+     * @param durableMutationAspect supplies the per-room lock shared with durable mutations
+     * @param roomCoordinator coordinator managing room-scoped concurrency boundaries
+     */
+    public RoomController(RoomService roomService,
+            GameLifecycleService gameLifecycleService,
+            JwtService jwtService,
+            DurableMutationAspect durableMutationAspect,
+            RoomCoordinator roomCoordinator) {
+        this(roomService, gameLifecycleService, jwtService, durableMutationAspect, (RoomCoordinator) roomCoordinator);
+    }
+
+    /**
+     * Backward-compatible constructor for callers passing DurableMutationAspect.
      *
      * @param roomService owns lobby state and membership
      * @param gameLifecycleService transitions rooms into active games
@@ -115,6 +108,21 @@ public class RoomController {
             JwtService jwtService,
             DurableMutationAspect durableMutationAspect) {
         this(roomService, gameLifecycleService, jwtService, durableMutationAspect, (RoomCoordinator) null);
+    }
+
+    /**
+     * Creates the room controller explicitly with RoomCoordinator.
+     *
+     * @param roomService owns lobby state and membership
+     * @param gameLifecycleService transitions rooms into active games
+     * @param jwtService issues room-bound player tokens
+     * @param roomCoordinator coordinator managing the single room concurrency boundary
+     */
+    public RoomController(RoomService roomService,
+            GameLifecycleService gameLifecycleService,
+            JwtService jwtService,
+            RoomCoordinator roomCoordinator) {
+        this(roomService, gameLifecycleService, jwtService, null, roomCoordinator);
     }
 
     /**

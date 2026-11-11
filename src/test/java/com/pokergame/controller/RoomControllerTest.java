@@ -41,6 +41,7 @@ import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.security.EndpointRateLimitFilter;
 import com.pokergame.security.RateLimitService;
 import com.pokergame.service.GameStateService;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.util.LockLease;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
@@ -112,12 +113,17 @@ class RoomControllerTest {
     @MockitoBean
     private DurableMutationAspect durableMutationAspect;
 
+    @MockitoBean
+    private RoomCoordinator roomCoordinator;
+
     /**
      * Initializes the test fixtures before each scenario.
      */
     @BeforeEach
     void setup() {
         Mockito.when(durableMutationAspect.acquireRoomLock(ArgumentMatchers.anyString()))
+                .thenReturn(LockLease.none());
+        Mockito.when(roomCoordinator.acquire(ArgumentMatchers.anyString()))
                 .thenReturn(LockLease.none());
 
         // Reset rate limit buckets to ensure a fresh start for each test

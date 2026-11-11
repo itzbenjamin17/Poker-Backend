@@ -18,6 +18,7 @@ import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.util.LockLease;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -74,6 +75,9 @@ class GameControllerTest {
     private DurableMutationAspect durableMutationAspect;
 
     @MockitoBean
+    private RoomCoordinator roomCoordinator;
+
+    @MockitoBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @MockitoBean
@@ -93,6 +97,7 @@ class GameControllerTest {
     @BeforeEach
     void setUp() {
         when(durableMutationAspect.acquireRoomLock(anyString())).thenReturn(LockLease.none());
+        when(roomCoordinator.acquire(anyString())).thenReturn(LockLease.none());
         principal = new PlayerPrincipal(playerName, gameId);
         auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
     }

@@ -39,6 +39,10 @@ public record RoomDataResponse(
         Long inactivityDeadlineEpochMs,
         Long serverTimeEpochMs
 ) {
+    public RoomDataResponse {
+        players = players == null ? List.of() : List.copyOf(players);
+    }
+
     /** Compatibility constructor for callers that do not supply timing metadata. */
     public RoomDataResponse(String roomId, String roomName, int maxPlayers, int buyIn, int smallBlind,
             int bigBlind, LocalDateTime createdAt, String hostName, List<PlayerJoinInfo> players,
