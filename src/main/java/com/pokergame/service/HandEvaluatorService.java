@@ -174,7 +174,6 @@ public class HandEvaluatorService {
                 .toList();
 
         // Compare pair values first
-        // noinspection DuplicatedCode
         if (pair1.getFirst().getValue() != pair2.getFirst().getValue()) {
             boolean better = pair1.getFirst().getValue() > pair2.getFirst().getValue();
             if (logger.isTraceEnabled()) {
@@ -310,7 +309,6 @@ public class HandEvaluatorService {
                 .toList();
 
         // Compare three-of-a-kind values first
-        // noinspection DuplicatedCode
         if (threeOfKind1.getFirst().getValue() != threeOfKind2.getFirst().getValue()) {
             boolean better = threeOfKind1.getFirst().getValue() > threeOfKind2.getFirst().getValue();
             if (logger.isTraceEnabled()) {
