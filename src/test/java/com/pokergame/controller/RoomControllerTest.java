@@ -125,6 +125,12 @@ class RoomControllerTest {
                 .thenReturn(LockLease.none());
         Mockito.when(roomCoordinator.acquire(ArgumentMatchers.anyString()))
                 .thenReturn(LockLease.none());
+        Mockito.when(roomCoordinator.coordinate(ArgumentMatchers.anyString(), ArgumentMatchers.any(java.util.function.Supplier.class)))
+                .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        Mockito.doAnswer(inv -> {
+            ((Runnable) inv.getArgument(1)).run();
+            return null;
+        }).when(roomCoordinator).coordinate(ArgumentMatchers.anyString(), ArgumentMatchers.any(Runnable.class));
 
         // Reset rate limit buckets to ensure a fresh start for each test
         rateLimitService.reset();
