@@ -11,6 +11,7 @@ import com.pokergame.enums.ResponseMessage;
 import com.pokergame.service.event.RoomDestroyed;
 import com.pokergame.service.event.RoomMemberRegistered;
 import com.pokergame.service.event.RoomMembershipRetired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import com.pokergame.exception.BadRequestException;
@@ -51,6 +52,8 @@ public class RoomService {
     private final ApplicationEventPublisher eventPublisher;
     private final long disconnectGracePeriodMs;
     private final PasswordEncoder passwordEncoder;
+    private final RoomCoordinator roomCoordinator;
+    private final Object roomRegistrationLock = new Object();
     private RoomService self;
     private Clock clock = Clock.systemUTC();
     private TaskScheduler taskScheduler;
@@ -72,7 +75,7 @@ public class RoomService {
      * @param messagingTemplate WebSocket messaging collaborator
      */
     public RoomService(SimpMessagingTemplate messagingTemplate) {
-        this(messagingTemplate, event -> { }, 120_000L, new BCryptPasswordEncoder());
+        this(messagingTemplate, event -> { }, 120_000L, new BCryptPasswordEncoder(), new RoomCoordinator());
     }
 
     /**
@@ -82,7 +85,7 @@ public class RoomService {
      * @param passwordEncoder   password encoder for hashing and validating credentials
      */
     public RoomService(SimpMessagingTemplate messagingTemplate, PasswordEncoder passwordEncoder) {
-        this(messagingTemplate, event -> { }, 120_000L, passwordEncoder);
+        this(messagingTemplate, event -> { }, 120_000L, passwordEncoder, new RoomCoordinator());
     }
 
     /**
@@ -95,7 +98,7 @@ public class RoomService {
     public RoomService(SimpMessagingTemplate messagingTemplate,
             ApplicationEventPublisher eventPublisher,
             long disconnectGracePeriodMs) {
-        this(messagingTemplate, eventPublisher, disconnectGracePeriodMs, new BCryptPasswordEncoder());
+        this(messagingTemplate, eventPublisher, disconnectGracePeriodMs, new BCryptPasswordEncoder(), new RoomCoordinator());
     }
 
     /**
@@ -106,15 +109,54 @@ public class RoomService {
      * @param disconnectGracePeriodMs reconnect grace interval in ms
      * @param passwordEncoder         password encoder for hashing and verifying room passwords
      */
+    public RoomService(SimpMessagingTemplate messagingTemplate,
+            ApplicationEventPublisher eventPublisher,
+            long disconnectGracePeriodMs,
+            PasswordEncoder passwordEncoder) {
+        this(messagingTemplate, eventPublisher, disconnectGracePeriodMs, passwordEncoder, new RoomCoordinator());
+    }
+
+    /**
+     * Autowired constructor with all dependencies including optional/provided RoomCoordinator.
+     *
+     * @param messagingTemplate       WebSocket messaging collaborator
+     * @param eventPublisher          publishes room lifecycle events once a mutation is accepted
+     * @param disconnectGracePeriodMs reconnect grace interval in ms
+     * @param passwordEncoder         password encoder for hashing and verifying room passwords
+     * @param roomCoordinatorProvider provider for the room-scoped coordinator
+     */
     @Autowired
     public RoomService(SimpMessagingTemplate messagingTemplate,
             ApplicationEventPublisher eventPublisher,
             @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs,
-            PasswordEncoder passwordEncoder) {
+            PasswordEncoder passwordEncoder,
+            ObjectProvider<RoomCoordinator> roomCoordinatorProvider) {
         this.messagingTemplate = messagingTemplate;
         this.eventPublisher = eventPublisher;
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
         this.passwordEncoder = passwordEncoder != null ? passwordEncoder : new BCryptPasswordEncoder();
+        this.roomCoordinator = roomCoordinatorProvider.getIfAvailable(RoomCoordinator::new);
+    }
+
+    /**
+     * Fully specified constructor.
+     *
+     * @param messagingTemplate       WebSocket messaging collaborator
+     * @param eventPublisher          publishes room lifecycle events once a mutation is accepted
+     * @param disconnectGracePeriodMs reconnect grace interval in ms
+     * @param passwordEncoder         password encoder for hashing and verifying room passwords
+     * @param roomCoordinator         coordinator managing room-scoped concurrency boundaries
+     */
+    public RoomService(SimpMessagingTemplate messagingTemplate,
+            ApplicationEventPublisher eventPublisher,
+            long disconnectGracePeriodMs,
+            PasswordEncoder passwordEncoder,
+            RoomCoordinator roomCoordinator) {
+        this.messagingTemplate = messagingTemplate;
+        this.eventPublisher = eventPublisher;
+        this.disconnectGracePeriodMs = disconnectGracePeriodMs;
+        this.passwordEncoder = passwordEncoder != null ? passwordEncoder : new BCryptPasswordEncoder();
+        this.roomCoordinator = roomCoordinator != null ? roomCoordinator : new RoomCoordinator();
     }
 
     /**
@@ -126,6 +168,15 @@ public class RoomService {
     @Autowired
     void setSelf(@Lazy RoomService self) {
         this.self = self;
+    }
+
+    /**
+     * Returns the room-scoped concurrency coordinator.
+     *
+     * @return room coordinator
+     */
+    public RoomCoordinator getRoomCoordinator() {
+        return roomCoordinator;
     }
 
     // Room storage
@@ -180,56 +231,57 @@ public class RoomService {
         String sanitizedRoomName = InputSanitizer.sanitize(request.getRoomName());
         String sanitizedPlayerName = InputSanitizer.sanitize(request.getPlayerName());
 
-        synchronized (this) {
-            if (isRoomNameTaken(sanitizedRoomName)) {
-                logger.warn("Attempted to create room with duplicate name: {}", sanitizedRoomName);
-                throw new BadRequestException(
-                        "Room name '" + sanitizedRoomName + "' is already taken. Please choose a different name.");
+        return roomCoordinator.coordinate(roomId, () -> {
+            synchronized (roomRegistrationLock) {
+                if (isRoomNameTaken(sanitizedRoomName)) {
+                    logger.warn("Attempted to create room with duplicate name: {}", sanitizedRoomName);
+                    throw new BadRequestException(
+                            "Room name '" + sanitizedRoomName + "' is already taken. Please choose a different name.");
+                }
+
+                String rawPassword = request.getPassword();
+                String passwordToStore = null;
+                if (rawPassword != null && !rawPassword.trim().isEmpty()) {
+                    passwordToStore = passwordEncoder.encode(rawPassword);
+                }
+
+                Room room = new Room(
+                        roomId,
+                        sanitizedRoomName,
+                        sanitizedPlayerName, // Host name
+                        request.getMaxPlayers(),
+                        request.getSmallBlind(),
+                        request.getBigBlind(),
+                        request.getBuyIn(),
+                        passwordToStore);
+
+                // Add the host as the first player
+                room.addPlayer(sanitizedPlayerName);
+                room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
+                scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
+                long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
+                room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
+
+                rooms.put(roomId, room);
+                roomHosts.put(roomId, sanitizedPlayerName);
             }
 
-            String rawPassword = request.getPassword();
-            String passwordToStore = null;
-            if (rawPassword != null && !rawPassword.trim().isEmpty()) {
-                passwordToStore = passwordEncoder.encode(rawPassword);
-            }
+            DurableTransactionContext.afterCommit(() -> {
+                Room createdRoom = rooms.get(roomId);
+                String membershipId = createdRoom != null ? createdRoom.getMembershipId(sanitizedPlayerName) : null;
+                Long absenceDeadline = createdRoom != null ? createdRoom.getAbsenceDeadline(sanitizedPlayerName) : null;
+                long deadline = absenceDeadline != null ? absenceDeadline : (System.currentTimeMillis() + disconnectGracePeriodMs);
+                eventPublisher.publishEvent(new RoomMemberRegistered(roomId, sanitizedPlayerName, membershipId, deadline));
+            });
 
-            Room room = new Room(
-                    roomId,
-                    sanitizedRoomName,
-                    sanitizedPlayerName, // Host name
-                    request.getMaxPlayers(),
-                    request.getSmallBlind(),
-                    request.getBigBlind(),
-                    request.getBuyIn(),
-                    passwordToStore);
+            sendAfterCommit("/room/" + roomId,
+                    new ApiResponse<>(ResponseMessage.ROOM_CREATED.getMessage(), getRoomData(roomId)));
 
-            // Add the host as the first player
-            room.addPlayer(sanitizedPlayerName);
-            room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
-            scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
-            long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
-            room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
+            logger.info("Room created: {} (ID: {}) by host: {}",
+                    sanitizedRoomName, roomId, sanitizedPlayerName);
 
-
-            rooms.put(roomId, room);
-            roomHosts.put(roomId, sanitizedPlayerName);
-        }
-
-        DurableTransactionContext.afterCommit(() -> {
-            Room createdRoom = rooms.get(roomId);
-            String membershipId = createdRoom != null ? createdRoom.getMembershipId(sanitizedPlayerName) : null;
-            Long absenceDeadline = createdRoom != null ? createdRoom.getAbsenceDeadline(sanitizedPlayerName) : null;
-            long deadline = absenceDeadline != null ? absenceDeadline : (System.currentTimeMillis() + disconnectGracePeriodMs);
-            eventPublisher.publishEvent(new RoomMemberRegistered(roomId, sanitizedPlayerName, membershipId, deadline));
+            return roomId;
         });
-
-        sendAfterCommit("/room/" + roomId,
-                new ApiResponse<>(ResponseMessage.ROOM_CREATED.getMessage(), getRoomData(roomId)));
-
-        logger.info("Room created: {} (ID: {}) by host: {}",
-                sanitizedRoomName, roomId, sanitizedPlayerName);
-
-        return roomId;
     }
 
     /**
@@ -288,12 +340,20 @@ public class RoomService {
      * @throws BadRequestException       if capacity, password, or name rules reject the join
      */
     public String joinRoom(String roomId, String playerName, String password) {
-        Room room = rooms.get(roomId);
-        if (room == null || isLobbyExpired(room)) {
-            checkAndCloseIfExpired(roomId);
+        if (roomId == null) {
             throw new ResourceNotFoundException("Room not found");
         }
-        return (self == null ? this : self).joinRoom(roomId, new JoinRoomRequest(room.getRoomName(), playerName, password));
+        return roomCoordinator.coordinate(roomId, () -> {
+            Room room = rooms.get(roomId);
+            if (room == null) {
+                throw new ResourceNotFoundException("Room not found");
+            }
+            if (isLobbyExpired(room)) {
+                checkAndCloseIfExpired(roomId);
+                throw new BadRequestException("Room has expired due to inactivity.");
+            }
+            return (self == null ? this : self).joinRoom(roomId, new JoinRoomRequest(room.getRoomName(), playerName, password));
+        });
     }
 
     /**
@@ -311,78 +371,81 @@ public class RoomService {
     public String joinRoom(String roomId, JoinRoomRequest joinRequest) {
         RoomPasswordPolicy.validateLength(joinRequest.password());
         String sanitizedPlayerName = InputSanitizer.sanitize(joinRequest.playerName());
-        Room room = rooms.get(roomId);
-        if (room == null) {
-            throw new ResourceNotFoundException("Room not found");
-        }
 
-        synchronized (room) {
-            if (rooms.get(roomId) != room) {
-                logger.warn("Join attempt failed: room not found for id {} (player: {})", roomId, sanitizedPlayerName);
+        return roomCoordinator.coordinate(roomId, () -> {
+            Room room = rooms.get(roomId);
+            if (room == null) {
                 throw new ResourceNotFoundException("Room not found");
             }
 
-            if (room.isGameStarted()) {
-                logger.warn("Attempted to join room {} after game started", room.getRoomName());
-                throw new BadRequestException("Cannot join room. The game has already started.");
-            }
+            synchronized (room) {
+                if (rooms.get(roomId) != room) {
+                    logger.warn("Join attempt failed: room not found for id {} (player: {})", roomId, sanitizedPlayerName);
+                    throw new ResourceNotFoundException("Room not found");
+                }
 
-            if (isLobbyExpired(room)) {
-                logger.warn("Join attempt failed: room {} has expired due to inactivity", room.getRoomName());
-                throw new BadRequestException("Room has expired due to inactivity.");
-            }
+                if (room.isGameStarted()) {
+                    logger.warn("Attempted to join room {} after game started", room.getRoomName());
+                    throw new BadRequestException("Cannot join room. The game has already started.");
+                }
 
-            // Check password if the room is private
-            if (room.hasPassword() && !room.checkPassword(joinRequest.password(), passwordEncoder)) {
-                logger.warn("Invalid password attempt for room {} by player {}", room.getRoomName(),
-                        sanitizedPlayerName);
-                throw new BadRequestException("Invalid password");
-            }
+                if (isLobbyExpired(room)) {
+                    logger.warn("Join attempt failed: room {} has expired due to inactivity", room.getRoomName());
+                    checkAndCloseIfExpired(roomId);
+                    throw new BadRequestException("Room has expired due to inactivity.");
+                }
 
-            // Check if the room is full
-            if (room.isFull()) {
-                logger.warn("Join attempt failed: room {} is full (player: {})", room.getRoomName(),
-                        sanitizedPlayerName);
-                throw new BadRequestException("Room is full");
-            }
+                // Check password if the room is private
+                if (room.hasPassword() && !room.checkPassword(joinRequest.password(), passwordEncoder)) {
+                    logger.warn("Invalid password attempt for room {} by player {}", room.getRoomName(),
+                            sanitizedPlayerName);
+                    throw new BadRequestException("Invalid password");
+                }
 
-            // Check if the player name already exists
-            if (room.hasPlayer(sanitizedPlayerName)) {
-                logger.warn("Join attempt failed: player name '{}' already taken in room {}", sanitizedPlayerName,
-                        room.getRoomName());
-                throw new BadRequestException("Player name already taken");
-            }
-
-            try {
-                room.addPlayer(sanitizedPlayerName);
-            } catch (IllegalStateException e) {
-                if ("Room is full".equals(e.getMessage()) || (e.getMessage() != null && e.getMessage().contains("full"))) {
-                    logger.warn("Join attempt failed: room {} capacity exceeded: {}", room.getRoomName(), e.getMessage());
+                // Check if the room is full
+                if (room.isFull()) {
+                    logger.warn("Join attempt failed: room {} is full (player: {})", room.getRoomName(),
+                            sanitizedPlayerName);
                     throw new BadRequestException("Room is full");
                 }
-                throw e;
+
+                // Check if the player name already exists
+                if (room.hasPlayer(sanitizedPlayerName)) {
+                    logger.warn("Join attempt failed: player name '{}' already taken in room {}", sanitizedPlayerName,
+                            room.getRoomName());
+                    throw new BadRequestException("Player name already taken");
+                }
+
+                try {
+                    room.addPlayer(sanitizedPlayerName);
+                } catch (IllegalStateException e) {
+                    if ("Room is full".equals(e.getMessage()) || (e.getMessage() != null && e.getMessage().contains("full"))) {
+                        logger.warn("Join attempt failed: room {} capacity exceeded: {}", room.getRoomName(), e.getMessage());
+                        throw new BadRequestException("Room is full");
+                    }
+                    throw e;
+                }
+                room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
+                scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
+                long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
+                room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
             }
-            room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
-            scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
-            long acceptanceDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
-            room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
 
-        }
+            DurableTransactionContext.afterCommit(() -> {
+                Room joinedRoom = rooms.get(roomId);
+                String mId = joinedRoom != null ? joinedRoom.getMembershipId(sanitizedPlayerName) : null;
+                Long absenceDeadline = joinedRoom != null ? joinedRoom.getAbsenceDeadline(sanitizedPlayerName) : null;
+                long deadline = absenceDeadline != null ? absenceDeadline : (System.currentTimeMillis() + disconnectGracePeriodMs);
+                eventPublisher.publishEvent(new RoomMemberRegistered(roomId, sanitizedPlayerName, mId, deadline));
+            });
 
-        DurableTransactionContext.afterCommit(() -> {
-            Room joinedRoom = rooms.get(roomId);
-            String mId = joinedRoom != null ? joinedRoom.getMembershipId(sanitizedPlayerName) : null;
-            Long absenceDeadline = joinedRoom != null ? joinedRoom.getAbsenceDeadline(sanitizedPlayerName) : null;
-            long deadline = absenceDeadline != null ? absenceDeadline : (System.currentTimeMillis() + disconnectGracePeriodMs);
-            eventPublisher.publishEvent(new RoomMemberRegistered(roomId, sanitizedPlayerName, mId, deadline));
+            logger.info("Player {} joined room: {}", sanitizedPlayerName, room.getRoomName());
+
+            sendAfterCommit("/room/" + roomId,
+                    new ApiResponse<>(ResponseMessage.PLAYER_JOINED.getMessage(), getRoomData(roomId)));
+
+            return roomId;
         });
-
-        logger.info("Player {} joined room: {}", sanitizedPlayerName, room.getRoomName());
-
-        sendAfterCommit("/room/" + roomId,
-                new ApiResponse<>(ResponseMessage.PLAYER_JOINED.getMessage(), getRoomData(roomId)));
-
-        return roomId;
     }
 
     /**
@@ -521,17 +584,22 @@ public class RoomService {
     }
 
     /**
-     * Retrieves all currently available rooms.
+     * Retrieves all currently available rooms by resolving identities individually.
      *
      * @return a list of all Room objects
      */
     public List<Room> getRooms() {
-        return new ArrayList<>(rooms.values());
+        List<String> roomIds = new ArrayList<>(rooms.keySet());
+        return roomIds.stream()
+                .map(this::getRoom)
+                .filter(Objects::nonNull)
+                .toList();
     }
 
     /**
      * Retrieves formatted room data for API responses and WebSocket broadcasts.
      * Includes player information with host status indicators.
+     * Coordinated under the room boundary before reading published state.
      *
      * @param roomId the unique identifier of the room
      * @return a RoomDataResponse object containing formatted room information
@@ -543,62 +611,63 @@ public class RoomService {
             logger.error("Room data request failed: roomId is null");
             throw new BadRequestException("Room ID cannot be null");
         }
-        Room room = rooms.get(roomId);
-        if (room == null || isLobbyExpired(room)) {
-            if (room != null) {
-                checkAndCloseIfExpired(roomId);
+        return roomCoordinator.coordinate(roomId, () -> {
+            Room room = rooms.get(roomId);
+            if (room == null || isLobbyExpired(room)) {
+                if (room != null) {
+                    checkAndCloseIfExpired(roomId);
+                }
+                logger.warn("Room data request failed: room not found for id {}", roomId);
+                throw new ResourceNotFoundException("Room not found");
             }
-            logger.warn("Room data request failed: room not found for id {}", roomId);
-            throw new ResourceNotFoundException("Room not found");
-        }
 
-        synchronized (room) {
-            String currentHost = roomHosts.getOrDefault(roomId, room.getHostName());
+            synchronized (room) {
+                String currentHost = roomHosts.getOrDefault(roomId, room.getHostName());
 
-            // Convert player names to PlayerInfoDTO objects
-            List<PlayerJoinInfo> playerObjects = room.getPlayers().stream()
-                    .map(playerName -> {
-                        LocalDateTime joinedAt = room.getJoinedAt(playerName);
-                        String joinedAtStr = (joinedAt != null) ? joinedAt.toString() : "recently";
-                        return new PlayerJoinInfo(
-                                playerName,
-                                currentHost.equals(playerName),
-                                joinedAtStr
-                        );
-                    })
-                    .collect(Collectors.toList());
+                // Convert player names to PlayerInfoDTO objects
+                List<PlayerJoinInfo> playerObjects = room.getPlayers().stream()
+                        .map(playerName -> {
+                            LocalDateTime joinedAt = room.getJoinedAt(playerName);
+                            String joinedAtStr = (joinedAt != null) ? joinedAt.toString() : "recently";
+                            return new PlayerJoinInfo(
+                                    playerName,
+                                    currentHost.equals(playerName),
+                                    joinedAtStr
+                            );
+                        })
+                        .collect(Collectors.toList());
 
-            // Create and return the RoomDataDTO
-            return new RoomDataResponse(
-                    roomId,
-                    room.getRoomName(),
-                    room.getMaxPlayers(),
-                    room.getBuyIn(),
-                    room.getSmallBlind(),
-                    room.getBigBlind(),
-                    room.getCreatedAt(),
-                    currentHost,
-                    playerObjects,
-                    playerObjects.size(),
-                    !room.isGameStarted() && playerObjects.size() >= 2,
-                    room.isGameStarted(), room.getInactivityDeadlineEpochMs(), clock.millis());
-        }
+                // Create and return the RoomDataDTO
+                return new RoomDataResponse(
+                        roomId,
+                        room.getRoomName(),
+                        room.getMaxPlayers(),
+                        room.getBuyIn(),
+                        room.getSmallBlind(),
+                        room.getBigBlind(),
+                        room.getCreatedAt(),
+                        currentHost,
+                        playerObjects,
+                        playerObjects.size(),
+                        !room.isGameStarted() && playerObjects.size() >= 2,
+                        room.isGameStarted(),
+                        room.getInactivityDeadlineEpochMs(),
+                        clock.millis());
+            }
+        });
     }
 
-
     /**
-     * Retrieves a room by its unique identifier.
+     * Retrieves a room by its unique identifier as a pure lookup without lifecycle side effects.
      *
      * @param roomId the unique identifier of the room
      * @return the Room object if found, null otherwise
      */
     public Room getRoom(String roomId) {
-        Room room = rooms.get(roomId);
-        if (room != null && isLobbyExpired(room)) {
-            checkAndCloseIfExpired(roomId);
+        if (roomId == null) {
             return null;
         }
-        return room;
+        return rooms.get(roomId);
     }
 
     /**
@@ -617,21 +686,19 @@ public class RoomService {
     }
 
     /**
-     * Finds a room by its name (case-insensitive).
+     * Finds a room by its name (case-insensitive) as a pure lookup.
      *
      * @param roomName the name of the room to find
      * @return the Room object if found, null otherwise
      */
     public Room findRoomByName(String roomName) {
-        Room room = rooms.values().stream()
+        if (roomName == null) {
+            return null;
+        }
+        return rooms.values().stream()
                 .filter(r -> r.getRoomName().equalsIgnoreCase(roomName))
                 .findFirst()
                 .orElse(null);
-        if (room != null && isLobbyExpired(room)) {
-            checkAndCloseIfExpired(room.getRoomId());
-            return null;
-        }
-        return room;
     }
 
     /**
@@ -809,20 +876,26 @@ public class RoomService {
     }
 
     /**
-     * Checks if a lobby has expired and closes it if so.
+     * Checks if a lobby has expired and closes it if so under the room coordination boundary.
      *
      * @param roomId room identity
      * @return true if room was closed due to inactivity
      */
     public boolean checkAndCloseIfExpired(String roomId) {
-        Room room = rooms.get(roomId);
-        if (room == null) return false;
-        if (!room.isGameStarted() && room.getInactivityDeadlineEpochMs() != null
-                && clock.millis() >= room.getInactivityDeadlineEpochMs()) {
-            (self != null ? self : this).closeLobbyDueToInactivity(roomId, room.getInactivityDeadlineEpochMs());
-            return true;
-        }
-        return false;
+        if (roomId == null) return false;
+        return roomCoordinator.coordinate(roomId, () -> {
+            Room room = rooms.get(roomId);
+            if (room == null) return false;
+            synchronized (room) {
+                if (rooms.get(roomId) != room) return false;
+                if (!room.isGameStarted() && room.getInactivityDeadlineEpochMs() != null
+                        && clock.millis() >= room.getInactivityDeadlineEpochMs()) {
+                    (self != null ? self : this).closeLobbyDueToInactivity(roomId, room.getInactivityDeadlineEpochMs());
+                    return true;
+                }
+                return false;
+            }
+        });
     }
 
     /**
