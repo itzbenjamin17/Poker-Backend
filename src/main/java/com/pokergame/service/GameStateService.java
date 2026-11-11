@@ -89,8 +89,13 @@ public class GameStateService {
      * @return public game-state DTO for the requested game
      */
     public PublicGameStateResponse getPublicGameStateSnapshot(String gameId, Game game) {
+        Room room = roomService.getRoom(gameId);
+        if (room == null) {
+            logger.warn("Game state build failed: room not found for gameId {}", gameId);
+            throw new ResourceNotFoundException("Room not found");
+        }
         synchronized (game) {
-            return buildPublicGameStateResponse(gameId, game);
+            return buildPublicGameStateResponse(gameId, game, room);
         }
     }
 
@@ -128,12 +133,18 @@ public class GameStateService {
 
         logger.debug("Broadcasting game state for game {}", gameId);
 
+        Room room = roomService.getRoom(gameId);
+        if (room == null) {
+            logger.warn("Game state build failed: room not found for gameId {}", gameId);
+            throw new ResourceNotFoundException("Room not found");
+        }
+
         PublicGameStateResponse publicResponse;
         Map<String, PrivatePlayerState> playerPrivateStates = new HashMap<>();
 
         synchronized (game) {
             game.incrementStateRevision();
-            publicResponse = buildPublicGameStateResponse(gameId, game);
+            publicResponse = buildPublicGameStateResponse(gameId, game, room);
             for (Player player : game.getPlayers()) {
                 playerPrivateStates.put(player.getName(), buildPrivatePlayerState(game, player));
             }
@@ -165,14 +176,14 @@ public class GameStateService {
             return;
         }
 
+        Room room = roomService.getRoom(gameId);
+        int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+
         PublicGameStateResponse showdownResponse;
         List<String> winnerNames;
 
         synchronized (game) {
             game.incrementStateRevision();
-            // Get room information
-            Room room = roomService.getRoom(gameId);
-            int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
             // Showdown means no one is waiting to act - reporting a stale "current
             // player" pointer here previously made the client briefly think it was
@@ -280,13 +291,13 @@ public class GameStateService {
             return;
         }
 
+        Room room = roomService.getRoom(gameId);
+        int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+
         PublicGameStateResponse autoAdvanceResponse;
 
         synchronized (game) {
             game.incrementStateRevision();
-            // Get room information
-            Room room = roomService.getRoom(gameId);
-            int maxPlayers = room != null ? room.getMaxPlayers() : 0;
 
             // Get current player information
             String currentPlayerName = null;
@@ -674,12 +685,12 @@ public class GameStateService {
      *
      * @param gameId the unique identifier of the game
      * @param game   the Game object containing the current state
+     * @param room   the Room object associated with this game
      * @return a {@link PublicGameStateResponse}
      * 
      * @throws ResourceNotFoundException if the room is not found
      */
-    private PublicGameStateResponse buildPublicGameStateResponse(String gameId, Game game) {
-        Room room = roomService.getRoom(gameId);
+    private PublicGameStateResponse buildPublicGameStateResponse(String gameId, Game game, Room room) {
         if (room == null) {
             logger.warn("Game state build failed: room not found for gameId {}", gameId);
             throw new ResourceNotFoundException("Room not found");
