@@ -652,11 +652,7 @@ public class GameLifecycleService {
         }
         activeGames.put(gameId, game);
         if (room != null) {
-            if (game.isGameOver()) {
-                room.setTerminal(true);
-            } else {
-                room.setTerminal(false);
-            }
+            room.setTerminal(game.isGameOver());
             room.setGameStarted(true);
         }
     }
@@ -705,7 +701,7 @@ public class GameLifecycleService {
         }
         MdcUtils.runWithRoomId(gameId, () -> {
             List<TaskIntent> intents;
-            boolean normalized = false;
+            boolean normalized;
             int rebuiltCount;
             synchronized (game) {
                 normalized = game.normalizeRecoveredReadyCountdown(System.currentTimeMillis() + configuredReadyCountdownMs);
@@ -1140,7 +1136,7 @@ public class GameLifecycleService {
             }
 
             Player player = game.findPlayerByName(playerName);
-            boolean previousReady = player != null && Boolean.TRUE.equals(player.getIsReadyForNextHand());
+            boolean previousReady = player != null && player.getIsReadyForNextHand();
 
             game.setPlayerReadyForNextHand(playerName, true);
             if (!previousReady) {
@@ -1178,7 +1174,7 @@ public class GameLifecycleService {
             }
 
             Player player = game.findPlayerByName(playerName);
-            boolean previousReady = player != null && Boolean.TRUE.equals(player.getIsReadyForNextHand());
+            boolean previousReady = player != null && player.getIsReadyForNextHand();
 
             game.setPlayerReadyForNextHand(playerName, false);
             if (previousReady) {

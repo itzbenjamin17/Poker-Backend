@@ -755,7 +755,7 @@ class RoomTest {
                 });
             }
 
-            readyLatch.await(5, TimeUnit.SECONDS);
+            assertTrue(readyLatch.await(5, TimeUnit.SECONDS), "All concurrent join threads must get ready in time");
             startLatch.countDown();
             assertTrue(doneLatch.await(5, TimeUnit.SECONDS), "All concurrent join threads must finish");
         } finally {

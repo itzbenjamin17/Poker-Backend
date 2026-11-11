@@ -283,27 +283,25 @@ public class Room {
 
         public Room build() {
             Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, password, createdAt);
-            synchronized (room) {
-                room.playersWithJoinTime.clear();
-                if (playersWithJoinTime != null) {
-                    if (playersWithJoinTime.size() > maxPlayers) {
-                        throw new IllegalStateException("Restored players count exceeds maxPlayers: " + playersWithJoinTime.size() + " > " + maxPlayers);
-                    }
-                    room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
-                    for (String playerName : room.playersWithJoinTime.keySet()) {
-                        String persistedId = playerMembershipIds != null ? playerMembershipIds.get(playerName) : null;
-                        if (persistedId != null && !persistedId.isBlank()) {
-                            room.playerMembershipIds.put(playerName, persistedId);
-                            room.persistedMembershipPlayers.add(playerName);
-                        } else {
-                            room.playerMembershipIds.put(playerName, UUID.randomUUID().toString());
-                        }
+            room.playersWithJoinTime.clear();
+            if (playersWithJoinTime != null) {
+                if (playersWithJoinTime.size() > maxPlayers) {
+                    throw new IllegalStateException("Restored players count exceeds maxPlayers: " + playersWithJoinTime.size() + " > " + maxPlayers);
+                }
+                room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
+                for (String playerName : room.playersWithJoinTime.keySet()) {
+                    String persistedId = playerMembershipIds != null ? playerMembershipIds.get(playerName) : null;
+                    if (persistedId != null && !persistedId.isBlank()) {
+                        room.playerMembershipIds.put(playerName, persistedId);
+                        room.persistedMembershipPlayers.add(playerName);
+                    } else {
+                        room.playerMembershipIds.put(playerName, UUID.randomUUID().toString());
                     }
                 }
-                room.isGameStarted = gameStarted;
-                room.isTerminal = terminal;
-                room.inactivityDeadlineEpochMs = inactivityDeadlineEpochMs;
             }
+            room.isGameStarted = gameStarted;
+            room.isTerminal = terminal;
+            room.inactivityDeadlineEpochMs = inactivityDeadlineEpochMs;
             return room;
         }
     }

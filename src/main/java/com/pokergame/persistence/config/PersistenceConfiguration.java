@@ -161,13 +161,14 @@ public class PersistenceConfiguration {
     HealthIndicator pokerPersistenceHealth(EncryptedWalStore store, PersistenceRecovery recovery) {
         return () -> {
             boolean persistenceHealthy = store.isHealthy();
+            String lastStorageError = store.lastError();
             Health.Builder builder = recovery.isComplete() ? Health.up() : Health.down();
             return builder.withDetail("recoveryComplete", recovery.isComplete())
                     .withDetail("persistenceHealthy", persistenceHealthy)
                     .withDetail("mode", !recovery.isComplete() ? "RECOVERING" : persistenceHealthy ? "DURABLE" : "MEMORY_ONLY")
                     .withDetail("unsavedRoomCount", store.unsavedRoomCount())
                     .withDetail("activeWalCount", store.walCount())
-                    .withDetail("lastStorageError", store.lastError() == null ? "none" : store.lastError())
+                    .withDetail("lastStorageError", lastStorageError == null ? "none" : lastStorageError)
                     .build();
         };
     }

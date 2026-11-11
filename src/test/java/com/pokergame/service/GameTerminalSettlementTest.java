@@ -59,14 +59,13 @@ class GameTerminalSettlementTest {
     private SimpMessagingTemplate messagingTemplate;
 
     private GameLifecycleService gameLifecycleService;
-    private GameRuntimeTimers runtimeTimers;
     private GameTerminalSettlement terminalSettlement;
     private Room testRoom;
     private static final String ROOM_ID = "test-room-id";
 
     @BeforeEach
     void setUp() {
-        runtimeTimers = new GameRuntimeTimers(taskScheduler);
+        GameRuntimeTimers runtimeTimers = new GameRuntimeTimers(taskScheduler);
         terminalSettlement = new GameTerminalSettlement(gameStateService, runtimeTimers);
         gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
                 taskScheduler);

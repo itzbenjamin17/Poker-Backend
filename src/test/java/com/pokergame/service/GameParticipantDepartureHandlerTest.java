@@ -1089,6 +1089,7 @@ class GameParticipantDepartureHandlerTest {
 
             boolean done = doneLatch.await(3, TimeUnit.SECONDS);
             assertTrue(done, "Race timed out at iteration " + i);
+            assertNull(leaveError.get(), "Leave operation must not throw an unexpected exception");
 
             Game game = gameLifecycleService.getGame(roomId);
             if (game != null) {
@@ -1171,6 +1172,7 @@ class GameParticipantDepartureHandlerTest {
 
             boolean done = doneLatch.await(3, TimeUnit.SECONDS);
             assertTrue(done, "Race timed out at iteration " + i);
+            assertNull(leaveError.get(), "Leave operation must not throw an unexpected exception");
 
             Game game = gameLifecycleService.getGame(roomId);
             if (game != null) {

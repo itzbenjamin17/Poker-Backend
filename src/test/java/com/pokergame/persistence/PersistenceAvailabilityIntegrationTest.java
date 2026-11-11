@@ -81,8 +81,6 @@ class PersistenceAvailabilityIntegrationTest {
             broker.subscribe(recorder);
             try {
                 initialPot = game.getPot();
-                initialStacks = game.getPlayers().stream().collect(Collectors.toMap(Player::getPlayerId, Player::getChips));
-                initialDeck = game.getRemainingDeckSnapshot();
 
                 unavailable.set(true);
 

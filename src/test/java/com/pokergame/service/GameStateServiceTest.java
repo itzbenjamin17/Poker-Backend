@@ -462,7 +462,7 @@ class GameStateServiceTest {
 
         Object captured = captor.getValue();
         assertNotNull(captured);
-        assertTrue(captured instanceof GameEndResponse);
+        assertInstanceOf(GameEndResponse.class, captured);
 
         GameEndResponse gameEndResponse = (GameEndResponse) captured;
         assertEquals("GAME_END", gameEndResponse.type());

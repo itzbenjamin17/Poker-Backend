@@ -295,13 +295,6 @@ public final class AggregateSnapshotMapper {
     }
 
     /**
-     * Restores a Game from a snapshot. We do this carefully instead of using normal game creation,
-     * so we don't accidentally reshuffle cards, take new blinds, or mess up whose turn it is.
-     *
-     * @param state the saved game snapshot
-     * @return a recreated game, ready to continue playing
-     */
-    /**
      * Restores a Room from a persisted room snapshot.
      *
      * @param state the saved room snapshot
