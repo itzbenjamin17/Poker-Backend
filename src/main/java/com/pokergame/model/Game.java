@@ -132,7 +132,7 @@ public class Game {
      */
     Game(GameRestoreBuilder builder) {
         if (builder.getGameId() == null || builder.getGameId().trim().isEmpty()) {
-            logger.error("[Game] Invalid gameId: '{}'", builder.getGameId());
+            logger.error("[Game][Restore] Invalid gameId: '{}'", builder.getGameId());
             throw new BadRequestException("Game ID cannot be null or empty");
         }
         List<Player> builderPlayers = builder.getPlayers();
