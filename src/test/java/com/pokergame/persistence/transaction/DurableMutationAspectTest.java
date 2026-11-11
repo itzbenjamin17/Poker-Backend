@@ -36,6 +36,7 @@ import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.AggregateStateImage;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.service.HandEvaluatorService;
+import com.pokergame.service.RoomCoordinator;
 import org.junit.jupiter.api.DisplayName;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
@@ -330,8 +331,8 @@ class DurableMutationAspectTest {
     }
 
     @Test
-    @DisplayName("captureState acquires Room monitor before Game monitor and serializes outside monitors")
-    void captureState_AcquiresMonitorsInOrderAndEncodesOutsideMonitors() throws Throwable {
+    @DisplayName("captureState holds the shared room coordinator through capture and encoding")
+    void captureState_UsesSharedRoomCoordinatorForCaptureAndEncoding() throws Throwable {
         when(roomServiceProvider.getObject()).thenReturn(roomService);
         when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
 
@@ -343,6 +344,7 @@ class DurableMutationAspectTest {
                 new HandEvaluatorService()));
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, realMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+        RoomCoordinator coordinator = aspect.getRoomCoordinator();
 
         Room room = spy(new Room("room-capture", "Capture Room", "Host", 6, 10, 20, 1000, null));
         room.addPlayer("Host");
@@ -354,20 +356,20 @@ class DurableMutationAspectTest {
         when(roomService.getCurrentHost("room-capture")).thenReturn("Host");
 
         doAnswer(inv -> {
-            assertTrue(Thread.holdsLock(room), "Room state must be read under Room monitor");
-            assertFalse(Thread.holdsLock(game), "Game monitor must not be held when capturing Room state");
+            assertTrue(coordinator.isHeldByCurrentThread("room-capture"),
+                    "Room state must be read under the room coordination boundary");
             return inv.callRealMethod();
         }).when(room).getPlayersWithJoinTimeSnapshot();
 
         doAnswer(inv -> {
-            assertTrue(Thread.holdsLock(room), "Room monitor must still be held during Game state capture");
-            assertTrue(Thread.holdsLock(game), "Game monitor must be held during Game state capture");
+            assertTrue(coordinator.isHeldByCurrentThread("room-capture"),
+                    "Game state must be read under the room coordination boundary");
             return inv.callRealMethod();
         }).when(game).getPlayers();
 
         doAnswer(inv -> {
-            assertFalse(Thread.holdsLock(room), "Room monitor must be released before JSON serialization");
-            assertFalse(Thread.holdsLock(game), "Game monitor must be released before JSON serialization");
+            assertTrue(coordinator.isHeldByCurrentThread("room-capture"),
+                    "Encoding must retain the established room coordination boundary");
             return inv.callRealMethod();
         }).when(realMapper).serialize(any(AggregateStateImage.class));
 

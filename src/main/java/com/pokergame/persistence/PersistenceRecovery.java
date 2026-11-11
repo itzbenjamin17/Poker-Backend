@@ -239,7 +239,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
                                 roomId, playerName,
                                 recoveredDeadlines.get(new RecoveredPlayerKey(roomId, playerName)));
                     }
-                    
+
                     // Restart the game timers (like the countdown for player turns) so the game can continue
                     if (game != null) {
                         gameLifecycleService.resumeRecoveredTimers(game.getGameId());

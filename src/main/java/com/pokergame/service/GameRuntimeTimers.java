@@ -19,7 +19,7 @@ import java.util.concurrent.ScheduledFuture;
  * registrations from persisted deadlines, and overdue work is scheduled immediately.
  *
  * <p>Registration checks the deadline, hand number, and task generation under the
- * game lock. The callback must revalidate those values at the durable mutation seam
+ * room coordination lease. The callback must revalidate those values at the durable mutation seam
  * because a cancelled or replaced callback may already be running.
  */
 final class GameRuntimeTimers {
@@ -64,12 +64,12 @@ final class GameRuntimeTimers {
         }
     }
 
-    /** Captures the task identity while the caller holds the game lock. */
+    /** Captures the task identity while the caller holds the room coordination lease. */
     static TaskIntent captureIntent(String gameId, Game game, ScheduledGameTask task, long deadline) {
         return new TaskIntent(gameId, task, deadline, game.getHandNumber(), game.getScheduledTaskGeneration(task));
     }
 
-    /** Captures all currently scheduled task intents while the caller holds the game lock. */
+    /** Captures all currently scheduled task intents while the caller holds the room coordination lease. */
     static List<TaskIntent> captureAllIntents(String gameId, Game game) {
         return game.getScheduledTaskDeadlinesSnapshot().entrySet().stream()
                 .map(entry -> captureIntent(gameId, game, entry.getKey(), entry.getValue()))

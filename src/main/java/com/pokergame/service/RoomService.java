@@ -204,15 +204,17 @@ public class RoomService {
      * repeated by the caller.
      *
      * @param request validated room configuration
-     * @return the created room id paired with the canonical host name
+     * @return admitted room identity, canonical host name, and MembershipId
      * @throws BadRequestException if the room name is already taken
      */
     public RoomEntryResult createRoomForEntry(CreateRoomRequest request) {
-        String roomId = createRoom(request);
-        // The host is stored under its sanitized name; getCurrentHost returns that
-        // canonical value, so no second sanitization pass is needed.
-        String canonicalPlayerName = getCurrentHost(roomId);
-        return new RoomEntryResult(roomId, canonicalPlayerName);
+        String roomId = UUID.randomUUID().toString();
+        return roomCoordinator.coordinate(roomId, () -> {
+            (self == null ? this : self).createRoom(roomId, request);
+            String canonicalPlayerName = getCurrentHost(roomId);
+            return new RoomEntryResult(roomId, canonicalPlayerName,
+                    rooms.get(roomId).getMembershipId(canonicalPlayerName));
+        });
     }
 
     /**
@@ -317,16 +319,21 @@ public class RoomService {
      * repeated by the caller.
      *
      * @param joinRequest validated join request
-     * @return the joined room id paired with the canonical player name
+     * @return admitted room identity, canonical player name, and MembershipId
      * @throws ResourceNotFoundException if the room isn't found
      * @throws BadRequestException if the password is invalid, the player name is taken, or the room is full
      */
     public RoomEntryResult joinRoomForEntry(JoinRoomRequest joinRequest) {
-        String roomId = joinRoom(joinRequest);
-        // The player is stored under its sanitized name; sanitize once here (in the
-        // service) to recover the canonical key, then confirm it against stored state.
+        String roomName = InputSanitizer.sanitize(joinRequest.roomName());
         String canonicalPlayerName = InputSanitizer.sanitize(joinRequest.playerName());
-        return new RoomEntryResult(roomId, canonicalPlayerName);
+        Room target = findRoomByName(roomName);
+        if (target == null) throw new ResourceNotFoundException("Room not found");
+        String roomId = target.getRoomId();
+        return roomCoordinator.coordinate(roomId, () -> {
+            (self == null ? this : self).joinRoom(roomId, joinRequest);
+            return new RoomEntryResult(roomId, canonicalPlayerName,
+                    rooms.get(roomId).getMembershipId(canonicalPlayerName));
+        });
     }
 
     /**
@@ -657,7 +664,8 @@ public class RoomService {
     }
 
     /**
-     * Retrieves a room by its unique identifier as a pure lookup without lifecycle side effects.
+     * Retrieves a room by its unique identifier as a pure internal lookup without lifecycle side effects.
+     * Callers must hold the room lease while accessing mutable state and must not retain the result.
      *
      * @param roomId the unique identifier of the room
      * @return the Room object if found, null otherwise
@@ -680,8 +688,10 @@ public class RoomService {
         if (roomId == null) {
             return false;
         }
-        Room room = rooms.get(roomId);
-        return room != null && room.hasPlayer(playerName);
+        return roomCoordinator.coordinate(roomId, () -> {
+            Room room = rooms.get(roomId);
+            return room != null && room.hasPlayer(playerName);
+        });
     }
 
     /**
@@ -708,9 +718,11 @@ public class RoomService {
      * @return true if the player is the room host, false otherwise
      */
     public boolean isRoomHost(String roomId, String playerName) {
-        Room room = rooms.get(roomId);
-        String hostName = roomHosts.getOrDefault(roomId, room == null ? null : room.getHostName());
-        return hostName != null && hostName.equals(playerName);
+        return roomCoordinator.coordinate(roomId, () -> {
+            Room room = rooms.get(roomId);
+            String hostName = roomHosts.getOrDefault(roomId, room == null ? null : room.getHostName());
+            return hostName != null && hostName.equals(playerName);
+        });
     }
 
     /**
@@ -721,8 +733,10 @@ public class RoomService {
      * @return current host, original host as fallback, or {@code null} if absent
      */
     public String getCurrentHost(String roomId) {
-        Room room = rooms.get(roomId);
-        return roomHosts.getOrDefault(roomId, room == null ? null : room.getHostName());
+        return roomCoordinator.coordinate(roomId, () -> {
+            Room room = rooms.get(roomId);
+            return roomHosts.getOrDefault(roomId, room == null ? null : room.getHostName());
+        });
     }
 
     /**

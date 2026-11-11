@@ -698,7 +698,7 @@ class RoomControllerTest {
     }
 
     @Test
-    @DisplayName("POST /api/room/create - Issues token with membershipId when room exists")
+    @DisplayName("POST /api/room/create - Keeps admitted membershipId after host replacement")
     void createRoom_WithActiveMembership_ShouldIssueTokenWithMembershipId() throws Exception {
         CreateRoomRequest request = new CreateRoomRequest("RoomMem", "HostAlice", 6, 10, 20, 1000, null);
         String roomId = "room-mem-123";
@@ -706,7 +706,9 @@ class RoomControllerTest {
         String expectedMembershipId = room.addPlayer("HostAlice");
 
         when(roomService.createRoomForEntry(any(CreateRoomRequest.class)))
-                .thenReturn(new RoomEntryResult(roomId, "HostAlice"));
+                .thenReturn(new RoomEntryResult(roomId, "HostAlice", expectedMembershipId));
+        room.removePlayer("HostAlice");
+        room.addPlayer("HostAlice");
         when(roomService.getRoom(roomId)).thenReturn(room);
         when(jwtService.generateToken("HostAlice", roomId, expectedMembershipId)).thenReturn("token-with-mid");
 
@@ -722,7 +724,7 @@ class RoomControllerTest {
     }
 
     @Test
-    @DisplayName("POST /api/room/join - Issues token with membershipId when joined")
+    @DisplayName("POST /api/room/join - Keeps admitted membershipId after player replacement")
     void joinRoom_WithActiveMembership_ShouldIssueTokenWithMembershipId() throws Exception {
         JoinRoomRequest request = new JoinRoomRequest("RoomMem", "Bob", null);
         String roomId = "room-mem-456";
@@ -731,7 +733,9 @@ class RoomControllerTest {
         String expectedMembershipId = room.addPlayer("Bob");
 
         when(roomService.joinRoomForEntry(any(JoinRoomRequest.class)))
-                .thenReturn(new RoomEntryResult(roomId, "Bob"));
+                .thenReturn(new RoomEntryResult(roomId, "Bob", expectedMembershipId));
+        room.removePlayer("Bob");
+        room.addPlayer("Bob");
         when(roomService.getRoom(roomId)).thenReturn(room);
         when(jwtService.generateToken("Bob", roomId, expectedMembershipId)).thenReturn("token-with-mid-bob");
 

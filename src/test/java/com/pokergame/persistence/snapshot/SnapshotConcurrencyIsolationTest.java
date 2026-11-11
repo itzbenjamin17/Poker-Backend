@@ -3,6 +3,7 @@ package com.pokergame.persistence.snapshot;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.service.HandEvaluatorService;
+import com.pokergame.service.RoomCoordinator;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -31,18 +32,19 @@ class SnapshotConcurrencyIsolationTest {
         Player departing = new Player("Charlie", "p3", 1000);
         Game game = new Game("snapshot-room", List.of(alice, bob, departing), 10, 20, evaluator);
         AggregateStateImage.GameState before = mapper.toState(game);
+        RoomCoordinator coordinator = new RoomCoordinator();
 
         AtomicReference<Thread> reader = new AtomicReference<>();
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             Future<AggregateStateImage.GameState> capture;
-            synchronized (game) {
+            try (var ignored = coordinator.acquire("snapshot-room")) {
                 alice.setDisconnected(true);
                 capture = executor.submit(() -> {
                     reader.set(Thread.currentThread());
-                    return mapper.toState(game);
+                    return coordinator.coordinate("snapshot-room", () -> mapper.toState(game));
                 });
-                awaitBlockedOn(reader, game);
+                awaitBlockedOn(reader, coordinator.getLockRegistry());
 
                 bob.setReadyForNextHand(true);
                 game.removePlayerFromGame(departing);

@@ -36,8 +36,6 @@ import com.pokergame.model.HandSettlementResult;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.enums.ScheduledGameTask;
 import java.util.stream.Collectors;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Lazy;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -53,10 +51,6 @@ public class GameStateService {
 
     private final RoomService roomService;
 
-    private GameLifecycleService gameLifecycleService;
-
-    private RoomCoordinator roomCoordinator;
-
     private final Map<String, HandSettlementResult> retainedSettlements = new ConcurrentHashMap<>();
 
     /**
@@ -69,51 +63,6 @@ public class GameStateService {
     public GameStateService(RoomService roomService, SimpMessagingTemplate messagingTemplate) {
         this.roomService = roomService;
         this.messagingTemplate = messagingTemplate;
-    }
-
-    @Autowired(required = false)
-    public void setGameLifecycleService(@Lazy GameLifecycleService gameLifecycleService) {
-        this.gameLifecycleService = gameLifecycleService;
-    }
-
-    @Autowired(required = false)
-    public void setRoomCoordinator(RoomCoordinator roomCoordinator) {
-        this.roomCoordinator = roomCoordinator;
-    }
-
-    /**
-     * Builds the current public game-state snapshot for REST consumers using its immutable identifier.
-     *
-     * @param gameId game identifier
-     * @return public game-state DTO for the requested game
-     */
-    public PublicGameStateResponse getPublicGameStateSnapshot(String gameId) {
-        if (gameLifecycleService == null) {
-            throw new IllegalStateException("GameLifecycleService not configured");
-        }
-        Game game = gameLifecycleService.getGame(gameId);
-        if (game == null || game.isGameOver()) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-        return getPublicGameStateSnapshot(gameId, game);
-    }
-
-    /**
-     * Builds the private game-state snapshot for a specific player using immutable identifiers.
-     *
-     * @param gameId     game identifier
-     * @param playerName authenticated player name
-     * @return private state containing the player's hole cards
-     */
-    public PrivatePlayerState getPrivatePlayerStateSnapshot(String gameId, String playerName) {
-        if (gameLifecycleService == null) {
-            throw new IllegalStateException("GameLifecycleService not configured");
-        }
-        Game game = gameLifecycleService.getGame(gameId);
-        if (game == null || game.isGameOver()) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-        return getPrivatePlayerStateSnapshot(game, playerName);
     }
 
     /**

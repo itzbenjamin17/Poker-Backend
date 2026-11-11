@@ -7,13 +7,11 @@ import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.util.LockLease;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
 import com.pokergame.service.RoomCoordinator;
-import org.springframework.beans.factory.annotation.Autowired;
 import com.pokergame.model.Game;
 import com.pokergame.security.PlayerPrincipal;
 import org.slf4j.Logger;
@@ -47,61 +45,13 @@ public class GameController {
 
     private final RoomCoordinator roomCoordinator;
 
-    /**
-     * Creates the game controller with its action, lifecycle, projection, and coordination services.
-     *
-     * @param playerActionService validates and applies player actions
-     * @param gameLifecycleService owns active games and lifecycle transitions
-     * @param gameStateService creates and publishes client state
-     * @param roomCoordinator coordinator managing the single room concurrency boundary
-     * @param durableMutationAspect optional legacy mutation aspect for backward compatibility
-     */
-    @Autowired
-    public GameController(PlayerActionService playerActionService,
-            GameLifecycleService gameLifecycleService,
-            GameStateService gameStateService,
-            @Autowired(required = false) RoomCoordinator roomCoordinator,
-            @Autowired(required = false) DurableMutationAspect durableMutationAspect) {
+    /** Creates the controller with the shared room coordination boundary. */
+    public GameController(PlayerActionService playerActionService, GameLifecycleService gameLifecycleService,
+            GameStateService gameStateService, RoomCoordinator roomCoordinator) {
         this.playerActionService = playerActionService;
         this.gameLifecycleService = gameLifecycleService;
         this.gameStateService = gameStateService;
-        if (roomCoordinator != null) {
-            this.roomCoordinator = roomCoordinator;
-        } else if (durableMutationAspect != null && durableMutationAspect.getRoomCoordinator() != null) {
-            this.roomCoordinator = durableMutationAspect.getRoomCoordinator();
-        } else {
-            this.roomCoordinator = new RoomCoordinator();
-        }
-    }
-
-    /**
-     * Creates the game controller explicitly with the room coordinator.
-     *
-     * @param playerActionService validates and applies player actions
-     * @param gameLifecycleService owns active games and lifecycle transitions
-     * @param gameStateService creates and publishes client state
-     * @param roomCoordinator coordinator managing the single room concurrency boundary
-     */
-    public GameController(PlayerActionService playerActionService,
-            GameLifecycleService gameLifecycleService,
-            GameStateService gameStateService,
-            RoomCoordinator roomCoordinator) {
-        this(playerActionService, gameLifecycleService, gameStateService, roomCoordinator, null);
-    }
-
-    /**
-     * Backward-compatible constructor for callers passing DurableMutationAspect.
-     *
-     * @param playerActionService validates and applies player actions
-     * @param gameLifecycleService owns active games and lifecycle transitions
-     * @param gameStateService creates and publishes client state
-     * @param durableMutationAspect supplies the per-room lock shared with durable mutations
-     */
-    public GameController(PlayerActionService playerActionService,
-            GameLifecycleService gameLifecycleService,
-            GameStateService gameStateService,
-            DurableMutationAspect durableMutationAspect) {
-        this(playerActionService, gameLifecycleService, gameStateService, null, durableMutationAspect);
+        this.roomCoordinator = java.util.Objects.requireNonNull(roomCoordinator);
     }
 
     /**

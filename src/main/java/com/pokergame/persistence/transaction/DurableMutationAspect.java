@@ -246,7 +246,7 @@ public final class DurableMutationAspect {
             if (room == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
             Game game = gameLifecycleService.getObject().getGame(roomId);
             String currentHost = roomService.getObject().getCurrentHost(roomId);
-            // snapshotMapper.captureStateImage enforces synchronized (room) -> synchronized (game) lock ordering
+            // Keep capture and serialization within the stable room coordination boundary.
             AggregateStateImage stateImage = snapshotMapper.captureStateImage(room, currentHost, game);
             return new PendingSave(snapshotMapper.serialize(stateImage), false);
         });
@@ -288,15 +288,13 @@ public final class DurableMutationAspect {
         return roomCoordinator.coordinate(roomId, () -> {
             Room room = roomService.getObject().getRoom(roomId);
             if (room == null) return new RollbackState(null, Map.of());
-            synchronized (room) {
-                AggregateStateImage image = snapshotMapper.captureStateImage(room,
-                        roomService.getObject().getCurrentHost(roomId), gameLifecycleService.getObject().getGame(roomId));
-                Map<String, ConnectionState> connections = new HashMap<>();
-                for (String player : room.getPlayers()) {
-                    connections.put(player, new ConnectionState(room.isPlayerConnected(player), room.getAbsenceDeadline(player)));
-                }
-                return new RollbackState(image, Map.copyOf(connections));
+            AggregateStateImage image = snapshotMapper.captureStateImage(room,
+                    roomService.getObject().getCurrentHost(roomId), gameLifecycleService.getObject().getGame(roomId));
+            Map<String, ConnectionState> connections = new HashMap<>();
+            for (String player : room.getPlayers()) {
+                connections.put(player, new ConnectionState(room.isPlayerConnected(player), room.getAbsenceDeadline(player)));
             }
+            return new RollbackState(image, Map.copyOf(connections));
         });
     }
 
@@ -322,12 +320,10 @@ public final class DurableMutationAspect {
                         evictAggregate(roomId);
                     } else {
                         restoreAggregate(roomId, aggregate);
-                        synchronized (aggregate.room()) {
-                            beforeMutation.connections().forEach((player, state) -> {
-                                aggregate.room().setPlayerConnected(player, state.connected());
-                                aggregate.room().setAbsenceDeadline(player, state.absenceDeadline());
-                            });
-                        }
+                        beforeMutation.connections().forEach((player, state) -> {
+                            aggregate.room().setPlayerConnected(player, state.connected());
+                            aggregate.room().setAbsenceDeadline(player, state.absenceDeadline());
+                        });
                         if (aggregate.game() != null) gameLifecycleService.getObject().resumeRollbackTimers(roomId);
                     }
                 } else {

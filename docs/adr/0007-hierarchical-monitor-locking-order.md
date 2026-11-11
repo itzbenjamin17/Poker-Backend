@@ -18,5 +18,5 @@ Concurrent requests originate from multiple asynchronous sources: HTTP REST endp
 
 ## Consequences
 
-- Completely eliminates JVM deadlocks across all concurrent game actions, disconnect handlers, and scheduled lifecycle timers.
+- Prevented aggregate-monitor inversion only when every participant followed the hierarchy; it did not eliminate all JVM deadlocks. ADR-0011 now defines the room-scoped guarantees and assumptions.
 - Requires strict developer discipline and static/runtime auditing to guarantee that no new code path violates the `Room Lease -> Player Lease -> Room Monitor -> Game Monitor` acquisition hierarchy.

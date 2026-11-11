@@ -7,19 +7,15 @@ import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.TokenResponse;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
-import org.springframework.beans.factory.annotation.Autowired;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.dto.internal.RoomEntryResult;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -46,66 +42,15 @@ public class RoomController {
 
     private final JwtService jwtService;
 
-    private final DurableMutationAspect durableMutationAspect;
-
     private final RoomCoordinator roomCoordinator;
 
-    /**
-     * Creates the room controller with its room, game, token, and coordination services.
-     *
-     * @param roomService owns lobby state and membership
-     * @param gameLifecycleService transitions rooms into active games
-     * @param jwtService issues room-bound player tokens
-     * @param durableMutationAspect supplies the per-room lock shared with durable mutations
-     * @param roomCoordinator coordinator managing the single room concurrency boundary
-     */
-    @Autowired
-    public RoomController(RoomService roomService,
-            GameLifecycleService gameLifecycleService,
-            JwtService jwtService,
-            @Autowired(required = false) DurableMutationAspect durableMutationAspect,
-            @Autowired(required = false) RoomCoordinator roomCoordinator) {
+    /** Creates the controller with the shared room coordination boundary. */
+    public RoomController(RoomService roomService, GameLifecycleService gameLifecycleService,
+            JwtService jwtService, RoomCoordinator roomCoordinator) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.jwtService = jwtService;
-        this.durableMutationAspect = durableMutationAspect;
-        if (roomCoordinator != null) {
-            this.roomCoordinator = roomCoordinator;
-        } else if (durableMutationAspect != null && durableMutationAspect.getRoomCoordinator() != null) {
-            this.roomCoordinator = durableMutationAspect.getRoomCoordinator();
-        } else {
-            this.roomCoordinator = new RoomCoordinator();
-        }
-    }
-
-    /**
-     * Backward-compatible constructor for callers passing DurableMutationAspect.
-     *
-     * @param roomService owns lobby state and membership
-     * @param gameLifecycleService transitions rooms into active games
-     * @param jwtService issues room-bound player tokens
-     * @param durableMutationAspect supplies the per-room lock shared with durable mutations
-     */
-    public RoomController(RoomService roomService,
-            GameLifecycleService gameLifecycleService,
-            JwtService jwtService,
-            DurableMutationAspect durableMutationAspect) {
-        this(roomService, gameLifecycleService, jwtService, durableMutationAspect, (RoomCoordinator) null);
-    }
-
-    /**
-     * Creates the room controller explicitly with RoomCoordinator.
-     *
-     * @param roomService owns lobby state and membership
-     * @param gameLifecycleService transitions rooms into active games
-     * @param jwtService issues room-bound player tokens
-     * @param roomCoordinator coordinator managing the single room concurrency boundary
-     */
-    public RoomController(RoomService roomService,
-            GameLifecycleService gameLifecycleService,
-            JwtService jwtService,
-            RoomCoordinator roomCoordinator) {
-        this(roomService, gameLifecycleService, jwtService, null, roomCoordinator);
+        this.roomCoordinator = java.util.Objects.requireNonNull(roomCoordinator);
     }
 
     /**
@@ -128,8 +73,7 @@ public class RoomController {
         String roomId = entry.roomId();
         String canonicalPlayerName = entry.canonicalPlayerName();
 
-        Room room = roomService.getRoom(roomId);
-        String membershipId = room != null ? room.getMembershipId(canonicalPlayerName) : null;
+        String membershipId = entry.membershipId();
 
         // Generate JWT token for this player, bound to this room and membership
         String token = membershipId != null
@@ -161,8 +105,7 @@ public class RoomController {
         String roomId = entry.roomId();
         String canonicalPlayerName = entry.canonicalPlayerName();
 
-        Room room = roomService.getRoom(roomId);
-        String membershipId = room != null ? room.getMembershipId(canonicalPlayerName) : null;
+        String membershipId = entry.membershipId();
 
         // Generate JWT token for this player, bound to this room and membership
         String token = membershipId != null

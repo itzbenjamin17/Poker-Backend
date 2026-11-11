@@ -49,10 +49,9 @@ public final class AggregateSnapshotMapper {
     }
 
     /**
-     * Captures an immutable state image from live Room and Game aggregates under their respective monitors.
-     * Room monitor is acquired before Game monitor.
+     * Captures an immutable state image while the caller owns the room coordination lease.
      * All live domain fields, players, and cards are converted into independent immutable records.
-     * No JSON serialization or I/O is performed under the monitors.
+     * No JSON serialization or I/O is performed during capture.
      *
      * @param room the room aggregate
      * @param currentHost the current host
@@ -65,11 +64,8 @@ public final class AggregateSnapshotMapper {
         }
         AggregateStateImage.RoomState roomState;
         AggregateStateImage.GameState gameState;
-        synchronized (room) {
-            roomState = toRoomState(room);
-            // toState(game) acquires synchronized (game) while holding synchronized (room)
-            gameState = toState(game);
-        }
+        roomState = toRoomState(room);
+        gameState = toState(game);
         return new AggregateStateImage(AggregateStateImage.CURRENT_SCHEMA_VERSION, false, roomState,
                 currentHost, gameState);
     }
@@ -86,14 +82,12 @@ public final class AggregateSnapshotMapper {
         if (room == null) {
             return null;
         }
-        synchronized (room) {
-            return toRoomState(room);
-        }
+        return toRoomState(room);
     }
 
     /**
      * Serializes an already-captured immutable state image to JSON bytes.
-     * Must be called after releasing aggregate monitors.
+     * The caller retains the established persistence ordering boundary.
      *
      * @param image the state image to serialize
      * @return the serialized bytes
@@ -107,8 +101,7 @@ public final class AggregateSnapshotMapper {
     }
 
     /**
-     * Takes a room and its game, captures state under aggregate monitors, and turns it into a snapshot.
-     * Aggregate monitors are released before JSON serialization.
+     * Captures and serializes a room and game while the caller owns the room coordination lease.
      *
      * @param room        the room being saved
      * @param currentHost the current host, which could be different from the original creator
@@ -249,31 +242,29 @@ public final class AggregateSnapshotMapper {
         if (game == null) {
             return null;
         }
-        synchronized (game) {
-            List<Player> playerList = game.getPlayers();
-            List<AggregateStateImage.PlayerState> playerStates = playerList != null
-                    ? playerList.stream().filter(Objects::nonNull).map(this::toState).toList()
-                    : List.of();
-            List<Player> activeList = game.getActivePlayers();
-            List<String> activePlayerIds = activeList != null
-                    ? activeList.stream().filter(Objects::nonNull).map(Player::getPlayerId).toList()
-                    : List.of();
-            return new AggregateStateImage.GameState(
-                game.getGameId(), playerStates, activePlayerIds,
-                cards(game.getRemainingDeckSnapshot()), cards(game.getCommunityCards()), game.getPot(),
-                game.getDealerPosition(), game.getSmallBlindPosition(), game.getBigBlindPosition(),
-                game.getCurrentPlayerPosition(), game.getCurrentHighestBet(), game.getCurrentPhase(),
-                game.isGameOver(), game.getSmallBlind(), game.getBigBlind(), game.getHandContributionsSnapshot(),
-                game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs(),
-                game.hasEveryoneHadInitialTurn(), game.getActedPlayerIdsSnapshot(),
-                game.getScheduledTaskDeadlinesSnapshot(), game.getPreHandCarryOver(),
-                game.getLastFullRaiseByStreetSnapshot(), game.getLastActedWagerByPlayerSnapshot(),
-                game.getHandSeatOrderSnapshot(), game.getDealerAnchorPlayerId(), game.getSmallBlindPlayerId(),
-                game.getBigBlindPlayerId(), settlementState(game.getLastSettlementResult()),
-                game.isTerminalCarryOverSettled(), game.getReadyGateState(), game.getHandNumber(),
-                game.getScheduledTaskGenerationsSnapshot(), game.isForfeitPending(), game.getStateRevision(),
-                toTerminalResultState(game.getRetainedTerminalResult()));
-        }
+        List<Player> playerList = game.getPlayers();
+        List<AggregateStateImage.PlayerState> playerStates = playerList != null
+                ? playerList.stream().filter(Objects::nonNull).map(this::toState).toList()
+                : List.of();
+        List<Player> activeList = game.getActivePlayers();
+        List<String> activePlayerIds = activeList != null
+                ? activeList.stream().filter(Objects::nonNull).map(Player::getPlayerId).toList()
+                : List.of();
+        return new AggregateStateImage.GameState(
+            game.getGameId(), playerStates, activePlayerIds,
+            cards(game.getRemainingDeckSnapshot()), cards(game.getCommunityCards()), game.getPot(),
+            game.getDealerPosition(), game.getSmallBlindPosition(), game.getBigBlindPosition(),
+            game.getCurrentPlayerPosition(), game.getCurrentHighestBet(), game.getCurrentPhase(),
+            game.isGameOver(), game.getSmallBlind(), game.getBigBlind(), game.getHandContributionsSnapshot(),
+            game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs(),
+            game.hasEveryoneHadInitialTurn(), game.getActedPlayerIdsSnapshot(),
+            game.getScheduledTaskDeadlinesSnapshot(), game.getPreHandCarryOver(),
+            game.getLastFullRaiseByStreetSnapshot(), game.getLastActedWagerByPlayerSnapshot(),
+            game.getHandSeatOrderSnapshot(), game.getDealerAnchorPlayerId(), game.getSmallBlindPlayerId(),
+            game.getBigBlindPlayerId(), settlementState(game.getLastSettlementResult()),
+            game.isTerminalCarryOverSettled(), game.getReadyGateState(), game.getHandNumber(),
+            game.getScheduledTaskGenerationsSnapshot(), game.isForfeitPending(), game.getStateRevision(),
+            toTerminalResultState(game.getRetainedTerminalResult()));
     }
 
     /**

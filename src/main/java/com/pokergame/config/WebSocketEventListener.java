@@ -27,9 +27,7 @@ import org.springframework.web.socket.messaging.SessionUnsubscribeEvent;
 
 import java.security.Principal;
 import java.time.Instant;
-import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.service.RoomCoordinator;
-import com.pokergame.util.KeyedLockRegistry;
 import com.pokergame.util.LockLease;
 
 import java.util.Objects;
@@ -44,8 +42,8 @@ import java.util.HashSet;
  * Reconciles process-local WebSocket sessions with durable player membership.
  * <p>
  * Sessions and futures are intentionally transient, while disconnect deadlines and
- * resulting room/game mutations are durable. Per-player locks linearize reconnects
- * with grace-expiry cleanup so a player cannot be removed after reconnecting.
+ * resulting room/game mutations are durable. The shared room coordination boundary
+ * linearizes reconnects with grace-expiry cleanup so a player cannot be removed after reconnecting.
  * </p>
  */
 @Component
@@ -62,7 +60,6 @@ public class WebSocketEventListener {
     private final ConcurrentMap<String, PendingDisconnect> pendingDisconnects = new ConcurrentHashMap<>();
     private final TaskScheduler taskScheduler;
     private final RoomCoordinator roomCoordinator;
-    private final DurableMutationAspect durableMutationAspect;
 
     /**
      * Creates the listener with the authoritative room, game, rate limit, and coordinator services.
@@ -81,55 +78,11 @@ public class WebSocketEventListener {
             @Qualifier("taskScheduler") TaskScheduler taskScheduler,
             RoomCoordinator roomCoordinator,
             @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
-        this(roomService,
-                gameLifecycleService,
-                rateLimitService,
-                taskScheduler,
-                roomCoordinator,
-                null,
-                disconnectGracePeriodMs);
-    }
-
-    /**
-     * Backward-compatible constructor for callers passing DurableMutationAspect.
-     *
-     * @param roomService              authoritative room registry
-     * @param gameLifecycleService     durable game and cleanup service
-     * @param rateLimitService         transient WebSocket rate-limit registry
-     * @param taskScheduler            runtime grace-period scheduler
-     * @param durableMutationAspect    per-room lock shared with durable mutations
-     * @param disconnectGracePeriodMs  allowed reconnect interval
-     */
-    public WebSocketEventListener(RoomService roomService,
-            GameLifecycleService gameLifecycleService,
-            RateLimitService rateLimitService,
-            @Qualifier("taskScheduler") TaskScheduler taskScheduler,
-            DurableMutationAspect durableMutationAspect,
-            @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
-        this(roomService,
-                gameLifecycleService,
-                rateLimitService,
-                taskScheduler,
-                durableMutationAspect != null && durableMutationAspect.getRoomCoordinator() != null
-                        ? durableMutationAspect.getRoomCoordinator()
-                        : new RoomCoordinator(),
-                durableMutationAspect,
-                disconnectGracePeriodMs);
-    }
-
-    private WebSocketEventListener(RoomService roomService,
-            GameLifecycleService gameLifecycleService,
-            RateLimitService rateLimitService,
-            TaskScheduler taskScheduler,
-            RoomCoordinator roomCoordinator,
-            DurableMutationAspect durableMutationAspect,
-            long disconnectGracePeriodMs) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.rateLimitService = rateLimitService;
         this.taskScheduler = taskScheduler;
         this.roomCoordinator = Objects.requireNonNull(roomCoordinator, "roomCoordinator cannot be null");
-        this.durableMutationAspect = durableMutationAspect;
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
     }
 
@@ -193,10 +146,10 @@ public class WebSocketEventListener {
                     }
                 }
             }
-            // Registration and cleanup are linearized per player: a reconnect that wins
-            // this lock cannot be evicted by an already-running grace timer.
+            // Registration and cleanup share this room boundary, so a reconnect that wins
+            // it cannot be evicted by an already-running grace timer.
             registerActiveSession(playerPrincipal, sessionId);
-            // Reconcile Room lease and Game flags under Room -> Game.
+            // Reconcile room and game state inside the shared room boundary.
             gameLifecycleService.markPlayerReconnected(roomId, playerName);
 
             PendingDisconnect pendingDisconnect = pendingDisconnects.remove(compositeName);
@@ -567,18 +520,14 @@ public class WebSocketEventListener {
     }
 
     /**
-     * Acquires the outer durable room lease before any player lease or aggregate monitor.
-     * This ordering also applies to reconnects, grace callbacks, and scheduled cleanups.
+     * Acquires the room boundary for session transitions and cleanup callbacks.
      *
      * @param roomId room whose session state is changing
-     * @return room lease, or a no-op lease when persistence is disabled or roomId is null
+     * @return room lease, or a no-op lease when roomId is null
      */
     private LockLease acquireRoomLease(String roomId) {
         if (roomId == null) {
             return LockLease.none();
-        }
-        if (durableMutationAspect != null) {
-            return durableMutationAspect.acquireRoomLock(roomId);
         }
         return roomCoordinator.acquire(roomId);
     }
@@ -713,6 +662,12 @@ public class WebSocketEventListener {
         }
     }
 
+    /** Tests the room suffix of a player routing key. */
+    private static boolean belongsToRoom(String user, String roomId) {
+        int separator = user.lastIndexOf(':');
+        return separator >= 0 && user.substring(separator + 1).equals(roomId);
+    }
+
     /** Removes transient room state under the room lease. */
     private void processRoomDestroyed(String roomId) {
         if (roomId == null) {
@@ -722,14 +677,12 @@ public class WebSocketEventListener {
             gameLifecycleService.cancelRuntimeTasks(roomId, false);
             Set<String> usersToClean = new HashSet<>();
             for (String user : activeSessionsByUser.keySet()) {
-                int colonIdx = user.lastIndexOf(':');
-                if (colonIdx >= 0 && user.substring(colonIdx + 1).equals(roomId)) {
+                if (belongsToRoom(user, roomId)) {
                     usersToClean.add(user);
                 }
             }
             for (String user : pendingDisconnects.keySet()) {
-                int colonIdx = user.lastIndexOf(':');
-                if (colonIdx >= 0 && user.substring(colonIdx + 1).equals(roomId)) {
+                if (belongsToRoom(user, roomId)) {
                     usersToClean.add(user);
                 }
             }
