@@ -10,7 +10,9 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.dto.internal.RoomEntryResult;
 import jakarta.validation.Valid;
@@ -44,8 +46,38 @@ public class RoomController {
 
     private final DurableMutationAspect durableMutationAspect;
 
+    private final RoomCoordinator roomCoordinator;
+
     /**
-     * Creates the room controller with its room, game, and token services.
+     * Creates the room controller with its room, game, token, and coordination services.
+     *
+     * @param roomService owns lobby state and membership
+     * @param gameLifecycleService transitions rooms into active games
+     * @param jwtService issues room-bound player tokens
+     * @param durableMutationAspect supplies the per-room lock shared with durable mutations
+     * @param roomCoordinator coordinator managing the single room concurrency boundary
+     */
+    @Autowired
+    public RoomController(RoomService roomService,
+            GameLifecycleService gameLifecycleService,
+            JwtService jwtService,
+            @Autowired(required = false) DurableMutationAspect durableMutationAspect,
+            @Autowired(required = false) RoomCoordinator roomCoordinator) {
+        this.roomService = roomService;
+        this.gameLifecycleService = gameLifecycleService;
+        this.jwtService = jwtService;
+        this.durableMutationAspect = durableMutationAspect;
+        if (roomCoordinator != null) {
+            this.roomCoordinator = roomCoordinator;
+        } else if (durableMutationAspect != null && durableMutationAspect.getRoomCoordinator() != null) {
+            this.roomCoordinator = durableMutationAspect.getRoomCoordinator();
+        } else {
+            this.roomCoordinator = new RoomCoordinator();
+        }
+    }
+
+    /**
+     * Backward-compatible constructor for callers passing DurableMutationAspect.
      *
      * @param roomService owns lobby state and membership
      * @param gameLifecycleService transitions rooms into active games
@@ -56,10 +88,22 @@ public class RoomController {
             GameLifecycleService gameLifecycleService,
             JwtService jwtService,
             DurableMutationAspect durableMutationAspect) {
-        this.roomService = roomService;
-        this.gameLifecycleService = gameLifecycleService;
-        this.jwtService = jwtService;
-        this.durableMutationAspect = durableMutationAspect;
+        this(roomService, gameLifecycleService, jwtService, durableMutationAspect, null);
+    }
+
+    /**
+     * Creates the room controller explicitly with RoomCoordinator.
+     *
+     * @param roomService owns lobby state and membership
+     * @param gameLifecycleService transitions rooms into active games
+     * @param jwtService issues room-bound player tokens
+     * @param roomCoordinator coordinator managing the single room concurrency boundary
+     */
+    public RoomController(RoomService roomService,
+            GameLifecycleService gameLifecycleService,
+            JwtService jwtService,
+            RoomCoordinator roomCoordinator) {
+        this(roomService, gameLifecycleService, jwtService, null, roomCoordinator);
     }
 
     /**
@@ -145,7 +189,7 @@ public class RoomController {
         // Security check: ensure the token is actually for THIS room
         playerPrincipal.assertBoundTo(roomId);
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
             if (roomService.checkAndCloseIfExpired(roomId)) {
                 throw new BadRequestException("Room has expired due to inactivity.");
             }
@@ -171,7 +215,7 @@ public class RoomController {
         // Check binding before exposing resource existence
         playerPrincipal.assertBoundTo(roomId);
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
             gameLifecycleService.validatePlayerMembership(roomId, playerPrincipal.playerName(), playerPrincipal.membershipId());
             logger.debug("Fetching room info for room: {}", roomId);
             Room room = roomService.getRoom(roomId);
@@ -214,7 +258,7 @@ public class RoomController {
         // Security check: ensure the token is actually for THIS room
         playerPrincipal.assertBoundTo(roomId);
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
             if (roomService.checkAndCloseIfExpired(roomId)) {
                 throw new BadRequestException("Room has expired due to inactivity.");
             }
