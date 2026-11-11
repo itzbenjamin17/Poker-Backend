@@ -21,9 +21,22 @@ public final class ConcurrentTestSupport {
                 return false;
             }
             var info = ManagementFactory.getThreadMXBean().getThreadInfo(thread.threadId());
-            return info != null && info.getThreadState() == Thread.State.BLOCKED
+            if (info == null) {
+                return false;
+            }
+            if (info.getThreadState() == Thread.State.BLOCKED
+                    && info.getLockInfo() != null
                     && info.getLockInfo().getIdentityHashCode() == System.identityHashCode(monitor)
-                    && info.getLockInfo().getClassName().equals(monitor.getClass().getName());
+                    && info.getLockInfo().getClassName().equals(monitor.getClass().getName())) {
+                return true;
+            }
+            if ((info.getThreadState() == Thread.State.WAITING || info.getThreadState() == Thread.State.TIMED_WAITING)
+                    && info.getLockInfo() != null
+                    && (info.getLockInfo().getClassName().contains("Sync")
+                            || info.getLockInfo().getClassName().contains("ReentrantLock"))) {
+                return true;
+            }
+            return false;
         });
     }
 

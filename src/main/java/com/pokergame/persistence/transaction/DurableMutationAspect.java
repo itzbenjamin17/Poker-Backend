@@ -10,6 +10,7 @@ import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.WalTransaction;
 import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.util.MdcKeys;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -52,7 +53,7 @@ public final class DurableMutationAspect {
     private final ObjectProvider<RoomService> roomService;
     private final ObjectProvider<GameLifecycleService> gameLifecycleService;
     private final PersistenceProperties properties;
-    private final KeyedLockRegistry<String> roomLocks = new KeyedLockRegistry<>();
+    private final RoomCoordinator roomCoordinator;
     private final ConcurrentHashMap<String, AtomicInteger> recordsSinceCompaction = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, PendingSave> pendingSaves = new ConcurrentHashMap<>();
     private final ExpressionParser expressionParser = new SpelExpressionParser();
@@ -66,15 +67,32 @@ public final class DurableMutationAspect {
      * @param roomService          lazy provider for the room service
      * @param gameLifecycleService lazy provider for the game service
      * @param properties           settings for when to clean up old save files
+     * @param roomCoordinator      coordinator managing room-scoped concurrency boundaries
      */
     public DurableMutationAspect(EncryptedWalStore store, AggregateSnapshotMapper snapshotMapper,
             ObjectProvider<RoomService> roomService, ObjectProvider<GameLifecycleService> gameLifecycleService,
-            PersistenceProperties properties) {
+            PersistenceProperties properties, RoomCoordinator roomCoordinator) {
         this.store = store;
         this.snapshotMapper = snapshotMapper;
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.properties = properties;
+        this.roomCoordinator = java.util.Objects.requireNonNull(roomCoordinator, "roomCoordinator cannot be null");
+    }
+
+    /**
+     * Creates this aspect using a newly created {@link RoomCoordinator}.
+     *
+     * @param store                storage for saving game data, or null for room locking only
+     * @param snapshotMapper       helper to convert the game into a format we can save
+     * @param roomService          lazy provider for the room service
+     * @param gameLifecycleService lazy provider for the game service
+     * @param properties           settings for when to clean up old save files
+     */
+    public DurableMutationAspect(EncryptedWalStore store, AggregateSnapshotMapper snapshotMapper,
+            ObjectProvider<RoomService> roomService, ObjectProvider<GameLifecycleService> gameLifecycleService,
+            PersistenceProperties properties) {
+        this(store, snapshotMapper, roomService, gameLifecycleService, properties, new RoomCoordinator());
     }
 
     /**
@@ -84,7 +102,7 @@ public final class DurableMutationAspect {
      * @return the room lock
      */
     public LockLease acquireRoomLock(String roomId) {
-        return roomLocks.acquire(roomId);
+        return roomCoordinator.acquire(roomId);
     }
 
     /**
@@ -94,7 +112,7 @@ public final class DurableMutationAspect {
      * @return the room lock lease if immediately available, or {@code null} if held by another thread
      */
     public LockLease tryAcquireRoomLock(String roomId) {
-        return roomLocks.tryAcquire(roomId);
+        return roomCoordinator.tryAcquire(roomId);
     }
 
     /**
@@ -103,7 +121,16 @@ public final class DurableMutationAspect {
      * @return the room lock registry
      */
     public KeyedLockRegistry<String> getLockRegistry() {
-        return roomLocks;
+        return roomCoordinator.getLockRegistry();
+    }
+
+    /**
+     * Returns the room coordinator managing per-room concurrency.
+     *
+     * @return the room coordinator
+     */
+    public RoomCoordinator getRoomCoordinator() {
+        return roomCoordinator;
     }
 
     /**
@@ -120,7 +147,7 @@ public final class DurableMutationAspect {
     public Object persist(ProceedingJoinPoint joinPoint, DurableMutation mutation) throws Throwable {
         String roomId = resolveRoomId(joinPoint, mutation.roomId());
         if (store == null) {
-            LockLease lease = roomLocks.acquire(roomId);
+            LockLease lease = roomCoordinator.acquire(roomId);
             try {
                 return joinPoint.proceed();
             } finally {
@@ -140,7 +167,7 @@ public final class DurableMutationAspect {
                 return joinPoint.proceed();
             }
 
-            try (LockLease _ = roomLocks.acquire(roomId)) {
+            try (LockLease _ = roomCoordinator.acquire(roomId)) {
                 DurableTransactionContext.begin(roomId);
                 RollbackState beforeMutation = null;
                 try {
@@ -196,7 +223,7 @@ public final class DurableMutationAspect {
     @Scheduled(fixedDelay = 5000, initialDelay = 5000)
     public void retryPendingSaves() {
         for (String roomId : pendingSaves.keySet()) {
-            LockLease lease = roomLocks.tryAcquire(roomId);
+            LockLease lease = roomCoordinator.tryAcquire(roomId);
             if (lease == null) continue;
             try (lease) {
                 PendingSave pending = pendingSaves.get(roomId);
@@ -214,13 +241,15 @@ public final class DurableMutationAspect {
 
     /** Captures and encodes the latest accepted room state for a save attempt. */
     private PendingSave captureState(String roomId) {
-        Room room = roomService.getObject().getRoom(roomId);
-        if (room == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
-        Game game = gameLifecycleService.getObject().getGame(roomId);
-        String currentHost = roomService.getObject().getCurrentHost(roomId);
-        // snapshotMapper.captureStateImage enforces synchronized (room) -> synchronized (game) lock ordering
-        AggregateStateImage stateImage = snapshotMapper.captureStateImage(room, currentHost, game);
-        return new PendingSave(snapshotMapper.serialize(stateImage), false);
+        return roomCoordinator.coordinate(roomId, () -> {
+            Room room = roomService.getObject().getRoom(roomId);
+            if (room == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
+            Game game = gameLifecycleService.getObject().getGame(roomId);
+            String currentHost = roomService.getObject().getCurrentHost(roomId);
+            // Keep capture and serialization within the stable room coordination boundary.
+            AggregateStateImage stateImage = snapshotMapper.captureStateImage(room, currentHost, game);
+            return new PendingSave(snapshotMapper.serialize(stateImage), false);
+        });
     }
 
     /** Saves accepted bytes without replaying the domain command or its effects. */
@@ -256,9 +285,9 @@ public final class DurableMutationAspect {
 
     /** Captures live rollback data independently of serialization and WAL availability. */
     private RollbackState captureRollbackState(String roomId) {
-        Room room = roomService.getObject().getRoom(roomId);
-        if (room == null) return new RollbackState(null, Map.of());
-        synchronized (room) {
+        return roomCoordinator.coordinate(roomId, () -> {
+            Room room = roomService.getObject().getRoom(roomId);
+            if (room == null) return new RollbackState(null, Map.of());
             AggregateStateImage image = snapshotMapper.captureStateImage(room,
                     roomService.getObject().getCurrentHost(roomId), gameLifecycleService.getObject().getGame(roomId));
             Map<String, ConnectionState> connections = new HashMap<>();
@@ -266,7 +295,7 @@ public final class DurableMutationAspect {
                 connections.put(player, new ConnectionState(room.isPlayerConnected(player), room.getAbsenceDeadline(player)));
             }
             return new RollbackState(image, Map.copyOf(connections));
-        }
+        });
     }
 
     /** Process-local connectivity is intentionally separate from the persisted image. */
@@ -283,37 +312,37 @@ public final class DurableMutationAspect {
      * @param beforeMutation immutable state captured before the rejected command, or null if capture failed
      */
     private void rollbackOrEvictAggregate(String roomId, RollbackState beforeMutation) {
-        try {
-            if (beforeMutation != null && beforeMutation.image() != null) {
-                RecoveredAggregate aggregate = snapshotMapper.restoreStateImage(beforeMutation.image());
-                if (aggregate.deleted() || aggregate.room() == null) {
-                    evictAggregate(roomId);
-                } else {
-                    restoreAggregate(roomId, aggregate);
-                    synchronized (aggregate.room()) {
+        roomCoordinator.coordinate(roomId, () -> {
+            try {
+                if (beforeMutation != null && beforeMutation.image() != null) {
+                    RecoveredAggregate aggregate = snapshotMapper.restoreStateImage(beforeMutation.image());
+                    if (aggregate.deleted() || aggregate.room() == null) {
+                        evictAggregate(roomId);
+                    } else {
+                        restoreAggregate(roomId, aggregate);
                         beforeMutation.connections().forEach((player, state) -> {
                             aggregate.room().setPlayerConnected(player, state.connected());
                             aggregate.room().setAbsenceDeadline(player, state.absenceDeadline());
                         });
+                        if (aggregate.game() != null) gameLifecycleService.getObject().resumeRollbackTimers(roomId);
                     }
-                    if (aggregate.game() != null) gameLifecycleService.getObject().resumeRollbackTimers(roomId);
+                } else {
+                    // A captured absence is itself accepted state: retain its pending tombstone.
+                    // Only an unavailable preimage makes a retry unsafe after rejection.
+                    if (beforeMutation == null) pendingSaves.remove(roomId);
+                    evictAggregate(roomId);
                 }
-            } else {
-                // A captured absence is itself accepted state: retain its pending tombstone.
-                // Only an unavailable preimage makes a retry unsafe after rejection.
-                if (beforeMutation == null) pendingSaves.remove(roomId);
+            } catch (Exception restoreFailure) {
+                logger.error("Failed to restore aggregate for room {} after mutation failure; evicting to prevent dirty commits",
+                        roomId, restoreFailure);
                 evictAggregate(roomId);
+                pendingSaves.remove(roomId);
+                recordStorageFailure(roomId, restoreFailure instanceof RuntimeException re ? re
+                        : new PersistenceException("Failed to restore aggregate for room " + roomId, restoreFailure));
+            } finally {
+                cleanupAbortedCreation(roomId);
             }
-        } catch (Exception restoreFailure) {
-            logger.error("Failed to restore aggregate for room {} after mutation failure; evicting to prevent dirty commits",
-                    roomId, restoreFailure);
-            evictAggregate(roomId);
-            pendingSaves.remove(roomId);
-            recordStorageFailure(roomId, restoreFailure instanceof RuntimeException re ? re
-                    : new PersistenceException("Failed to restore aggregate for room " + roomId, restoreFailure));
-        } finally {
-            cleanupAbortedCreation(roomId);
-        }
+        });
     }
 
     /**
@@ -371,15 +400,17 @@ public final class DurableMutationAspect {
 
     /** Removes an uncommitted creation WAL only when no accepted room remains. */
     private void cleanupAbortedCreation(String roomId) {
-        try {
-            recordsSinceCompaction.remove(roomId);
-            RoomService rooms = roomService.getObject();
-            if ((rooms == null || rooms.getRoom(roomId) == null) && store.recoverLatest(roomId).isEmpty()) {
-                store.delete(roomId);
+        roomCoordinator.coordinate(roomId, () -> {
+            try {
+                recordsSinceCompaction.remove(roomId);
+                RoomService rooms = roomService.getObject();
+                if ((rooms == null || rooms.getRoom(roomId) == null) && store.recoverLatest(roomId).isEmpty()) {
+                    store.delete(roomId);
+                }
+            } catch (Exception cleanupError) {
+                logger.error("Failed to clean up aborted WAL for room {}", roomId, cleanupError);
             }
-        } catch (Exception cleanupError) {
-            logger.error("Failed to clean up aborted WAL for room {}", roomId, cleanupError);
-        }
+        });
     }
 
     /** Determines whether the accepted WAL prefix is large enough to compact. */

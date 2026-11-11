@@ -144,6 +144,28 @@ class KeyedLockRegistryTest {
     }
 
     @Test
+    @DisplayName("isHeldByCurrentThread reflects only the owning thread")
+    void isHeldByCurrentThreadReflectsOnlyOwningThread() throws Exception {
+        String key = "room-1";
+        assertThat(lockRegistry.isHeldByCurrentThread(key)).isFalse();
+        assertThat(lockRegistry.isHeldByCurrentThread(null)).isFalse();
+
+        try (LockLease lease = lockRegistry.acquire(key)) {
+            assertThat(lockRegistry.isHeldByCurrentThread(key)).isTrue();
+
+            ExecutorService pool = Executors.newSingleThreadExecutor();
+            try {
+                Future<Boolean> otherThreadHeld = pool.submit(() -> lockRegistry.isHeldByCurrentThread(key));
+                assertThat(otherThreadHeld.get(2, TimeUnit.SECONDS)).isFalse();
+            } finally {
+                stopExecutor(pool);
+            }
+        }
+
+        assertThat(lockRegistry.isHeldByCurrentThread(key)).isFalse();
+    }
+
+    @Test
     void concurrentWaitersAndReleasesMaintainMutualExclusion() throws Exception {
         String key = "concurrent-key";
         int threads = 10;

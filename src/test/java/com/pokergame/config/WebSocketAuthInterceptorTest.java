@@ -3,6 +3,8 @@ package com.pokergame.config;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.RoomService;
+import com.pokergame.service.RoomCoordinator;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -23,6 +25,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 import com.pokergame.model.Room;
 
 /** Tests WebSocket auth interceptor behavior. */
@@ -38,6 +41,12 @@ class WebSocketAuthInterceptorTest {
 
     @InjectMocks
     private WebSocketAuthInterceptor interceptor;
+
+    /** Uses the same real coordination boundary for all membership checks in this fixture. */
+    @BeforeEach
+    void configureRoomCoordinator() {
+        lenient().when(roomService.getRoomCoordinator()).thenReturn(new RoomCoordinator());
+    }
 
     private static final String VALID_TOKEN = "valid.jwt.token";
     private static final String ROOM_ID = "room-123";

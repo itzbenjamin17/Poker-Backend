@@ -106,6 +106,7 @@ class GameParticipantDepartureHandler {
      * @param game        active game aggregate, or null
      */
     void departParticipantsUnderLock(String roomId, Collection<String> playerNames, Room room, Game game) {
+        assertHeld(roomId);
         if (playerNames == null || playerNames.isEmpty()) return;
         List<String> departing = playerNames.stream()
                 .filter(Objects::nonNull)
@@ -323,6 +324,7 @@ class GameParticipantDepartureHandler {
      * @param disconnectDeadlineEpochMs epoch millisecond deadline for reconnect
      */
     void markPlayerDisconnectedUnderLock(String gameId, Game game, String playerName, long disconnectDeadlineEpochMs) {
+        assertHeld(gameId);
         if (game.isForfeitPending()) return;
         if (game.isGameOver()) return;
         Player player = game.findPlayerByName(playerName);
@@ -359,6 +361,7 @@ class GameParticipantDepartureHandler {
      * @param game       authoritative game state, or null
      */
     void reconcilePlayerReconnectedUnderLock(String gameId, String playerName, Room room, Game game) {
+        assertHeld(gameId);
         if (game != null) {
             if (game.isGameOver()) {
                 logger.debug("Skipping reconnect for player {} because game {} is already over", playerName, gameId);
@@ -408,6 +411,7 @@ class GameParticipantDepartureHandler {
      * @return terminal game end response
      */
     GameEndResponse claimWinUnderLock(String gameId, Game game, Room room, String playerName) {
+        assertHeld(gameId);
         if (game.isGameOver()) {
             return terminalSettlement.resolveTerminalResultForParticipant(gameId, game, room, playerName, true);
         }
@@ -430,8 +434,15 @@ class GameParticipantDepartureHandler {
      */
     void removeDisconnectedPlayerUnderLock(String gameId, Room room, Game game, String playerName,
             long expectedDeadlineEpochMs) {
+        assertHeld(gameId);
         if (hasDisconnectGraceExpired(room, game, playerName, expectedDeadlineEpochMs)) {
             departParticipantsUnderLock(gameId, List.of(playerName), room, game);
+        }
+    }
+
+    private void assertHeld(String roomId) {
+        if (lifecycleService != null && lifecycleService.getRoomCoordinator() != null) {
+            lifecycleService.getRoomCoordinator().assertHeldByCurrentThread(roomId);
         }
     }
 

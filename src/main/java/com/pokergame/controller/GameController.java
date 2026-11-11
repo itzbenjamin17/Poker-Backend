@@ -7,11 +7,11 @@ import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.util.LockLease;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.model.Game;
 import com.pokergame.security.PlayerPrincipal;
 import org.slf4j.Logger;
@@ -43,24 +43,15 @@ public class GameController {
 
     private final PlayerActionService playerActionService;
 
-    private final DurableMutationAspect durableMutationAspect;
+    private final RoomCoordinator roomCoordinator;
 
-    /**
-     * Creates the game controller with its action, lifecycle, and projection services.
-     *
-     * @param playerActionService validates and applies player actions
-     * @param gameLifecycleService owns active games and lifecycle transitions
-     * @param gameStateService creates and publishes client state
-     * @param durableMutationAspect supplies the per-room lock shared with durable mutations
-     */
-    public GameController(PlayerActionService playerActionService,
-            GameLifecycleService gameLifecycleService,
-            GameStateService gameStateService,
-            DurableMutationAspect durableMutationAspect) {
+    /** Creates the controller with the shared room coordination boundary. */
+    public GameController(PlayerActionService playerActionService, GameLifecycleService gameLifecycleService,
+            GameStateService gameStateService, RoomCoordinator roomCoordinator) {
         this.playerActionService = playerActionService;
         this.gameLifecycleService = gameLifecycleService;
         this.gameStateService = gameStateService;
-        this.durableMutationAspect = durableMutationAspect;
+        this.roomCoordinator = java.util.Objects.requireNonNull(roomCoordinator);
     }
 
     /**
@@ -82,7 +73,7 @@ public class GameController {
         // Security check: ensure the token is actually for THIS game/room
         playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             Game game = getAuthorisedGame(gameId, playerName);
             return ResponseEntity.ok(gameStateService.getPublicGameStateSnapshot(gameId, game));
@@ -107,7 +98,7 @@ public class GameController {
         // Security check: ensure the token is actually for THIS game/room
         playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             Game game = getAuthorisedGame(gameId, playerName);
             return ResponseEntity.ok(gameStateService.getPrivatePlayerStateSnapshot(game, playerName));
@@ -159,7 +150,7 @@ public class GameController {
         // Security check: ensure the token is actually for THIS game/room
         playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             playerActionService.processPlayerAction(gameId, actionRequest, playerName);
             logger.debug("Player action processed successfully for game {}", gameId);
@@ -182,7 +173,7 @@ public class GameController {
         // Security check: ensure the token is actually for THIS game/room
         playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             gameLifecycleService.markPlayerReadyForNextHand(gameId, playerName);
         }
@@ -204,7 +195,7 @@ public class GameController {
         // Security check: ensure the token is actually for THIS game/room
         playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             gameLifecycleService.unmarkPlayerReadyForNextHand(gameId, playerName);
         }
@@ -229,7 +220,7 @@ public class GameController {
         // Security check: ensure the token is actually for THIS game
         playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             gameLifecycleService.departParticipants(gameId, List.of(playerName));
             logger.info("Player {} successfully left game {}", playerName, gameId);
@@ -266,7 +257,7 @@ public class GameController {
             throw new UnauthorisedActionException("Query player name does not match authenticated player.");
         }
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             return ResponseEntity.ok(gameLifecycleService.getGameReview(gameId, playerName));
         }
@@ -295,7 +286,7 @@ public class GameController {
         // Security check: ensure the token is actually for THIS game/room (null-safe)
         playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(gameId)) {
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             GameEndResponse result = gameLifecycleService.claimWin(gameId, playerName);
             logger.info("Player {} successfully claimed win in game {}", playerName, gameId);

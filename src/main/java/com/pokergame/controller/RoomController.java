@@ -7,9 +7,9 @@ import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.TokenResponse;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.dto.internal.RoomEntryResult;
@@ -42,24 +42,15 @@ public class RoomController {
 
     private final JwtService jwtService;
 
-    private final DurableMutationAspect durableMutationAspect;
+    private final RoomCoordinator roomCoordinator;
 
-    /**
-     * Creates the room controller with its room, game, and token services.
-     *
-     * @param roomService owns lobby state and membership
-     * @param gameLifecycleService transitions rooms into active games
-     * @param jwtService issues room-bound player tokens
-     * @param durableMutationAspect supplies the per-room lock shared with durable mutations
-     */
-    public RoomController(RoomService roomService,
-            GameLifecycleService gameLifecycleService,
-            JwtService jwtService,
-            DurableMutationAspect durableMutationAspect) {
+    /** Creates the controller with the shared room coordination boundary. */
+    public RoomController(RoomService roomService, GameLifecycleService gameLifecycleService,
+            JwtService jwtService, RoomCoordinator roomCoordinator) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.jwtService = jwtService;
-        this.durableMutationAspect = durableMutationAspect;
+        this.roomCoordinator = java.util.Objects.requireNonNull(roomCoordinator);
     }
 
     /**
@@ -82,8 +73,7 @@ public class RoomController {
         String roomId = entry.roomId();
         String canonicalPlayerName = entry.canonicalPlayerName();
 
-        Room room = roomService.getRoom(roomId);
-        String membershipId = room != null ? room.getMembershipId(canonicalPlayerName) : null;
+        String membershipId = entry.membershipId();
 
         // Generate JWT token for this player, bound to this room and membership
         String token = membershipId != null
@@ -115,8 +105,7 @@ public class RoomController {
         String roomId = entry.roomId();
         String canonicalPlayerName = entry.canonicalPlayerName();
 
-        Room room = roomService.getRoom(roomId);
-        String membershipId = room != null ? room.getMembershipId(canonicalPlayerName) : null;
+        String membershipId = entry.membershipId();
 
         // Generate JWT token for this player, bound to this room and membership
         String token = membershipId != null
@@ -145,7 +134,7 @@ public class RoomController {
         // Security check: ensure the token is actually for THIS room
         playerPrincipal.assertBoundTo(roomId);
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
             if (roomService.checkAndCloseIfExpired(roomId)) {
                 throw new BadRequestException("Room has expired due to inactivity.");
             }
@@ -171,7 +160,11 @@ public class RoomController {
         // Check binding before exposing resource existence
         playerPrincipal.assertBoundTo(roomId);
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
+        return roomCoordinator.coordinate(roomId, () -> {
+            if (roomService.checkAndCloseIfExpired(roomId)) {
+                logger.warn("Room has expired: {}", roomId);
+                return ResponseEntity.notFound().build();
+            }
             gameLifecycleService.validatePlayerMembership(roomId, playerPrincipal.playerName(), playerPrincipal.membershipId());
             logger.debug("Fetching room info for room: {}", roomId);
             Room room = roomService.getRoom(roomId);
@@ -179,20 +172,13 @@ public class RoomController {
                 logger.warn("Room not found: {}", roomId);
                 return ResponseEntity.notFound().build();
             }
-            // The room lease (acquireRoomLock) and this Room intrinsic monitor are DISTINCT locks
-            // guarding different concerns: the lease serializes durable mutations on the room, while
-            // this monitor guards Room's own mutable fields and enforces the room -> game lock
-            // ordering. Both are held intentionally so the membership check and the room-data read
-            // are atomic against a concurrent removePlayer. Do not "simplify" by dropping either.
-            synchronized (room) {
-                if (!room.getPlayers().contains(playerPrincipal.playerName())) {
-                    throw new UnauthorisedActionException("You are not a member of this room.");
-                }
-                RoomDataResponse roomData = roomService.getRoomData(roomId);
-                logger.debug("Room info retrieved successfully for room: {}", roomId);
-                return ResponseEntity.ok(roomData);
+            if (!room.getPlayers().contains(playerPrincipal.playerName())) {
+                throw new UnauthorisedActionException("You are not a member of this room.");
             }
-        }
+            RoomDataResponse roomData = roomService.getRoomData(roomId);
+            logger.debug("Room info retrieved successfully for room: {}", roomId);
+            return ResponseEntity.ok(roomData);
+        });
     }
 
     /**
@@ -214,7 +200,7 @@ public class RoomController {
         // Security check: ensure the token is actually for THIS room
         playerPrincipal.assertBoundTo(roomId);
 
-        try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
             if (roomService.checkAndCloseIfExpired(roomId)) {
                 throw new BadRequestException("Room has expired due to inactivity.");
             }

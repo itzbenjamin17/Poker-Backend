@@ -12,23 +12,22 @@ import com.pokergame.service.event.RoomMemberRegistered;
 import com.pokergame.service.event.RoomMembershipRetired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.messaging.SessionConnectEvent;
 import org.springframework.web.socket.messaging.SessionDisconnectEvent;
 import org.springframework.web.socket.messaging.SessionSubscribeEvent;
 import org.springframework.web.socket.messaging.SessionUnsubscribeEvent;
 
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.scheduling.TaskScheduler;
-
 import java.security.Principal;
 import java.time.Instant;
-import com.pokergame.persistence.transaction.DurableMutationAspect;
-import com.pokergame.util.KeyedLockRegistry;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.util.LockLease;
 
 import java.util.Objects;
@@ -43,8 +42,8 @@ import java.util.HashSet;
  * Reconciles process-local WebSocket sessions with durable player membership.
  * <p>
  * Sessions and futures are intentionally transient, while disconnect deadlines and
- * resulting room/game mutations are durable. Per-player locks linearize reconnects
- * with grace-expiry cleanup so a player cannot be removed after reconnecting.
+ * resulting room/game mutations are durable. The shared room coordination boundary
+ * linearizes reconnects with grace-expiry cleanup so a player cannot be removed after reconnecting.
  * </p>
  */
 @Component
@@ -59,33 +58,41 @@ public class WebSocketEventListener {
     private final ConcurrentMap<String, Set<String>> activeSessionsByUser = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PlayerPrincipal> sessionToPrincipal = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PendingDisconnect> pendingDisconnects = new ConcurrentHashMap<>();
-    private final KeyedLockRegistry<String> sessionLocks = new KeyedLockRegistry<>();
     private final TaskScheduler taskScheduler;
-    private final DurableMutationAspect durableMutationAspect;
+    private final RoomCoordinator roomCoordinator;
 
     /**
-     * Creates the listener with the authoritative cleanup service and process-local
-     * scheduler used to enforce reconnect grace.
+     * Creates the listener with the authoritative room, game, rate limit, and coordinator services.
      *
      * @param roomService              authoritative room registry
      * @param gameLifecycleService     durable game and cleanup service
      * @param rateLimitService         transient WebSocket rate-limit registry
      * @param taskScheduler            runtime grace-period scheduler
-     * @param durableMutationAspect    per-room lock shared with durable mutations
-     * @param disconnectGracePeriodMs allowed reconnect interval
+     * @param roomCoordinator          coordinator managing room-scoped concurrency boundaries
+     * @param disconnectGracePeriodMs  allowed reconnect interval
      */
+    @Autowired
     public WebSocketEventListener(RoomService roomService,
             GameLifecycleService gameLifecycleService,
             RateLimitService rateLimitService,
             @Qualifier("taskScheduler") TaskScheduler taskScheduler,
-            DurableMutationAspect durableMutationAspect,
+            RoomCoordinator roomCoordinator,
             @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.rateLimitService = rateLimitService;
         this.taskScheduler = taskScheduler;
-        this.durableMutationAspect = durableMutationAspect;
+        this.roomCoordinator = Objects.requireNonNull(roomCoordinator, "roomCoordinator cannot be null");
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
+    }
+
+    /**
+     * Returns the room coordinator managing room-scoped concurrency boundaries.
+     *
+     * @return room coordinator
+     */
+    public RoomCoordinator getRoomCoordinator() {
+        return roomCoordinator;
     }
     
     /**
@@ -127,25 +134,22 @@ public class WebSocketEventListener {
         String playerName = playerPrincipal.playerName();
         String compositeName = playerKey(playerPrincipal);
 
-        try (LockLease _ = acquireRoomLease(roomId);
-                 LockLease _ = sessionLocks.acquire(compositeName)) {
+        try (LockLease _ = acquireRoomLease(roomId)) {
             if (playerPrincipal.membershipId() != null && !playerPrincipal.membershipId().isBlank()) {
                 Room room = roomService.getRoom(roomId);
                 if (room != null) {
-                    synchronized (room) {
-                        if (!room.hasPlayer(playerName)
-                                || !playerPrincipal.membershipId().equals(room.getMembershipId(playerName))) {
-                            logger.debug("Ignoring WebSocket connect for stale membership of player {} in room {}",
-                                    playerName, roomId);
-                            return;
-                        }
+                    if (!room.hasPlayer(playerName)
+                            || !playerPrincipal.membershipId().equals(room.getMembershipId(playerName))) {
+                        logger.debug("Ignoring WebSocket connect for stale membership of player {} in room {}",
+                                playerName, roomId);
+                        return;
                     }
                 }
             }
-            // Registration and cleanup are linearized per player: a reconnect that wins
-            // this lock cannot be evicted by an already-running grace timer.
+            // Registration and cleanup share this room boundary, so a reconnect that wins
+            // it cannot be evicted by an already-running grace timer.
             registerActiveSession(playerPrincipal, sessionId);
-            // Reconcile Room lease and Game flags under Room -> Game.
+            // Reconcile room and game state inside the shared room boundary.
             gameLifecycleService.markPlayerReconnected(roomId, playerName);
 
             PendingDisconnect pendingDisconnect = pendingDisconnects.remove(compositeName);
@@ -185,19 +189,16 @@ public class WebSocketEventListener {
             final PlayerPrincipal playerPrincipal = recoveredPrincipal;
             String compositeName = playerKey(playerPrincipal);
             
-            try (LockLease _ = acquireRoomLease(roomId);
-                 LockLease _ = sessionLocks.acquire(compositeName)) {
+            try (LockLease _ = acquireRoomLease(roomId)) {
                 if (playerPrincipal.membershipId() != null && !playerPrincipal.membershipId().isBlank()) {
                     Room currentRoom = roomService.getRoom(roomId);
                     if (currentRoom != null) {
-                        synchronized (currentRoom) {
-                            if (!currentRoom.hasPlayer(playerName)
-                                    || !playerPrincipal.membershipId().equals(currentRoom.getMembershipId(playerName))) {
-                                unregisterActiveSession(playerPrincipal, sessionId);
-                                logger.debug("Ignoring WebSocket disconnect for stale membership of player {} in room {}",
-                                        playerName, roomId);
-                                return;
-                            }
+                        if (!currentRoom.hasPlayer(playerName)
+                                || !playerPrincipal.membershipId().equals(currentRoom.getMembershipId(playerName))) {
+                            unregisterActiveSession(playerPrincipal, sessionId);
+                            logger.debug("Ignoring WebSocket disconnect for stale membership of player {} in room {}",
+                                    playerName, roomId);
+                            return;
                         }
                     }
                 }
@@ -220,13 +221,11 @@ public class WebSocketEventListener {
                 Room room = roomService.getRoom(roomId);
                 String membershipId = null;
                 if (room != null) {
-                    synchronized (room) {
-                        if (room.hasPlayer(playerName)) {
-                            room.setPlayerConnected(playerName, false);
-                            room.setAbsenceDeadline(playerName, disconnectDeadlineEpochMs);
-                        }
-                        membershipId = room.getMembershipId(playerName);
+                    if (room.hasPlayer(playerName)) {
+                        room.setPlayerConnected(playerName, false);
+                        room.setAbsenceDeadline(playerName, disconnectDeadlineEpochMs);
                     }
+                    membershipId = room.getMembershipId(playerName);
                 }
 
                 boolean gameActive = gameLifecycleService.gameExists(roomId);
@@ -266,8 +265,7 @@ public class WebSocketEventListener {
         String playerName = principal.playerName();
         String roomId = principal.roomId();
         
-        try (LockLease _ = acquireRoomLease(roomId);
-                 LockLease _ = sessionLocks.acquire(compositeName)) {
+        try (LockLease _ = acquireRoomLease(roomId)) {
             if (pendingDisconnects.get(compositeName) != expected || expected.isCancelled()) return;
 
             if (hasActiveSession(compositeName)) {
@@ -283,9 +281,7 @@ public class WebSocketEventListener {
             Room room = roomService.getRoom(roomId);
             boolean playerInRoom = false;
             if (room != null) {
-                synchronized (room) {
-                    playerInRoom = room.hasPlayer(playerName);
-                }
+                playerInRoom = room.hasPlayer(playerName);
             }
             boolean playerInGame = gameLifecycleService.gameExists(roomId)
                     && gameLifecycleService.playerExistsInGame(roomId, playerName);
@@ -319,21 +315,16 @@ public class WebSocketEventListener {
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
         String compositeName = playerKey(principal);
         MdcUtils.runWithMdc(roomId, playerName, () -> {
-            try (LockLease _ = acquireRoomLease(roomId);
-                 LockLease _ = sessionLocks.acquire(compositeName)) {
+            try (LockLease _ = acquireRoomLease(roomId)) {
                 Room room = roomService.getRoom(roomId);
                 if (room == null) {
                     return;
                 }
-                String currentMemId;
-                boolean playerConnected;
-                synchronized (room) {
-                    if (!room.hasPlayer(playerName)) {
-                        return;
-                    }
-                    currentMemId = room.getMembershipId(playerName);
-                    playerConnected = room.isPlayerConnected(playerName);
+                if (!room.hasPlayer(playerName)) {
+                    return;
                 }
+                String currentMemId = room.getMembershipId(playerName);
+                boolean playerConnected = room.isPlayerConnected(playerName);
                 if (!Objects.equals(membershipId, currentMemId)) {
                     return;
                 }
@@ -376,8 +367,7 @@ public class WebSocketEventListener {
         long delay = Math.max(0, deadlineEpochMs - System.currentTimeMillis());
         logger.info("Scheduling recovered disconnect for player {} in room {} with delayMs={}", playerName, roomId, delay);
         MdcUtils.runWithMdc(roomId, playerName, () -> {
-            try (LockLease _ = acquireRoomLease(roomId);
-                 LockLease _ = sessionLocks.acquire(compositeName)) {
+            try (LockLease _ = acquireRoomLease(roomId)) {
                 PendingDisconnect existing = pendingDisconnects.remove(compositeName);
                 if (existing != null) existing.cancel();
                 Room restoredRoom = roomService.getRoom(roomId);
@@ -391,13 +381,11 @@ public class WebSocketEventListener {
                 }
                 String restoredMembershipId = null;
                 if (restoredRoom != null) {
-                    synchronized (restoredRoom) {
-                        if (restoredRoom.hasPlayer(playerName)) {
-                            restoredRoom.setPlayerConnected(playerName, false);
-                            restoredRoom.setAbsenceDeadline(playerName, deadlineEpochMs);
-                        }
-                        restoredMembershipId = restoredRoom.getMembershipId(playerName);
+                    if (restoredRoom.hasPlayer(playerName)) {
+                        restoredRoom.setPlayerConnected(playerName, false);
+                        restoredRoom.setAbsenceDeadline(playerName, deadlineEpochMs);
                     }
+                    restoredMembershipId = restoredRoom.getMembershipId(playerName);
                 }
                 PendingDisconnect registration = new PendingDisconnect(restoredMembershipId, deadlineEpochMs);
                 pendingDisconnects.put(compositeName, registration);
@@ -532,14 +520,52 @@ public class WebSocketEventListener {
     }
 
     /**
-     * Acquires the outer durable room lease before any player lease or aggregate monitor.
-     * This ordering also applies to reconnects, grace callbacks, and scheduled cleanups.
+     * Acquires the room boundary for session transitions and cleanup callbacks.
      *
      * @param roomId room whose session state is changing
-     * @return room lease, or a no-op lease when persistence is disabled
+     * @return room lease, or a no-op lease when roomId is null
      */
     private LockLease acquireRoomLease(String roomId) {
-        return durableMutationAspect.acquireRoomLock(roomId);
+        if (roomId == null) {
+            return LockLease.none();
+        }
+        return roomCoordinator.acquire(roomId);
+    }
+
+    /**
+     * Cancels any pending disconnect grace timer for the specified player in a room, optionally
+     * guarded by membership identity.
+     *
+     * @param roomId       room identity
+     * @param playerName   player identity
+     * @param membershipId optional membership identity to match, or null to cancel regardless
+     * @return true if a matching pending disconnect was found and cancelled
+     */
+    public boolean cancelScheduledDisconnect(String roomId, String playerName, String membershipId) {
+        if (roomId == null || playerName == null) {
+            return false;
+        }
+        String compositeName = playerName + ":" + roomId;
+        try (LockLease _ = acquireRoomLease(roomId)) {
+            PendingDisconnect pending = pendingDisconnects.get(compositeName);
+            if (pending != null && (membershipId == null || Objects.equals(pending.membershipId(), membershipId))) {
+                pendingDisconnects.remove(compositeName, pending);
+                pending.cancel();
+                return true;
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Cancels any pending disconnect grace timer for the specified player in a room.
+     *
+     * @param roomId     room identity
+     * @param playerName player identity
+     * @return true if a pending disconnect was found and cancelled
+     */
+    public boolean cancelScheduledDisconnect(String roomId, String playerName) {
+        return cancelScheduledDisconnect(roomId, playerName, null);
     }
 
     /**
@@ -619,65 +645,56 @@ public class WebSocketEventListener {
         }
     }
 
-    /** Retires matching membership state under room lease, player lease, then Room/Game monitors. */
+    /** Retires matching membership state under room lease. */
     private void processMembershipRetired(String roomId, String playerName, String membershipId) {
         String compositeName = playerName + ":" + roomId;
         try (LockLease _ = acquireRoomLease(roomId)) {
-            try (LockLease _ = sessionLocks.acquire(compositeName)) {
-                Room room = roomService.getRoom(roomId);
-                if (room != null) {
-                    synchronized (room) {
-                        if (room.hasPlayer(playerName)) {
-                            String currentMemId = room.getMembershipId(playerName);
-                            if (!Objects.equals(membershipId, currentMemId)) {
-                                return;
-                            }
-                        }
-                        Game game = gameLifecycleService.getGame(roomId);
-                        if (game != null) {
-                            synchronized (game) {
-                                retireMembershipUnderLock(roomId, playerName, membershipId, compositeName);
-                            }
-                        } else {
-                            retireMembershipUnderLock(roomId, playerName, membershipId, compositeName);
-                        }
-                    }
-                } else {
-                    Game game = gameLifecycleService.getGame(roomId);
-                    if (game != null) {
-                        synchronized (game) {
-                            retireMembershipUnderLock(roomId, playerName, membershipId, compositeName);
-                        }
-                    } else {
-                        retireMembershipUnderLock(roomId, playerName, membershipId, compositeName);
+            Room room = roomService.getRoom(roomId);
+            if (room != null) {
+                if (room.hasPlayer(playerName)) {
+                    String currentMemId = room.getMembershipId(playerName);
+                    if (!Objects.equals(membershipId, currentMemId)) {
+                        return;
                     }
                 }
             }
+            retireMembershipUnderLock(roomId, playerName, membershipId, compositeName);
         }
     }
 
-    /** Removes transient room state under the same room-before-player lease order as reconnects. */
+    /** Tests the room suffix of a player routing key. */
+    private static boolean belongsToRoom(String user, String roomId) {
+        int separator = user.lastIndexOf(':');
+        return separator >= 0 && user.substring(separator + 1).equals(roomId);
+    }
+
+    /** Removes transient room state under the room lease. */
     private void processRoomDestroyed(String roomId) {
-        LockLease roomLease = durableMutationAspect.acquireRoomLock(roomId);
-        try (roomLease) {
+        if (roomId == null) {
+            return;
+        }
+        try (LockLease _ = acquireRoomLease(roomId)) {
             gameLifecycleService.cancelRuntimeTasks(roomId, false);
             Set<String> usersToClean = new HashSet<>();
             for (String user : activeSessionsByUser.keySet()) {
-                if (user.endsWith(":" + roomId)) {
+                if (belongsToRoom(user, roomId)) {
                     usersToClean.add(user);
                 }
             }
             for (String user : pendingDisconnects.keySet()) {
-                if (user.endsWith(":" + roomId)) {
+                if (belongsToRoom(user, roomId)) {
                     usersToClean.add(user);
                 }
             }
             for (String user : usersToClean) {
-                String playerName = user.substring(0, user.length() - roomId.length() - 1);
-                try (LockLease _ = sessionLocks.acquire(user)) {
-                    retireMembershipUnderLock(roomId, playerName, null, user);
-                }
+                int colonIdx = user.lastIndexOf(':');
+                String playerName = colonIdx >= 0 ? user.substring(0, colonIdx) : user;
+                retireMembershipUnderLock(roomId, playerName, null, user);
             }
+            sessionToPrincipal.entrySet().removeIf(entry -> {
+                PlayerPrincipal p = entry.getValue();
+                return p != null && Objects.equals(p.roomId(), roomId);
+            });
         }
     }
 
@@ -687,13 +704,32 @@ public class WebSocketEventListener {
             pending.cancel();
             pendingDisconnects.remove(compositeName, pending);
         }
-        Set<String> sessions = activeSessionsByUser.remove(compositeName);
-        if (sessions != null) {
-            for (String sessionId : sessions) {
-                sessionToPrincipal.remove(sessionId);
+        if (membershipId != null) {
+            Set<String> sessions = activeSessionsByUser.get(compositeName);
+            if (sessions != null) {
+                sessions.removeIf(sessionId -> {
+                    PlayerPrincipal p = sessionToPrincipal.get(sessionId);
+                    if (p != null && Objects.equals(p.membershipId(), membershipId)) {
+                        sessionToPrincipal.remove(sessionId);
+                        return true;
+                    }
+                    return false;
+                });
+                if (sessions.isEmpty()) {
+                    activeSessionsByUser.remove(compositeName);
+                }
+            }
+        } else {
+            Set<String> sessions = activeSessionsByUser.remove(compositeName);
+            if (sessions != null) {
+                for (String sessionId : sessions) {
+                    sessionToPrincipal.remove(sessionId);
+                }
             }
         }
-        rateLimitService.cleanUpWs(compositeName);
+        if (!hasActiveSession(compositeName)) {
+            rateLimitService.cleanUpWs(compositeName);
+        }
     }
 
     /**
@@ -718,12 +754,14 @@ public class WebSocketEventListener {
     }
 
     /**
-     * Returns the count of active keys currently held or reserved in the session lock registry.
+     * Legacy helper from multi-tier locking. Retained for compatibility; always returns 0
+     * now that player-scoped session locks have been eliminated.
      *
-     * @return number of active lock keys
+     * @return 0
      */
+    @Deprecated
     public int getActiveSessionLockCount() {
-        return sessionLocks.activeKeyCount();
+        return 0;
     }
 
     /**

@@ -41,6 +41,7 @@ import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.security.EndpointRateLimitFilter;
 import com.pokergame.security.RateLimitService;
 import com.pokergame.service.GameStateService;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.util.LockLease;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
@@ -112,6 +113,9 @@ class RoomControllerTest {
     @MockitoBean
     private DurableMutationAspect durableMutationAspect;
 
+    @MockitoBean
+    private RoomCoordinator roomCoordinator;
+
     /**
      * Initializes the test fixtures before each scenario.
      */
@@ -119,6 +123,14 @@ class RoomControllerTest {
     void setup() {
         Mockito.when(durableMutationAspect.acquireRoomLock(ArgumentMatchers.anyString()))
                 .thenReturn(LockLease.none());
+        Mockito.when(roomCoordinator.acquire(ArgumentMatchers.anyString()))
+                .thenReturn(LockLease.none());
+        Mockito.when(roomCoordinator.coordinate(ArgumentMatchers.anyString(), ArgumentMatchers.<java.util.function.Supplier<?>>any()))
+                .thenAnswer(invocation -> ((java.util.function.Supplier<?>) invocation.getArgument(1)).get());
+        Mockito.doAnswer(invocation -> {
+            ((Runnable) invocation.getArgument(1)).run();
+            return null;
+        }).when(roomCoordinator).coordinate(ArgumentMatchers.anyString(), ArgumentMatchers.any(Runnable.class));
 
         // Reset rate limit buckets to ensure a fresh start for each test
         rateLimitService.reset();
@@ -686,7 +698,7 @@ class RoomControllerTest {
     }
 
     @Test
-    @DisplayName("POST /api/room/create - Issues token with membershipId when room exists")
+    @DisplayName("POST /api/room/create - Keeps admitted membershipId after host replacement")
     void createRoom_WithActiveMembership_ShouldIssueTokenWithMembershipId() throws Exception {
         CreateRoomRequest request = new CreateRoomRequest("RoomMem", "HostAlice", 6, 10, 20, 1000, null);
         String roomId = "room-mem-123";
@@ -694,7 +706,9 @@ class RoomControllerTest {
         String expectedMembershipId = room.addPlayer("HostAlice");
 
         when(roomService.createRoomForEntry(any(CreateRoomRequest.class)))
-                .thenReturn(new RoomEntryResult(roomId, "HostAlice"));
+                .thenReturn(new RoomEntryResult(roomId, "HostAlice", expectedMembershipId));
+        room.removePlayer("HostAlice");
+        room.addPlayer("HostAlice");
         when(roomService.getRoom(roomId)).thenReturn(room);
         when(jwtService.generateToken("HostAlice", roomId, expectedMembershipId)).thenReturn("token-with-mid");
 
@@ -710,7 +724,7 @@ class RoomControllerTest {
     }
 
     @Test
-    @DisplayName("POST /api/room/join - Issues token with membershipId when joined")
+    @DisplayName("POST /api/room/join - Keeps admitted membershipId after player replacement")
     void joinRoom_WithActiveMembership_ShouldIssueTokenWithMembershipId() throws Exception {
         JoinRoomRequest request = new JoinRoomRequest("RoomMem", "Bob", null);
         String roomId = "room-mem-456";
@@ -719,7 +733,9 @@ class RoomControllerTest {
         String expectedMembershipId = room.addPlayer("Bob");
 
         when(roomService.joinRoomForEntry(any(JoinRoomRequest.class)))
-                .thenReturn(new RoomEntryResult(roomId, "Bob"));
+                .thenReturn(new RoomEntryResult(roomId, "Bob", expectedMembershipId));
+        room.removePlayer("Bob");
+        room.addPlayer("Bob");
         when(roomService.getRoom(roomId)).thenReturn(room);
         when(jwtService.generateToken("Bob", roomId, expectedMembershipId)).thenReturn("token-with-mid-bob");
 

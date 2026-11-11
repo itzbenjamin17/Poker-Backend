@@ -1,5 +1,8 @@
 # 0007: Hierarchical Monitor Locking Order for Aggregate Concurrency
 
+> [!NOTE]
+> **Superseded by [ADR-0011](0011-room-coordinator-single-boundary-concurrency.md)**: The four-layer hierarchical locking order (`Room Lease -> Player Lease -> Room Monitor -> Game Monitor`) is superseded by a single explicit concurrency boundary per room managed by `RoomCoordinator`. During intermediate migration phases, any remaining legacy monitors must be acquired strictly beneath the `RoomCoordinator` lease.
+
 We decided to govern concurrent room and game mutations using intrinsic JVM monitor synchronization with a strict acquisition hierarchy (`Room` lock before `Game` lock) rather than an actor framework, STM, or database transactions.
 
 ## Context
@@ -15,5 +18,5 @@ Concurrent requests originate from multiple asynchronous sources: HTTP REST endp
 
 ## Consequences
 
-- Completely eliminates JVM deadlocks across all concurrent game actions, disconnect handlers, and scheduled lifecycle timers.
+- Prevented aggregate-monitor inversion only when every participant followed the hierarchy; it did not eliminate all JVM deadlocks. ADR-0011 now defines the room-scoped guarantees and assumptions.
 - Requires strict developer discipline and static/runtime auditing to guarantee that no new code path violates the `Room Lease -> Player Lease -> Room Monitor -> Game Monitor` acquisition hierarchy.

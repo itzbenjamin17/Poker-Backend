@@ -27,7 +27,7 @@ final class GameTerminalSettlement {
     record SettlementOutcome(boolean settledNow, Player winner, GameEndResponse event) { }
 
     /**
-     * Settles an ending game under the caller's {@code synchronized (game)} lock, cancels
+     * Settles an ending game under the caller's room coordination lease, cancels
      * non-cleanup runtime timers, clears retained hand settlement, and freezes the
      * terminal {@link GameEndResponse}.
      */

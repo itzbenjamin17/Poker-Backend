@@ -17,4 +17,7 @@ public record PrivatePlayerState(
         long handNumber,
         List<Card> holeCards
 ) {
+    public PrivatePlayerState {
+        holeCards = holeCards == null ? List.of() : List.copyOf(holeCards);
+    }
 }

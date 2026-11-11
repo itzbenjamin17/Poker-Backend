@@ -29,6 +29,7 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
 import com.pokergame.enums.Rank;
 import com.pokergame.service.HandEvaluatorService;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.GameStateService;
 import org.junit.jupiter.api.Test;
 
@@ -462,18 +463,19 @@ class AggregateSnapshotMapperTest {
         Game game = new Game(roomId, List.of(alice, bob), 10, 20, evaluator);
         game.dealHoleCards();
         game.postBlinds();
+        RoomCoordinator coordinator = new RoomCoordinator();
 
         AtomicReference<Thread> reader = new AtomicReference<>();
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             Future<byte[]> capture;
-            synchronized (game) {
+            try (var ignored = coordinator.acquire(roomId)) {
                 alice.setChips(alice.getChips() - 10);
                 capture = executor.submit(() -> {
                     reader.set(Thread.currentThread());
-                    return mapper.serialize(room, "Alice", game);
+                    return coordinator.coordinate(roomId, () -> mapper.serialize(room, "Alice", game));
                 });
-                awaitBlockedOn(reader, game);
+                awaitBlockedOn(reader, coordinator.getLockRegistry());
                 bob.setChips(bob.getChips() + 10);
                 game.incrementStateRevision();
             }

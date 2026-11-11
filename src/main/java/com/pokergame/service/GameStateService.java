@@ -94,9 +94,7 @@ public class GameStateService {
             logger.warn("Game state build failed: room not found for gameId {}", gameId);
             throw new ResourceNotFoundException("Room not found");
         }
-        synchronized (game) {
-            return buildPublicGameStateResponse(gameId, game, room);
-        }
+        return buildPublicGameStateResponse(gameId, game, room);
     }
 
     /**
@@ -107,14 +105,12 @@ public class GameStateService {
      * @return private state containing the player's hole cards
      */
     public PrivatePlayerState getPrivatePlayerStateSnapshot(Game game, String playerName) {
-        synchronized (game) {
-            Player player = game.getPlayers().stream()
-                    .filter(p -> p.getName().equals(playerName))
-                    .findFirst()
-                    .orElseThrow(() -> new ResourceNotFoundException("Player not found in game"));
+        Player player = game.getPlayers().stream()
+                .filter(p -> p.getName().equals(playerName))
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Player not found in game"));
 
-            return buildPrivatePlayerState(game, player);
-        }
+        return buildPrivatePlayerState(game, player);
     }
 
     /**
@@ -142,12 +138,10 @@ public class GameStateService {
         PublicGameStateResponse publicResponse;
         Map<String, PrivatePlayerState> playerPrivateStates = new HashMap<>();
 
-        synchronized (game) {
-            game.incrementStateRevision();
-            publicResponse = buildPublicGameStateResponse(gameId, game, room);
-            for (Player player : game.getPlayers()) {
-                playerPrivateStates.put(player.getName(), buildPrivatePlayerState(game, player));
-            }
+        game.incrementStateRevision();
+        publicResponse = buildPublicGameStateResponse(gameId, game, room);
+        for (Player player : game.getPlayers()) {
+            playerPrivateStates.put(player.getName(), buildPrivatePlayerState(game, player));
         }
 
         sendAfterCommit("/game/" + gameId, publicResponse);
@@ -182,88 +176,86 @@ public class GameStateService {
         PublicGameStateResponse showdownResponse;
         List<String> winnerNames;
 
-        synchronized (game) {
-            game.incrementStateRevision();
+        game.incrementStateRevision();
 
-            // Showdown means no one is waiting to act - reporting a stale "current
-            // player" pointer here previously made the client briefly think it was
-            // someone's turn (showing Fold/Check) between the showdown broadcast and
-            // the later GAME_END/next-hand broadcast, so these are intentionally null.
-            String currentPlayerName = null;
-            String currentPlayerId = null;
+        // Showdown means no one is waiting to act - reporting a stale "current
+        // player" pointer here previously made the client briefly think it was
+        // someone's turn (showing Fold/Check) between the showdown broadcast and
+        // the later GAME_END/next-hand broadcast, so these are intentionally null.
+        String currentPlayerName = null;
+        String currentPlayerId = null;
 
-            HandSettlementResult settlement = game.getLastSettlementResult();
-            boolean retainedSettlement = settlement != null && settlement.settled();
-            Set<String> winnerIds;
-            Map<String, Integer> contestedAwards;
-            HandSettlementResult effectiveSettlement;
-            if (settlement != null && settlement.settled()) {
-                winnerIds = settlement.winnerIds();
-                contestedAwards = settlement.contestedAwards();
-                effectiveSettlement = settlement;
-            } else {
-                winnerIds = winners.stream().map(Player::getPlayerId).collect(Collectors.toSet());
-                contestedAwards = winners.stream().collect(Collectors.toMap(Player::getPlayerId,
-                        ignored -> winningsPerPlayer, (left, right) -> left));
-                effectiveSettlement = new HandSettlementResult(contestedAwards, Map.of(), winnerIds, 0, true);
-            }
-            if (!game.isGameOver()) {
-                retainedSettlements.put(gameId, effectiveSettlement);
-            } else {
-                retainedSettlements.remove(gameId);
-            }
-            List<Player> projectedWinners = game.getPlayers().stream()
-                    .filter(player -> winnerIds.contains(player.getPlayerId())).toList();
-            winnerNames = projectedWinners.stream().map(Player::getName).toList();
-            Integer legacyWinnings = computeEqualWinnerAward(winnerIds, contestedAwards);
-
-            // Check if this is an actual showdown (i.e. not a win by fold)
-            boolean isActualShowdown = projectedWinners.stream()
-                    .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != HandRank.NO_HAND);
-            String smallBlindPlayerId = game.getSmallBlindPlayerId();
-            String bigBlindPlayerId = game.getBigBlindPlayerId();
-
-            // Convert players to PublicPlayerState DTOs with showdown information
-            List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
-                boolean isWinner = winnerIds.contains(player.getPlayerId());
-                boolean isActive = !player.getHasFolded() && !player.getIsOut();
-                return toPublicPlayerState(
-                        player,
-                        false,
-                        smallBlindPlayerId,
-                        bigBlindPlayerId,
-                        isActive ? player.getHandRank() : null,
-                        isActive ? player.getBestHand() : List.of(),
-                        isWinner,
-                        contestedAwards.getOrDefault(player.getPlayerId(), 0),
-                        (isActive && isActualShowdown) ? player.getHoleCards() : null);
-            }).toList();
-
-            // Create PublicGameStateResponse DTO with showdown information
-            showdownResponse = new PublicGameStateResponse(
-                    maxPlayers,
-                    game.getPot(),
-                    game.getPotBreakdown(),
-                    game.getUncalledAmount(),
-                    game.getCurrentPhase(),
-                    game.getCurrentHighestBet(),
-                    game.getCommunityCards(),
-                    playersList,
-                    currentPlayerName,
-                    currentPlayerId,
-                    winnerNames,
-                    legacyWinnings,
-                    null,
-                    null,
-                    game.isReadyCountdownActive(),
-                    game.getReadyCountdownDeadlineEpochMs(),
-                    null,
-                    null,
-                    retainedSettlement,
-                    retainedSettlement ? effectiveSettlement.remainder() : null,
-                    null, null, null, game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
-                    game.getStateRevision());
+        HandSettlementResult settlement = game.getLastSettlementResult();
+        boolean retainedSettlement = settlement != null && settlement.settled();
+        Set<String> winnerIds;
+        Map<String, Integer> contestedAwards;
+        HandSettlementResult effectiveSettlement;
+        if (settlement != null && settlement.settled()) {
+            winnerIds = settlement.winnerIds();
+            contestedAwards = settlement.contestedAwards();
+            effectiveSettlement = settlement;
+        } else {
+            winnerIds = winners.stream().map(Player::getPlayerId).collect(Collectors.toSet());
+            contestedAwards = winners.stream().collect(Collectors.toMap(Player::getPlayerId,
+                    ignored -> winningsPerPlayer, (left, right) -> left));
+            effectiveSettlement = new HandSettlementResult(contestedAwards, Map.of(), winnerIds, 0, true);
         }
+        if (!game.isGameOver()) {
+            retainedSettlements.put(gameId, effectiveSettlement);
+        } else {
+            retainedSettlements.remove(gameId);
+        }
+        List<Player> projectedWinners = game.getPlayers().stream()
+                .filter(player -> winnerIds.contains(player.getPlayerId())).toList();
+        winnerNames = projectedWinners.stream().map(Player::getName).toList();
+        Integer legacyWinnings = computeEqualWinnerAward(winnerIds, contestedAwards);
+
+        // Check if this is an actual showdown (i.e. not a win by fold)
+        boolean isActualShowdown = projectedWinners.stream()
+                .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != HandRank.NO_HAND);
+        String smallBlindPlayerId = game.getSmallBlindPlayerId();
+        String bigBlindPlayerId = game.getBigBlindPlayerId();
+
+        // Convert players to PublicPlayerState DTOs with showdown information
+        List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
+            boolean isWinner = winnerIds.contains(player.getPlayerId());
+            boolean isActive = !player.getHasFolded() && !player.getIsOut();
+            return toPublicPlayerState(
+                    player,
+                    false,
+                    smallBlindPlayerId,
+                    bigBlindPlayerId,
+                    isActive ? player.getHandRank() : null,
+                    isActive ? player.getBestHand() : List.of(),
+                    isWinner,
+                    contestedAwards.getOrDefault(player.getPlayerId(), 0),
+                    (isActive && isActualShowdown) ? player.getHoleCards() : null);
+        }).toList();
+
+        // Create PublicGameStateResponse DTO with showdown information
+        showdownResponse = new PublicGameStateResponse(
+                maxPlayers,
+                game.getPot(),
+                game.getPotBreakdown(),
+                game.getUncalledAmount(),
+                game.getCurrentPhase(),
+                game.getCurrentHighestBet(),
+                game.getCommunityCards(),
+                playersList,
+                currentPlayerName,
+                currentPlayerId,
+                winnerNames,
+                legacyWinnings,
+                null,
+                null,
+                game.isReadyCountdownActive(),
+                game.getReadyCountdownDeadlineEpochMs(),
+                null,
+                null,
+                retainedSettlement,
+                retainedSettlement ? effectiveSettlement.remainder() : null,
+                null, null, null, game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
+                game.getStateRevision());
 
         // Broadcast showdown results to all players
         sendAfterCommit("/game/" + gameId, showdownResponse);
@@ -296,57 +288,55 @@ public class GameStateService {
 
         PublicGameStateResponse autoAdvanceResponse;
 
-        synchronized (game) {
-            game.incrementStateRevision();
+        game.incrementStateRevision();
 
-            // Get current player information
-            String currentPlayerName = null;
-            String currentPlayerId = null;
-            String smallBlindPlayerId = game.getSmallBlindPlayerId();
-            String bigBlindPlayerId = game.getBigBlindPlayerId();
+        // Get current player information
+        String currentPlayerName = null;
+        String currentPlayerId = null;
+        String smallBlindPlayerId = game.getSmallBlindPlayerId();
+        String bigBlindPlayerId = game.getBigBlindPlayerId();
 
-            // Convert players to PlayerState DTOs
-            List<PublicPlayerState> playersList = game.getPlayers().stream()
-                    .map(player -> toPublicPlayerState(
-                            player,
-                            false,
-                            smallBlindPlayerId,
-                            bigBlindPlayerId,
-                            player.getHandRank(),
-                            List.of(),
-                            null,
-                            null,
-                            null))
-                    .toList();
+        // Convert players to PlayerState DTOs
+        List<PublicPlayerState> playersList = game.getPlayers().stream()
+                .map(player -> toPublicPlayerState(
+                        player,
+                        false,
+                        smallBlindPlayerId,
+                        bigBlindPlayerId,
+                        player.getHandRank(),
+                        List.of(),
+                        null,
+                        null,
+                        null))
+                .toList();
 
-            // Create PublicGameStateResponse DTO with auto-advance fields
-            autoAdvanceResponse = new PublicGameStateResponse(
-                    maxPlayers,
-                    game.getPot(),
-                    game.getPotBreakdown(),
-                    game.getUncalledAmount(),
-                    game.getCurrentPhase(),
-                    game.getCurrentHighestBet(),
-                    game.getCommunityCards(),
-                    playersList,
-                    currentPlayerName,
-                    currentPlayerId,
-                    null, // winners
-                    null, // winningsPerPlayer
-                    true,
-                    message,
-                    game.isReadyCountdownActive(),
-                    game.getReadyCountdownDeadlineEpochMs(),
-                    null,
-                    null,
-                    null,
-                    null,
-                    List.of(),
-                    null,
-                    null,
-                    game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
-                    game.getStateRevision());
-        }
+        // Create PublicGameStateResponse DTO with auto-advance fields
+        autoAdvanceResponse = new PublicGameStateResponse(
+                maxPlayers,
+                game.getPot(),
+                game.getPotBreakdown(),
+                game.getUncalledAmount(),
+                game.getCurrentPhase(),
+                game.getCurrentHighestBet(),
+                game.getCommunityCards(),
+                playersList,
+                currentPlayerName,
+                currentPlayerId,
+                null, // winners
+                null, // winningsPerPlayer
+                true,
+                message,
+                game.isReadyCountdownActive(),
+                game.getReadyCountdownDeadlineEpochMs(),
+                null,
+                null,
+                null,
+                null,
+                List.of(),
+                null,
+                null,
+                game.getHandNumber(), game.getReadyGateState(), System.currentTimeMillis(),
+                game.getStateRevision());
 
         logger.info("Broadcasting auto-advance state for game {}: {}", gameId, message);
         sendAfterCommit("/game/" + gameId, autoAdvanceResponse);
@@ -475,14 +465,12 @@ public class GameStateService {
         Room room = roomService.getRoom(gameId);
         int maxPlayers = room == null ? 0 : room.getMaxPlayers();
         GameEndResponse event;
-        synchronized (game) {
-            clearRetainedSettlement(gameId);
-            if (game.getRetainedTerminalResult() != null) {
-                event = game.getRetainedTerminalResult();
-            } else {
-                event = captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
-                game.setRetainedTerminalResult(event);
-            }
+        clearRetainedSettlement(gameId);
+        if (game.getRetainedTerminalResult() != null) {
+            event = game.getRetainedTerminalResult();
+        } else {
+            event = captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
+            game.setRetainedTerminalResult(event);
         }
         sendGameEnd(event);
 

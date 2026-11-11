@@ -67,7 +67,8 @@ class DurableRollbackProgressionTest {
             return future;
         });
         HandEvaluatorService evaluator = new HandEvaluatorService();
-        games = new GameLifecycleService(rooms, evaluator, mock(GameStateService.class), messaging, scheduler);
+        games = new GameLifecycleService(rooms, evaluator, mock(GameStateService.class), messaging, scheduler,
+                rooms.getRoomCoordinator());
         Room room = new Room(ID, "Rollback room", "Host", 6, 10, 20, 1000, null);
         room.addPlayer("Host");
         room.addPlayer("Guest");
@@ -80,7 +81,8 @@ class DurableRollbackProgressionTest {
         ObjectProvider<GameLifecycleService> gameProvider = mock(ObjectProvider.class);
         when(roomProvider.getObject()).thenReturn(rooms);
         when(gameProvider.getObject()).thenReturn(games);
-        aspect = new DurableMutationAspect(store, mapper, roomProvider, gameProvider, new PersistenceProperties());
+        aspect = new DurableMutationAspect(store, mapper, roomProvider, gameProvider, new PersistenceProperties(),
+                rooms.getRoomCoordinator());
     }
 
     @Test

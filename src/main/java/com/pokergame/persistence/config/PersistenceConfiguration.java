@@ -33,6 +33,7 @@ import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.PersistenceRecovery;
 import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import org.springframework.context.ApplicationContext;
 
@@ -120,8 +121,10 @@ public class PersistenceConfiguration {
     DurableMutationAspect durableMutationAspect(ObjectProvider<EncryptedWalStore> store, AggregateSnapshotMapper snapshotMapper,
             ObjectProvider<RoomService> roomService,
             ObjectProvider<GameLifecycleService> gameLifecycleService,
-            PersistenceProperties properties) {
-        return new DurableMutationAspect(store.getIfAvailable(), snapshotMapper, roomService, gameLifecycleService, properties);
+            PersistenceProperties properties,
+            ObjectProvider<RoomCoordinator> roomCoordinatorProvider) {
+        RoomCoordinator coordinator = roomCoordinatorProvider.getIfAvailable(RoomCoordinator::new);
+        return new DurableMutationAspect(store.getIfAvailable(), snapshotMapper, roomService, gameLifecycleService, properties, coordinator);
     }
 
     /**
@@ -144,9 +147,14 @@ public class PersistenceConfiguration {
             WebSocketEventListener webSocketEventListener,
             ApplicationContext applicationContext,
             @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs,
-            java.time.Clock clock) {
+            java.time.Clock clock,
+            ObjectProvider<RoomCoordinator> roomCoordinatorProvider) {
+        RoomCoordinator coordinator = roomCoordinatorProvider.getIfAvailable(() ->
+                roomService != null && roomService.getRoomCoordinator() != null
+                        ? roomService.getRoomCoordinator()
+                        : new RoomCoordinator());
         return new PersistenceRecovery(store, mapper, roomService, gameLifecycleService, webSocketEventListener,
-                applicationContext, disconnectGracePeriodMs, clock);
+                applicationContext, disconnectGracePeriodMs, clock, coordinator);
     }
 
     /**

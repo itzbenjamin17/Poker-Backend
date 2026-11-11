@@ -38,13 +38,12 @@ public class Room {
     private final String hostName;
     /**
      * Join-order and arrival timestamps for players in this room.
-     * Guarded by this Room instance monitor (all mutations and accesses must synchronize on this).
+     * Guarded by the room-ID coordination lease after publication.
      */
     private final LinkedHashMap<String, LocalDateTime> playersWithJoinTime;
     /**
      * Session membership identities created per addPlayer and preserved across WAL snapshots.
-     * Writes remain guarded by this Room instance monitor. Atomic membership reads
-     * also support private projection while a caller already holds the Game monitor.
+     * Reads and writes require the room-ID coordination lease after publication.
      */
     private final Map<String, String> playerMembershipIds = new ConcurrentHashMap<>();
     private final Set<String> persistedMembershipPlayers = new HashSet<>();
@@ -52,13 +51,13 @@ public class Room {
 
     /**
      * Process-local absence deadlines for players awaiting first connection or reconnect grace.
-     * Guarded by this Room instance monitor. Excluded from WAL serialization.
+     * Guarded by the room-ID coordination lease after publication. Excluded from WAL serialization.
      */
     private final Map<String, Long> playerAbsenceDeadlines = new LinkedHashMap<>();
 
     /**
      * Process-local active socket presence bounded by room membership.
-     * Guarded by this Room instance monitor. Excluded from WAL serialization.
+     * Guarded by the room-ID coordination lease after publication. Excluded from WAL serialization.
      */
     private final Set<String> connectedPlayers = new HashSet<>();
     private final int maxPlayers;

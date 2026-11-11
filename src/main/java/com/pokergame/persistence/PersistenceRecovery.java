@@ -23,6 +23,8 @@ import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.LockLease;
 import java.util.HashMap;
 
 /**
@@ -45,6 +47,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
     private final ApplicationContext applicationContext;
     private final long disconnectGracePeriodMs;
     private final java.time.Clock clock;
+    private final RoomCoordinator roomCoordinator;
     private volatile boolean complete;
 
     /**
@@ -63,12 +66,20 @@ public final class PersistenceRecovery implements ApplicationRunner {
             GameLifecycleService gameLifecycleService, WebSocketEventListener webSocketEventListener,
             ApplicationContext applicationContext, long disconnectGracePeriodMs) {
         this(store, mapper, roomService, gameLifecycleService, webSocketEventListener, applicationContext,
-                disconnectGracePeriodMs, java.time.Clock.systemUTC());
+                disconnectGracePeriodMs, java.time.Clock.systemUTC(), null);
     }
 
     public PersistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper, RoomService roomService,
             GameLifecycleService gameLifecycleService, WebSocketEventListener webSocketEventListener,
             ApplicationContext applicationContext, long disconnectGracePeriodMs, java.time.Clock clock) {
+        this(store, mapper, roomService, gameLifecycleService, webSocketEventListener, applicationContext,
+                disconnectGracePeriodMs, clock, null);
+    }
+
+    public PersistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper, RoomService roomService,
+            GameLifecycleService gameLifecycleService, WebSocketEventListener webSocketEventListener,
+            ApplicationContext applicationContext, long disconnectGracePeriodMs, java.time.Clock clock,
+            RoomCoordinator roomCoordinator) {
         this.store = store;
         this.mapper = mapper;
         this.roomService = roomService;
@@ -77,6 +88,16 @@ public final class PersistenceRecovery implements ApplicationRunner {
         this.applicationContext = applicationContext;
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
         this.clock = clock != null ? clock : java.time.Clock.systemUTC();
+        this.roomCoordinator = roomCoordinator != null ? roomCoordinator : new RoomCoordinator();
+    }
+
+    /**
+     * Returns the room coordinator managing per-room concurrency.
+     *
+     * @return the room coordinator
+     */
+    public RoomCoordinator getRoomCoordinator() {
+        return roomCoordinator;
     }
 
     /**
@@ -95,6 +116,14 @@ public final class PersistenceRecovery implements ApplicationRunner {
      */
     @Override
     public void run(ApplicationArguments args) {
+        recover();
+    }
+
+    /**
+     * Executes the recovery workflow: loads all saved game data, cleans up deleted or expired rooms,
+     * restores aggregates into active registries under RoomCoordinator, and restarts game timers.
+     */
+    public void recover() {
         long startMs = System.currentTimeMillis();
         logger.info("Starting persistence recovery");
 
@@ -123,7 +152,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
             // If the room was marked for deletion before the crash, permanently delete it now
             if (aggregate.deleted()) {
                 logger.info("Deleted tombstone room {}", roomId);
-                store.delete(roomId);
+                roomCoordinator.coordinate(roomId, () -> store.delete(roomId));
                 roomsDeleted++;
                 continue;
             }
@@ -146,82 +175,84 @@ public final class PersistenceRecovery implements ApplicationRunner {
 
         for (RecoveredAggregate aggregate : recoveredAggregates) {
             String roomId = aggregate.room().getRoomId();
-            try {
-                Game game = aggregate.game();
-                if (game == null) {
-                    Long inactivityDeadline = aggregate.room().getInactivityDeadlineEpochMs();
-                    if (inactivityDeadline != null && clock.millis() >= inactivityDeadline) {
-                        logger.info("Lobby {} expired during restart downtime (deadline: {}, now: {}); deleting",
-                                roomId, inactivityDeadline, clock.millis());
-                        store.delete(roomId);
-                        roomsDeleted++;
-                        continue;
-                    }
-                } else {
-                    if (game.isGameOver() && game.isCleanupExpired(clock.millis())) {
-                        logger.info("Game {} cleanup deadline expired during restart downtime (now: {}); deleting",
-                                roomId, clock.millis());
-                        store.delete(roomId);
-                        roomsDeleted++;
-                        continue;
+            try (LockLease _ = roomCoordinator.acquire(roomId)) {
+                try {
+                    Game game = aggregate.game();
+                    if (game == null) {
+                        Long inactivityDeadline = aggregate.room().getInactivityDeadlineEpochMs();
+                        if (inactivityDeadline != null && clock.millis() >= inactivityDeadline) {
+                            logger.info("Lobby {} expired during restart downtime (deadline: {}, now: {}); deleting",
+                                    roomId, inactivityDeadline, clock.millis());
+                            store.delete(roomId);
+                            roomsDeleted++;
+                            continue;
+                        }
+                    } else {
+                        if (game.isGameOver() && game.isCleanupExpired(clock.millis())) {
+                            logger.info("Game {} cleanup deadline expired during restart downtime (now: {}); deleting",
+                                    roomId, clock.millis());
+                            store.delete(roomId);
+                            roomsDeleted++;
+                            continue;
+                        }
+
+                        Long inactivityDeadline = aggregate.room().getInactivityDeadlineEpochMs();
+                        if (inactivityDeadline != null && clock.millis() >= inactivityDeadline && !game.isGameOver()) {
+                            logger.info("Game {} expired due to room inactivity during restart downtime (deadline: {}, now: {}); abandoning",
+                                    roomId, inactivityDeadline, clock.millis());
+                            roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
+                            gameLifecycleService.restoreGame(game);
+                            gameLifecycleService.abandonGameDueToInactivity(roomId);
+                            roomsRestored++;
+                            gamesRestored++;
+                            continue;
+                        }
                     }
 
-                    Long inactivityDeadline = aggregate.room().getInactivityDeadlineEpochMs();
-                    if (inactivityDeadline != null && clock.millis() >= inactivityDeadline && !game.isGameOver()) {
-                        logger.info("Game {} expired due to room inactivity during restart downtime (deadline: {}, now: {}); abandoning",
-                                roomId, inactivityDeadline, clock.millis());
-                        roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
+                    for (String playerName : aggregate.room().getPlayers()) {
+                        Player gamePlayer = game == null ? null : game.getPlayers().stream()
+                                .filter(player -> player.getName().equals(playerName))
+                                .findFirst().orElse(null);
+                        long storedDeadline = gamePlayer == null || gamePlayer.getDisconnectDeadlineEpochMs() == null
+                                ? 0 : gamePlayer.getDisconnectDeadlineEpochMs();
+                        long deadline = Math.max(freshDeadline, storedDeadline);
+                        if (gamePlayer != null) {
+                            gamePlayer.setDisconnected(true);
+                            gamePlayer.setReadyForNextHand(false);
+                            gamePlayer.setDisconnectDeadlineEpochMs(deadline);
+                        }
+                        recoveredDeadlines.put(new RecoveredPlayerKey(roomId, playerName), deadline);
+                    }
+
+                    roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
+                    if (game != null) {
                         gameLifecycleService.restoreGame(game);
-                        gameLifecycleService.abandonGameDueToInactivity(roomId);
-                        roomsRestored++;
+                        if (!game.isGameOver() && aggregate.room().getInactivityDeadlineEpochMs() != null) {
+                            gameLifecycleService.scheduleGameInactivity(roomId, aggregate.room().getInactivityDeadlineEpochMs());
+                        }
+                    } else if (aggregate.room().getInactivityDeadlineEpochMs() != null) {
+                        roomService.scheduleLobbyInactivity(roomId, aggregate.room().getInactivityDeadlineEpochMs());
+                    }
+                    for (String playerName : aggregate.room().getPlayers()) {
+                        // Tell the system to kick the player if they don't reconnect by the deadline
+                        webSocketEventListener.scheduleRecoveredDisconnect(
+                                roomId, playerName,
+                                recoveredDeadlines.get(new RecoveredPlayerKey(roomId, playerName)));
+                    }
+
+                    // Restart the game timers (like the countdown for player turns) so the game can continue
+                    if (game != null) {
+                        gameLifecycleService.resumeRecoveredTimers(game.getGameId());
                         gamesRestored++;
-                        continue;
                     }
+                    roomsRestored++;
+                    logger.debug("Recovered room: roomId={}, hasGame={}", roomId, game != null);
+                } catch (Exception e) {
+                    logger.error("Failed to recover room {}; quarantining corrupted WAL", roomId, e);
+                    gameLifecycleService.evictGame(roomId);
+                    roomService.evictRoom(roomId);
+                    store.quarantine(roomId, e.getMessage());
                 }
-
-                for (String playerName : aggregate.room().getPlayers()) {
-                    Player gamePlayer = game == null ? null : game.getPlayers().stream()
-                            .filter(player -> player.getName().equals(playerName))
-                            .findFirst().orElse(null);
-                    long storedDeadline = gamePlayer == null || gamePlayer.getDisconnectDeadlineEpochMs() == null
-                            ? 0 : gamePlayer.getDisconnectDeadlineEpochMs();
-                    long deadline = Math.max(freshDeadline, storedDeadline);
-                    if (gamePlayer != null) {
-                        gamePlayer.setDisconnected(true);
-                        gamePlayer.setReadyForNextHand(false);
-                        gamePlayer.setDisconnectDeadlineEpochMs(deadline);
-                    }
-                    recoveredDeadlines.put(new RecoveredPlayerKey(roomId, playerName), deadline);
-                }
-
-                roomService.restoreRoom(aggregate.room(), aggregate.currentHost());
-                if (game != null) {
-                    gameLifecycleService.restoreGame(game);
-                    if (!game.isGameOver() && aggregate.room().getInactivityDeadlineEpochMs() != null) {
-                        gameLifecycleService.scheduleGameInactivity(roomId, aggregate.room().getInactivityDeadlineEpochMs());
-                    }
-                } else if (aggregate.room().getInactivityDeadlineEpochMs() != null) {
-                    roomService.scheduleLobbyInactivity(roomId, aggregate.room().getInactivityDeadlineEpochMs());
-                }
-                for (String playerName : aggregate.room().getPlayers()) {
-                    // Tell the system to kick the player if they don't reconnect by the deadline
-                    webSocketEventListener.scheduleRecoveredDisconnect(
-                            roomId, playerName,
-                            recoveredDeadlines.get(new RecoveredPlayerKey(roomId, playerName)));
-                }
-                
-                // Restart the game timers (like the countdown for player turns) so the game can continue
-                if (game != null) {
-                    gameLifecycleService.resumeRecoveredTimers(game.getGameId());
-                    gamesRestored++;
-                }
-                roomsRestored++;
-                logger.debug("Recovered room: roomId={}, hasGame={}", roomId, game != null);
-            } catch (Exception e) {
-                logger.error("Failed to recover room {}; quarantining corrupted WAL", roomId, e);
-                gameLifecycleService.evictGame(roomId);
-                roomService.evictRoom(roomId);
-                store.quarantine(roomId, e.getMessage());
             }
         }
         
