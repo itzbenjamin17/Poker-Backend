@@ -148,6 +148,20 @@ public class KeyedLockRegistry<K> {
     }
 
     /**
+     * Returns whether the lock for the given key is held by the current thread.
+     *
+     * @param key the key to inspect
+     * @return true if the lock is held by the current thread
+     */
+    public boolean isHeldByCurrentThread(K key) {
+        if (key == null) {
+            return false;
+        }
+        LockEntry<K> entry = entries.get(key);
+        return entry != null && entry.lock.isHeldByCurrentThread();
+    }
+
+    /**
      * Returns the number of distinct keys currently active in the registry.
      *
      * @return active key count

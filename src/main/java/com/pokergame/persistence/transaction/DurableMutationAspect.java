@@ -10,6 +10,7 @@ import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.WalTransaction;
 import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.util.MdcKeys;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -52,7 +53,7 @@ public final class DurableMutationAspect {
     private final ObjectProvider<RoomService> roomService;
     private final ObjectProvider<GameLifecycleService> gameLifecycleService;
     private final PersistenceProperties properties;
-    private final KeyedLockRegistry<String> roomLocks = new KeyedLockRegistry<>();
+    private final RoomCoordinator roomCoordinator;
     private final ConcurrentHashMap<String, AtomicInteger> recordsSinceCompaction = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, PendingSave> pendingSaves = new ConcurrentHashMap<>();
     private final ExpressionParser expressionParser = new SpelExpressionParser();
@@ -66,15 +67,32 @@ public final class DurableMutationAspect {
      * @param roomService          lazy provider for the room service
      * @param gameLifecycleService lazy provider for the game service
      * @param properties           settings for when to clean up old save files
+     * @param roomCoordinator      coordinator managing room-scoped concurrency boundaries
      */
     public DurableMutationAspect(EncryptedWalStore store, AggregateSnapshotMapper snapshotMapper,
             ObjectProvider<RoomService> roomService, ObjectProvider<GameLifecycleService> gameLifecycleService,
-            PersistenceProperties properties) {
+            PersistenceProperties properties, RoomCoordinator roomCoordinator) {
         this.store = store;
         this.snapshotMapper = snapshotMapper;
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.properties = properties;
+        this.roomCoordinator = java.util.Objects.requireNonNull(roomCoordinator, "roomCoordinator cannot be null");
+    }
+
+    /**
+     * Creates this aspect using a newly created {@link RoomCoordinator}.
+     *
+     * @param store                storage for saving game data, or null for room locking only
+     * @param snapshotMapper       helper to convert the game into a format we can save
+     * @param roomService          lazy provider for the room service
+     * @param gameLifecycleService lazy provider for the game service
+     * @param properties           settings for when to clean up old save files
+     */
+    public DurableMutationAspect(EncryptedWalStore store, AggregateSnapshotMapper snapshotMapper,
+            ObjectProvider<RoomService> roomService, ObjectProvider<GameLifecycleService> gameLifecycleService,
+            PersistenceProperties properties) {
+        this(store, snapshotMapper, roomService, gameLifecycleService, properties, new RoomCoordinator());
     }
 
     /**
@@ -84,7 +102,7 @@ public final class DurableMutationAspect {
      * @return the room lock
      */
     public LockLease acquireRoomLock(String roomId) {
-        return roomLocks.acquire(roomId);
+        return roomCoordinator.acquire(roomId);
     }
 
     /**
@@ -94,7 +112,7 @@ public final class DurableMutationAspect {
      * @return the room lock lease if immediately available, or {@code null} if held by another thread
      */
     public LockLease tryAcquireRoomLock(String roomId) {
-        return roomLocks.tryAcquire(roomId);
+        return roomCoordinator.tryAcquire(roomId);
     }
 
     /**
@@ -103,7 +121,16 @@ public final class DurableMutationAspect {
      * @return the room lock registry
      */
     public KeyedLockRegistry<String> getLockRegistry() {
-        return roomLocks;
+        return roomCoordinator.getLockRegistry();
+    }
+
+    /**
+     * Returns the room coordinator managing per-room concurrency.
+     *
+     * @return the room coordinator
+     */
+    public RoomCoordinator getRoomCoordinator() {
+        return roomCoordinator;
     }
 
     /**
@@ -120,7 +147,7 @@ public final class DurableMutationAspect {
     public Object persist(ProceedingJoinPoint joinPoint, DurableMutation mutation) throws Throwable {
         String roomId = resolveRoomId(joinPoint, mutation.roomId());
         if (store == null) {
-            LockLease lease = roomLocks.acquire(roomId);
+            LockLease lease = roomCoordinator.acquire(roomId);
             try {
                 return joinPoint.proceed();
             } finally {
@@ -140,7 +167,7 @@ public final class DurableMutationAspect {
                 return joinPoint.proceed();
             }
 
-            try (LockLease _ = roomLocks.acquire(roomId)) {
+            try (LockLease _ = roomCoordinator.acquire(roomId)) {
                 DurableTransactionContext.begin(roomId);
                 RollbackState beforeMutation = null;
                 try {
@@ -196,7 +223,7 @@ public final class DurableMutationAspect {
     @Scheduled(fixedDelay = 5000, initialDelay = 5000)
     public void retryPendingSaves() {
         for (String roomId : pendingSaves.keySet()) {
-            LockLease lease = roomLocks.tryAcquire(roomId);
+            LockLease lease = roomCoordinator.tryAcquire(roomId);
             if (lease == null) continue;
             try (lease) {
                 PendingSave pending = pendingSaves.get(roomId);

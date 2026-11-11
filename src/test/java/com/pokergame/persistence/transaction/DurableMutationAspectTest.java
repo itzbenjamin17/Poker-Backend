@@ -25,8 +25,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
+import com.pokergame.util.LockLease;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.persistence.wal.WalFaultPoint;
@@ -120,6 +122,77 @@ class DurableMutationAspectTest {
         } finally {
             DurableTransactionContext.discard();
         }
+    }
+
+    @Test
+    void nestedCrossRoomMutationThrowsIllegalStateExceptionWhenPersistenceDisabled() throws Throwable {
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                null, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+
+        Method method = TestTarget.class.getMethod("validMutation", String.class);
+        DurableMutation mutation = method.getAnnotation(DurableMutation.class);
+
+        ProceedingJoinPoint joinPoint = mock(ProceedingJoinPoint.class);
+        MethodSignature signature = mock(MethodSignature.class);
+        when(signature.getMethod()).thenReturn(method);
+        when(joinPoint.getSignature()).thenReturn(signature);
+        when(joinPoint.getArgs()).thenReturn(new Object[]{"room-B"});
+
+        try (LockLease _ = aspect.acquireRoomLock("room-A")) {
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> aspect.persist(joinPoint, mutation));
+            assertThat(ex.getMessage()).contains("room-B").contains("room-A");
+            verify(joinPoint, never()).proceed();
+        }
+    }
+
+    @Test
+    void nestedCrossRoomMutationThrowsIllegalStateExceptionWhenPersistenceEnabled() throws Throwable {
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+
+        Method method = TestTarget.class.getMethod("validMutation", String.class);
+        DurableMutation mutation = method.getAnnotation(DurableMutation.class);
+
+        ProceedingJoinPoint joinPoint = mock(ProceedingJoinPoint.class);
+        MethodSignature signature = mock(MethodSignature.class);
+        when(signature.getMethod()).thenReturn(method);
+        when(joinPoint.getSignature()).thenReturn(signature);
+        when(joinPoint.getArgs()).thenReturn(new Object[]{"room-B"});
+
+        try (LockLease _ = aspect.acquireRoomLock("room-A")) {
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> aspect.persist(joinPoint, mutation));
+            assertThat(ex.getMessage()).contains("room-B").contains("room-A");
+            verify(joinPoint, never()).proceed();
+        }
+    }
+
+    @Test
+    void sameRoomNestedMutationSucceedsWhenPersistenceDisabled() throws Throwable {
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                null, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+
+        Method method = TestTarget.class.getMethod("validMutation", String.class);
+        DurableMutation mutation = method.getAnnotation(DurableMutation.class);
+
+        ProceedingJoinPoint joinPoint = mock(ProceedingJoinPoint.class);
+        MethodSignature signature = mock(MethodSignature.class);
+        when(signature.getMethod()).thenReturn(method);
+        when(joinPoint.getSignature()).thenReturn(signature);
+        when(joinPoint.getArgs()).thenReturn(new Object[]{"room-A"});
+        when(joinPoint.proceed()).thenReturn("success");
+
+        try (LockLease _ = aspect.acquireRoomLock("room-A")) {
+            Object result = aspect.persist(joinPoint, mutation);
+            assertThat(result).isEqualTo("success");
+            verify(joinPoint).proceed();
+            assertThat(aspect.getRoomCoordinator().isHeldByCurrentThread("room-A")).isTrue();
+        }
+        assertThat(aspect.getRoomCoordinator().isHeldByCurrentThread("room-A")).isFalse();
     }
 
     /**
