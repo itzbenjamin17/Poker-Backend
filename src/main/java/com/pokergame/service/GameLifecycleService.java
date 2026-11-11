@@ -168,7 +168,7 @@ public class GameLifecycleService {
             if (roomService.getRoom(roomId) != room) return;
             Game game = getGame(roomId);
             if (game != null) {
-                Long inactivityDeadline = room != null ? room.getInactivityDeadlineEpochMs() : null;
+                Long inactivityDeadline = room.getInactivityDeadlineEpochMs();
                 if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
                     mutationProxy().abandonGameDueToInactivity(roomId);
                     return;
@@ -547,7 +547,7 @@ public class GameLifecycleService {
         if (room != null) {
             room.setTerminal(true);
         }
-        if (event != null && gameStateService != null) {
+        if (event != null) {
             gameStateService.sendGameEnd(event);
         }
         scheduleGameCleanup(gameId, gameEndDisplayDelayMs);
@@ -890,6 +890,7 @@ public class GameLifecycleService {
             }
         }
         if (actorToDepart != null) {
+            logger.info("Player {} timed out after 60 seconds in game {}; removing from seat", actorToDepart, gameId);
             departParticipants(gameId, List.of(actorToDepart));
         }
         if (cleanupRequested) {
@@ -1261,7 +1262,7 @@ public class GameLifecycleService {
         if (room == null) throw new ResourceNotFoundException("Room not found");
         synchronized (room) {
             synchronized (game) {
-                Long inactivityDeadline = room != null ? room.getInactivityDeadlineEpochMs() : null;
+                Long inactivityDeadline = room.getInactivityDeadlineEpochMs();
                 if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
                     mutationProxy().abandonGameDueToInactivity(gameId);
                     throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");

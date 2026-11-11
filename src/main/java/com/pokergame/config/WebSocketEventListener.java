@@ -471,7 +471,7 @@ public class WebSocketEventListener {
     /**
      * Unregisters an active WebSocket session for the given user.
      * 
-     * @param compositeName The composite name of the user.
+     * @param principal The authenticated player whose session is being removed.
      * @param sessionId The session ID of the user.
      */
     private boolean unregisterActiveSession(PlayerPrincipal principal, String sessionId) {

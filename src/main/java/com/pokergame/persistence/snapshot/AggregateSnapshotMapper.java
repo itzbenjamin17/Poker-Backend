@@ -414,11 +414,18 @@ public final class AggregateSnapshotMapper {
             throw new PersistenceException("Retained terminal result gameId does not match game identity");
         }
         boolean isAbandoned = Boolean.TRUE.equals(state.abandoned()) || "INACTIVITY".equals(state.reason());
-        if (!isAbandoned) {
+        if (isAbandoned) {
+            if (state.winner() != null || state.winnerChips() != null) {
+                throw new PersistenceException("Retained terminal result abandonment contains a winner");
+            }
+        } else {
             if (state.winner() == null || state.winner().trim().isEmpty()) {
                 throw new PersistenceException("Retained terminal result missing winner name");
             }
-            if (state.winnerChips() != null && state.winnerChips() < 0) {
+            if (state.winnerChips() == null) {
+                throw new PersistenceException("Retained terminal result missing winner chips");
+            }
+            if (state.winnerChips() < 0) {
                 throw new PersistenceException("Retained terminal result has invalid negative winner chips");
             }
         }
@@ -466,7 +473,8 @@ public final class AggregateSnapshotMapper {
         if (!validateCards(finalState.communityCards(), 5)) {
             throw new PersistenceException("Retained terminal result has invalid community cards");
         }
-        if (finalState.winners().size() != 1 || !state.winner().equals(finalState.winners().get(0))) {
+        if (isAbandoned ? !finalState.winners().isEmpty()
+                : finalState.winners().size() != 1 || !state.winner().equals(finalState.winners().getFirst())) {
             throw new PersistenceException("Retained terminal result winner roster is incoherent");
         }
 
@@ -515,8 +523,9 @@ public final class AggregateSnapshotMapper {
                 throw new PersistenceException("Retained terminal result has invalid player deadline");
             }
         }
-        if (champions != 1 || champion == null || !state.winner().equals(champion.name()) ||
-                champion.chips() != state.winnerChips()) {
+        if (isAbandoned ? champions != 0
+                : champions != 1 || champion == null || !state.winner().equals(champion.name()) ||
+                !Objects.equals(champion.chips(), state.winnerChips())) {
             throw new PersistenceException("Retained terminal result champion does not match frozen players");
         }
     }

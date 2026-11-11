@@ -29,6 +29,7 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
 import com.pokergame.enums.Rank;
 import com.pokergame.service.HandEvaluatorService;
+import com.pokergame.service.GameStateService;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -755,6 +756,15 @@ class AggregateSnapshotMapperTest {
         return Arguments.of(name, corruption, "Retained terminal result " + messageSuffix);
     }
 
+    private static void abandonTerminalResult(ObjectNode terminal) {
+        terminal.put("abandoned", true);
+        terminal.put("reason", "INACTIVITY");
+        terminal.putNull("winner");
+        terminal.putNull("winnerChips");
+        finalStateOf(terminal).putArray("winners");
+        playerOf(terminal, 0).put("isWinner", false);
+    }
+
     static Stream<Arguments> corruptTerminalResults() {
         return Stream.of(
                 // Envelope
@@ -766,6 +776,24 @@ class AggregateSnapshotMapperTest {
                 rejected("empty winner", t -> t.put("winner", ""), "missing winner name"),
                 rejected("blank winner", t -> t.put("winner", "   "), "missing winner name"),
                 rejected("null winner", t -> t.putNull("winner"), "missing winner name"),
+                rejected("null winner chips", t -> t.putNull("winnerChips"), "missing winner chips"),
+                rejected("missing winner chips", t -> t.remove("winnerChips"), "missing winner chips"),
+                rejected("abandonment with winner", t -> {
+                    abandonTerminalResult(t);
+                    t.put("winner", "Alice");
+                }, "abandonment contains a winner"),
+                rejected("abandonment with winner chips", t -> {
+                    abandonTerminalResult(t);
+                    t.put("winnerChips", 2000);
+                }, "abandonment contains a winner"),
+                rejected("abandonment with winner roster", t -> {
+                    abandonTerminalResult(t);
+                    finalStateOf(t).putArray("winners").add("Alice");
+                }, "winner roster is incoherent"),
+                rejected("abandonment with champion", t -> {
+                    abandonTerminalResult(t);
+                    playerOf(t, 0).put("isWinner", true);
+                }, "champion does not match frozen players"),
                 rejected("negative winner chips", t -> t.put("winnerChips", -1),
                         "has invalid negative winner chips"),
                 rejected("empty message", t -> t.put("message", ""), "missing message"),
@@ -983,6 +1011,36 @@ class AggregateSnapshotMapperTest {
         playerOf((ObjectNode) snapshot.at("/game/retainedTerminalResult"), 1).set("holeCards", cardArray());
         RecoveredAggregate recovered = newMapper().deserialize(JSON.writeValueAsBytes(snapshot));
         assertEquals(List.of(), recovered.game().getRetainedTerminalResult().finalState().players().get(1).holeCards());
+    }
+
+    @Test
+    void abandonedGameRoundTripPreservesOutcomeWithoutWinner() {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        Room room = new Room("room-abandoned", "Night Game", "Alice", 6, 5, 10, 1000, null);
+        room.addPlayer("Alice");
+        room.addPlayer("Bob");
+        room.setGameStarted(true);
+        Game game = new Game(room.getRoomId(), List.of(
+                new Player("Alice", "alice-id", 1000),
+                new Player("Bob", "bob-id", 1000)), 5, 10, evaluator);
+        game.resetForNewHand();
+        game.dealHoleCards();
+        game.postBlinds();
+        game.markGameOver();
+        game.closeReadyCountdown();
+        var projections = new GameStateService(null, null);
+        GameEndResponse result = projections.captureAbandonment(room.getRoomId(), game, room.getMaxPlayers());
+        game.setRetainedTerminalResult(result);
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(JSON, evaluator);
+
+        GameEndResponse restored = mapper.deserialize(mapper.serialize(room, "Alice", game))
+                .game().getRetainedTerminalResult();
+
+        assertEquals(result, restored);
+        assertTrue(restored.abandoned());
+        assertNull(restored.winner());
+        assertNull(restored.winnerChips());
+        assertTrue(restored.finalState().winners().isEmpty());
     }
 
     static Stream<Arguments> corruptGames() {
