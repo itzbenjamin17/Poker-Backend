@@ -1,6 +1,7 @@
 package com.pokergame.util;
 
 import org.slf4j.MDC;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Utility methods for scoping Mapped Diagnostic Context (MDC) keys during execution.
@@ -19,10 +20,9 @@ public final class MdcUtils {
      * @param action the task to execute
      */
     public static void runWithRoomId(String roomId, Runnable action) {
+        requireNonNull(roomId, "The room ID cannot be null");
         String prevRoom = MDC.get(MdcKeys.ROOM_ID);
-        if (roomId != null) {
-            MDC.put(MdcKeys.ROOM_ID, roomId);
-        }
+        MDC.put(MdcKeys.ROOM_ID, roomId);
         try {
             action.run();
         } finally {
