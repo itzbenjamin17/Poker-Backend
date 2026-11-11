@@ -280,7 +280,7 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<Throwable> lateJoin;
         try {
-            try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
+            try (LockLease _ = durableMutationAspect.getRoomCoordinator().acquire(roomId)) {
                 // Queue the late join behind the lease so it cannot interleave with the start.
                 lateJoin = executor.submit(() -> {
                     try {
@@ -291,7 +291,7 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
                     }
                 });
                 await().atMost(Duration.ofSeconds(5))
-                        .until(() -> durableMutationAspect.getLockRegistry().reservationCount(roomId) == 2);
+                        .until(() -> durableMutationAspect.getRoomCoordinator().getLockRegistry().reservationCount(roomId) == 2);
 
                 // Start happens first, while the join is still queued behind the lease.
                 gameLifecycleService.createGameFromRoom(roomId);
@@ -331,7 +331,7 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
         Future<Throwable> start;
         String racerMembership;
         try {
-            try (LockLease _ = durableMutationAspect.acquireRoomLock(roomId)) {
+            try (LockLease _ = durableMutationAspect.getRoomCoordinator().acquire(roomId)) {
                 // Queue the start behind the lease; it will find two players once the join below commits.
                 start = executor.submit(() -> {
                     try {
@@ -342,7 +342,7 @@ public class SecurityHardeningIntegrationTest extends AbstractIntegrationTestSup
                     }
                 });
                 await().atMost(Duration.ofSeconds(5))
-                        .until(() -> durableMutationAspect.getLockRegistry().reservationCount(roomId) == 2);
+                        .until(() -> durableMutationAspect.getRoomCoordinator().getLockRegistry().reservationCount(roomId) == 2);
 
                 // Join happens first, while the start is still queued behind the lease.
                 roomService.joinRoom(roomId, new JoinRoomRequest(roomName, "Racer", null));

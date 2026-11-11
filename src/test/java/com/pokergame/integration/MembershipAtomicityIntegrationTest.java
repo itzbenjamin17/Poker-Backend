@@ -49,7 +49,7 @@ class MembershipAtomicityIntegrationTest {
             PlayerPrincipal retired = new PlayerPrincipal("Alice", roomId, rooms.getRoom(roomId).getMembershipId("Alice"));
             DurableMutationAspect locks = context.getBean(DurableMutationAspect.class);
             Future<Throwable> request;
-            try (LockLease _ = locks.acquireRoomLock(roomId)) {
+            try (LockLease _ = locks.getRoomCoordinator().acquire(roomId)) {
                 request = executor.submit(() -> {
                     try {
                         controller.getPrivateState(roomId, retired);
@@ -58,7 +58,7 @@ class MembershipAtomicityIntegrationTest {
                         return failure;
                     }
                 });
-                await().atMost(Duration.ofSeconds(5)).until(() -> locks.getLockRegistry().reservationCount(roomId) == 2);
+                await().atMost(Duration.ofSeconds(5)).until(() -> locks.getRoomCoordinator().getLockRegistry().reservationCount(roomId) == 2);
                 games.departParticipants(roomId, List.of("Alice"));
                 rooms.joinRoom(new JoinRoomRequest("Atomic room", "Alice", null));
                 games.createGameFromRoom(roomId);
@@ -85,7 +85,7 @@ class MembershipAtomicityIntegrationTest {
             DurableMutationAspect locks = context.getBean(DurableMutationAspect.class);
             Future<Throwable> request;
             String replacementMembership;
-            try (LockLease _ = locks.acquireRoomLock(roomId)) {
+            try (LockLease _ = locks.getRoomCoordinator().acquire(roomId)) {
                 request = executor.submit(() -> {
                     try {
                         if (roomEndpoint) roomController.leaveRoom(roomId, retired);
@@ -95,7 +95,7 @@ class MembershipAtomicityIntegrationTest {
                         return failure;
                     }
                 });
-                await().atMost(Duration.ofSeconds(5)).until(() -> locks.getLockRegistry().reservationCount(roomId) == 2);
+                await().atMost(Duration.ofSeconds(5)).until(() -> locks.getRoomCoordinator().getLockRegistry().reservationCount(roomId) == 2);
                 games.departParticipants(roomId, List.of("Alice"));
                 rooms.joinRoom(new JoinRoomRequest("Departure room", "Alice", null));
                 replacementMembership = rooms.getRoom(roomId).getMembershipId("Alice");

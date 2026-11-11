@@ -754,17 +754,6 @@ public class WebSocketEventListener {
     }
 
     /**
-     * Legacy helper from multi-tier locking. Retained for compatibility; always returns 0
-     * now that player-scoped session locks have been eliminated.
-     *
-     * @return 0
-     */
-    @Deprecated
-    public int getActiveSessionLockCount() {
-        return 0;
-    }
-
-    /**
      * Returns the count of pending disconnect registrations.
      *
      * @return number of pending disconnects

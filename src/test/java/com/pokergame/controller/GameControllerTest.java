@@ -12,7 +12,6 @@ import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
-import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.security.JwtAuthenticationFilter;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameLifecycleService;
@@ -70,10 +69,6 @@ class GameControllerTest {
 
     @MockitoBean
     private PlayerActionService playerActionService;
-
-    @MockitoBean
-    private DurableMutationAspect durableMutationAspect;
-
     @MockitoBean
     private RoomCoordinator roomCoordinator;
 
@@ -96,7 +91,6 @@ class GameControllerTest {
      */
     @BeforeEach
     void setUp() {
-        when(durableMutationAspect.acquireRoomLock(anyString())).thenReturn(LockLease.none());
         when(roomCoordinator.acquire(anyString())).thenReturn(LockLease.none());
         principal = new PlayerPrincipal(playerName, gameId);
         auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());

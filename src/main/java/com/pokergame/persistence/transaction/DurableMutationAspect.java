@@ -96,35 +96,6 @@ public final class DurableMutationAspect {
     }
 
     /**
-     * Obtains the dedicated reentrant lock for a room.
-     *
-     * @param roomId the room identifier
-     * @return the room lock
-     */
-    public LockLease acquireRoomLock(String roomId) {
-        return roomCoordinator.acquire(roomId);
-    }
-
-    /**
-     * Attempts to obtain the dedicated reentrant lock for a room without blocking.
-     *
-     * @param roomId the room identifier
-     * @return the room lock lease if immediately available, or {@code null} if held by another thread
-     */
-    public LockLease tryAcquireRoomLock(String roomId) {
-        return roomCoordinator.tryAcquire(roomId);
-    }
-
-    /**
-     * Returns the keyed lock registry managing per-room persistence locks.
-     *
-     * @return the room lock registry
-     */
-    public KeyedLockRegistry<String> getLockRegistry() {
-        return roomCoordinator.getLockRegistry();
-    }
-
-    /**
      * Returns the room coordinator managing per-room concurrency.
      *
      * @return the room coordinator

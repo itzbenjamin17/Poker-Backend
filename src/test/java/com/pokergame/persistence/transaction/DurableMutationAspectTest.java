@@ -139,7 +139,7 @@ class DurableMutationAspectTest {
         when(joinPoint.getSignature()).thenReturn(signature);
         when(joinPoint.getArgs()).thenReturn(new Object[]{"room-B"});
 
-        try (LockLease _ = aspect.acquireRoomLock("room-A")) {
+        try (LockLease _ = aspect.getRoomCoordinator().acquire("room-A")) {
             IllegalStateException ex = assertThrows(IllegalStateException.class,
                     () -> aspect.persist(joinPoint, mutation));
             assertThat(ex.getMessage()).contains("room-B").contains("room-A");
@@ -164,7 +164,7 @@ class DurableMutationAspectTest {
         when(joinPoint.getSignature()).thenReturn(signature);
         when(joinPoint.getArgs()).thenReturn(new Object[]{"room-B"});
 
-        try (LockLease _ = aspect.acquireRoomLock("room-A")) {
+        try (LockLease _ = aspect.getRoomCoordinator().acquire("room-A")) {
             IllegalStateException ex = assertThrows(IllegalStateException.class,
                     () -> aspect.persist(joinPoint, mutation));
             assertThat(ex.getMessage()).contains("room-B").contains("room-A");
@@ -187,7 +187,7 @@ class DurableMutationAspectTest {
         when(joinPoint.getArgs()).thenReturn(new Object[]{"room-A"});
         when(joinPoint.proceed()).thenReturn("success");
 
-        try (LockLease _ = aspect.acquireRoomLock("room-A")) {
+        try (LockLease _ = aspect.getRoomCoordinator().acquire("room-A")) {
             Object result = aspect.persist(joinPoint, mutation);
             assertThat(result).isEqualTo("success");
             verify(joinPoint).proceed();

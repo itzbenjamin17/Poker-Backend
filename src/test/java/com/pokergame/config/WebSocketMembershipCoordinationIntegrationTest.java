@@ -398,7 +398,6 @@ class WebSocketMembershipCoordinationIntegrationTest {
         assertThat(listener.getActiveSessionCount("Bob:" + roomId)).isEqualTo(0);
         assertThat(listener.hasPendingDisconnect("Alice:" + roomId)).isFalse();
         assertThat(listener.getSessionToPrincipalCount()).isEqualTo(0);
-        assertThat(listener.getActiveSessionLockCount()).isEqualTo(0);
         assertThat(listener.getPendingDisconnectCount()).isEqualTo(0);
     }
 
@@ -439,7 +438,6 @@ class WebSocketMembershipCoordinationIntegrationTest {
         }
 
         // Global counters must be completely clean
-        assertThat(listener.getActiveSessionLockCount()).isEqualTo(0);
         assertThat(listener.getSessionToPrincipalCount()).isEqualTo(0);
         assertThat(listener.getPendingDisconnectCount()).isEqualTo(0);
     }

@@ -37,7 +37,6 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
-import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.security.EndpointRateLimitFilter;
 import com.pokergame.security.RateLimitService;
 import com.pokergame.service.GameStateService;
@@ -66,7 +65,7 @@ class RoomControllerTest {
     /** Unsupported password bytes produce client validation errors on both public commands. */
     @Test
     void oversizedUnicodePasswordsReturnBadRequestBeforeServiceInvocation() throws Exception {
-        String password = "漢".repeat(25);
+        String password = "æ¼¢".repeat(25);
         mockMvc.perform(post("/api/room/create").contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new CreateRoomRequest(
                                 "Room", "Host", 4, 5, 10, 100, password))))
@@ -109,10 +108,6 @@ class RoomControllerTest {
 
     @MockitoBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
-
-    @MockitoBean
-    private DurableMutationAspect durableMutationAspect;
-
     @MockitoBean
     private RoomCoordinator roomCoordinator;
 
@@ -121,8 +116,6 @@ class RoomControllerTest {
      */
     @BeforeEach
     void setup() {
-        Mockito.when(durableMutationAspect.acquireRoomLock(ArgumentMatchers.anyString()))
-                .thenReturn(LockLease.none());
         Mockito.when(roomCoordinator.acquire(ArgumentMatchers.anyString()))
                 .thenReturn(LockLease.none());
         Mockito.when(roomCoordinator.coordinate(ArgumentMatchers.anyString(), ArgumentMatchers.<java.util.function.Supplier<?>>any()))

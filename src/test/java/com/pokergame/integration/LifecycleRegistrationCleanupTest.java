@@ -86,7 +86,6 @@ class LifecycleRegistrationCleanupTest {
             assertThat(webSocketEventListener.getActiveSessionCount(hostPrincipal.playerName() + ":" + hostPrincipal.roomId())).isEqualTo(0);
             assertThat(webSocketEventListener.hasPendingDisconnect(hostPrincipal.playerName() + ":" + hostPrincipal.roomId())).isFalse();
             assertThat(rateLimitService.hasWsBucket(hostPrincipal.playerName() + ":" + hostPrincipal.roomId())).isFalse();
-            assertThat(webSocketEventListener.getActiveSessionLockCount()).isEqualTo(0);
             assertThat(webSocketEventListener.getPendingDisconnectCount()).isEqualTo(0);
             assertThat(webSocketEventListener.getSessionToPrincipalCount()).isEqualTo(0);
         });
@@ -102,7 +101,7 @@ class LifecycleRegistrationCleanupTest {
             assertThat(gameLifecycleService.getRuntimeTaskCount(roomId)).isEqualTo(0);
             assertThat(gameLifecycleService.getGame(roomId)).isNull();
             assertThat(roomService.getRoom(roomId)).isNull();
-            assertThat(durableMutationAspect.getLockRegistry().reservationCount(roomId)).isEqualTo(0);
+            assertThat(durableMutationAspect.getRoomCoordinator().getLockRegistry().reservationCount(roomId)).isEqualTo(0);
         });
     }
 }

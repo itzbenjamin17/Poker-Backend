@@ -73,7 +73,6 @@ class WebSocketEventListenerTest {
         cleanupThread.start();
         cleanup.get(3, TimeUnit.SECONDS);
         reconnect.get(3, TimeUnit.SECONDS);
-        assertEquals(0, listener.getActiveSessionLockCount());
     }
 
     /** A retirement that runs late must not evict a player who has since re-joined. */
