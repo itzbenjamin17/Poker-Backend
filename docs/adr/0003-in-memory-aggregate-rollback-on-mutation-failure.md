@@ -1,20 +1,20 @@
 # 0003: In-Memory Aggregate Rollback on Mutation Failure
 
-We decided to automatically restore in-memory game and room aggregates from pre-mutation snapshots whenever an intercepted durable mutation throws an exception.
+We decided to automatically restore the in-memory `Room` and `Game` objects from a pre-change snapshot (`AggregateStateImage`) whenever a `@DurableMutation` service method throws an exception.
 
 ## Context
 
-Service methods annotated with `@DurableMutation` execute in-memory state changes directly on shared Java aggregates (`Room` and `Game`) before serializing a snapshot to disk. If a domain exception occurred midway through execution (e.g. an unexpected validation failure, capacity overflow, or downstream runtime error), partial mutations were already applied to in-memory state. Because persistence failed or was skipped, the in-memory aggregate became desynchronized from the disk WAL, causing corrupt game state (such as vanished chips or phantom player seats) to persist in RAM until server restart.
+Service methods annotated with `@DurableMutation` modify the live `Room` and `Game` objects in memory before saving an encrypted snapshot to disk. If an error was thrown halfway through a method (such as a validation error, full room, or unexpected runtime exception), the first half of the changes had already modified the live Java objects in RAM. Because the method failed before saving to disk, memory was left in a broken, half-updated state (such as missing chips or ghost seats) that contradicted the disk save file until the server restarted.
 
 ## Decision
 
-1. **Pre-Mutation Snapshot Capture**: `DurableMutationAspect` captures an independent immutable state image before executing each top-level domain mutation. This image is separate from JSON serialization and WAL saving, so a storage or serialization outage cannot make rollback discard newer accepted in-memory gameplay.
-2. **Rollback / Eviction on Failure**: If the intercepted join point throws any `Throwable`, discard its queued effects and restore the pre-mutation room, game, and connection metadata. Rebuild runtime callbacks from the restored absolute deadlines without replaying broadcasts or applying startup reconnect policy. If no safe pre-mutation image is available, evict the aggregate rather than restoring an older disk image over accepted state. Failed room creation restores absence.
-3. **Transparent Error Propagation**: After restoring in-memory consistency, the original exception is rethrown to standard Spring `@RestControllerAdvice` and `@MessageExceptionHandler` handlers so users receive the appropriate error status and message.
+1. **Pre-Change Snapshot**: `DurableMutationAspect` captures a frozen in-memory copy (`AggregateStateImage`) of the room and game before running each top-level `@DurableMutation` method. Because this copy is kept in memory before JSON serialization or disk writes, rollbacks still work even when disk persistence is disabled or experiencing an outage.
+2. **Rollback or Eviction on Error**: If the service method throws any exception (`Throwable`), `DurableMutationAspect` discards any queued WebSocket broadcasts and restores the `Room`, `Game`, and connection state from the pre-change copy. Active timers are rebuilt from the restored deadlines without re-sending broadcasts. If no pre-change copy exists (for example, when creating a brand-new room fails), the room is removed from memory completely.
+3. **Normal Error Responses**: After rolling back memory to a clean state, the original exception is rethrown so Spring's `@RestControllerAdvice` and `@MessageExceptionHandler` return the expected error response to the client.
 
 ## Consequences
 
-- Failed mutations never leave dirty, half-applied state in server memory.
-- In-memory aggregates retain the latest accepted gameplay; disk may lag during the continue-in-memory policy of ADR-0001. Rollback does not require successful serialization or storage access.
-- A rejected command preserves lifecycle progression, and obsolete callbacks remain guarded against duplicate dealing or payouts.
-- Does not require complex distributed two-phase commit or transactional database rollback infrastructure.
+- Failed requests never leave half-applied changes in server memory.
+- Rollback works purely in memory without needing disk access or JSON deserialization, preserving the latest valid gameplay even during a disk outage (ADR-0001).
+- Rejected actions leave existing turn and round timers intact and protected against duplicate payouts or deals.
+- Avoids needing a relational database or complex transaction manager just to undo failed in-memory updates.

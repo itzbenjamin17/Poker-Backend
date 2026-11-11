@@ -28,7 +28,8 @@ Single-context repo:
 │   ├── 0007-hierarchical-monitor-locking-order.md
 │   ├── 0008-epoch-deadline-lifecycle-scheduling.md
 │   ├── 0009-multi-session-disconnect-grace-period.md
-│   └── 0010-room-lifecycle-notifications-via-application-events.md
+│   ├── 0010-room-lifecycle-notifications-via-application-events.md
+│   └── 0011-room-coordinator-single-boundary-concurrency.md
 └── src/
 ```
 

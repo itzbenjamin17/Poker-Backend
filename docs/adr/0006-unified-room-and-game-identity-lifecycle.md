@@ -1,19 +1,19 @@
 # 0006: Unified Room and Game Identity Lifecycle
 
-We decided that a Game aggregate reuses the exact same UUID as its parent Room aggregate, sharing the same cryptographic token and messaging channels throughout the entire table lifecycle.
+We decided that a `Game` reuses the exact same UUID as its `Room` (`gameId` equals `roomId`), sharing the same JWT token and WebSocket topics from lobby creation through the end of the match.
 
 ## Context
 
-In many gaming systems, a lobby or table room has an identifier, and each individual hand or match played inside that room receives a newly generated `gameId` or `matchId`. This requires clients to perform token exchanges, tear down and re-establish WebSocket subscriptions, and synchronize two different identifiers across every round transition.
+In many multiplayer game servers, a waiting room has a `roomId`, and starting a match creates a separate `gameId` or `matchId`. That forces clients to swap tokens, tear down and reconnect WebSocket subscriptions, and keep two different IDs in sync whenever the host starts the game.
 
 ## Decision
 
-1. **Reused Identifier**: When `GameLifecycleService.createGameFromRoom(roomId)` initiates an active poker game, the `Game` is constructed using the `roomId` as its `gameId`.
-2. **Unified Token Scope**: The JWT issued to a player upon creating or joining a room contains `roomId`, which serves directly as the authorization claim for both room endpoints (`/api/room/{id}/*`) and game endpoints (`/api/game/{id}/*`).
-3. **Single Channel Lifecycle**: STOMP subscriptions to `/room/{id}` and `/game/{id}` remain static across the entire match without re-negotiation.
+1. **Same UUID for Room and Game**: When `GameLifecycleService.createGameFromRoom(roomId)` starts a poker match, the new `Game` is created with `roomId` as its `gameId`.
+2. **One Token for Both**: The JWT issued when a player creates or joins a room carries `roomId`, which authorizes both room endpoints (`/api/room/{id}/*`) and game endpoints (`/api/game/{id}/*`).
+3. **Unchanged WebSocket Topics**: Client STOMP subscriptions to `/room/{id}` and `/game/{id}` stay connected on the same ID across the entire match without reconnecting.
 
 ## Consequences
 
-- Completely eliminates token exchange delays and WebSocket reconnection overhead between successive poker hands.
-- Substantially simplifies client state: the client only ever tracks one active room identifier.
-- Disallows running multiple concurrent games within a single room, which aligns with the physical reality of a single poker table.
+- Eliminates token swaps and WebSocket reconnection delays when transitioning from the lobby to the poker table.
+- Simplifies the frontend: the client only ever tracks a single `roomId`.
+- A single `Room` can only run one `Game` at a time, which matches how a single poker table works.

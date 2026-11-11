@@ -6,29 +6,29 @@
 
 ## Context
 
-The server owns live rooms and games in memory. Command replay is unsafe because room IDs, timestamps, shuffles, asynchronous progression, and client broadcasts are nondeterministic. Persisted poker state also contains passwords, hole cards, complete deck order, chip accounting, and reconnect deadlines.
+The server keeps live rooms and games in memory (`Room` and `Game`). Re-running past player commands to recover after a crash is unsafe because room IDs, timestamps, deck shuffles, background timers, and client broadcasts would produce different results on replay. Saved poker state also contains sensitive data: room passwords, players' face-down hole cards, the full deck order, chip balances, and reconnect deadlines.
 
 ## Decision
 
-Use one local WAL per `roomId` for the single-server deployment model. Explicit `@DurableMutation` advice attempts an encrypted `PREPARE`, executes the authoritative service mutation, captures an immutable versioned state image, and attempts an authenticated `COMMIT`. When writes succeed, queued client events are released after commit. Runtime storage failures keep accepted gameplay and effects in memory and retry the latest state without replaying the command.
+Use one local Write-Ahead Log (WAL) save file per `roomId` (`<roomId>.wal`) for the single-server deployment model. Service methods annotated with `@DurableMutation` write an encrypted `PREPARE` record, run the room or game change in memory, capture a frozen versioned snapshot (`AggregateStateImage`), and write an authenticated `COMMIT` record. When disk writes succeed, queued WebSocket broadcasts and events are sent after the commit finishes. If saving to disk fails at runtime, the server keeps the accepted gameplay change in memory, sends the client updates once, and retries saving the latest state snapshot without re-running the player command.
 
-Records use AES-256-GCM. Associated data binds format/schema version, file/room identity, sequence, transaction identity, record type, and key ID. The keyring supplies one current write key and optional older read keys. Domain objects rehydrate through explicit state-image mappings; runtime schedulers, futures, WebSocket sessions, locks, evaluators, publishers, and rate-limit buckets are rebuilt.
+Save records are encrypted with AES-256-GCM. Authenticated metadata binds the schema version, room ID, sequence number, transaction ID, record type, and encryption key ID. `EncryptionKeyring` provides one current write key and optional older read keys for key rotation. On startup, `Room` and `Game` objects are rebuilt from `AggregateStateImage` via `AggregateSnapshotMapper`, while runtime-only collaborators (schedulers, timers, WebSocket sessions, locks, hand evaluators, event publishers, and rate-limit buckets) are recreated fresh.
 
-Absolute scheduled-work and reconnect deadlines are part of the state image. Recovery restores every aggregate before declaring readiness, treats every prior socket as disconnected, grants a fresh reconnect grace period, and reschedules future or overdue work with state-based idempotence guards.
+Exact clock deadlines for scheduled tasks and reconnect windows are saved inside `AggregateStateImage`. Startup recovery (`PersistenceRecovery`) restores every saved room and game before marking the server ready, treats all previous WebSocket connections as disconnected, grants every player a fresh reconnect grace period, and reschedules future or overdue timers with generation checks so tasks never run twice.
 
 ## Consequences
 
-- When storage is healthy, mutations and resulting broadcasts correspond to a flushed state image. During a runtime storage outage, valid mutations continue in memory and their effects are released once; the latest accepted image or deletion tombstone is retried every five seconds and on later accepted mutations.
-- Exact deck order and private state survive restart without replaying randomness.
-- Independent rooms can write concurrently; one room has one serialized transaction.
-- Crash-torn final writes are recoverable, while committed-prefix corruption and missing keys fail closed.
-- Compaction rewrites the latest state under the current key; permanent completion removes the WAL.
-- Runtime prepare, serialization, commit, and maintenance failures do not reject valid gameplay or change application readiness. If an in-flight mutation throws a domain or validation exception, in-memory aggregate state is restored to its pre-mutation snapshot (or evicted) to preserve RAM consistency. Persistence health reports `MEMORY_ONLY` and unsaved rooms while gameplay remains available. A process stop before saving catches up can lose accepted in-memory changes. Global infrastructure failures and missing keys fail startup, while single corrupted room WALs or unsupported schema versions are quarantined to `<roomId>.wal.corrupted` so healthy rooms recover without crashing the server. Schema 4 records terminal review results; older schemas are rejected cleanly prior to deserialization.
-- The design does not provide multi-instance writing, cross-node failover, an audit archive, or online schema migration. Those require a different durable-store architecture.
+- When disk storage is healthy, every state change and client broadcast corresponds to a saved snapshot on disk. During a temporary disk outage, valid gameplay continues in memory and broadcasts are sent once; the latest snapshot (or room deletion marker) is retried every five seconds and on subsequent changes.
+- The exact shuffled deck order and private hole cards survive a server restart without re-running random shuffles.
+- Different rooms can save to disk in parallel, while changes to the same room run one at a time.
+- Half-written records at the end of a file after a sudden crash are safely recovered, while corruption earlier in the file or missing encryption keys fail safely.
+- Log compaction rewrites the latest room snapshot under the current encryption key, and permanent room cleanup deletes the `.wal` file.
+- Runtime disk or serialization failures do not block valid gameplay or flip the server's readiness probe. If a service method throws a domain or validation error, the in-memory `Room` and `Game` are rolled back to their pre-change snapshot (or removed) so memory never stays half-updated. The persistence health check reports `MEMORY_ONLY` and the count of unsaved rooms while gameplay stays online. Stopping the server before background retries catch up can lose those unsaved in-memory changes. Missing keys or unreadable storage directories stop startup, whereas a single corrupted `.wal` file or unsupported schema version is quarantined to `<roomId>.wal.corrupted` so healthy rooms still recover. Schema 4 stores final post-game review results (`GameEndResponse`); older schema versions are rejected cleanly before deserialization.
+- This design is built for a single server and does not support multiple server instances writing to the same files, cross-node failover, historical hand archives, or live schema migration.
 
 ## Alternatives rejected
 
-- Command/event replay: nondeterministic IDs, time, scheduling, and shuffling make exact recovery substantially harder.
-- Serializing mutable domain objects: leaks runtime collaborators and couples storage compatibility to implementation fields.
-- Database migration in this change: exceeds the local single-server requirement and changes the operational model.
-- Unencrypted snapshots: exposes live credentials and private card/deck state to filesystem readers.
+- Replaying player commands or events: random shuffles, IDs, clock times, and background timers make exact state recovery unreliable.
+- Serializing live Java domain objects directly: leaks runtime helpers (locks, schedulers) into save files and breaks compatibility whenever internal fields change.
+- Introducing an external database: adds operational complexity beyond what a single-server ephemeral poker table needs.
+- Unencrypted save files: exposes room passwords, private hole cards, and remaining deck order to anyone who can read the filesystem.

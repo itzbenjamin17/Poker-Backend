@@ -1,21 +1,21 @@
 # 0008: Epoch-Deadline Lifecycle Scheduling and Recovery Resumption
 
-We decided to model all asynchronous game timers as absolute epoch millisecond deadlines stored directly on aggregate state, executing via Spring TaskScheduler callbacks that validate their expected task token before acting and dynamically resuming after WAL recovery.
+We decided to store all game timer deadlines as exact wall-clock timestamps (milliseconds since the Unix epoch) directly on `Game` and `Player`, and have background timer callbacks verify their task generation counter before running so timers can safely resume after a server restart.
 
 ## Context
 
-Texas Hold'em matches rely on timed lifecycle transitions (`ScheduledTaskType`: `AUTO_ADVANCE`, `READY_OPEN`, `NEW_HAND`, `DISCONNECT_CLEANUP`, and `GAME_END_CLEANUP`), including reconnect grace periods (default 120s), round-end display pauses (default 0ms), inter-hand ready countdowns (default 30s), and completed-game retention delays (default 20s). Standard Java concurrency uses `java.util.concurrent.ScheduledFuture` handles stored in volatile memory, while enterprise architectures use persistent job schedulers like Quartz backed by a relational database. Volatile futures are permanently lost during single-server process restarts, while Quartz introduces heavyweight database dependencies contrary to the in-memory architecture.
+A Texas Hold'em match relies on several background timers (`ScheduledGameTask`: `AUTO_ADVANCE`, `READY_OPEN`, `NEW_HAND`, `DISCONNECT_CLEANUP`, and `CLEANUP`), including reconnect grace periods (120s default), round-end pauses (0ms default), between-hand ready countdowns (30s default), and finished-game cleanup delays (20s default). Standard Java `ScheduledFuture` handles live only in RAM and vanish when the server restarts, while persistent job schedulers like Quartz require an external database.
 
 ## Decision
 
-1. **State-Embedded Deadlines**: Store absolute epoch millisecond timestamps (`deadlineEpochMs`, `disconnectDeadlineEpochMs`, `readyCountdownDeadlineEpochMs`) and a unique `scheduledTaskId` directly on the `Game` and `Player` aggregates.
-2. **Defensive Callback Verification**: Scheduled callbacks submitted to Spring's `ThreadPoolTaskScheduler` do not blindly execute when their delay expires. Instead, they acquire the aggregate lock and verify that the aggregate's active `scheduledTaskId` and state still match the callback token. Superseded or cancelled tasks are dropped as no-ops.
-3. **Startup Recovery Rescheduling**: In `PersistenceRecovery.java`, restored aggregates have their stored epoch deadlines inspected:
-   - If the deadline is in the future, the remaining duration is calculated and rescheduled.
-   - If the deadline has already passed while the server was down, the task is executed immediately to advance the game or mark disconnected status.
+1. **Save Deadlines in Game State**: Store the exact wall-clock expiration time (`deadlineEpochMs`, `disconnectDeadlineEpochMs`, `readyCountdownDeadlineEpochMs`) and a task generation counter (`scheduledTaskGenerations`) directly on `Game` and `Player` so they are saved to disk as part of `AggregateStateImage`.
+2. **Ignore Outdated Timer Callbacks**: When a scheduled task fires on Spring's `ThreadPoolTaskScheduler`, it locks the room and checks whether the `Game`'s current task generation counter and state still match the timer that was scheduled. If the game has already moved on (for example, a player acted before their turn timer ran out), the outdated callback does nothing.
+3. **Resume Timers on Startup**: When `PersistenceRecovery.java` restores saved rooms on server startup, it inspects each saved deadline:
+   - If the deadline is still in the future, it schedules a timer for the remaining time.
+   - If the deadline already passed while the server was down, it runs the task immediately.
 
 ## Consequences
 
-- Full crash resilience: game timers, turn countdowns, and disconnect windows survive server restarts and ungraceful process terminations without an external database.
-- Prevents race conditions from obsolete delayed threads firing against newer game phases.
-- Absolute epoch timestamps allow frontend clients to render synchronized visual countdown bars that remain accurate despite network latency.
+- Turn timers, ready countdowns, and disconnect grace periods survive server restarts without an external database.
+- Outdated timer callbacks can never accidentally advance or corrupt a newer hand or betting round.
+- Sending exact wall-clock deadlines (`turnDeadlineEpochMs`, `readyCountdownDeadlineEpochMs`) lets the frontend draw accurate countdown bars regardless of network delay.

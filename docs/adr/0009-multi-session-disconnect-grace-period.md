@@ -1,25 +1,25 @@
 # 0009: Multi-Session Disconnect Tracking with Reconnect Grace Period
 
-We decided to track multiple active STOMP session IDs per composite player identity and apply a configurable reconnect grace period (default 120 seconds) before evicting disconnected players or folding active hands.
+We decided to track all active WebSocket connections for each player in a room and wait for a configurable grace period (`disconnectGracePeriodMs`, 120 seconds by default) after their last connection closes before removing them from the table.
 
 ## Context
 
-In web-based multiplayer games, players frequently refresh their browser tab, navigate back and forth, or switch between Wi-Fi and mobile data. Naive WebSocket servers treat any socket closure (`SessionDisconnectEvent`) as an immediate player abandonment, instantly folding their hand, forfeiting their chips, or kicking them from the room. Furthermore, if a player opens a second tab or reconnects before the first socket unregisters, single-session tracking mistakenly treats the new connection as disconnected when the old socket tears down.
+In browser games, players often refresh the page, switch tabs, or briefly lose Wi-Fi. If the server treated every closed WebSocket (`SessionDisconnectEvent`) as quitting the match, a simple page refresh would immediately fold the player's cards and forfeit their buy-in. Also, if a player opens a second tab or reconnects before the old socket finishes closing, tracking only a single session ID would mistakenly mark the player as disconnected when the old socket closes.
 
 ## Decision
 
-1. **Multi-Session Set Tracking**: In `WebSocketEventListener`, maintain a concurrent mapping from composite player identity (`playerName:roomId`) to a set of active STOMP session IDs (`userSessions`). A player is only considered disconnected when their active session set becomes empty.
-2. **Scheduled Grace Period**: When a player's last active session disconnects:
-   - Mark the player as `disconnected = true` on the `Game` and `Room` aggregates.
-   - Assign an absolute disconnect deadline (`System.currentTimeMillis() + disconnectGracePeriodMs`, default 120 seconds).
-   - Schedule a delayed eviction task with `TaskScheduler`.
-3. **Seamless Reconnection Cancellation**: When the player re-establishes a WebSocket connection (`SessionSubscribeEvent`) before the deadline expires:
+1. **Track a Set of Active Connections per Player**: In `WebSocketEventListener`, map each player in a room (`playerName:roomId`) to a set of active STOMP session IDs (`userSessions`). A player is only marked disconnected when their set of active connections becomes completely empty.
+2. **Start a Grace Period Timer on Last Disconnect**: When a player's last connection closes:
+   - Mark the player as `disconnected = true` on `Game` and `Room`.
+   - Record the exact clock time when their grace window expires (`System.currentTimeMillis() + disconnectGracePeriodMs`, 120 seconds by default).
+   - Schedule a `DISCONNECT_CLEANUP` task with `TaskScheduler`.
+3. **Cancel Cleanup on Reconnect**: If the player reconnects and subscribes (`SessionSubscribeEvent`) before the deadline runs out:
    - Clear the `disconnected` flag.
-   - Cancel the scheduled disconnect eviction task.
-   - Retain the player's active seat, chip stack, and hole cards without interruption.
+   - Cancel the scheduled `DISCONNECT_CLEANUP` task.
+   - Keep the player's seat, chip stack, and hole cards intact.
 
 ## Consequences
 
-- Prevents accidental folds and buy-in forfeiture during transient network hiccups, browser refreshes, or tab switches.
-- Accurately tracks multi-tab players without cross-tab disconnect races.
-- If the player fails to reconnect within the configured grace window, the scheduled cleanup auto-folds their hand, awards any uncalled chips, and vacates their seat to protect the table from stalling.
+- Page refreshes and brief network drops no longer fold a player's hand or forfeit their chips.
+- Opening or closing extra tabs for the same player does not falsely trigger a disconnect as long as one tab stays connected.
+- If a player stays offline past the grace deadline, the scheduled task automatically folds their hand, refunds any uncalled bets, and frees their seat so the table does not stall forever.
