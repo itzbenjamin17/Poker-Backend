@@ -36,6 +36,8 @@ import com.pokergame.util.KeyedLockRegistry;
 import com.pokergame.util.LockLease;
 import org.springframework.scheduling.annotation.Scheduled;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Automatically saves the poker game to disk after certain methods finish running.
  * <p>
@@ -77,7 +79,7 @@ public final class DurableMutationAspect {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.properties = properties;
-        this.roomCoordinator = java.util.Objects.requireNonNull(roomCoordinator, "roomCoordinator cannot be null");
+        this.roomCoordinator = requireNonNull(roomCoordinator, "roomCoordinator cannot be null");
     }
 
     /**

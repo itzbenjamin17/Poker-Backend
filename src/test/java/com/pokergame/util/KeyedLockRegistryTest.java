@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static com.pokergame.util.ConcurrentTestSupport.stopExecutor;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class KeyedLockRegistryTest {
 
@@ -141,6 +142,27 @@ class KeyedLockRegistryTest {
         assertDoesNotThrow(lease::close);
         assertThat(lockRegistry.reservationCount(key)).isEqualTo(0);
         assertThat(lockRegistry.activeKeyCount()).isEqualTo(0);
+    }
+
+    @Test
+    void wrongThreadClosePreservesLockAndReservation() throws Exception {
+        String key = "room-1";
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try (LockLease lease = lockRegistry.acquire(key)) {
+            pool.submit(() -> {
+                assertThrows(IllegalMonitorStateException.class, lease::close);
+                try (LockLease competingLease = lockRegistry.tryAcquire(key)) {
+                    assertThat(competingLease).isNull();
+                }
+            }).get(2, TimeUnit.SECONDS);
+
+            assertThat(lockRegistry.reservationCount(key)).isEqualTo(1);
+            assertThat(lockRegistry.isHeldByCurrentThread(key)).isTrue();
+        } finally {
+            stopExecutor(pool);
+        }
+
+        assertThat(lockRegistry.activeKeyCount()).isZero();
     }
 
     @Test

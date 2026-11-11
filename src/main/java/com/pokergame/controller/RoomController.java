@@ -25,6 +25,7 @@ import com.pokergame.util.LockLease;
 import java.util.List;
 import jakarta.servlet.http.HttpServletRequest;
 
+import static java.util.Objects.requireNonNull;
 
 /**
  * REST controller for poker room management.
@@ -50,7 +51,7 @@ public class RoomController {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.jwtService = jwtService;
-        this.roomCoordinator = java.util.Objects.requireNonNull(roomCoordinator);
+        this.roomCoordinator = requireNonNull(roomCoordinator);
     }
 
     /**

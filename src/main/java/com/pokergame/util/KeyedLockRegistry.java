@@ -1,6 +1,6 @@
 package com.pokergame.util;
 
-import java.util.Objects;
+import static java.util.Objects.requireNonNull;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
@@ -9,21 +9,21 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * A scoped keyed-lock registry that manages per-key reentrant locks without lock identity splitting.
+ * A registry of reentrant locks, with one shared lock per key.
  * <p>
- * A lease reserves its entry atomically before waiting; owners, waiters, and nested acquisitions
- * all hold a reservation count. Upon lease closure, the underlying lock is unlocked before
- * releasing that reservation, and the entry is removed from the registry only when its
- * reservation count reaches zero. A failed {@code tryAcquire} releases its reservation immediately.
+ * Each acquisition reserves the key's entry before attempting to lock it. This keeps the same
+ * lock available to current owners, waiting threads, and reentrant acquisitions. Closing a lease
+ * unlocks first, then releases its reservation. The registry removes an entry when its last
+ * reservation is released. If {@code tryAcquire} fails, its reservation is released immediately.
  * </p>
  *
  * @param <K> the key type
  */
 public class KeyedLockRegistry<K> {
 
-    private final ConcurrentMap<K, LockEntry<K>> entries = new ConcurrentHashMap<>();
+    private final ConcurrentMap<K, LockEntry> entries = new ConcurrentHashMap<>();
 
-    private static final class LockEntry<K> {
+    private static final class LockEntry {
         final ReentrantLock lock = new ReentrantLock();
         final AtomicInteger reservations = new AtomicInteger(0);
     }
@@ -35,14 +35,7 @@ public class KeyedLockRegistry<K> {
      * @return the active lock lease
      */
     public LockLease acquire(K key) {
-        Objects.requireNonNull(key, "key cannot be null");
-        LockEntry<K> entry = entries.compute(key, (k, existing) -> {
-            if (existing == null) {
-                existing = new LockEntry<>();
-            }
-            existing.reservations.incrementAndGet();
-            return existing;
-        });
+        LockEntry entry = reserveEntry(key);
 
         entry.lock.lock();
         return new Lease(key, entry);
@@ -55,14 +48,7 @@ public class KeyedLockRegistry<K> {
      * @return the lock lease if acquired, or {@code null} if the lock was held
      */
     public LockLease tryAcquire(K key) {
-        Objects.requireNonNull(key, "key cannot be null");
-        LockEntry<K> entry = entries.compute(key, (k, existing) -> {
-            if (existing == null) {
-                existing = new LockEntry<>();
-            }
-            existing.reservations.incrementAndGet();
-            return existing;
-        });
+        LockEntry entry = reserveEntry(key);
 
         boolean acquired = false;
         try {
@@ -89,14 +75,7 @@ public class KeyedLockRegistry<K> {
      * @throws InterruptedException if interrupted while waiting
      */
     public LockLease tryAcquire(K key, long timeout, TimeUnit unit) throws InterruptedException {
-        Objects.requireNonNull(key, "key cannot be null");
-        LockEntry<K> entry = entries.compute(key, (k, existing) -> {
-            if (existing == null) {
-                existing = new LockEntry<>();
-            }
-            existing.reservations.incrementAndGet();
-            return existing;
-        });
+        LockEntry entry = reserveEntry(key);
 
         boolean acquired = false;
         try {
@@ -113,8 +92,34 @@ public class KeyedLockRegistry<K> {
         return new Lease(key, entry);
     }
 
-    private void releaseReservation(K key, LockEntry<K> entry) {
-        entries.compute(key, (k, existing) -> {
+    /**
+     * Atomically gets or creates the entry for the key and increments its reservation count
+     * before the caller attempts to acquire the lock.
+     *
+     * @param key the key to reserve
+     * @return the reserved entry
+     * @throws NullPointerException if the key is null
+     */
+    private LockEntry reserveEntry(K key) {
+        requireNonNull(key, "key cannot be null");
+        return entries.compute(key, (_, existing) -> {
+            if (existing == null) {
+                existing = new LockEntry();
+            }
+            existing.reservations.incrementAndGet();
+            return existing;
+        });
+    }
+
+    /**
+     * Releases one reservation if the entry is still mapped to the key.
+     * Removes the entry when its reservation count reaches zero.
+     *
+     * @param key the key whose reservation is being released
+     * @param entry the entry that holds the reservation
+     */
+    private void releaseReservation(K key, LockEntry entry) {
+        entries.compute(key, (_, existing) -> {
             if (existing == entry) {
                 if (existing.reservations.decrementAndGet() == 0) {
                     return null;
@@ -132,7 +137,7 @@ public class KeyedLockRegistry<K> {
      * @return the active reservation count (owners, waiters, nested acquisitions)
      */
     public int reservationCount(K key) {
-        LockEntry<K> entry = entries.get(key);
+        LockEntry entry = entries.get(key);
         return entry != null ? entry.reservations.get() : 0;
     }
 
@@ -143,7 +148,7 @@ public class KeyedLockRegistry<K> {
      * @return true if the lock is held
      */
     public boolean isLocked(K key) {
-        LockEntry<K> entry = entries.get(key);
+        LockEntry entry = entries.get(key);
         return entry != null && entry.lock.isLocked();
     }
 
@@ -157,7 +162,7 @@ public class KeyedLockRegistry<K> {
         if (key == null) {
             return false;
         }
-        LockEntry<K> entry = entries.get(key);
+        LockEntry entry = entries.get(key);
         return entry != null && entry.lock.isHeldByCurrentThread();
     }
 
@@ -172,16 +177,37 @@ public class KeyedLockRegistry<K> {
 
     private final class Lease implements LockLease {
         private final K key;
-        private final LockEntry<K> entry;
+        private final LockEntry entry;
         private final AtomicBoolean closed = new AtomicBoolean(false);
 
-        private Lease(K key, LockEntry<K> entry) {
+        /**
+         * Creates a lease for an acquired lock and its existing reservation.
+         *
+         * @param key the key used to release the reservation
+         * @param entry the reserved entry whose lock the caller holds
+         */
+        private Lease(K key, LockEntry entry) {
             this.key = key;
             this.entry = entry;
         }
 
+        /**
+         * Unlocks the entry and releases this lease's reservation.
+         * Calls made after the lease has closed return immediately.
+         *
+         * @throws IllegalMonitorStateException if the lease is open and the current thread
+         *                                      does not hold the lock
+         */
         @Override
         public void close() {
+            if (closed.get()) {
+                return;
+            }
+            if (!entry.lock.isHeldByCurrentThread()) {
+                throw new IllegalMonitorStateException(
+                        "Lease must be closed by the thread that acquired it");
+            }
+
             if (closed.compareAndSet(false, true)) {
                 try {
                     entry.lock.unlock();

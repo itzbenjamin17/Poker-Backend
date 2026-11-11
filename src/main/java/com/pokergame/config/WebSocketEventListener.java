@@ -38,6 +38,8 @@ import java.util.concurrent.ScheduledFuture;
 import com.pokergame.security.RateLimitService;
 import java.util.HashSet;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Reconciles process-local WebSocket sessions with durable player membership.
  * <p>
@@ -82,7 +84,7 @@ public class WebSocketEventListener {
         this.gameLifecycleService = gameLifecycleService;
         this.rateLimitService = rateLimitService;
         this.taskScheduler = taskScheduler;
-        this.roomCoordinator = Objects.requireNonNull(roomCoordinator, "roomCoordinator cannot be null");
+        this.roomCoordinator = requireNonNull(roomCoordinator, "roomCoordinator cannot be null");
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
     }
 

@@ -26,6 +26,8 @@ import jakarta.validation.Valid;
 
 import java.util.List;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * REST controller for active poker game operations.
  * Manages player actions and game departures using WebSocket for real-time
@@ -51,7 +53,7 @@ public class GameController {
         this.playerActionService = playerActionService;
         this.gameLifecycleService = gameLifecycleService;
         this.gameStateService = gameStateService;
-        this.roomCoordinator = java.util.Objects.requireNonNull(roomCoordinator);
+        this.roomCoordinator = requireNonNull(roomCoordinator);
     }
 
     /**

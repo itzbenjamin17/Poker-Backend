@@ -4,7 +4,7 @@ import com.pokergame.util.KeyedLockRegistry;
 import com.pokergame.util.LockLease;
 import org.springframework.stereotype.Service;
 
-import java.util.Objects;
+import static java.util.Objects.requireNonNull;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
@@ -40,7 +40,7 @@ public class RoomCoordinator {
     }
 
     public RoomCoordinator(KeyedLockRegistry<String> lockRegistry) {
-        this.lockRegistry = Objects.requireNonNull(lockRegistry, "lockRegistry cannot be null");
+        this.lockRegistry = requireNonNull(lockRegistry, "lockRegistry cannot be null");
     }
 
     /**
@@ -51,7 +51,7 @@ public class RoomCoordinator {
      * @throws IllegalStateException if the current thread is already coordinating a different room
      */
     public LockLease acquire(String roomId) {
-        Objects.requireNonNull(roomId, "roomId cannot be null");
+        requireNonNull(roomId, "roomId cannot be null");
         checkCrossRoom(roomId);
         LockLease lease = lockRegistry.acquire(roomId);
         pushRoom(roomId);
@@ -66,7 +66,7 @@ public class RoomCoordinator {
      * @throws IllegalStateException if the current thread is already coordinating a different room
      */
     public LockLease tryAcquire(String roomId) {
-        Objects.requireNonNull(roomId, "roomId cannot be null");
+        requireNonNull(roomId, "roomId cannot be null");
         checkCrossRoom(roomId);
         LockLease lease = lockRegistry.tryAcquire(roomId);
         if (lease == null) {
@@ -87,8 +87,8 @@ public class RoomCoordinator {
      * @throws IllegalStateException if the current thread is already coordinating a different room
      */
     public LockLease tryAcquire(String roomId, long timeout, TimeUnit unit) throws InterruptedException {
-        Objects.requireNonNull(roomId, "roomId cannot be null");
-        Objects.requireNonNull(unit, "unit cannot be null");
+        requireNonNull(roomId, "roomId cannot be null");
+        requireNonNull(unit, "unit cannot be null");
         checkCrossRoom(roomId);
         LockLease lease = lockRegistry.tryAcquire(roomId, timeout, unit);
         if (lease == null) {
@@ -105,8 +105,8 @@ public class RoomCoordinator {
      * @param action the action to execute
      */
     public void coordinate(String roomId, Runnable action) {
-        Objects.requireNonNull(roomId, "roomId cannot be null");
-        Objects.requireNonNull(action, "action cannot be null");
+        requireNonNull(roomId, "roomId cannot be null");
+        requireNonNull(action, "action cannot be null");
         try (LockLease _ = acquire(roomId)) {
             action.run();
         }
@@ -121,8 +121,8 @@ public class RoomCoordinator {
      * @return computed result
      */
     public <T> T coordinate(String roomId, Supplier<T> supplier) {
-        Objects.requireNonNull(roomId, "roomId cannot be null");
-        Objects.requireNonNull(supplier, "supplier cannot be null");
+        requireNonNull(roomId, "roomId cannot be null");
+        requireNonNull(supplier, "supplier cannot be null");
         try (LockLease _ = acquire(roomId)) {
             return supplier.get();
         }
@@ -149,7 +149,7 @@ public class RoomCoordinator {
      * @throws IllegalStateException if the lease is not held by the current thread
      */
     public void assertHeldByCurrentThread(String roomId) {
-        Objects.requireNonNull(roomId, "roomId cannot be null");
+        requireNonNull(roomId, "roomId cannot be null");
         if (!isHeldByCurrentThread(roomId)) {
             throw new IllegalStateException("Current thread does not hold coordination lease for room: " + roomId);
         }
