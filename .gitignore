@@ -59,6 +59,13 @@ Desktop.ini
 
 ### Agent task artifacts ###
 .agents/
+!.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/sequential-tickets/
+.agents/skills/sequential-tickets/*
+!.agents/skills/sequential-tickets/SKILL.md
 node_modules/
 /docs/reviews/bug-audit/
 bug-audit/
