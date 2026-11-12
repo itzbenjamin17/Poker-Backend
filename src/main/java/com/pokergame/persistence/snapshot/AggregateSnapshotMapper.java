@@ -198,22 +198,7 @@ public final class AggregateSnapshotMapper {
         String reconciledHost = host != null && roomMembers.contains(host) ? host
                 : state.originalHost() != null && roomMembers.contains(state.originalHost()) ? state.originalHost()
                 : roomMembers.stream().findFirst().orElse(null);
-        Room room = Room.restoreBuilder()
-                .roomId(state.roomId())
-                .roomName(state.roomName())
-                .hostName(state.originalHost())
-                .maxPlayers(state.maxPlayers())
-                .smallBlind(state.smallBlind())
-                .bigBlind(state.bigBlind())
-                .buyIn(state.buyIn())
-                .passwordHash(state.password())
-                .createdAt(state.createdAt())
-                .playersWithJoinTime(joinTimes)
-                .playerMembershipIds(state.playerMembershipIds())
-                .gameStarted(state.gameStarted())
-                .build();
-
-        return new RecoveredAggregate(room, reconciledHost, game, false);
+        return new RecoveredAggregate(restoreRoom(state), reconciledHost, game, false);
     }
 
     /**

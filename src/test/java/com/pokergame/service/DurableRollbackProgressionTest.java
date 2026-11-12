@@ -172,7 +172,8 @@ class DurableRollbackProgressionTest {
         invoke(() -> {
             games.scheduleAutoAdvance(ID);
             games.scheduleReadyCountdownOpen(ID, 60_000);
-            games.scheduleGameCleanup(ID, 90_000);
+            // Keep cleanup later than the 15-minute inactivity registration captured by this scheduler.
+            games.scheduleGameCleanup(ID, 20 * 60_000);
             return null;
         });
         Map<ScheduledGameTask, Long> deadlines = games.getGame(ID).getScheduledTaskDeadlinesSnapshot();
@@ -186,8 +187,10 @@ class DurableRollbackProgressionTest {
         assertEquals(4, games.getRuntimeTaskCount(ID), "Restored aggregate must retain executable progression");
         acceptedFutures.forEach(future -> verify(future).cancel(false));
         assertTrue(effects.isEmpty());
-        int cleanupIndex = 0;
-        for (int index = 1; index < executionTimes.size(); index++) {
+        // Compare the restored registrations only. Cancelled futures may have
+        // nearly identical execution times to their replacements.
+        int cleanupIndex = acceptedFutures.size();
+        for (int index = cleanupIndex + 1; index < executionTimes.size(); index++) {
             if (executionTimes.get(index).isAfter(executionTimes.get(cleanupIndex))) cleanupIndex = index;
         }
         Runnable cleanup = callbacks.get(cleanupIndex);

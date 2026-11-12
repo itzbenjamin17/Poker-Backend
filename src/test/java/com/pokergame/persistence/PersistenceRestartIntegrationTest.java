@@ -43,7 +43,10 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -125,6 +128,32 @@ class PersistenceRestartIntegrationTest {
             games.markPlayerReconnected(roomId, currentPlayerName);
             assertDoesNotThrow(() -> second.getBean(PlayerActionService.class).processPlayerAction(
                     roomId, new PlayerActionRequest(nextAction, null), currentPlayerName));
+        }
+    }
+
+    @Test
+    void restartAbandonsAnActiveGameWhoseAcceptedInactivityDeadlineHasPassed() {
+        String roomId;
+        try (ConfigurableApplicationContext first = startApplication()) {
+            RoomService rooms = first.getBean(RoomService.class);
+            roomId = rooms.createRoom(new CreateRoomRequest("Inactive Room", "Alice", 6, 5, 10, 1000, null));
+            rooms.joinRoom(new JoinRoomRequest("Inactive Room", "Bob", null));
+            GameLifecycleService games = first.getBean(GameLifecycleService.class);
+            Instant started = Instant.now().minusMillis(GameLifecycleService.GAME_INACTIVITY_ALLOWANCE_MS).minusSeconds(1);
+            games.setClock(Clock.fixed(started, ZoneOffset.UTC));
+            games.createGameFromRoom(roomId);
+
+            assertFalse(games.getGame(roomId).isGameOver());
+            assertEquals(started.toEpochMilli() + GameLifecycleService.GAME_INACTIVITY_ALLOWANCE_MS,
+                    games.getInactivityDeadline(roomId));
+        }
+
+        try (ConfigurableApplicationContext second = startApplication(120_000, 60_000)) {
+            GameLifecycleService games = second.getBean(GameLifecycleService.class);
+            Game restored = games.getGame(roomId);
+            assertNotNull(restored);
+            assertTrue(restored.isGameOver(), "Recovery must enforce the original inactivity deadline");
+            assertTrue(restored.getRetainedTerminalResult().abandoned());
         }
     }
 

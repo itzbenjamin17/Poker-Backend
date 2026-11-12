@@ -10,6 +10,7 @@ import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.exception.BadRequestException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;
 import com.pokergame.security.PlayerPrincipal;
@@ -22,7 +23,16 @@ import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 
+import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.support.AbstractMessageChannel;
+import org.springframework.messaging.support.ChannelInterceptor;
+
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -31,6 +41,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static com.pokergame.util.ConcurrentTestSupport.stopExecutor;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Concurrency integration tests for Ticket #22:
@@ -46,7 +57,8 @@ class ScheduledLifecycleCoordinationIntegrationTest {
     private ConfigurableApplicationContext startApplication(boolean persistenceEnabled) {
         return new SpringApplicationBuilder(PokerApplication.class)
                 .profiles("test").web(WebApplicationType.NONE)
-                .run("--poker.persistence.enabled=" + persistenceEnabled,
+                .run("--poker.ready-countdown-ms=60000",
+                        "--poker.persistence.enabled=" + persistenceEnabled,
                         "--poker.persistence.directory=" + directory.toString().replace('\\', '/'),
                         "--poker.persistence.current-key-id=current",
                         "--poker.persistence.keys.current=" + Base64.getEncoder().encodeToString(new byte[32]));
@@ -321,6 +333,69 @@ class ScheduledLifecycleCoordinationIntegrationTest {
             assertThat(game.isGameOver()).isFalse();
             assertThat(room.isTerminal()).isFalse();
             assertThat(lifecycle.gameExists(roomId)).isTrue();
+        }
+    }
+
+    @Test
+    void expiredReadyCommandRollsBackAbandonmentAndDiscardsItsBroadcast() throws Exception {
+        try (ConfigurableApplicationContext context = startApplication(true)) {
+            RoomService rooms = context.getBean(RoomService.class);
+            GameLifecycleService lifecycle = context.getBean(GameLifecycleService.class);
+            String roomId = rooms.createRoom(new CreateRoomRequest("Expired Ready", "Host", 6, 10, 20, 1000, null));
+            rooms.joinRoom(new JoinRoomRequest("Expired Ready", "Alice", null));
+            lifecycle.createGameFromRoom(roomId);
+            lifecycle.markPlayerReconnected(roomId, "Host");
+            lifecycle.markPlayerReconnected(roomId, "Alice");
+            Game current = lifecycle.getGame(roomId);
+            context.getBean(PlayerActionService.class).processPlayerAction(roomId,
+                    new PlayerActionRequest(PlayerAction.FOLD, null), current.getCurrentPlayer().getName());
+            AbstractMessageChannel broker = context.getBean("brokerChannel", AbstractMessageChannel.class);
+            AtomicLong broadcasts = new AtomicLong();
+            broker.addInterceptor(new ChannelInterceptor() {
+                @Override
+                public Message<?> preSend(Message<?> message, MessageChannel channel) {
+                    if (("/game/" + roomId).equals(SimpMessageHeaderAccessor.getDestination(message.getHeaders()))) {
+                        broadcasts.incrementAndGet();
+                    }
+                    return message;
+                }
+            });
+
+            lifecycle.getRoomCoordinator().coordinate(roomId, () -> {
+                long deadline = rooms.getRoom(roomId).getInactivityDeadlineEpochMs();
+                Game game = lifecycle.getGame(roomId);
+                var acceptedTasks = game.getScheduledTaskDeadlinesSnapshot();
+                Long readyDeadline = game.getReadyCountdownDeadlineEpochMs();
+                assertThat(readyDeadline).isNotNull();
+                int settledPot = game.getPot();
+                Clock originalClock = lifecycle.getClock();
+                try {
+                    lifecycle.setClock(Clock.fixed(Instant.ofEpochMilli(deadline - 1), ZoneOffset.UTC));
+                    lifecycle.executeInactivityCleanup(roomId, deadline);
+                    assertThat(lifecycle.getGame(roomId).isGameOver()).isFalse();
+
+                    lifecycle.setClock(Clock.fixed(Instant.ofEpochMilli(deadline), ZoneOffset.UTC));
+                    BadRequestException rejected = assertThrows(BadRequestException.class,
+                            () -> lifecycle.markPlayerReadyForNextHand(roomId, "Host"));
+                    assertThat(rejected.actionErrorCode()).isEqualTo("GAME_EXPIRED");
+                    Game restored = lifecycle.getGame(roomId);
+                    assertThat(restored.isGameOver()).isFalse();
+                    assertThat(restored.getRetainedTerminalResult()).isNull();
+                    assertThat(restored.getScheduledTaskDeadlinesSnapshot()).isEqualTo(acceptedTasks);
+                    assertThat(restored.getReadyCountdownDeadlineEpochMs()).isEqualTo(readyDeadline);
+                    assertThat(rooms.getRoom(roomId).isTerminal()).isFalse();
+                    assertThat(broadcasts.get()).isZero();
+
+                    assertThat(lifecycle.getInactivityDeadline(roomId)).isEqualTo(deadline);
+                    lifecycle.executeInactivityCleanup(roomId, deadline);
+                    assertThat(restored.getRetainedTerminalResult().abandoned()).isTrue();
+                    assertThat(restored.getPot()).isEqualTo(settledPot);
+                    lifecycle.executeInactivityCleanup(roomId, deadline);
+                    assertThat(broadcasts.get()).isEqualTo(1);
+                } finally {
+                    lifecycle.setClock(originalClock);
+                }
+            });
         }
     }
 

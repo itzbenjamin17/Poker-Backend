@@ -108,6 +108,29 @@ class AggregateSnapshotMapperTest {
         assertEquals(game.getHandSeatOrderSnapshot(), recovered.game().getHandSeatOrderSnapshot());
     }
 
+    @ParameterizedTest
+    @MethodSource("inactivityDeadlines")
+    void restoreStateImagePreservesTheAcceptedInactivityDeadline(Long deadline) {
+        Room room = new Room("room-1", "Night Game", "Alice", 6, 5, 10, 1000, null);
+        room.addPlayer("Alice");
+        room.addPlayer("Bob");
+        room.setGameStarted(true);
+        room.setInactivityDeadlineEpochMs(deadline);
+        Game game = new Game("room-1", List.of(
+                new Player("Alice", "alice-id", 1000),
+                new Player("Bob", "bob-id", 1000)), 5, 10, new HandEvaluatorService());
+        AggregateSnapshotMapper mapper = newMapper();
+
+        RecoveredAggregate restored = mapper.restoreStateImage(mapper.captureStateImage(room, "Alice", game));
+
+        assertEquals(room.getRoomId(), restored.room().getRoomId());
+        assertEquals(deadline, restored.room().getInactivityDeadlineEpochMs());
+    }
+
+    private static Stream<Long> inactivityDeadlines() {
+        return Stream.of(null, 1L, 4_102_444_800_000L);
+    }
+
     @Test
     void settlementAndSchemaFourRoundTripAndRejectsVersionThreeAndTwo() {
         HandEvaluatorService evaluator = new HandEvaluatorService();
