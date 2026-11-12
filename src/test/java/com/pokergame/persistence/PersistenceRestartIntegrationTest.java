@@ -21,6 +21,7 @@ import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
 import com.pokergame.service.RoomService;
 import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.transaction.DurableMutation;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -94,6 +95,8 @@ class PersistenceRestartIntegrationTest {
         List<Card> deckBefore;
         String currentPlayerName;
         PlayerAction nextAction;
+        Long inactivityDeadline;
+        Long turnDeadline;
 
         try (ConfigurableApplicationContext first = startApplication()) {
             RoomService rooms = first.getBean(RoomService.class);
@@ -102,6 +105,10 @@ class PersistenceRestartIntegrationTest {
             GameLifecycleService games = first.getBean(GameLifecycleService.class);
             games.createGameFromRoom(roomId);
             Game game = games.getGame(roomId);
+            inactivityDeadline = games.getInactivityDeadline(roomId);
+            turnDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT);
+            assertNotNull(inactivityDeadline);
+            assertNotNull(turnDeadline);
             GameStateService states = first.getBean(GameStateService.class);
             publicBefore = states.getPublicGameStateSnapshot(roomId, game);
             currentPlayerName = game.getCurrentPlayer().getName();
@@ -115,6 +122,9 @@ class PersistenceRestartIntegrationTest {
             GameLifecycleService games = second.getBean(GameLifecycleService.class);
             Game restored = games.getGame(roomId);
             assertNotNull(restored);
+            assertEquals(inactivityDeadline, games.getInactivityDeadline(roomId));
+            assertEquals(turnDeadline, restored.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+            assertTrue(games.getRuntimeTaskCount(roomId) > 0);
             GameStateService states = second.getBean(GameStateService.class);
             PublicGameStateResponse publicAfter = states.getPublicGameStateSnapshot(roomId, restored);
             assertEquals(publicBefore.pot(), publicAfter.pot());
@@ -128,6 +138,43 @@ class PersistenceRestartIntegrationTest {
             games.markPlayerReconnected(roomId, currentPlayerName);
             assertDoesNotThrow(() -> second.getBean(PlayerActionService.class).processPlayerAction(
                     roomId, new PlayerActionRequest(nextAction, null), currentPlayerName));
+        }
+    }
+
+    @Test
+    void replacementAndEvictionCancelGameTimersAndKeepTheRoom() {
+        try (ConfigurableApplicationContext context = startApplication()) {
+            RoomService rooms = context.getBean(RoomService.class);
+            GameLifecycleService games = context.getBean(GameLifecycleService.class);
+            AggregateSnapshotMapper mapper = context.getBean(AggregateSnapshotMapper.class);
+            String roomId = rooms.createRoom(new CreateRoomRequest("Restored Room", "Alice", 6, 5, 10, 1000, null));
+            rooms.joinRoom(new JoinRoomRequest("Restored Room", "Bob", null));
+            games.createGameFromRoom(roomId);
+
+            games.getRoomCoordinator().coordinate(roomId, () -> {
+                Room room = rooms.getRoom(roomId);
+                Game original = games.getGame(roomId);
+                Game replacement = mapper.restoreStateImage(mapper.captureStateImage(room, "Alice", original)).game();
+                assertNotSame(original, replacement);
+                assertTrue(games.getRuntimeTaskCount(roomId) > 0);
+
+                games.restoreGame(replacement);
+
+                assertSame(replacement, games.getGame(roomId));
+                assertEquals(0, games.getRuntimeTaskCount(roomId));
+                assertTrue(room.isGameStarted());
+                games.resumeRollbackTimers(roomId);
+                assertTrue(games.getRuntimeTaskCount(roomId) > 0);
+
+                games.evictGame(roomId);
+
+                assertEquals(0, games.getRuntimeTaskCount(roomId));
+                assertNull(games.getGame(roomId));
+                assertSame(room, rooms.getRoom(roomId));
+                assertFalse(room.isGameStarted());
+                assertFalse(room.isTerminal());
+                assertEquals("Alice", rooms.getCurrentHost(roomId));
+            });
         }
     }
 

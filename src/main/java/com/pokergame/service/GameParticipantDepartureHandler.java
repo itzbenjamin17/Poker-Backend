@@ -2,7 +2,6 @@ package com.pokergame.service;
 
 import java.util.Collection;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -31,13 +30,13 @@ class GameParticipantDepartureHandler {
     private final RoomService roomService;
     private final GameStateService gameStateService;
     private final GameTerminalSettlement terminalSettlement;
-    private final Map<String, Game> activeGames;
+    private final ActiveGameRegistry activeGames;
 
     GameParticipantDepartureHandler(GameLifecycleService lifecycleService,
             RoomService roomService,
             GameStateService gameStateService,
             GameTerminalSettlement terminalSettlement,
-            Map<String, Game> activeGames) {
+            ActiveGameRegistry activeGames) {
         this.lifecycleService = lifecycleService;
         this.roomService = roomService;
         this.gameStateService = gameStateService;

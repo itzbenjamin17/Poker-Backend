@@ -18,7 +18,6 @@ import com.pokergame.persistence.transaction.DurableTransactionContext;
 import com.pokergame.service.GameTimerRegistry.TaskIntent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.pokergame.util.MdcUtils;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,7 +29,6 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import com.pokergame.enums.GamePhase;
 
 /**
@@ -86,9 +84,10 @@ public class GameLifecycleService {
     private final GameTerminalSettlement terminalSettlement;
     private final GameParticipantDepartureHandler departureHandler;
     private final RoomCoordinator roomCoordinator;
+    private final GameRecoveryService recovery;
     private GameLifecycleService self;
 
-    private final Map<String, Game> activeGames = new ConcurrentHashMap<>();
+    private final ActiveGameRegistry activeGames = new ActiveGameRegistry();
 
     /**
      * Creates the lifecycle service with the scheduler that owns runtime timers.
@@ -155,6 +154,8 @@ public class GameLifecycleService {
         this.terminalSettlement = new GameTerminalSettlement(gameStateService, runtimeTimers);
         this.departureHandler = new GameParticipantDepartureHandler(this, roomService, gameStateService, terminalSettlement, activeGames);
         this.roomCoordinator = roomCoordinator != null ? roomCoordinator : new RoomCoordinator();
+        this.recovery = new GameRecoveryService(activeGames, roomService, gameStateService, runtimeTimers,
+                this.roomCoordinator, this::scheduleRuntimeTask, this::scheduleGameInactivity);
     }
 
     public RoomCoordinator getRoomCoordinator() {
@@ -240,7 +241,7 @@ public class GameLifecycleService {
                 roomService.checkAndCloseIfExpired(roomId);
                 throw new BadRequestException("Room has expired due to inactivity.");
             }
-            if (activeGames.containsKey(roomId) || room.isGameStarted()) {
+            if (activeGames.contains(roomId) || room.isGameStarted()) {
                 logger.warn("Game creation failed: game already exists for room {}", roomId);
                 throw new BadRequestException("Game has already started for this room.");
             }
@@ -267,7 +268,7 @@ public class GameLifecycleService {
             }
 
             Game game = new Game(roomId, players, room.getSmallBlind(), room.getBigBlind(), handEvaluator);
-            activeGames.put(roomId, game);
+            activeGames.register(game);
 
             // Mark room started and capture start event payload before scheduling broadcast
             room.setGameStarted(true);
@@ -690,32 +691,8 @@ public class GameLifecycleService {
      * @param game exact game restored from a committed state image
      */
     public void restoreGame(Game game) {
-        if (game == null) {
-            return;
-        }
-        String gameId = game.getGameId();
-        roomCoordinator.coordinate(gameId, () -> {
-            Room room = roomService.getRoom(gameId);
-            Game existing = activeGames.get(gameId);
-            applyRestoreGame(game, room, existing);
-            return null;
-        });
-    }
-
-    private void applyRestoreGame(Game game, Room room, Game existing) {
-        String gameId = game.getGameId();
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        if (existing != null && existing != game) {
-            cancelRuntimeTasks(gameId, false);
-        }
-        if (gameStateService != null) {
-            gameStateService.clearRetainedSettlement(gameId);
-        }
-        activeGames.put(gameId, game);
-        if (room != null) {
-            room.setTerminal(game.isGameOver());
-            room.setGameStarted(true);
-        }
+        if (game == null) return;
+        roomCoordinator.coordinate(game.getGameId(), () -> recovery.restoreGame(game));
     }
 
     /**
@@ -725,22 +702,8 @@ public class GameLifecycleService {
      * @param gameId identifier of the game to evict
      */
     public void evictGame(String gameId) {
-        if (gameId == null) {
-            return;
-        }
-        roomCoordinator.coordinate(gameId, () -> {
-            Room room = roomService.getRoom(gameId);
-            cancelRuntimeTasks(gameId, false);
-            activeGames.remove(gameId);
-            if (gameStateService != null) {
-                gameStateService.clearRetainedSettlement(gameId);
-            }
-            if (room != null) {
-                room.setGameStarted(false);
-                room.setTerminal(false);
-            }
-            return null;
-        });
+        if (gameId == null) return;
+        roomCoordinator.coordinate(gameId, () -> recovery.evictGame(gameId));
     }
 
     /**
@@ -752,20 +715,7 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void resumeRecoveredTimers(String gameId) {
-        roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null) {
-                return;
-            }
-            MdcUtils.runWithRoomId(gameId, () -> {
-                boolean normalized = game.normalizeRecoveredReadyCountdown(System.currentTimeMillis() + configuredReadyCountdownMs);
-                List<TaskIntent> intents = GameTimerRegistry.captureAllIntents(gameId, game);
-                int rebuiltCount = intents.size();
-                DurableTransactionContext.afterCommit(() -> intents.forEach(this::scheduleRuntimeTask));
-                if (normalized) gameStateService.broadcastGameState(gameId, game);
-                logger.info("Resumed {} recovered timers for game {}", rebuiltCount, gameId);
-            });
-        });
+        roomCoordinator.coordinate(gameId, () -> recovery.resumeRecoveredTimers(gameId, configuredReadyCountdownMs));
     }
 
     /**
@@ -777,17 +727,7 @@ public class GameLifecycleService {
      */
     public void resumeRollbackTimers(String gameId) {
         if (gameId == null) return;
-        roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null) return null;
-            List<TaskIntent> intents = GameTimerRegistry.captureAllIntents(gameId, game);
-            intents.forEach(this::scheduleRuntimeTask);
-            Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            if (room != null && room.getInactivityDeadlineEpochMs() != null && !game.isGameOver()) {
-                scheduleGameInactivity(gameId, room.getInactivityDeadlineEpochMs());
-            }
-            return null;
-        });
+        roomCoordinator.coordinate(gameId, () -> recovery.resumeRollbackTimers(gameId));
     }
 
     /**
