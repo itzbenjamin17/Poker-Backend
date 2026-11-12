@@ -17,7 +17,7 @@ import com.pokergame.model.Game;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.service.GameTimerRegistry.TaskIntent;
+import com.pokergame.service.GameTaskScheduler.TaskIntent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -290,6 +290,18 @@ class GameTimerRegistryTest {
         }
     }
 
+    /** Exercises registration through the scheduler's authoritative identity check. */
+    private void submitTask(TaskIntent intent, Game game, GameTaskScheduler.ScheduledTaskExecutor callback) {
+        ActiveGameRegistry games = new ActiveGameRegistry();
+        RoomCoordinator coordinator = gameLifecycleService.getRoomCoordinator();
+        GameTaskScheduler scheduler = new GameTaskScheduler(games, runtimeTimers, coordinator, roomService,
+                gameLifecycleService::getClock, callback, (id, deadline) -> {});
+        coordinator.coordinate(intent.gameId(), () -> {
+            if (game != null) games.replace(game);
+            scheduler.scheduleRuntimeTask(intent);
+        });
+    }
+
     private void stubGameEndCapture() {
         Answer<GameEndResponse> buildResponse = invocation -> {
             String id = invocation.getArgument(0);
@@ -333,7 +345,7 @@ class GameTimerRegistryTest {
         void captureAllIntents_WhenNoTasks_ReturnsEmptyList() {
             Game game = startedGame();
             game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-            List<TaskIntent> intents = GameTimerRegistry.captureAllIntents(ROOM_ID, game);
+            List<TaskIntent> intents = GameTaskScheduler.captureAllIntents(ROOM_ID, game);
             assertTrue(intents.isEmpty());
         }
 
@@ -345,7 +357,7 @@ class GameTimerRegistryTest {
             game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 10_000L);
             game.scheduleTask(ScheduledGameTask.CLEANUP, 60_000L);
 
-            List<TaskIntent> intents = GameTimerRegistry.captureAllIntents(ROOM_ID, game);
+            List<TaskIntent> intents = GameTaskScheduler.captureAllIntents(ROOM_ID, game);
             assertEquals(2, intents.size());
 
             TaskIntent autoAdvanceIntent = intents.stream()
@@ -371,7 +383,7 @@ class GameTimerRegistryTest {
         @DisplayName("schedule ignores task when game is null")
         void schedule_WhenGameIsNull_DoesNothing() {
             TaskIntent intent = new TaskIntent(ROOM_ID, ScheduledGameTask.NEW_HAND, 5000L, 1L, 1L);
-            runtimeTimers.schedule(intent, null, (g, t, d, h, gen) -> {});
+            submitTask(intent, null, (g, t, d, h, gen) -> {});
             assertEquals(0, runtimeTimers.countForGame(ROOM_ID));
             verifyNoInteractions(taskScheduler);
         }
@@ -385,15 +397,15 @@ class GameTimerRegistryTest {
             long gen = game.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND);
 
             TaskIntent staleHand = new TaskIntent(ROOM_ID, ScheduledGameTask.NEW_HAND, 5000L, game.getHandNumber() + 1, gen);
-            runtimeTimers.schedule(staleHand, game, (g, t, d, h, gToken) -> {});
+            submitTask(staleHand, game, (g, t, d, h, gToken) -> {});
             assertEquals(0, runtimeTimers.countForGame(ROOM_ID));
 
             TaskIntent staleGen = new TaskIntent(ROOM_ID, ScheduledGameTask.NEW_HAND, 5000L, game.getHandNumber(), gen - 1);
-            runtimeTimers.schedule(staleGen, game, (g, t, d, h, gToken) -> {});
+            submitTask(staleGen, game, (g, t, d, h, gToken) -> {});
             assertEquals(0, runtimeTimers.countForGame(ROOM_ID));
 
             TaskIntent staleDeadline = new TaskIntent(ROOM_ID, ScheduledGameTask.NEW_HAND, 6000L, game.getHandNumber(), gen);
-            runtimeTimers.schedule(staleDeadline, game, (g, t, d, h, gToken) -> {});
+            submitTask(staleDeadline, game, (g, t, d, h, gToken) -> {});
             assertEquals(0, runtimeTimers.countForGame(ROOM_ID));
 
             verifyNoInteractions(taskScheduler);
@@ -414,7 +426,7 @@ class GameTimerRegistryTest {
 
             AtomicBoolean executed = new AtomicBoolean(false);
             TaskIntent intent = new TaskIntent(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline, game.getHandNumber(), gen);
-            runtimeTimers.schedule(intent, game, (g, t, d, h, gToken) -> {
+            submitTask(intent, game, (g, t, d, h, gToken) -> {
                 assertEquals(ROOM_ID, g);
                 assertEquals(ScheduledGameTask.NEW_HAND, t);
                 assertEquals(deadline, d);
@@ -446,14 +458,14 @@ class GameTimerRegistryTest {
             doReturn(future1).doReturn(future2).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
 
             TaskIntent intent1 = new TaskIntent(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline1, game.getHandNumber(), gen1);
-            runtimeTimers.schedule(intent1, game, (g, t, d, h, gen) -> {});
+            submitTask(intent1, game, (g, t, d, h, gen) -> {});
             assertEquals(1, runtimeTimers.countForGame(ROOM_ID));
 
             long deadline2 = System.currentTimeMillis() + 8000L;
             game.scheduleTask(ScheduledGameTask.NEW_HAND, deadline2);
             long gen2 = game.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND);
             TaskIntent intent2 = new TaskIntent(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline2, game.getHandNumber(), gen2);
-            runtimeTimers.schedule(intent2, game, (g, t, d, h, gen) -> {});
+            submitTask(intent2, game, (g, t, d, h, gen) -> {});
 
             verify(future1).cancel(false);
             assertEquals(1, runtimeTimers.countForGame(ROOM_ID));
@@ -472,7 +484,7 @@ class GameTimerRegistryTest {
             doReturn(future).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
 
             TaskIntent intent = new TaskIntent(ROOM_ID, ScheduledGameTask.CLEANUP, deadline, game.getHandNumber(), gen);
-            runtimeTimers.schedule(intent, game, (g, t, d, h, gToken) -> {});
+            submitTask(intent, game, (g, t, d, h, gToken) -> {});
             assertEquals(1, runtimeTimers.countForGame(ROOM_ID));
 
             runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.CLEANUP);
@@ -492,7 +504,7 @@ class GameTimerRegistryTest {
                 futures.put(task, future);
                 doReturn(future).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
                 game.scheduleTask(task, deadline);
-                runtimeTimers.schedule(GameTimerRegistry.captureIntent(ROOM_ID, game, task, deadline),
+                submitTask(GameTaskScheduler.captureIntent(ROOM_ID, game, task, deadline),
                         game, (g, t, d, h, generation) -> {});
             }
             doReturn(inactivity).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
@@ -532,8 +544,8 @@ class GameTimerRegistryTest {
             ScheduledFuture<Object> future2 = mock(ScheduledFuture.class);
             doReturn(future1).doReturn(future2).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
 
-            runtimeTimers.schedule(new TaskIntent(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline1, game.getHandNumber(), game.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND)), game, (g, t, d, h, gen) -> {});
-            runtimeTimers.schedule(new TaskIntent(ROOM_ID, ScheduledGameTask.CLEANUP, deadline2, game.getHandNumber(), game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP)), game, (g, t, d, h, gen) -> {});
+            submitTask(new TaskIntent(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline1, game.getHandNumber(), game.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND)), game, (g, t, d, h, gen) -> {});
+            submitTask(new TaskIntent(ROOM_ID, ScheduledGameTask.CLEANUP, deadline2, game.getHandNumber(), game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP)), game, (g, t, d, h, gen) -> {});
             assertEquals(2, runtimeTimers.countForGame(ROOM_ID));
 
             runtimeTimers.cancelAllForGame(ROOM_ID, true);

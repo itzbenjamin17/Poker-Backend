@@ -73,7 +73,7 @@ Package-private model collaborators calculate betting rules (`BettingRound`), se
 
 `Game.restoreBuilder()` returns the top-level `GameRestoreBuilder`; code compiled against the former nested `Game.GameRestoreBuilder` must be updated and recompiled.
 
-`GameTimerRegistry` owns process-local scheduler registrations for game tasks and active-game inactivity. `Game` retains task deadlines and generations, and `Room` retains the active-game inactivity deadline. `GameRecoveryService` installs and evicts restored games and resumes their timers. Scheduled callbacks re-enter `GameLifecycleService` through the Spring proxy and validate current state under the room lease.
+`GameTimerRegistry` owns process-local scheduler registrations for game tasks and active-game inactivity. `Game` retains task deadlines and generations, and `Room` retains the active-game inactivity deadline. `GameRecoveryService` installs and evicts restored games and resumes their timers. `GameTaskScheduler` records durable intent, submits accepted work, and validates callback identity. Scheduled callbacks re-enter `GameLifecycleService` through the Spring proxy and validate current state under the room lease.
 
 `GameReadinessCoordinator` orchestrates the `Game`/`ReadyGate` transitions and returns timeout or progression decisions. `GameLifecycleService` applies those decisions at the existing durable boundary. `GameInactivityPolicy` calculates deadlines and checks whether they apply. `GameParticipantDepartureHandler` handles departures, disconnects, reconnection, and grace expiry. `GameTerminalSettlement` freezes terminal results and authorizes review.
 

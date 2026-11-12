@@ -3,14 +3,12 @@ package com.pokergame.service;
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.DurableTransactionContext;
-import com.pokergame.service.GameTimerRegistry.TaskIntent;
+import com.pokergame.service.GameTaskScheduler.TaskIntent;
 import com.pokergame.util.MdcUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 
 /** Installs and evicts restored games and resumes their accepted timer intent. */
 final class GameRecoveryService {
@@ -21,19 +19,17 @@ final class GameRecoveryService {
     private final GameStateService gameStateService;
     private final GameTimerRegistry timerRegistry;
     private final RoomCoordinator roomCoordinator;
-    private final Consumer<TaskIntent> submitTask;
-    private final BiConsumer<String, Long> submitInactivity;
+    private final GameTaskScheduler scheduling;
 
     GameRecoveryService(ActiveGameRegistry activeGames, RoomService roomService, GameStateService gameStateService,
             GameTimerRegistry timerRegistry, RoomCoordinator roomCoordinator,
-            Consumer<TaskIntent> submitTask, BiConsumer<String, Long> submitInactivity) {
+            GameTaskScheduler scheduling) {
         this.activeGames = activeGames;
         this.roomService = roomService;
         this.gameStateService = gameStateService;
         this.timerRegistry = timerRegistry;
         this.roomCoordinator = roomCoordinator;
-        this.submitTask = submitTask;
-        this.submitInactivity = submitInactivity;
+        this.scheduling = scheduling;
     }
 
     /** Replaces a game with a detached, already rehydrated instance under its room lease. */
@@ -82,8 +78,8 @@ final class GameRecoveryService {
         if (game == null) return;
         MdcUtils.runWithRoomId(gameId, () -> {
             boolean normalized = game.normalizeRecoveredReadyCountdown(System.currentTimeMillis() + configuredReadyCountdownMs);
-            List<TaskIntent> intents = GameTimerRegistry.captureAllIntents(gameId, game);
-            DurableTransactionContext.afterCommit(() -> intents.forEach(submitTask));
+            List<TaskIntent> intents = GameTaskScheduler.captureAllIntents(gameId, game);
+            DurableTransactionContext.afterCommit(() -> intents.forEach(scheduling::scheduleRuntimeTask));
             if (normalized) gameStateService.broadcastGameState(gameId, game);
             logger.info("Resumed {} recovered timers for game {}", intents.size(), gameId);
         });
@@ -94,10 +90,10 @@ final class GameRecoveryService {
         roomCoordinator.assertHeldByCurrentThread(gameId);
         Game game = activeGames.get(gameId);
         if (game == null) return;
-        GameTimerRegistry.captureAllIntents(gameId, game).forEach(submitTask);
+        GameTaskScheduler.captureAllIntents(gameId, game).forEach(scheduling::scheduleRuntimeTask);
         Room room = roomService != null ? roomService.getRoom(gameId) : null;
         if (room != null && room.getInactivityDeadlineEpochMs() != null && !game.isGameOver()) {
-            submitInactivity.accept(gameId, room.getInactivityDeadlineEpochMs());
+            scheduling.scheduleGameInactivity(gameId, room.getInactivityDeadlineEpochMs());
         }
     }
 }

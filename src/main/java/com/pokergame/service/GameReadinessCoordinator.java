@@ -3,7 +3,7 @@ package com.pokergame.service;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
-import com.pokergame.service.GameTimerRegistry.TaskIntent;
+import com.pokergame.service.GameTaskScheduler.TaskIntent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,7 +40,7 @@ final class GameReadinessCoordinator {
                 yield new Opening(Progression.START_HAND, null);
             }
             case OPENED -> {
-                TaskIntent intent = GameTimerRegistry.captureIntent(gameId, game, ScheduledGameTask.READY_TIMEOUT, deadline);
+                TaskIntent intent = GameTaskScheduler.captureIntent(gameId, game, ScheduledGameTask.READY_TIMEOUT, deadline);
                 gameStateService.broadcastGameState(gameId, game);
                 yield new Opening(Progression.NONE, intent);
             }

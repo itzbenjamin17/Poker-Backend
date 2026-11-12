@@ -1,15 +1,12 @@
 package com.pokergame.service;
 
 import com.pokergame.enums.ScheduledGameTask;
-import com.pokergame.model.Game;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.TaskScheduler;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 
@@ -18,9 +15,8 @@ import java.util.concurrent.ScheduledFuture;
  * Each game and task type has at most one current registration. Recovery can rebuild
  * registrations from persisted deadlines, and overdue work is scheduled immediately.
  *
- * <p>Registration checks the deadline, hand number, and task generation under the
- * room coordination lease. The callback must revalidate those values at the durable mutation seam
- * because a cancelled or replaced callback may already be running.
+ * <p>The task scheduler validates durable intent before registering a future. The callback
+ * checks its registration identity because a cancellation or replacement may race with submission.
  */
 final class GameTimerRegistry {
     private static final Logger logger = LoggerFactory.getLogger(GameTimerRegistry.class);
@@ -31,18 +27,10 @@ final class GameTimerRegistry {
         this.taskScheduler = taskScheduler;
     }
 
-    /** Executes scheduled work using the values captured at registration. */
-    @FunctionalInterface
-    interface ScheduledTaskExecutor {
-        void execute(String gameId, ScheduledGameTask task, long deadline, long handNumber, long generation);
-    }
-
     private final Map<RuntimeTaskKey, RuntimeTask> runtimeTasks = new ConcurrentHashMap<>();
 
     /** A null task identifies the room-backed inactivity timer. */
     private record RuntimeTaskKey(String gameId, ScheduledGameTask task) { }
-    /** Identifies a scheduled task for a specific hand, generation, and epoch-millisecond deadline. */
-    record TaskIntent(String gameId, ScheduledGameTask task, long deadline, long handNumber, long generation) { }
 
     /** Tracks completion or cancellation that can occur before the scheduler returns the future. */
     private static final class RuntimeTask {
@@ -65,38 +53,11 @@ final class GameTimerRegistry {
         }
     }
 
-    /** Captures the task identity while the caller holds the room coordination lease. */
-    static TaskIntent captureIntent(String gameId, Game game, ScheduledGameTask task, long deadline) {
-        return new TaskIntent(gameId, task, deadline, game.getHandNumber(), game.getScheduledTaskGeneration(task));
-    }
-
-    /** Captures all currently scheduled task intents while the caller holds the room coordination lease. */
-    static List<TaskIntent> captureAllIntents(String gameId, Game game) {
-        return game.getScheduledTaskDeadlinesSnapshot().entrySet().stream()
-                .map(entry -> captureIntent(gameId, game, entry.getKey(), entry.getValue()))
-                .toList();
-    }
-
-    /**
-     * Registers current task intent and cancels any previous registration for the same game and task type.
-     *
-     * @param intent task identity captured from the game
-     * @param game current game, or {@code null} if it has been removed
-     * @param callback executor that revalidates the task before mutating the game
-     */
-    void schedule(TaskIntent intent, Game game, ScheduledTaskExecutor callback) {
-        String gameId = intent.gameId();
-        ScheduledGameTask task = intent.task();
-        long deadline = intent.deadline();
-        if (game == null) return;
+    /** Registers the validated task's process-local future. */
+    void schedule(String gameId, ScheduledGameTask task, long deadline, Runnable callback) {
         long delay = Math.max(0, deadline - System.currentTimeMillis());
         logger.debug("Scheduling runtime task {} for game {} with delayMs={} deadline={}", task, gameId, delay, deadline);
-        RuntimeTaskKey key = new RuntimeTaskKey(gameId, task);
-        if (game.getHandNumber() != intent.handNumber()
-                || game.getScheduledTaskGeneration(task) != intent.generation()
-                || !Objects.equals(game.getScheduledTaskDeadline(task), deadline)) return;
-        register(key, Instant.now().plusMillis(delay),
-                () -> callback.execute(gameId, task, deadline, intent.handNumber(), intent.generation()));
+        register(new RuntimeTaskKey(gameId, task), Instant.now().plusMillis(delay), callback);
     }
 
     /** Registers room-backed inactivity work using the remaining time on the authoritative clock. */
