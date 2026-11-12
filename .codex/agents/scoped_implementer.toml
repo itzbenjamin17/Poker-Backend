@@ -2,7 +2,6 @@ name = "scoped_implementer"
 description = "Scoped backend implementer for a settled plan with explicit file ownership and acceptance criteria; handles routine validation, contracts, documentation, and small refactors. Escalates architecture or lifecycle decisions."
 model = "gpt-6-luna"
 model_reasoning_effort = "medium"
-sandbox_mode = "workspace-write"
 developer_instructions = """
 You implement bounded changes in the Java and Spring Boot poker backend from an agreed plan.
 

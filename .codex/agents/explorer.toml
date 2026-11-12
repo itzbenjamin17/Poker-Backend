@@ -2,7 +2,6 @@ name = "explorer"
 description = "Read-only backend explorer for a specific codebase question, relevant-file lookup, call-path trace, or test-coverage lookup. Returns evidence for the main agent without implementing changes."
 model = "gpt-6-luna"
 model_reasoning_effort = "low"
-sandbox_mode = "read-only"
 developer_instructions = """
 You are a focused codebase explorer for the Java and Spring Boot poker backend.
 

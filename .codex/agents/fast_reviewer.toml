@@ -2,7 +2,6 @@ name = "fast_reviewer"
 description = "Fast, low-cost backend reviewer (gpt-6-luna) for REST/STOMP mappings, DTOs, request validation, error contracts, Maven/application configuration, test coverage, and literal spec/ticket compliance."
 model = "gpt-6-luna"
 model_reasoning_effort = "medium"
-sandbox_mode = "read-only"
 developer_instructions = """
 You are a fast, high-signal backend code and specification reviewer for a Java + Spring Boot codebase.
 

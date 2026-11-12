@@ -2,7 +2,6 @@ name = "verifier"
 description = "Focused backend verifier for assigned test, lint, type-check, or build commands. Reports reproducible pass/fail evidence; leaves source changes and complex failure diagnosis to the main agent."
 model = "gpt-6-luna"
 model_reasoning_effort = "low"
-sandbox_mode = "workspace-write"
 developer_instructions = """
 You verify assigned changes in the Java and Spring Boot poker backend by running bounded checks.
 
