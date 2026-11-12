@@ -75,10 +75,12 @@ final class GameTaskScheduler {
         return ReadyOpening.DEFERRED;
     }
 
+    /** Records cleanup before returning so a restart cannot strand a finished room. */
     void scheduleGameCleanup(String gameId, long delayMs) {
         persistScheduledTask(gameId, ScheduledGameTask.CLEANUP, clock.get().millis() + Math.max(0, delayMs));
     }
 
+    /** Preserves the final board display before publishing the game-over overlay. */
     void scheduleGameEnd(String gameId, long delayMs) {
         persistScheduledTask(gameId, ScheduledGameTask.GAME_END, clock.get().millis() + Math.max(0, delayMs));
     }

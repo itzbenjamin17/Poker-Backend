@@ -26,11 +26,17 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
-import java.util.*;
+import java.time.Clock;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
 
 /**
- * Service class responsible for game lifecycle management.
- * Handles game creation, starting new hands, and game termination.
+ * Creates games and exposes the room-coordinated lifecycle API.
+ * Durable entry points hold the room lease and dispatch to the workflow owners.
  */
 @Service
 public class GameLifecycleService {
@@ -39,13 +45,13 @@ public class GameLifecycleService {
     public static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = HandProgressionService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS;
     public static final long TURN_ALLOWANCE_MS = GameTaskScheduler.TURN_ALLOWANCE_MS;
     public static final long GAME_INACTIVITY_ALLOWANCE_MS = GameInactivityPolicy.ALLOWANCE_MS;
-    private java.time.Clock clock = java.time.Clock.systemUTC();
+    private Clock clock = Clock.systemUTC();
 
     /** Supplies the authoritative clock without changing legacy construction. */
     @Autowired(required = false)
-    public void setClock(java.time.Clock clock) { this.clock = clock; }
+    public void setClock(Clock clock) { this.clock = clock; }
 
-    public java.time.Clock getClock() { return clock; }
+    public Clock getClock() { return clock; }
 
     @Value("${poker.game-end.display-delay-ms:20000}")
     private long gameEndDisplayDelayMs = 20000;
@@ -58,11 +64,7 @@ public class GameLifecycleService {
     @Value("${poker.ready-countdown-ms:30000}")
     private long configuredReadyCountdownMs = 30000;
 
-    /**
-     * Returns the configured ready countdown duration in milliseconds for package collaborators.
-     *
-     * @return ready countdown duration in milliseconds
-     */
+    /** Returns the configured ready countdown duration in milliseconds. */
     long getConfiguredReadyCountdownMs() {
         return configuredReadyCountdownMs;
     }
@@ -71,15 +73,13 @@ public class GameLifecycleService {
 
     private final HandEvaluatorService handEvaluator;
 
-    private final GameStateService gameStateService;
-
     private final SimpMessagingTemplate messagingTemplate;
 
     private final GameTimerRegistry runtimeTimers;
     private final GameReadinessCoordinator readiness;
     private final HandProgressionService handProgression;
     private final GameCompletionHandler completion;
-    private final GameParticipantDepartureHandler departureHandler;
+    private final PlayerDepartureHandler departureHandler;
     private final RoomCoordinator roomCoordinator;
     private final GameRecoveryService recovery;
     private final GameTaskScheduler scheduling;
@@ -88,15 +88,8 @@ public class GameLifecycleService {
     private final ActiveGameRegistry activeGames = new ActiveGameRegistry();
 
     /**
-     * Creates the lifecycle service with the scheduler that owns runtime timers.
-     * Scheduled intent itself lives on {@link Game} so timers can be rebuilt after a
-     * restart. Backwards-compatible overload.
-     *
-     * @param roomService          authoritative room service
-     * @param handEvaluatorService hand evaluator attached to new and restored games
-     * @param gameStateService     client state publisher
-     * @param messagingTemplate    direct messaging collaborator
-     * @param taskScheduler        runtime timer scheduler
+     * Creates the lifecycle service with a runtime scheduler and a local room coordinator.
+     * Scheduled intent lives on {@link Game} so timers can be rebuilt after a restart.
      */
     public GameLifecycleService(RoomService roomService,
             HandEvaluatorService handEvaluatorService,
@@ -106,16 +99,7 @@ public class GameLifecycleService {
         this(roomService, handEvaluatorService, gameStateService, messagingTemplate, taskScheduler, (RoomCoordinator) null);
     }
 
-    /**
-     * Autowired constructor with all dependencies including optional/provided RoomCoordinator.
-     *
-     * @param roomService              authoritative room service
-     * @param handEvaluatorService     hand evaluator attached to new and restored games
-     * @param gameStateService         client state publisher
-     * @param messagingTemplate        direct messaging collaborator
-     * @param taskScheduler            runtime timer scheduler
-     * @param roomCoordinatorProvider provider for the room-scoped coordinator
-     */
+    /** Creates the Spring service with the application room coordinator when available. */
     @Autowired
     public GameLifecycleService(RoomService roomService,
             HandEvaluatorService handEvaluatorService,
@@ -127,16 +111,7 @@ public class GameLifecycleService {
                 roomCoordinatorProvider != null ? roomCoordinatorProvider.getIfAvailable(RoomCoordinator::new) : null);
     }
 
-    /**
-     * Creates the lifecycle service explicitly with a RoomCoordinator.
-     *
-     * @param roomService          authoritative room service
-     * @param handEvaluatorService hand evaluator attached to new and restored games
-     * @param gameStateService     client state publisher
-     * @param messagingTemplate    direct messaging collaborator
-     * @param taskScheduler        runtime timer scheduler
-     * @param roomCoordinator      coordinator managing room-scoped concurrency boundaries
-     */
+    /** Creates the lifecycle service and its workflow owners with a shared room coordinator. */
     public GameLifecycleService(RoomService roomService,
             HandEvaluatorService handEvaluatorService,
             GameStateService gameStateService,
@@ -145,7 +120,6 @@ public class GameLifecycleService {
             RoomCoordinator roomCoordinator) {
         this.roomService = roomService;
         this.handEvaluator = handEvaluatorService;
-        this.gameStateService = gameStateService;
         this.messagingTemplate = messagingTemplate;
         this.runtimeTimers = new GameTimerRegistry(taskScheduler);
         this.roomCoordinator = roomCoordinator != null ? roomCoordinator : new RoomCoordinator();
@@ -160,7 +134,8 @@ public class GameLifecycleService {
         this.readiness = new GameReadinessCoordinator(activeGames, roomService, gameStateService, runtimeTimers,
                 scheduling, completion, handProgression, this.roomCoordinator, this::getClock,
                 this::getConfiguredReadyCountdownMs, gameId -> mutationProxy().handleGameEnd(gameId, false));
-        this.departureHandler = new GameParticipantDepartureHandler(this, roomService, gameStateService, completion, activeGames);
+        this.departureHandler = new PlayerDepartureHandler(roomService, gameStateService, completion, handProgression,
+                readiness, runtimeTimers, activeGames, this.roomCoordinator, this::getClock);
         this.recovery = new GameRecoveryService(activeGames, roomService, gameStateService, runtimeTimers,
                 this.roomCoordinator, scheduling);
     }
@@ -169,57 +144,25 @@ public class GameLifecycleService {
         return roomCoordinator;
     }
 
-    GameParticipantDepartureHandler getDepartureHandler() {
+    /** Returns the departure owner for existing package callers. */
+    PlayerDepartureHandler getDepartureHandler() {
         return departureHandler;
     }
 
     /**
-     * We inject a proxy of this exact same service into itself to solve Spring's "self-invocation" problem.
-     * <p>
-     * When background timers (like the turn timer) expire, they need to call methods in this class
-     * and trigger a save. If we used `this.method()`, it would bypass the {@link DurableMutation}
-     * autosave trigger. By using `self.method()`, we ensure the game is properly saved.
-     * </p>
-     *
-     * @param self the Spring proxy of this service
+     * Injects the Spring proxy so deferred callbacks enter {@link DurableMutation} advice.
+     * Directly constructed tests can continue using the service without a proxy.
      */
     @Autowired
     void setSelf(@Lazy GameLifecycleService self) {
         this.self = self;
     }
 
-    /**
-     * Single durable entry point for participant departure across room and game
-     * aggregates. Handles lobby host departure (room destruction), active game host
-     * departure (host transfer), batch departures, forfeit classification, and
-     * terminal settlement freeze.
-     *
-     * @param roomId room or game identifier
-     * @param playerNames collection of player names departing
-     */
+    /** Durable batch departure for lobby and game participants, including host succession and forfeits. */
     @DurableMutation(roomId = "#roomId")
     public void departParticipants(String roomId, Collection<String> playerNames) {
-        if (roomId == null || roomId.trim().isEmpty() || playerNames == null || playerNames.isEmpty()) {
-            return;
-        }
-
-        roomCoordinator.coordinate(roomId, () -> {
-            Room room = roomService.getRoom(roomId);
-            if (room == null) {
-                Game game = getGame(roomId);
-                if (game == null || game.isGameOver()) return;
-                departureHandler.departParticipantsUnderLock(roomId, playerNames, null, game);
-                return;
-            }
-
-            if (roomService.getRoom(roomId) != room) return;
-            Game game = getGame(roomId);
-            if (game != null && GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
-                completion.abandonGameDueToInactivity(roomId);
-                return;
-            }
-            departureHandler.departParticipantsUnderLock(roomId, playerNames, room, game);
-        });
+        if (roomId == null || roomId.trim().isEmpty() || playerNames == null || playerNames.isEmpty()) return;
+        roomCoordinator.coordinate(roomId, () -> departureHandler.departParticipants(roomId, playerNames));
     }
 
     /**
@@ -296,30 +239,21 @@ public class GameLifecycleService {
         });
     }
 
-    /**
-     * Starts a new hand of poker for the specified game.
-     * Resets game state, deals cards, posts blinds, and broadcasts initial state.
-     *
-     * @param gameId The unique identifier of the game
-     */
+    /** Starts the next eligible hand, including any immediate readiness from forced blinds. */
     @DurableMutation(roomId = "#gameId")
     public void startNewHand(String gameId) {
         roomCoordinator.coordinate(gameId,
                 () -> readiness.applyHandContinuation(gameId, handProgression.startNewHand(gameId)));
     }
 
+    /** Applies hand progression under the caller's room lease. */
     void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome) {
         readiness.applyHandContinuation(gameId, handProgression.applyTurnOutcome(gameId, game, outcome));
     }
 
     /**
-     * Applies progression and publishes an outcome from the current durable mutation.
-     * Callers must derive the outcome from this game under the same room lease.
-     *
-     * @param gameId                     game identifier
-     * @param game                       authoritative game state
-     * @param outcome                    turn outcome produced by the game
-     * @param notifyImmediateAutoAdvance {@code true} to emit the initial all-in notification banner
+     * Applies the accepted turn outcome under its room lease.
+     * The caller must derive the outcome under the same lease. The flag selects the initial all-in notification.
      */
     @DurableMutation(roomId = "#gameId")
     public void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
@@ -327,27 +261,13 @@ public class GameLifecycleService {
                 handProgression.applyTurnOutcome(gameId, game, outcome, notifyImmediateAutoAdvance)));
     }
 
-    /**
-     * Applies one authoritative auto-advance mutation for an all-in hand.
-     * Every deck, phase, payout, and player mutation enters through this public
-     * service seam so each step receives its own committed state image.
-     *
-     * @param gameId game to advance
-     * @return {@code true} when the step completed showdown, otherwise false
-     */
+    /** Deals or settles one all-in step within its own durable mutation. Returns true on completion. */
     @DurableMutation(roomId = "#gameId")
     public boolean advanceAutoAdvanceStep(String gameId) {
         return roomCoordinator.coordinate(gameId, () -> handProgression.advanceAutoAdvanceStep(gameId));
     }
 
-    /**
-     * Handles the end of a game when all players except one have been eliminated.
-     * Broadcasts the game end event to all participants and cleans up game
-     * resources.
-     *
-     * @param gameId    the unique identifier of the game
-     * @param isForfeit true if the game ended due to a player leaving/disconnecting
-     */
+    /** Freezes and publishes normal or forfeit completion, then schedules removal. */
     @DurableMutation(roomId = "#gameId")
     public void handleGameEnd(String gameId, boolean isForfeit) {
         roomCoordinator.coordinate(gameId, () -> completion.handleGameEnd(gameId, isForfeit));
@@ -370,152 +290,80 @@ public class GameLifecycleService {
         runtimeTimers.cancelInactivity(gameId);
     }
 
-    /**
-     * Executes inactivity cleanup under the room lease when expected deadline matches
-     * current room state and has elapsed according to the authoritative clock.
-     *
-     * @param gameId                 game identifier
-     * @param expectedDeadlineEpochMs deadline epoch ms captured when scheduled
-     */
+    /** Applies inactivity cleanup only when the captured deadline still matches and has elapsed. */
     @DurableMutation(roomId = "#gameId")
     public void executeInactivityCleanup(String gameId, Long expectedDeadlineEpochMs) {
         if (gameId == null || expectedDeadlineEpochMs == null) return;
         roomCoordinator.coordinate(gameId, () -> completion.executeInactivityCleanup(gameId, expectedDeadlineEpochMs));
     }
 
-    /**
-     * Stops an inactive game after 15 minutes without deliberate player action,
-     * installs an abandonment outcome with no winner and unawarded unfinished pot,
-     * and durably schedules cleanup 20 seconds later.
-     *
-     * @param gameId game identifier
-     */
+    /** Freezes an abandonment result and schedules removal, leaving the unfinished pot unawarded. */
     @DurableMutation(roomId = "#gameId")
     public void abandonGameDueToInactivity(String gameId) {
         if (gameId == null) return;
         roomCoordinator.coordinate(gameId, () -> completion.abandonGameDueToInactivity(gameId));
     }
 
-    /**
-     * Resets the active-game inactivity deadline to 15 minutes in the future under lock.
-     *
-     * @param gameId game identifier
-     * @param game   game instance
-     */
-    void resetGameInactivityUnderLock(String gameId, Game game) {
-        scheduling.resetGameInactivityUnderLock(gameId, game);
-    }
-
-    /**
-     * Resets the active-game inactivity deadline to 15 minutes in the future.
-     *
-     * @param gameId game identifier
-     */
+    /** Extends the inactivity deadline for accepted game activity. */
     @DurableMutation(roomId = "#gameId")
     public void resetGameInactivity(String gameId) {
         if (gameId == null) return;
         roomCoordinator.coordinate(gameId, () -> scheduling.resetGameInactivity(gameId));
     }
 
-    /**
-     * Executes terminal cleanup under room lease, verifying that game is terminal or cleanup was scheduled.
-     *
-     * @param gameId game identifier
-     */
+    /** Removes an expired room or game with accepted terminal cleanup intent. */
     @DurableMutation(roomId = "#gameId")
     public void executeTerminalCleanup(String gameId) {
         if (gameId == null) return;
         roomCoordinator.coordinate(gameId, () -> completion.executeTerminalCleanup(gameId));
     }
 
-    /**
-     * Cleans up the finished game so it no longer uses resources
-     *
-     * @param gameId id of the game that is now done
-     */
+    /** Removes the game, its room, and all runtime registrations. */
     @DurableMutation(roomId = "#gameId")
     public void performGameCleanup(String gameId) {
         if (gameId == null) return;
         roomCoordinator.coordinate(gameId, () -> completion.performGameCleanup(gameId));
     }
 
-    /**
-     * Retrieves a game for internal use under its room lease.
-     * Callers must not retain the live result beyond the coordinated operation.
-     *
-     * @param gameId the unique identifier of the game to retrieve
-     * @return the Game object if found, null otherwise
-     */
+    /** Returns the current live game. Callers must hold the room lease while using the result. */
     public Game getGame(String gameId) {
         return activeGames.get(gameId);
     }
 
-    /**
-     * Registers an already rehydrated game without executing normal creation logic,
-     * which would start a replacement hand. Restores in-memory state under the room
-     * lock without dropping existing locks or leaking inconsistent player mapping.
-     *
-     * @param game exact game restored from a committed state image
-     */
+    /** Installs an already rehydrated game under its room lease without dealing a new hand. */
     public void restoreGame(Game game) {
         if (game == null) return;
         roomCoordinator.coordinate(game.getGameId(), () -> recovery.restoreGame(game));
     }
 
-    /**
-     * Evicts active game state and cancels pending timers for the specified game
-     * without destroying the associated room container.
-     *
-     * @param gameId identifier of the game to evict
-     */
+    /** Evicts the game and its timers while retaining the room. */
     public void evictGame(String gameId) {
         if (gameId == null) return;
         roomCoordinator.coordinate(gameId, () -> recovery.evictGame(gameId));
     }
 
-    /**
-     * Rebuilds runtime futures from absolute persisted deadlines. Overdue work is
-     * scheduled immediately and remains safe because callbacks verify the expected
-     * deadline before mutating state.
-     *
-     * @param gameId recovered game whose runtime work must resume
-     */
+    /** Normalizes recovered readiness and rebuilds pending timers after the recovery mutation. */
     @DurableMutation(roomId = "#gameId")
     public void resumeRecoveredTimers(String gameId) {
         roomCoordinator.coordinate(gameId, () -> recovery.resumeRecoveredTimers(gameId, configuredReadyCountdownMs));
     }
 
     /**
-     * Restores only runtime registrations after live rollback, preserving the accepted
-     * deadlines and generations exactly. Unlike startup recovery, it does not normalize
-     * ready state, publish snapshots, or queue work in the failed transaction context.
-     *
-     * @param gameId restored game whose accepted task intents must run
+     * Restores accepted runtime registrations from exact deadlines and generations.
+     * Rollback does not normalize readiness, broadcast, or queue work in the failed mutation.
      */
     public void resumeRollbackTimers(String gameId) {
         if (gameId == null) return;
         roomCoordinator.coordinate(gameId, () -> recovery.resumeRollbackTimers(gameId));
     }
 
-    /**
-     * Persists the next-hand deadline in the same room transaction that requested
-     * it, preventing a crash from leaving a completed countdown with no next hand.
-     *
-     * @param gameId  game awaiting a new hand
-     * @param delayMs delay before execution
-     */
+    /** Persists the next-hand deadline in the mutation that requested it. */
     @DurableMutation(roomId = "#gameId")
     void scheduleNewHand(String gameId, long delayMs) {
         scheduling.scheduleNewHand(gameId, delayMs);
     }
 
-    /**
-     * Persists the post-showdown display delay. An immediate opening stays in the
-     * current durable transaction so no scheduler handoff is needed.
-     *
-     * @param gameId  game entering its ready gate
-     * @param delayMs display delay before the gate opens
-     */
+    /** Records the post-showdown delay, or opens readiness immediately in the current mutation. */
     @DurableMutation(roomId = "#gameId")
     void scheduleReadyCountdownOpen(String gameId, long delayMs) {
         if (scheduling.scheduleReadyCountdownOpen(gameId, delayMs) == GameTaskScheduler.ReadyOpening.OPEN_IMMEDIATELY) {
@@ -523,49 +371,25 @@ public class GameLifecycleService {
         }
     }
 
-    /**
-     * Persists terminal cleanup intent before returning the game-end mutation, so a
-     * restart cannot leave a permanently finished room in memory.
-     *
-     * @param gameId  finished game
-     * @param delayMs client display delay before deletion
-     */
+    /** Persists cleanup before returning from the game-end mutation. */
     @DurableMutation(roomId = "#gameId")
     void scheduleGameCleanup(String gameId, long delayMs) {
         scheduling.scheduleGameCleanup(gameId, delayMs);
     }
 
-    /**
-     * Persists the final game-end deadline before notifying clients of victory,
-     * allowing a review window of the final board before the game-over overlay.
-     *
-     * @param gameId  game whose tournament has concluded
-     * @param delayMs client review delay before game-over broadcast
-     */
+    /** Records when the final board display ends and the terminal result is due. */
     @DurableMutation(roomId = "#gameId")
     void scheduleGameEnd(String gameId, long delayMs) {
         scheduling.scheduleGameEnd(gameId, delayMs);
     }
 
-    /**
-     * Persists the first all-in progression deadline before clients observe the
-     * auto-advance state.
-     *
-     * @param gameId game requiring automatic board progression
-     */
+    /** Persists the first all-in progression deadline before publishing auto-advance. */
     @DurableMutation(roomId = "#gameId")
     void scheduleAutoAdvance(String gameId) {
         roomCoordinator.coordinate(gameId, () -> scheduling.scheduleAutoAdvance(gameId));
     }
 
-    /**
-     * Executes turn deadline only when expected deadline, hand number, and generation match current state.
-     *
-     * @param gameId                  game identifier
-     * @param expectedDeadlineEpochMs expected deadline epoch ms
-     * @param expectedHandNumber      expected hand number
-     * @param expectedGeneration      expected task generation
-     */
+    /** Handles a turn deadline using the captured task identity. */
     @DurableMutation(roomId = "#gameId")
     public void executeTurnDeadline(String gameId, Long expectedDeadlineEpochMs, Integer expectedHandNumber, Integer expectedGeneration) {
         if (expectedDeadlineEpochMs == null || expectedHandNumber == null || expectedGeneration == null) {
@@ -582,13 +406,7 @@ public class GameLifecycleService {
         executeCapturedTask(gameId, ScheduledGameTask.TURN_TIMEOUT, expectedDeadlineEpochMs, expectedHandNumber, expectedGeneration);
     }
 
-    /**
-     * Executes auto-advance hand step only when expected deadline and hand number match current state.
-     *
-     * @param gameId                  game identifier
-     * @param expectedDeadlineEpochMs expected deadline epoch ms
-     * @param expectedHandNumber      expected hand number
-     */
+    /** Handles auto-advance using deadline and hand identity for compatibility callers. */
     @DurableMutation(roomId = "#gameId")
     public void executeAutoAdvanceHand(String gameId, Long expectedDeadlineEpochMs, Integer expectedHandNumber) {
         if (expectedDeadlineEpochMs == null || expectedHandNumber == null) {
@@ -611,14 +429,7 @@ public class GameLifecycleService {
         executeCapturedTask(gameId, ScheduledGameTask.AUTO_ADVANCE, expectedDeadlineEpochMs, expectedHandNumber, expectedGeneration);
     }
 
-    /**
-     * Executes delayed work when handNumber and generation are known from current game aggregate.
-     * Package-private convenience overload for testing and internal callers.
-     *
-     * @param gameId          game owning the work
-     * @param task            delayed work type
-     * @param expectedDeadline deadline captured by this timer callback
-     */
+    /** Uses the current task identity for compatibility callers, with a deadline-only ready timeout. */
     @DurableMutation(roomId = "#gameId")
     void executeScheduledTask(String gameId, ScheduledGameTask task, long expectedDeadline) {
         if (gameId == null || task == null) return;
@@ -635,16 +446,7 @@ public class GameLifecycleService {
         });
     }
 
-    /**
-     * Executes delayed work only when its deadline, handNumber, and generation still match persisted intent.
-     * The deadline and generation act as tokens making cancelled or duplicated timer callbacks harmless.
-     *
-     * @param gameId             game owning the work
-     * @param task               delayed work type
-     * @param expectedDeadline   deadline captured by this timer callback
-     * @param expectedHandNumber hand number when scheduled
-     * @param expectedGeneration generation token when scheduled
-     */
+    /** Dispatches delayed work after validating its captured deadline, hand, and generation. */
     @DurableMutation(roomId = "#gameId")
     public void executeScheduledTask(String gameId, ScheduledGameTask task, long expectedDeadline, long expectedHandNumber, long expectedGeneration) {
         if (gameId == null || task == null) return;
@@ -657,7 +459,7 @@ public class GameLifecycleService {
             Game game = getGame(gameId);
             if (scheduling.claim(gameId, game, task, deadline, hand, generation) != GameTaskScheduler.Claim.EXECUTE) return;
             switch (task) {
-                case TURN_TIMEOUT -> applyTurnTimeout(gameId, game);
+                case TURN_TIMEOUT -> departureHandler.handleTurnTimeoutUnderLock(gameId, game);
                 case AUTO_ADVANCE -> readiness.applyHandContinuation(gameId, handProgression.applyAutoAdvanceTimeout(gameId, game));
                 case READY_TIMEOUT -> readiness.applyProgression(gameId, readiness.expire(gameId, game, deadline));
                 case NEW_HAND -> readiness.applyHandContinuation(gameId, handProgression.startNewHand(gameId));
@@ -666,21 +468,6 @@ public class GameLifecycleService {
                 case CLEANUP -> DurableTransactionContext.afterCommit(() -> mutationProxy().performGameCleanup(gameId));
             }
         });
-    }
-
-    private void applyTurnTimeout(String gameId, Game game) {
-        Room room = roomService != null ? roomService.getRoom(gameId) : null;
-        if (GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
-            logger.info("Inactivity deadline expired concurrently with turn timeout for game {}; abandonment takes precedence", gameId);
-            completion.abandonGameDueToInactivity(gameId);
-            return;
-        }
-        Player actor = game.getCurrentPlayer();
-        if (actor != null) {
-            String actorToDepart = actor.getName();
-            departParticipants(gameId, List.of(actorToDepart));
-            logger.info("Player {} timed out after 60 seconds in game {}; removing from seat", actorToDepart, gameId);
-        }
     }
 
     public void cancelRuntimeTasks(String gameId, boolean keepCleanup) {
@@ -694,12 +481,7 @@ public class GameLifecycleService {
         });
     }
 
-    /**
-     * Checks if the active game has reached or passed its inactivity deadline.
-     *
-     * @param gameId game identifier
-     * @return true if an active game inactivity deadline is configured and reached
-     */
+    /** Reports whether the configured inactivity deadline has been reached. */
     public boolean isGameInactivityExpired(String gameId) {
         Long deadline = getInactivityDeadline(gameId);
         return GameInactivityPolicy.isExpired(deadline, clock.millis());
@@ -709,22 +491,12 @@ public class GameLifecycleService {
         return runtimeTimers.countForGame(gameId);
     }
 
-    /**
-     * Checks if a game has reached its scheduled cleanup deadline.
-     *
-     * @param game game to check
-     * @return true if cleanup deadline is set and current time is at or past it
-     */
+    /** Reports whether a supplied game has reached its cleanup deadline. */
     public boolean isGameExpired(Game game) {
         return completion.isGameExpired(game);
     }
 
-    /**
-     * Checks if a game with the specified ID exists in the active games and has not expired.
-     *
-     * @param gameId the unique identifier of the game to check
-     * @return true if the game exists in active games and is not expired, false otherwise
-     */
+    /** Checks whether the current game exists and its cleanup deadline has not elapsed. */
     public boolean gameExists(String gameId) {
         return roomCoordinator.coordinate(gameId, () -> {
             Game game = activeGames.get(gameId);
@@ -785,76 +557,34 @@ public class GameLifecycleService {
         });
     }
 
-    /**
-     * Marks an active player as disconnected and broadcasts updated game state.
-     * Disconnected players stay in the game seat while reconnect grace is active.
-     *
-     * @param gameId                    the game identifier
-     * @param playerName                the disconnected player name
-     * @param disconnectDeadlineEpochMs disconnect grace expiry timestamp (UTC epoch
-     *                                  ms)
-     */
+    /** Marks a player disconnected and records their exact reconnect deadline. */
     @DurableMutation(roomId = "#gameId")
     public void markPlayerDisconnected(String gameId, String playerName, long disconnectDeadlineEpochMs) {
-        roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null) {
-                logger.debug("Cannot mark player disconnected: game not found for gameId={}", gameId);
-                return null;
-            }
-
-            departureHandler.markPlayerDisconnectedUnderLock(gameId, game, playerName, disconnectDeadlineEpochMs);
-            return null;
-        });
+        roomCoordinator.coordinate(gameId,
+                () -> departureHandler.markPlayerDisconnected(gameId, playerName, disconnectDeadlineEpochMs));
     }
 
-    /**
-     * Clears disconnect flag for a player that reconnects within grace period.
-     *
-     * @param gameId     the game identifier
-     * @param playerName the reconnecting player name
-     */
+    /** Reconciles room and game connectivity after a player reconnects. */
     @DurableMutation(roomId = "#gameId")
     public void markPlayerReconnected(String gameId, String playerName) {
-        roomCoordinator.coordinate(gameId, () -> {
-            Room room = roomService.getRoom(gameId);
-            Game game = getGame(gameId);
-            departureHandler.reconcilePlayerReconnectedUnderLock(gameId, playerName, room, game);
-            return null;
-        });
+        roomCoordinator.coordinate(gameId, () -> departureHandler.markPlayerReconnected(gameId, playerName));
     }
 
-    /**
-     * Opens a shared ready countdown after round end and schedules timeout
-     * auto-advance.
-     *
-     * @param gameId      game identifier
-     * @param countdownMs countdown duration in milliseconds
-     */
+    /** Opens the ready gate and schedules a timeout for the given duration in milliseconds. */
     @DurableMutation(roomId = "#gameId")
     public void startReadyCountdown(String gameId, long countdownMs) {
         roomCoordinator.coordinate(gameId, () -> readiness.applyProgression(gameId,
                 readiness.startReadyCountdown(gameId, countdownMs)));
     }
 
-    /**
-     * Marks a player as ready during an active ready countdown gate.
-     *
-     * @param gameId     game identifier
-     * @param playerName player name from principal
-     */
+    /** Marks an eligible player ready for the next deal. */
     @DurableMutation(roomId = "#gameId")
     public void markPlayerReadyForNextHand(String gameId, String playerName) {
         roomCoordinator.coordinate(gameId, () -> readiness.applyProgression(gameId,
                 readiness.markPlayerReadyForNextHand(gameId, playerName)));
     }
 
-    /**
-     * Unmarks a player as ready during an active ready countdown gate.
-     *
-     * @param gameId     game identifier
-     * @param playerName player name from principal
-     */
+    /** Removes a player from the ready set while the gate is open. */
     @DurableMutation(roomId = "#gameId")
     public void unmarkPlayerReadyForNextHand(String gameId, String playerName) {
         roomCoordinator.coordinate(gameId, () -> readiness.applyProgression(gameId,
@@ -863,10 +593,7 @@ public class GameLifecycleService {
 
     /**
      * Expires the ready gate by deadline for compatibility callers.
-     * Scheduled callbacks use the hand number and generation as well.
-     *
-     * @param gameId                 game whose ready gate may expire
-     * @param expectedDeadlineEpochMs deadline captured when the timer was submitted
+     * Scheduled callbacks also validate the captured hand and generation.
      */
     @DurableMutation(roomId = "#gameId")
     public void expireReadyCountdown(String gameId, Long expectedDeadlineEpochMs) {
@@ -878,22 +605,13 @@ public class GameLifecycleService {
     /**
      * Expires the ready gate by deadline for compatibility callers.
      * The deadline alone cannot distinguish two gates with the same expiry.
-     *
-     * @param gameId                 game whose ready gate may expire
-     * @param expectedDeadlineEpochMs deadline captured when the timer was submitted
      */
     @DurableMutation(roomId = "#gameId")
     public void handleReadyCountdownTimeout(String gameId, long expectedDeadlineEpochMs) {
         expireReadyCountdown(gameId, expectedDeadlineEpochMs);
     }
 
-    /**
-     * Cancels the process-local timeout before closing durable ready state and
-     * starting the hand, preventing a racing timeout from advancing twice.
-     *
-     * @param gameId game leaving the ready gate
-     * @param game   authoritative game state
-     */
+    /** Cancels the obsolete ready timer and closes the gate before starting the next hand. */
     void completeReadyCountdownAndStartNextHand(String gameId, Game game) {
         roomCoordinator.assertHeldByCurrentThread(gameId);
         readiness.complete(gameId, game);
@@ -905,114 +623,36 @@ public class GameLifecycleService {
     }
 
     /**
-     * Claims an immediate game win for a connected player when all other
-     * non-out players are disconnected. Repeating claim-win on a completed
-     * game returns the retained result without settlement, broadcast, or timer extension.
-     *
-     * @param gameId     game identifier
-     * @param playerName claimant name
-     * @return frozen terminal result
+     * Claims a disconnect win when the other contenders are disconnected.
+     * Repeat claims return the retained result without settlement, broadcast, or a new timer.
      */
     @DurableMutation(roomId = "#gameId")
     public GameEndResponse claimWin(String gameId, String playerName) {
-        return roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null || completion.isGameExpired(game)) {
-                throw new ResourceNotFoundException("Game not found");
-            }
-
-            Room room = roomService.getRoom(gameId);
-            if (room == null) throw new ResourceNotFoundException("Room not found");
-
-            completion.rejectExpiredActivity(gameId, room);
-            if (game.isGameOver()) {
-                GameEndResponse retained = game.getRetainedTerminalResult();
-                if (retained != null && retained.abandoned()) {
-                    throw new BadRequestException("Game was abandoned due to inactivity.", "GAME_ABANDONED", "Game was abandoned due to inactivity");
-                }
-            }
-            return departureHandler.claimWinUnderLock(gameId, game, room, playerName);
-        });
+        return roomCoordinator.coordinate(gameId, () -> departureHandler.claimWin(gameId, playerName));
     }
 
-    /**
-     * Retrieves the frozen terminal result for post-game review.
-     *
-     * @param gameId     game identifier
-     * @param playerName requesting player name
-     * @return frozen terminal result
-     */
+    /** Retrieves the frozen terminal result for an authorized participant. */
     public GameEndResponse getGameReview(String gameId, String playerName) {
         return roomCoordinator.coordinate(gameId, () -> completion.getGameReview(gameId, playerName));
     }
 
-    /**
-     * Removes a grace-expired player from room and game under room lease
-     * when the expected deadline matches current domain state.
-     *
-     * @param gameId                 room/game identity
-     * @param playerName             player whose reconnect grace expired
-     * @param expectedDeadlineEpochMs exact absolute deadline epoch ms expected
-     */
+    /** Removes a player only while the accepted grace deadline still matches. */
     @DurableMutation(roomId = "#gameId")
     public void executeDisconnectGraceExpiry(String gameId, String playerName, Long expectedDeadlineEpochMs) {
-        if (gameId == null || playerName == null || expectedDeadlineEpochMs == null) {
-            return;
-        }
-        roomCoordinator.coordinate(gameId, () -> {
-            Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            if (room == null) {
-                return;
-            }
-
-            if (!room.hasPlayer(playerName)) {
-                return;
-            }
-
-            Game game = getGame(gameId);
-            departureHandler.removeDisconnectedPlayerUnderLock(gameId, room, game, playerName, expectedDeadlineEpochMs);
-        });
+        if (gameId == null || playerName == null || expectedDeadlineEpochMs == null) return;
+        roomCoordinator.coordinate(gameId,
+                () -> departureHandler.executeDisconnectGraceExpiry(gameId, playerName, expectedDeadlineEpochMs));
     }
 
-    /**
-     * Removes a grace-expired player from room and game under one room transaction
-     * when the expected membership identity and expected deadline match current domain state.
-     *
-     * @param gameId                room/game identity
-     * @param playerName            player whose reconnect grace expired
-     * @param expectedMembershipId  opaque process-local membership ID expected to expire
-     * @param expectedDeadlineEpochMs exact absolute deadline epoch ms expected
-     */
+    /** Removes a player only when both membership identity and grace deadline match. */
     @DurableMutation(roomId = "#gameId")
     public void removeDisconnectedPlayer(String gameId, String playerName, String expectedMembershipId, long expectedDeadlineEpochMs) {
-        if (gameId == null || playerName == null || expectedMembershipId == null) {
-            return;
-        }
-        roomCoordinator.coordinate(gameId, () -> {
-            Room room = roomService.getRoom(gameId);
-            if (room == null) {
-                return;
-            }
-
-            if (!room.hasPlayer(playerName)) {
-                return;
-            }
-            String currentMembershipId = room.getMembershipId(playerName);
-            if (!Objects.equals(expectedMembershipId, currentMembershipId)) {
-                return;
-            }
-
-            Game game = getGame(gameId);
-            departureHandler.removeDisconnectedPlayerUnderLock(gameId, room, game, playerName, expectedDeadlineEpochMs);
-        });
+        if (gameId == null || playerName == null || expectedMembershipId == null) return;
+        roomCoordinator.coordinate(gameId, () -> departureHandler.removeDisconnectedPlayer(
+                gameId, playerName, expectedMembershipId, expectedDeadlineEpochMs));
     }
 
-    /**
-     * Returns the Spring proxy for timer callbacks while preserving direct unit-test
-     * construction, where no proxy is available.
-     *
-     * @return proxied service in production, otherwise this instance
-     */
+    /** Returns the durable Spring proxy, or the service itself in directly constructed tests. */
     private GameLifecycleService mutationProxy() {
         return self == null ? this : self;
     }

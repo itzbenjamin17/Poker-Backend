@@ -46,12 +46,12 @@ import org.mockito.Mockito;
 import org.mockito.stubbing.Answer;
 
 /**
- * Unit tests for GameParticipantDepartureHandler and participant departure lifecycle flows.
+ * Unit tests for PlayerDepartureHandler and participant departure lifecycle flows.
  */
 @Tag("unit")
 @DisplayName("Game participant departure handler")
 @ExtendWith(MockitoExtension.class)
-class GameParticipantDepartureHandlerTest {
+class PlayerDepartureHandlerTest {
 
     @Mock
     private RoomService roomService;

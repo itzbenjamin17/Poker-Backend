@@ -42,7 +42,7 @@ class RoomOwnershipEnforcementIntegrationTest {
     private GameLifecycleService lifecycleService;
     private GameStateService gameStateService;
     private PlayerActionService playerActionService;
-    private GameParticipantDepartureHandler departureHandler;
+    private PlayerDepartureHandler departureHandler;
     private HandEvaluatorService handEvaluator;
     private ExecutorService executor;
 

@@ -1,9 +1,11 @@
 package com.pokergame.service;
 
+import java.time.Clock;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -12,7 +14,8 @@ import org.slf4j.LoggerFactory;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.ReadyGateState;
-import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
@@ -20,28 +23,149 @@ import com.pokergame.model.Room;
 import com.pokergame.model.TournamentEligibility;
 
 /**
- * Handles participant departure, disconnect transitions, reconnect reconciliation,
- * and disconnect win claims across room and game aggregates under lock.
+ * Owns departures, reconnects, grace expiry, turn timeout, and disconnect win claims
+ * across room and game aggregates under the caller's room lease.
  */
-class GameParticipantDepartureHandler {
-    private static final Logger logger = LoggerFactory.getLogger(GameParticipantDepartureHandler.class);
+final class PlayerDepartureHandler {
+    private static final Logger logger = LoggerFactory.getLogger(PlayerDepartureHandler.class);
 
-    private final GameLifecycleService lifecycleService;
     private final RoomService roomService;
     private final GameStateService gameStateService;
     private final GameCompletionHandler completion;
+    private final HandProgressionService handProgression;
+    private final GameReadinessCoordinator readiness;
+    private final GameTimerRegistry runtimeTimers;
     private final ActiveGameRegistry activeGames;
+    private final RoomCoordinator roomCoordinator;
+    private final Supplier<Clock> clock;
 
-    GameParticipantDepartureHandler(GameLifecycleService lifecycleService,
-            RoomService roomService,
-            GameStateService gameStateService,
-            GameCompletionHandler completion,
-            ActiveGameRegistry activeGames) {
-        this.lifecycleService = lifecycleService;
+    PlayerDepartureHandler(RoomService roomService, GameStateService gameStateService, GameCompletionHandler completion,
+            HandProgressionService handProgression, GameReadinessCoordinator readiness, GameTimerRegistry runtimeTimers,
+            ActiveGameRegistry activeGames, RoomCoordinator roomCoordinator, Supplier<Clock> clock) {
         this.roomService = roomService;
         this.gameStateService = gameStateService;
         this.completion = completion;
+        this.handProgression = handProgression;
+        this.readiness = readiness;
+        this.runtimeTimers = runtimeTimers;
         this.activeGames = activeGames;
+        this.roomCoordinator = roomCoordinator;
+        this.clock = clock;
+    }
+
+    /** Resolves the current aggregates and applies a batch departure, giving inactivity precedence. */
+    void departParticipants(String roomId, Collection<String> playerNames) {
+        assertHeld(roomId);
+        Room room = roomService.getRoom(roomId);
+        if (room == null) {
+            Game game = activeGames.get(roomId);
+            if (game == null || game.isGameOver()) return;
+            departParticipantsUnderLock(roomId, playerNames, null, game);
+            return;
+        }
+
+        if (roomService.getRoom(roomId) != room) return;
+        Game game = activeGames.get(roomId);
+        if (game != null && GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.get().millis())) {
+            completion.abandonGameDueToInactivity(roomId);
+            return;
+        }
+        departParticipantsUnderLock(roomId, playerNames, room, game);
+    }
+
+    /** Records the reconnect deadline while keeping the player's seat during the grace period. */
+    void markPlayerDisconnected(String gameId, String playerName, long disconnectDeadlineEpochMs) {
+        assertHeld(gameId);
+        Game game = activeGames.get(gameId);
+        if (game == null) {
+            logger.debug("Cannot mark player disconnected: game not found for gameId={}", gameId);
+            return;
+        }
+
+        markPlayerDisconnectedUnderLock(gameId, game, playerName, disconnectDeadlineEpochMs);
+    }
+
+    /** Reconciles game and room connectivity, including any pending forfeit or readiness. */
+    void markPlayerReconnected(String gameId, String playerName) {
+        assertHeld(gameId);
+        Room room = roomService.getRoom(gameId);
+        Game game = activeGames.get(gameId);
+        reconcilePlayerReconnectedUnderLock(gameId, playerName, room, game);
+    }
+
+    /** Resolves an eligible disconnect win or returns the authorized retained result. */
+    GameEndResponse claimWin(String gameId, String playerName) {
+        assertHeld(gameId);
+        Game game = activeGames.get(gameId);
+        if (game == null || completion.isGameExpired(game)) {
+            throw new ResourceNotFoundException("Game not found");
+        }
+
+        Room room = roomService.getRoom(gameId);
+        if (room == null) throw new ResourceNotFoundException("Room not found");
+
+        completion.rejectExpiredActivity(gameId, room);
+        if (game.isGameOver()) {
+            GameEndResponse retained = game.getRetainedTerminalResult();
+            if (retained != null && retained.abandoned()) {
+                throw new BadRequestException("Game was abandoned due to inactivity.", "GAME_ABANDONED", "Game was abandoned due to inactivity");
+            }
+        }
+        return claimWinUnderLock(gameId, game, room, playerName);
+    }
+
+    /** Applies grace expiry only for a current room member and matching deadline. */
+    void executeDisconnectGraceExpiry(String gameId, String playerName, long expectedDeadlineEpochMs) {
+        assertHeld(gameId);
+        Room room = roomService != null ? roomService.getRoom(gameId) : null;
+        if (room == null) {
+            return;
+        }
+
+        if (!room.hasPlayer(playerName)) {
+            return;
+        }
+
+        Game game = activeGames.get(gameId);
+        removeDisconnectedPlayerUnderLock(gameId, room, game, playerName, expectedDeadlineEpochMs);
+    }
+
+    /** Checks membership identity as well as the exact grace deadline before departing the player. */
+    void removeDisconnectedPlayer(String gameId, String playerName, String expectedMembershipId,
+            long expectedDeadlineEpochMs) {
+        assertHeld(gameId);
+        Room room = roomService.getRoom(gameId);
+        if (room == null) {
+            return;
+        }
+
+        if (!room.hasPlayer(playerName)) {
+            return;
+        }
+        String currentMembershipId = room.getMembershipId(playerName);
+        if (!Objects.equals(expectedMembershipId, currentMembershipId)) {
+            return;
+        }
+
+        Game game = activeGames.get(gameId);
+        removeDisconnectedPlayerUnderLock(gameId, room, game, playerName, expectedDeadlineEpochMs);
+    }
+
+    /** Handles the current actor after the scheduler has claimed the turn timeout. */
+    void handleTurnTimeoutUnderLock(String gameId, Game game) {
+        assertHeld(gameId);
+        Room room = roomService != null ? roomService.getRoom(gameId) : null;
+        if (GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.get().millis())) {
+            logger.info("Inactivity deadline expired concurrently with turn timeout for game {}; abandonment takes precedence", gameId);
+            completion.abandonGameDueToInactivity(gameId);
+            return;
+        }
+        Player actor = game.getCurrentPlayer();
+        if (actor != null) {
+            String actorToDepart = actor.getName();
+            departParticipants(gameId, List.of(actorToDepart));
+            logger.info("Player {} timed out after 60 seconds in game {}; removing from seat", actorToDepart, gameId);
+        }
     }
 
     /**
@@ -60,6 +184,7 @@ class GameParticipantDepartureHandler {
      */
     String determineSurvivingHost(Room room, Game game, Collection<String> departingMembers) {
         if (room == null) return null;
+        assertHeld(room.getRoomId());
         String currentHost = roomService.getCurrentHost(room.getRoomId());
         List<String> remaining = room.getPlayers().stream()
                 .filter(name -> departingMembers == null || !departingMembers.contains(name))
@@ -97,7 +222,7 @@ class GameParticipantDepartureHandler {
     }
 
     /**
-     * Removes departing participants from active game and room state while holding appropriate locks.
+     * Removes departing participants from active game and room state under the room lease.
      *
      * @param roomId      identifier of the room/game
      * @param playerNames collection of player names departing
@@ -221,7 +346,7 @@ class GameParticipantDepartureHandler {
                     game.setForfeitPending(true);
                     game.waitForReadyPlayers();
                     game.invalidateProgressionTasks();
-                    lifecycleService.cancelRuntimeTasks(roomId, false);
+                    runtimeTimers.cancelAllForGame(roomId, false);
                     List<String> roomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
                     if (!roomMembers.isEmpty() && roomService.getRoom(roomId) != null) {
                         String survivingHost = determineSurvivingHost(room, game, roomMembers);
@@ -288,16 +413,17 @@ class GameParticipantDepartureHandler {
         if (game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive()) {
             gameStateService.broadcastGameState(roomId, game);
         } else {
-            lifecycleService.applyTurnOutcome(roomId, game, game.reconcileAfterPlayerRemoval());
+            readiness.applyHandContinuation(roomId,
+                    handProgression.applyTurnOutcome(roomId, game, game.reconcileAfterPlayerRemoval()));
         }
 
         if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
-            lifecycleService.completeReadyCountdownAndStartNextHand(roomId, game);
+            completeReadyCountdownAndStartNextHand(roomId, game);
         }
     }
 
     /**
-     * Marks a player as disconnected under the game lock and broadcasts state.
+     * Marks a player as disconnected under the room lease and broadcasts state.
      *
      * @param gameId                    identifier of the game
      * @param game                      authoritative game state
@@ -329,12 +455,12 @@ class GameParticipantDepartureHandler {
         }
 
         if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
-            lifecycleService.completeReadyCountdownAndStartNextHand(gameId, game);
+            completeReadyCountdownAndStartNextHand(gameId, game);
         }
     }
 
     /**
-     * Reconciles a reconnecting player's state under aggregate locks.
+     * Reconciles a reconnecting player's state under the room lease.
      *
      * @param gameId     identifier of the game
      * @param playerName name of the reconnecting player
@@ -371,7 +497,7 @@ class GameParticipantDepartureHandler {
                 }
                 if (game.getReadyGateState() == ReadyGateState.WAITING_FOR_PLAYERS
                         && game.getReadyEligibleCount() >= 2) {
-                    lifecycleService.startReadyCountdown(gameId, lifecycleService.getConfiguredReadyCountdownMs());
+                    readiness.openConfiguredCountdown(gameId);
                 }
             }
         }
@@ -383,7 +509,7 @@ class GameParticipantDepartureHandler {
     }
 
     /**
-     * Processes an immediate win claim under room and game locks.
+     * Processes an immediate win claim under the room lease.
      *
      * @param gameId     identifier of the game
      * @param game       authoritative game state
@@ -405,7 +531,7 @@ class GameParticipantDepartureHandler {
     }
 
     /**
-     * Removes a disconnected player whose grace period expired under lock.
+     * Removes a disconnected player whose grace period expired under the room lease.
      *
      * @param gameId                  identifier of the game
      * @param room                    current room aggregate
@@ -421,10 +547,14 @@ class GameParticipantDepartureHandler {
         }
     }
 
+    /** Closes the ready gate and applies the next hand's immediate continuation in this lease. */
+    private void completeReadyCountdownAndStartNextHand(String gameId, Game game) {
+        readiness.complete(gameId, game);
+        readiness.applyHandContinuation(gameId, handProgression.startNewHand(gameId));
+    }
+
     private void assertHeld(String roomId) {
-        if (lifecycleService != null && lifecycleService.getRoomCoordinator() != null) {
-            lifecycleService.getRoomCoordinator().assertHeldByCurrentThread(roomId);
-        }
+        roomCoordinator.assertHeldByCurrentThread(roomId);
     }
 
     /**
@@ -437,6 +567,7 @@ class GameParticipantDepartureHandler {
      * @return true if grace period has expired
      */
     boolean hasDisconnectGraceExpired(Room room, Game game, String playerName, long expectedDeadlineEpochMs) {
+        assertHeld(room.getRoomId());
         Player player = game == null ? null : game.findPlayerByName(playerName);
         boolean disconnected = player == null ? !room.isPlayerConnected(playerName) : player.getIsDisconnected();
         if (!disconnected) return false;
