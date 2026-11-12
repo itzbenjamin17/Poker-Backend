@@ -29,18 +29,18 @@ class GameParticipantDepartureHandler {
     private final GameLifecycleService lifecycleService;
     private final RoomService roomService;
     private final GameStateService gameStateService;
-    private final GameTerminalSettlement terminalSettlement;
+    private final GameCompletionHandler completion;
     private final ActiveGameRegistry activeGames;
 
     GameParticipantDepartureHandler(GameLifecycleService lifecycleService,
             RoomService roomService,
             GameStateService gameStateService,
-            GameTerminalSettlement terminalSettlement,
+            GameCompletionHandler completion,
             ActiveGameRegistry activeGames) {
         this.lifecycleService = lifecycleService;
         this.roomService = roomService;
         this.gameStateService = gameStateService;
-        this.terminalSettlement = terminalSettlement;
+        this.completion = completion;
         this.activeGames = activeGames;
     }
 
@@ -168,7 +168,7 @@ class GameParticipantDepartureHandler {
             String survivingHost = determineSurvivingHost(room, game, membersToDetach);
             roomService.leavePlayersBatch(roomId, membersToDetach, survivingHost);
             if (roomService.getRoom(roomId) != null) gameStateService.broadcastGameState(roomId, game);
-            cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
+            completion.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
             return;
         }
 
@@ -179,7 +179,7 @@ class GameParticipantDepartureHandler {
                 room.setTerminal(true);
             }
             if (!game.isGameOver() || !game.isTerminalCarryOverSettled()) {
-                lifecycleService.handleGameEnd(roomId, false);
+                completion.handleGameEnd(roomId, false);
             }
             List<String> roomMembersToLeave = departing.stream().filter(room.getPlayers()::contains).toList();
             if (!roomMembersToLeave.isEmpty()) {
@@ -228,9 +228,9 @@ class GameParticipantDepartureHandler {
                         roomService.leavePlayersBatch(roomId, roomMembers, survivingHost);
                     }
                     if (roomService.getRoom(roomId) != null) gameStateService.broadcastGameState(roomId, game);
-                    cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
+                    completion.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
                 } else {
-                    lifecycleService.handleGameEndWithForfeits(roomId, survivor, departingGamePlayers.stream().map(Player::getName).collect(Collectors.toSet()));
+                    completion.handleGameEndWithForfeits(roomId, survivor, departingGamePlayers.stream().map(Player::getName).collect(Collectors.toSet()));
                     if (room != null) {
                         room.setTerminal(true);
                     }
@@ -253,7 +253,7 @@ class GameParticipantDepartureHandler {
                 String survivingHost = determineSurvivingHost(room, game, roomMembers);
                 roomService.leavePlayersBatch(roomId, roomMembers, survivingHost);
             }
-            cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
+            completion.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
             return;
         }
 
@@ -293,24 +293,6 @@ class GameParticipantDepartureHandler {
 
         if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
             lifecycleService.completeReadyCountdownAndStartNextHand(roomId, game);
-        }
-    }
-
-    /**
-     * Cleans up an abandoned game if the room is empty and has no remaining contenders.
-     *
-     * @param gameId identifier of the game
-     * @param room   current room aggregate
-     * @param game   active game aggregate
-     */
-    void cleanupAbandonedGameIfRoomEmpty(String gameId, Room room, Game game) {
-        if (TournamentEligibility.countContenders(game) != 0 || !room.getPlayers().isEmpty()) return;
-        game.closeReadyCountdown();
-        for (ScheduledGameTask task : ScheduledGameTask.values()) game.clearScheduledTask(task);
-        lifecycleService.cancelRuntimeTasks(gameId, false);
-        activeGames.remove(gameId, game);
-        if (gameStateService != null) {
-            gameStateService.clearRetainedSettlement(gameId);
         }
     }
 
@@ -376,7 +358,7 @@ class GameParticipantDepartureHandler {
                 if (game.isForfeitPending() && TournamentEligibility.countContenders(game) == 1
                         && TournamentEligibility.isContender(game, player)) {
                     game.setForfeitPending(false);
-                    lifecycleService.handleGameEndWithForfeits(gameId, player, Set.of());
+                    completion.handleGameEndWithForfeits(gameId, player, Set.of());
                     if (room != null && room.hasPlayer(playerName)) {
                         room.setPlayerConnected(playerName, true);
                         room.setAbsenceDeadline(playerName, null);
@@ -412,14 +394,14 @@ class GameParticipantDepartureHandler {
     GameEndResponse claimWinUnderLock(String gameId, Game game, Room room, String playerName) {
         assertHeld(gameId);
         if (game.isGameOver()) {
-            return terminalSettlement.resolveTerminalResultForParticipant(gameId, game, room, playerName, true);
+            return completion.resolveTerminalResultForParticipant(gameId, game, room, playerName, true);
         }
         if (!TournamentEligibility.canPlayerClaimWin(game, playerName)) {
             throw new UnauthorisedActionException("Cannot claim win right now.");
         }
         List<String> opponents = TournamentEligibility.disconnectedContenderNamesExcept(game, playerName);
         departParticipantsUnderLock(gameId, opponents, room, game);
-        return terminalSettlement.ensureRetainedClaimResult(gameId, game, room, playerName);
+        return completion.ensureRetainedClaimResult(gameId, game, room, playerName);
     }
 
     /**

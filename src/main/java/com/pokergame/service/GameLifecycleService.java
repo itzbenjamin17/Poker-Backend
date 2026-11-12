@@ -7,7 +7,6 @@ import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
-import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
@@ -80,7 +79,7 @@ public class GameLifecycleService {
 
     private final GameTimerRegistry runtimeTimers;
     private final GameReadinessCoordinator readiness;
-    private final GameTerminalSettlement terminalSettlement;
+    private final GameCompletionHandler completion;
     private final GameParticipantDepartureHandler departureHandler;
     private final RoomCoordinator roomCoordinator;
     private final GameRecoveryService recovery;
@@ -151,13 +150,14 @@ public class GameLifecycleService {
         this.messagingTemplate = messagingTemplate;
         this.runtimeTimers = new GameTimerRegistry(taskScheduler);
         this.readiness = new GameReadinessCoordinator(gameStateService, runtimeTimers);
-        this.terminalSettlement = new GameTerminalSettlement(gameStateService, runtimeTimers);
-        this.departureHandler = new GameParticipantDepartureHandler(this, roomService, gameStateService, terminalSettlement, activeGames);
         this.roomCoordinator = roomCoordinator != null ? roomCoordinator : new RoomCoordinator();
         this.scheduling = new GameTaskScheduler(activeGames, runtimeTimers, this.roomCoordinator, roomService,
                 this::getClock,
                 (gameId, task, deadline, hand, generation) -> mutationProxy().executeScheduledTask(gameId, task, deadline, hand, generation),
                 (gameId, deadline) -> mutationProxy().executeInactivityCleanup(gameId, deadline));
+        this.completion = new GameCompletionHandler(activeGames, roomService, gameStateService, runtimeTimers,
+                scheduling, this.roomCoordinator, this::getClock, this::getGameEndDisplayDelayMs);
+        this.departureHandler = new GameParticipantDepartureHandler(this, roomService, gameStateService, completion, activeGames);
         this.recovery = new GameRecoveryService(activeGames, roomService, gameStateService, runtimeTimers,
                 this.roomCoordinator, scheduling);
     }
@@ -212,7 +212,7 @@ public class GameLifecycleService {
             if (roomService.getRoom(roomId) != room) return;
             Game game = getGame(roomId);
             if (game != null && GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
-                mutationProxy().abandonGameDueToInactivity(roomId);
+                completion.abandonGameDueToInactivity(roomId);
                 return;
             }
             departureHandler.departParticipantsUnderLock(roomId, playerNames, room, game);
@@ -310,7 +310,7 @@ public class GameLifecycleService {
             logger.info("Starting new hand for game: {}", gameId);
             if (game.isForfeitPending()) return;
             if (game.isGameOver()) {
-                if (!game.isTerminalCarryOverSettled()) handleGameEnd(gameId, false);
+                if (!game.isTerminalCarryOverSettled()) completion.handleGameEnd(gameId, false);
                 return;
             }
             if (game.getHandNumber() > 0 && (game.getCurrentPhase() != GamePhase.SHOWDOWN
@@ -330,7 +330,7 @@ public class GameLifecycleService {
             boolean gameEnded = game.resetForNewHand();
             if (gameEnded) {
                 logger.warn("Game {} became over after reset", gameId);
-                handleGameEnd(gameId, false);
+                completion.handleGameEnd(gameId, false);
                 return;
             }
             if (gameStateService != null) {
@@ -479,37 +479,13 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void handleGameEnd(String gameId, boolean isForfeit) {
-        handleGameEndInternal(gameId, isForfeit, null, Set.of());
+        roomCoordinator.coordinate(gameId, () -> completion.handleGameEnd(gameId, isForfeit));
     }
 
     /** Freezes a forfeit result while retaining the complete terminal roster. */
     @DurableMutation(roomId = "#gameId")
     public void handleGameEndWithForfeits(String gameId, Player preferredWinner, Set<String> forfeitedPlayers) {
-        handleGameEndInternal(gameId, true, preferredWinner, forfeitedPlayers == null ? Set.of() : Set.copyOf(forfeitedPlayers));
-    }
-
-    private void handleGameEndInternal(String gameId, boolean isForfeit, Player preferredWinner, Set<String> forfeitedPlayers) {
-        roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null) return;
-
-            Room room = roomService.getRoom(gameId);
-            GameTerminalSettlement.SettlementOutcome outcome;
-            outcome = terminalSettlement.settleUnderLock(gameId, game, room, isForfeit, preferredWinner, forfeitedPlayers);
-            if (!outcome.settledNow()) return;
-
-            if (room != null) {
-                room.setTerminal(true);
-            }
-            if (outcome.winner() == null) {
-                logger.warn("Cannot broadcast game end for {} - no winner could be determined", gameId);
-                return;
-            }
-            if (outcome.event() != null) {
-                gameStateService.sendGameEnd(outcome.event());
-            }
-            scheduling.scheduleGameCleanup(gameId, gameEndDisplayDelayMs);
-        });
+        roomCoordinator.coordinate(gameId, () -> completion.handleGameEndWithForfeits(gameId, preferredWinner, forfeitedPlayers));
     }
 
     /** Registers the room's captured inactivity deadline with the runtime timer owner. */
@@ -532,31 +508,8 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void executeInactivityCleanup(String gameId, Long expectedDeadlineEpochMs) {
-        if (gameId == null || expectedDeadlineEpochMs == null) {
-            return;
-        }
-        roomCoordinator.coordinate(gameId, () -> {
-            Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            if (room == null) {
-                return;
-            }
-            Game game = getGame(gameId);
-            if (game == null) {
-                return;
-            }
-            if (game.isGameOver() && game.getRetainedTerminalResult() != null) {
-                return;
-            }
-            if (!GameInactivityPolicy.matchesDeadline(room, expectedDeadlineEpochMs)) {
-                logger.debug("Skipping inactivity cleanup: deadline changed for game {}", gameId);
-                return;
-            }
-            if (!GameInactivityPolicy.hasElapsed(expectedDeadlineEpochMs, clock.millis())) {
-                logger.debug("Skipping inactivity cleanup: deadline has not elapsed for game {}", gameId);
-                return;
-            }
-            abandonGameDueToInactivity(gameId);
-        });
+        if (gameId == null || expectedDeadlineEpochMs == null) return;
+        roomCoordinator.coordinate(gameId, () -> completion.executeInactivityCleanup(gameId, expectedDeadlineEpochMs));
     }
 
     /**
@@ -569,34 +522,7 @@ public class GameLifecycleService {
     @DurableMutation(roomId = "#gameId")
     public void abandonGameDueToInactivity(String gameId) {
         if (gameId == null) return;
-        roomCoordinator.coordinate(gameId, () -> {
-            cancelGameInactivity(gameId);
-            Game game = getGame(gameId);
-            if (game == null) return;
-            Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            if (game.isGameOver() && game.getRetainedTerminalResult() != null) {
-                return;
-            }
-            game.markGameOver();
-            game.closeReadyCountdown();
-            game.invalidateProgressionTasks();
-            runtimeTimers.cancelAllForGame(gameId, true);
-            game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
-            game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-            game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
-            game.clearScheduledTask(ScheduledGameTask.READY_OPEN);
-            game.clearScheduledTask(ScheduledGameTask.NEW_HAND);
-            GameEndResponse event = terminalSettlement.captureAbandonmentUnderLock(gameId, game, room);
-
-            if (room != null) {
-                room.setTerminal(true);
-            }
-            if (event != null) {
-                gameStateService.sendGameEnd(event);
-            }
-            scheduling.scheduleGameCleanup(gameId, gameEndDisplayDelayMs);
-            logger.info("Game {} abandoned due to inactivity; scheduled {}ms cleanup", gameId, gameEndDisplayDelayMs);
-        });
+        roomCoordinator.coordinate(gameId, () -> completion.abandonGameDueToInactivity(gameId));
     }
 
     /**
@@ -627,23 +553,8 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void executeTerminalCleanup(String gameId) {
-        if (gameId == null) {
-            return;
-        }
-        roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            if (game == null && room == null) {
-                return;
-            }
-            if (game != null) {
-                if (!game.isGameOver() && game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP) == null) {
-                    logger.debug("Skipping terminal cleanup for uncompleted game {}", gameId);
-                    return;
-                }
-            }
-            performGameCleanup(gameId);
-        });
+        if (gameId == null) return;
+        roomCoordinator.coordinate(gameId, () -> completion.executeTerminalCleanup(gameId));
     }
 
     /**
@@ -654,15 +565,7 @@ public class GameLifecycleService {
     @DurableMutation(roomId = "#gameId")
     public void performGameCleanup(String gameId) {
         if (gameId == null) return;
-        roomCoordinator.coordinate(gameId, () -> {
-            cancelRuntimeTasks(gameId, false);
-            activeGames.remove(gameId);
-            if (gameStateService != null) {
-                gameStateService.clearRetainedSettlement(gameId);
-            }
-            roomService.destroyRoom(gameId);
-            logger.info("Game {} and associated room cleaned up", gameId);
-        });
+        roomCoordinator.coordinate(gameId, () -> completion.performGameCleanup(gameId));
     }
 
     /**
@@ -890,7 +793,7 @@ public class GameLifecycleService {
                 }
                 case NEW_HAND -> startNewHand(gameId);
                 case READY_OPEN -> startReadyCountdown(gameId, configuredReadyCountdownMs);
-                case GAME_END -> handleGameEnd(gameId, false);
+                case GAME_END -> completion.handleGameEnd(gameId, false);
                 case CLEANUP -> DurableTransactionContext.afterCommit(() -> mutationProxy().performGameCleanup(gameId));
             }
         });
@@ -900,7 +803,7 @@ public class GameLifecycleService {
         Room room = roomService != null ? roomService.getRoom(gameId) : null;
         if (GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
             logger.info("Inactivity deadline expired concurrently with turn timeout for game {}; abandonment takes precedence", gameId);
-            abandonGameDueToInactivity(gameId);
+            completion.abandonGameDueToInactivity(gameId);
             return;
         }
         Player actor = game.getCurrentPlayer();
@@ -957,7 +860,7 @@ public class GameLifecycleService {
      * @return true if cleanup deadline is set and current time is at or past it
      */
     public boolean isGameExpired(Game game) {
-        return game == null || game.isCleanupExpired(clock.millis());
+        return completion.isGameExpired(game);
     }
 
     /**
@@ -969,7 +872,7 @@ public class GameLifecycleService {
     public boolean gameExists(String gameId) {
         return roomCoordinator.coordinate(gameId, () -> {
             Game game = activeGames.get(gameId);
-            return game != null && !isGameExpired(game);
+            return game != null && !completion.isGameExpired(game);
         });
     }
 
@@ -1116,14 +1019,6 @@ public class GameLifecycleService {
         setPlayerReadyForNextHand(gameId, playerName, false);
     }
 
-    /** Rejects expired activity within the caller's durable mutation. */
-    private void rejectExpiredActivity(String gameId, Room room) {
-        if (GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
-            mutationProxy().abandonGameDueToInactivity(gameId);
-            throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
-        }
-    }
-
     /** Resolves current aggregates and applies inactivity validation before changing readiness. */
     private void setPlayerReadyForNextHand(String gameId, String playerName, boolean ready) {
         roomCoordinator.coordinate(gameId, () -> {
@@ -1133,7 +1028,7 @@ public class GameLifecycleService {
             }
 
             Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            rejectExpiredActivity(gameId, room);
+            completion.rejectExpiredActivity(gameId, room);
             if (readiness.setReady(gameId, game, playerName, ready, () -> scheduling.resetGameInactivityUnderLock(gameId, game))) {
                 startNewHand(gameId);
             }
@@ -1201,14 +1096,14 @@ public class GameLifecycleService {
     public GameEndResponse claimWin(String gameId, String playerName) {
         return roomCoordinator.coordinate(gameId, () -> {
             Game game = getGame(gameId);
-            if (game == null || isGameExpired(game)) {
+            if (game == null || completion.isGameExpired(game)) {
                 throw new ResourceNotFoundException("Game not found");
             }
 
             Room room = roomService.getRoom(gameId);
             if (room == null) throw new ResourceNotFoundException("Room not found");
 
-            rejectExpiredActivity(gameId, room);
+            completion.rejectExpiredActivity(gameId, room);
             if (game.isGameOver()) {
                 GameEndResponse retained = game.getRetainedTerminalResult();
                 if (retained != null && retained.abandoned()) {
@@ -1227,19 +1122,7 @@ public class GameLifecycleService {
      * @return frozen terminal result
      */
     public GameEndResponse getGameReview(String gameId, String playerName) {
-        return roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null || isGameExpired(game)) {
-                throw new ResourceNotFoundException("Game not found");
-            }
-
-            if (!game.isGameOver()) {
-                throw new ConflictException("Game has not finished");
-            }
-
-            Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            return terminalSettlement.resolveTerminalResultForParticipant(gameId, game, room, playerName, false);
-        });
+        return roomCoordinator.coordinate(gameId, () -> completion.getGameReview(gameId, playerName));
     }
 
     /**

@@ -36,12 +36,12 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit and integration tests for {@link GameTerminalSettlement}, terminal state helper
+ * Unit and integration tests for {@link GameCompletionHandler}, terminal state helper
  * methods on {@link Game}, and migrated terminal settlement lifecycle tests.
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("GameTerminalSettlement & Terminal State Management")
-class GameTerminalSettlementTest {
+@DisplayName("GameCompletionHandler & Terminal State Management")
+class GameCompletionHandlerTest {
 
     @Mock
     private TaskScheduler taskScheduler;
@@ -59,16 +59,21 @@ class GameTerminalSettlementTest {
     private SimpMessagingTemplate messagingTemplate;
 
     private GameLifecycleService gameLifecycleService;
-    private GameTerminalSettlement terminalSettlement;
+    private GameCompletionHandler completion;
     private Room testRoom;
     private static final String ROOM_ID = "test-room-id";
 
     @BeforeEach
     void setUp() {
         GameTimerRegistry runtimeTimers = new GameTimerRegistry(taskScheduler);
-        terminalSettlement = new GameTerminalSettlement(gameStateService, runtimeTimers);
+        RoomCoordinator coordinator = new RoomCoordinator();
         gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
-                taskScheduler);
+                taskScheduler, coordinator);
+        ActiveGameRegistry activeGames = new ActiveGameRegistry();
+        GameTaskScheduler scheduling = new GameTaskScheduler(activeGames, runtimeTimers, coordinator, roomService,
+                gameLifecycleService::getClock, (id, task, deadline, hand, generation) -> {}, (id, deadline) -> {});
+        completion = new GameCompletionHandler(activeGames, roomService, gameStateService, runtimeTimers,
+                scheduling, coordinator, gameLifecycleService::getClock, gameLifecycleService::getGameEndDisplayDelayMs);
         lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
                 .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
 
@@ -191,7 +196,7 @@ class GameTerminalSettlementTest {
     }
 
     @Nested
-    @DisplayName("GameTerminalSettlement Collaborator Unit Tests")
+    @DisplayName("GameCompletionHandler Collaborator Unit Tests")
     class CollaboratorUnitTests {
 
         @Test
@@ -202,8 +207,9 @@ class GameTerminalSettlementTest {
             Game game = gameLifecycleService.getGame(ROOM_ID);
             game.setForfeitPending(true);
 
-            GameTerminalSettlement.SettlementOutcome outcome =
-                    terminalSettlement.settleUnderLock(ROOM_ID, game, testRoom, false, null, Set.of());
+            GameCompletionHandler.SettlementOutcome outcome =
+                    gameLifecycleService.getRoomCoordinator().coordinate(ROOM_ID,
+                            () -> completion.settleUnderLock(ROOM_ID, game, testRoom, false, null, Set.of()));
             assertFalse(outcome.settledNow());
             assertNull(outcome.winner());
         }
@@ -219,8 +225,9 @@ class GameTerminalSettlementTest {
             assertTrue(game.isGameOver());
             assertTrue(game.isTerminalCarryOverSettled());
 
-            GameTerminalSettlement.SettlementOutcome outcome =
-                    terminalSettlement.settleUnderLock(ROOM_ID, game, testRoom, false, null, Set.of());
+            GameCompletionHandler.SettlementOutcome outcome =
+                    gameLifecycleService.getRoomCoordinator().coordinate(ROOM_ID,
+                            () -> completion.settleUnderLock(ROOM_ID, game, testRoom, false, null, Set.of()));
             assertFalse(outcome.settledNow());
         }
 
@@ -234,8 +241,9 @@ class GameTerminalSettlementTest {
             reset(gameStateService);
             stubGameEndCapture();
 
-            GameTerminalSettlement.SettlementOutcome outcome =
-                    terminalSettlement.settleUnderLock(ROOM_ID, game, testRoom, false, null, Set.of());
+            GameCompletionHandler.SettlementOutcome outcome =
+                    gameLifecycleService.getRoomCoordinator().coordinate(ROOM_ID,
+                            () -> completion.settleUnderLock(ROOM_ID, game, testRoom, false, null, Set.of()));
             assertTrue(outcome.settledNow());
             assertNotNull(outcome.winner());
             assertNotNull(outcome.event());
@@ -252,7 +260,8 @@ class GameTerminalSettlementTest {
             game.markGameOver();
 
             assertThrows(UnauthorisedActionException.class, () ->
-                    terminalSettlement.resolveTerminalResultForParticipant(ROOM_ID, game, testRoom, "Stranger", false));
+                    gameLifecycleService.getRoomCoordinator().coordinate(ROOM_ID,
+                            () -> completion.resolveTerminalResultForParticipant(ROOM_ID, game, testRoom, "Stranger", false)));
         }
 
         @Test
@@ -264,7 +273,8 @@ class GameTerminalSettlementTest {
             game.markGameOver();
             assertNull(game.getRetainedTerminalResult());
 
-            GameEndResponse response = terminalSettlement.ensureRetainedClaimResult(ROOM_ID, game, testRoom, "Host");
+            GameEndResponse response = gameLifecycleService.getRoomCoordinator().coordinate(ROOM_ID,
+                    () -> completion.ensureRetainedClaimResult(ROOM_ID, game, testRoom, "Host"));
             assertNotNull(response);
             assertEquals("Host", response.winner());
             assertSame(response, game.getRetainedTerminalResult());
