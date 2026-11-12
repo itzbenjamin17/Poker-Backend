@@ -74,3 +74,6 @@ A frozen, versioned copy of a `Room` and its `Game` at a specific moment that ca
 
 **EncryptedWalStore (`WalTransaction`)**:
 The per-room encrypted save file (`<roomId>.wal`, short for Write-Ahead Log) on disk that records the latest `AggregateStateImage` so active games survive a server restart; broken save files are renamed to `<roomId>.wal.corrupted` on startup so one bad file doesn't stop the server from booting.
+
+**Transient**:
+Something that is in-memory so it is not persisted to disk and is lost on server restart.

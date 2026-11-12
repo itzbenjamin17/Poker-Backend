@@ -58,7 +58,6 @@ public class GameLifecycleService {
     @Value("${poker.game-end.display-delay-ms:20000}")
     private long gameEndDisplayDelayMs = 20000;
 
-    public void setGameEndDisplayDelayMs(long ms) { this.gameEndDisplayDelayMs = ms; }
     public long getGameEndDisplayDelayMs() { return gameEndDisplayDelayMs; }
 
     @Value("${poker.round-end.display-delay-ms:0}")
