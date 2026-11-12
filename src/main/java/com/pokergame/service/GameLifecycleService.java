@@ -14,7 +14,6 @@ import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.persistence.transaction.DurableTransactionContext;
-import com.pokergame.service.GameTaskScheduler.TaskIntent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -28,7 +27,6 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import com.pokergame.enums.GamePhase;
 
 /**
  * Service class responsible for game lifecycle management.
@@ -38,7 +36,7 @@ import com.pokergame.enums.GamePhase;
 public class GameLifecycleService {
 
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
-    public static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = 6000;
+    public static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = HandProgressionService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS;
     public static final long TURN_ALLOWANCE_MS = GameTaskScheduler.TURN_ALLOWANCE_MS;
     public static final long GAME_INACTIVITY_ALLOWANCE_MS = GameInactivityPolicy.ALLOWANCE_MS;
     private java.time.Clock clock = java.time.Clock.systemUTC();
@@ -79,6 +77,7 @@ public class GameLifecycleService {
 
     private final GameTimerRegistry runtimeTimers;
     private final GameReadinessCoordinator readiness;
+    private final HandProgressionService handProgression;
     private final GameCompletionHandler completion;
     private final GameParticipantDepartureHandler departureHandler;
     private final RoomCoordinator roomCoordinator;
@@ -149,7 +148,6 @@ public class GameLifecycleService {
         this.gameStateService = gameStateService;
         this.messagingTemplate = messagingTemplate;
         this.runtimeTimers = new GameTimerRegistry(taskScheduler);
-        this.readiness = new GameReadinessCoordinator(gameStateService, runtimeTimers);
         this.roomCoordinator = roomCoordinator != null ? roomCoordinator : new RoomCoordinator();
         this.scheduling = new GameTaskScheduler(activeGames, runtimeTimers, this.roomCoordinator, roomService,
                 this::getClock,
@@ -157,6 +155,11 @@ public class GameLifecycleService {
                 (gameId, deadline) -> mutationProxy().executeInactivityCleanup(gameId, deadline));
         this.completion = new GameCompletionHandler(activeGames, roomService, gameStateService, runtimeTimers,
                 scheduling, this.roomCoordinator, this::getClock, this::getGameEndDisplayDelayMs);
+        this.handProgression = new HandProgressionService(activeGames, this.roomCoordinator, runtimeTimers, scheduling,
+                completion, gameStateService, () -> roundEndDisplayDelayMs);
+        this.readiness = new GameReadinessCoordinator(activeGames, roomService, gameStateService, runtimeTimers,
+                scheduling, completion, handProgression, this.roomCoordinator, this::getClock,
+                this::getConfiguredReadyCountdownMs, gameId -> mutationProxy().handleGameEnd(gameId, false));
         this.departureHandler = new GameParticipantDepartureHandler(this, roomService, gameStateService, completion, activeGames);
         this.recovery = new GameRecoveryService(activeGames, roomService, gameStateService, runtimeTimers,
                 this.roomCoordinator, scheduling);
@@ -287,7 +290,7 @@ public class GameLifecycleService {
 
             logger.info("Game created and started for room: {} with {} players", roomId, room.getPlayers().size());
 
-            startNewHand(roomId);
+            readiness.applyHandContinuation(roomId, handProgression.startNewHand(roomId));
 
             return roomId;
         });
@@ -301,56 +304,12 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void startNewHand(String gameId) {
-        roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null) {
-                logger.warn("Cannot start new hand - game {} not found", gameId);
-                return;
-            }
-            logger.info("Starting new hand for game: {}", gameId);
-            if (game.isForfeitPending()) return;
-            if (game.isGameOver()) {
-                if (!game.isTerminalCarryOverSettled()) completion.handleGameEnd(gameId, false);
-                return;
-            }
-            if (game.getHandNumber() > 0 && (game.getCurrentPhase() != GamePhase.SHOWDOWN
-                    || !game.isHandSettled())) {
-                logger.warn("Ignoring new-hand request for unsettled game {} hand {}", gameId, game.getHandNumber());
-                return;
-            }
-            runtimeTimers.cancelProgressionForGame(gameId);
-            // Invalidate obsolete durable intent independently of the runtime cancellation scope.
-            game.invalidateProgressionTasks();
-            readiness.cancelTimeout(gameId);
-            game.closeReadyCountdown();
-            game.clearScheduledTask(ScheduledGameTask.CLEANUP);
-
-            // Reset determines game completion before cards are dealt so the final
-            // winner state remains visible during the configured display window.
-            boolean gameEnded = game.resetForNewHand();
-            if (gameEnded) {
-                logger.warn("Game {} became over after reset", gameId);
-                completion.handleGameEnd(gameId, false);
-                return;
-            }
-            if (gameStateService != null) {
-                gameStateService.clearRetainedSettlement(gameId);
-            }
-
-            game.beginHand();
-
-            game.dealHoleCards();
-            game.postBlinds();
-            applyTurnOutcome(gameId, game, game.reconcileAfterForcedBlinds());
-
-            logger.info("New hand started successfully for game: {} | Current player: {} | Phase: {} | Pot: {}",
-                    gameId, game.getCurrentPlayer() == null ? "none" : game.getCurrentPlayer().getName(),
-                    game.getCurrentPhase(), game.getPot());
-        });
+        roomCoordinator.coordinate(gameId,
+                () -> readiness.applyHandContinuation(gameId, handProgression.startNewHand(gameId)));
     }
 
     void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome) {
-        applyTurnOutcomeUnderLock(gameId, game, outcome, false);
+        readiness.applyHandContinuation(gameId, handProgression.applyTurnOutcome(gameId, game, outcome));
     }
 
     /**
@@ -364,54 +323,8 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
-        roomCoordinator.coordinate(gameId, () -> {
-            applyTurnOutcomeUnderLock(gameId, game, outcome, notifyImmediateAutoAdvance);
-        });
-    }
-
-    private void applyTurnOutcomeUnderLock(String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        switch (outcome.type()) {
-            case NEXT_PLAYER, PHASE_ADVANCED -> {
-                game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
-                runtimeTimers.cancelTask(gameId, ScheduledGameTask.AUTO_ADVANCE);
-                if (game.getCurrentPlayer() != null) {
-                    scheduling.scheduleTurnTimeout(gameId);
-                } else {
-                    game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-                    runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
-                }
-                gameStateService.broadcastGameState(gameId, game);
-            }
-            case AUTO_ADVANCING -> {
-                game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-                runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
-                if (game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE) == null) {
-                    scheduling.scheduleAutoAdvance(gameId);
-                }
-                if (notifyImmediateAutoAdvance) {
-                    gameStateService.broadcastAutoAdvanceNotification(gameId, game);
-                } else {
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Auto-advancing...");
-                }
-            }
-            case SHOWDOWN -> {
-                game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
-                game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-                runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
-                schedulePostShowdownProgression(gameId, game);
-                gameStateService.broadcastShowdownResults(gameId, game, outcome.winners(), outcome.winningsPerPlayer());
-            }
-        }
-    }
-
-    private void schedulePostShowdownProgression(String gameId, Game game) {
-        if (game.isTournamentOver()) {
-            scheduling.scheduleGameEnd(gameId, FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
-        } else if (scheduling.scheduleReadyCountdownOpen(gameId, roundEndDisplayDelayMs)
-                == GameTaskScheduler.ReadyOpening.OPEN_IMMEDIATELY) {
-            startReadyCountdown(gameId, configuredReadyCountdownMs);
-        }
+        roomCoordinator.coordinate(gameId, () -> readiness.applyHandContinuation(gameId,
+                handProgression.applyTurnOutcome(gameId, game, outcome, notifyImmediateAutoAdvance)));
     }
 
     /**
@@ -424,49 +337,7 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public boolean advanceAutoAdvanceStep(String gameId) {
-        return roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null) {
-                return true;
-            }
-
-            if (game.isForfeitPending()) return true;
-            if (game.isGameOver()) return true;
-            if (game.isHandSettled()
-                    || game.isTerminalCarryOverSettled()) {
-                logger.info("Skipping stale auto-advance callback for settled game {}", gameId);
-                return true;
-            }
-            return switch (game.getCurrentPhase()) {
-                case PRE_FLOP -> {
-                    game.dealFlop();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing flop...");
-                    yield false;
-                }
-                case FLOP -> {
-                    game.dealTurn();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing turn...");
-                    yield false;
-                }
-                case TURN -> {
-                    game.dealRiver();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing river...");
-                    yield false;
-                }
-                case RIVER -> {
-                    int potBeforeDistribution = game.getPot();
-                    List<Player> winners = game.conductShowdown();
-                    int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
-                    gameStateService.broadcastShowdownResults(gameId, game, winners, winningsPerPlayer);
-                    gameStateService.broadcastAutoAdvanceComplete(gameId, game);
-                    yield true;
-                }
-                case SHOWDOWN -> {
-                    logger.warn("Auto-advance step invoked for game {} already in SHOWDOWN - skipping duplicate distribution", gameId);
-                    yield true;
-                }
-            };
-        });
+        return roomCoordinator.coordinate(gameId, () -> handProgression.advanceAutoAdvanceStep(gameId));
     }
 
     /**
@@ -648,7 +519,7 @@ public class GameLifecycleService {
     @DurableMutation(roomId = "#gameId")
     void scheduleReadyCountdownOpen(String gameId, long delayMs) {
         if (scheduling.scheduleReadyCountdownOpen(gameId, delayMs) == GameTaskScheduler.ReadyOpening.OPEN_IMMEDIATELY) {
-            startReadyCountdown(gameId, configuredReadyCountdownMs);
+            roomCoordinator.coordinate(gameId, () -> readiness.openConfiguredCountdown(gameId));
         }
     }
 
@@ -787,12 +658,10 @@ public class GameLifecycleService {
             if (scheduling.claim(gameId, game, task, deadline, hand, generation) != GameTaskScheduler.Claim.EXECUTE) return;
             switch (task) {
                 case TURN_TIMEOUT -> applyTurnTimeout(gameId, game);
-                case AUTO_ADVANCE -> applyAutoAdvanceTimeout(gameId, game);
-                case READY_TIMEOUT -> {
-                    if (readiness.expire(gameId, game, deadline)) startNewHand(gameId);
-                }
-                case NEW_HAND -> startNewHand(gameId);
-                case READY_OPEN -> startReadyCountdown(gameId, configuredReadyCountdownMs);
+                case AUTO_ADVANCE -> readiness.applyHandContinuation(gameId, handProgression.applyAutoAdvanceTimeout(gameId, game));
+                case READY_TIMEOUT -> readiness.applyProgression(gameId, readiness.expire(gameId, game, deadline));
+                case NEW_HAND -> readiness.applyHandContinuation(gameId, handProgression.startNewHand(gameId));
+                case READY_OPEN -> readiness.openConfiguredCountdown(gameId);
                 case GAME_END -> completion.handleGameEnd(gameId, false);
                 case CLEANUP -> DurableTransactionContext.afterCommit(() -> mutationProxy().performGameCleanup(gameId));
             }
@@ -811,19 +680,6 @@ public class GameLifecycleService {
             String actorToDepart = actor.getName();
             departParticipants(gameId, List.of(actorToDepart));
             logger.info("Player {} timed out after 60 seconds in game {}; removing from seat", actorToDepart, gameId);
-        }
-    }
-
-    private void applyAutoAdvanceTimeout(String gameId, Game game) {
-        if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
-            game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
-            return;
-        }
-        boolean complete = advanceAutoAdvanceStep(gameId);
-        if (complete) {
-            schedulePostShowdownProgression(gameId, game);
-        } else {
-            scheduling.scheduleAutoAdvance(gameId);
         }
     }
 
@@ -977,24 +833,8 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void startReadyCountdown(String gameId, long countdownMs) {
-        roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null) {
-                return;
-            }
-
-            GameReadinessCoordinator.Opening opening = readiness.open(gameId, game, clock.millis() + countdownMs);
-            switch (opening.progression()) {
-                case END_GAME -> DurableTransactionContext.afterCommit(() -> mutationProxy().handleGameEnd(gameId, false));
-                case START_HAND -> startNewHand(gameId);
-                case NONE -> {
-                    TaskIntent timeout = opening.timeout();
-                    if (timeout != null) {
-                        scheduling.submitAfterCommit(timeout);
-                    }
-                }
-            }
-        });
+        roomCoordinator.coordinate(gameId, () -> readiness.applyProgression(gameId,
+                readiness.startReadyCountdown(gameId, countdownMs)));
     }
 
     /**
@@ -1005,7 +845,8 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void markPlayerReadyForNextHand(String gameId, String playerName) {
-        setPlayerReadyForNextHand(gameId, playerName, true);
+        roomCoordinator.coordinate(gameId, () -> readiness.applyProgression(gameId,
+                readiness.markPlayerReadyForNextHand(gameId, playerName)));
     }
 
     /**
@@ -1016,23 +857,8 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void unmarkPlayerReadyForNextHand(String gameId, String playerName) {
-        setPlayerReadyForNextHand(gameId, playerName, false);
-    }
-
-    /** Resolves current aggregates and applies inactivity validation before changing readiness. */
-    private void setPlayerReadyForNextHand(String gameId, String playerName, boolean ready) {
-        roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null) {
-                throw new ResourceNotFoundException("Game not found");
-            }
-
-            Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            completion.rejectExpiredActivity(gameId, room);
-            if (readiness.setReady(gameId, game, playerName, ready, () -> scheduling.resetGameInactivityUnderLock(gameId, game))) {
-                startNewHand(gameId);
-            }
-        });
+        roomCoordinator.coordinate(gameId, () -> readiness.applyProgression(gameId,
+                readiness.unmarkPlayerReadyForNextHand(gameId, playerName)));
     }
 
     /**
@@ -1044,14 +870,9 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void expireReadyCountdown(String gameId, Long expectedDeadlineEpochMs) {
-        if (gameId == null || expectedDeadlineEpochMs == null) {
-            return;
-        }
-        roomCoordinator.coordinate(gameId, () -> {
-            if (readiness.expire(gameId, getGame(gameId), expectedDeadlineEpochMs)) {
-                startNewHand(gameId);
-            }
-        });
+        if (gameId == null || expectedDeadlineEpochMs == null) return;
+        roomCoordinator.coordinate(gameId, () -> readiness.applyProgression(gameId,
+                readiness.expireReadyCountdown(gameId, expectedDeadlineEpochMs)));
     }
 
     /**
@@ -1076,7 +897,7 @@ public class GameLifecycleService {
     void completeReadyCountdownAndStartNextHand(String gameId, Game game) {
         roomCoordinator.assertHeldByCurrentThread(gameId);
         readiness.complete(gameId, game);
-        startNewHand(gameId);
+        readiness.applyHandContinuation(gameId, handProgression.startNewHand(gameId));
     }
 
     public void cancelTurnTimeout(String gameId) {

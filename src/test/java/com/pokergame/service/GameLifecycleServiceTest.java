@@ -129,6 +129,7 @@ class GameLifecycleServiceTest {
     void applyTurnOutcome_ShowdownWithoutDelay_OpensReadyCountdown() {
         Game game = createShowdownGame();
         TurnOutcome outcome = showdownOutcome(game);
+        clearInvocations(gameStateService);
 
         gameLifecycleService.applyTurnOutcome(ROOM_ID, game, outcome, true);
 
@@ -137,7 +138,9 @@ class GameLifecycleServiceTest {
                 game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
         assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
         assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
-        verify(gameStateService).broadcastShowdownResults(ROOM_ID, game, outcome.winners(), outcome.winningsPerPlayer());
+        var broadcasts = inOrder(gameStateService);
+        broadcasts.verify(gameStateService).broadcastGameState(ROOM_ID, game);
+        broadcasts.verify(gameStateService).broadcastShowdownResults(ROOM_ID, game, outcome.winners(), outcome.winningsPerPlayer());
     }
 
     @Test
