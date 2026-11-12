@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 
 /**
- * Manages in-memory scheduler registrations for task deadlines stored on a {@link Game}.
+ * Manages in-memory scheduler registrations for task deadlines stored on a game or its room.
  * Each game and task type has at most one current registration. Recovery can rebuild
  * registrations from persisted deadlines, and overdue work is scheduled immediately.
  *
@@ -22,12 +22,12 @@ import java.util.concurrent.ScheduledFuture;
  * room coordination lease. The callback must revalidate those values at the durable mutation seam
  * because a cancelled or replaced callback may already be running.
  */
-final class GameRuntimeTimers {
-    private static final Logger logger = LoggerFactory.getLogger(GameRuntimeTimers.class);
+final class GameTimerRegistry {
+    private static final Logger logger = LoggerFactory.getLogger(GameTimerRegistry.class);
 
     private final TaskScheduler taskScheduler;
 
-    GameRuntimeTimers(TaskScheduler taskScheduler) {
+    GameTimerRegistry(TaskScheduler taskScheduler) {
         this.taskScheduler = taskScheduler;
     }
 
@@ -39,6 +39,7 @@ final class GameRuntimeTimers {
 
     private final Map<RuntimeTaskKey, RuntimeTask> runtimeTasks = new ConcurrentHashMap<>();
 
+    /** A null task identifies the room-backed inactivity timer. */
     private record RuntimeTaskKey(String gameId, ScheduledGameTask task) { }
     /** Identifies a scheduled task for a specific hand, generation, and epoch-millisecond deadline. */
     record TaskIntent(String gameId, ScheduledGameTask task, long deadline, long handNumber, long generation) { }
@@ -91,23 +92,39 @@ final class GameRuntimeTimers {
         long delay = Math.max(0, deadline - System.currentTimeMillis());
         logger.debug("Scheduling runtime task {} for game {} with delayMs={} deadline={}", task, gameId, delay, deadline);
         RuntimeTaskKey key = new RuntimeTaskKey(gameId, task);
-        RuntimeTask registration = new RuntimeTask();
         if (game.getHandNumber() != intent.handNumber()
                 || game.getScheduledTaskGeneration(task) != intent.generation()
                 || !Objects.equals(game.getScheduledTaskDeadline(task), deadline)) return;
+        register(key, Instant.now().plusMillis(delay),
+                () -> callback.execute(gameId, task, deadline, intent.handNumber(), intent.generation()));
+    }
+
+    /** Registers room-backed inactivity work using the remaining time on the authoritative clock. */
+    void scheduleInactivity(String gameId, Long deadline, long now, Runnable callback) {
+        if (gameId == null || taskScheduler == null || deadline == null || deadline <= 0) return;
+        long delay = Math.max(0, deadline - now);
+        register(new RuntimeTaskKey(gameId, null),
+                Instant.ofEpochMilli(System.currentTimeMillis() + delay), callback);
+    }
+
+    private void register(RuntimeTaskKey key, Instant executionTime, Runnable callback) {
+        RuntimeTask registration = new RuntimeTask();
         RuntimeTask replaced = runtimeTasks.put(key, registration);
         if (replaced != null) replaced.cancel();
         try {
             ScheduledFuture<?> future = taskScheduler.schedule(() -> {
+                // A cancellation or replacement can win before the scheduler returns its future.
+                if (runtimeTasks.get(key) != registration) return;
                 try {
-                    callback.execute(gameId, task, deadline, intent.handNumber(), intent.generation());
+                    callback.run();
                 } catch (Exception e) {
-                    logger.error("Scheduled task {} failed for game {}", task, gameId, e);
+                    logger.error("Scheduled task {} failed for game {}",
+                            key.task() == null ? "INACTIVITY" : key.task(), key.gameId(), e);
                 } finally {
                     registration.complete();
                     runtimeTasks.remove(key, registration);
                 }
-            }, Instant.now().plusMillis(delay));
+            }, executionTime);
             registration.attach(future);
             if (future == null) {
                 registration.complete();
@@ -126,6 +143,20 @@ final class GameRuntimeTimers {
         if (registration != null) registration.cancel();
     }
 
+    /** Cancels the room-backed inactivity registration. */
+    void cancelInactivity(String gameId) {
+        if (gameId != null) cancelTask(gameId, null);
+    }
+
+    /** Cancels work tied to the previous hand while retaining inactivity and terminal timers. */
+    void cancelProgressionForGame(String gameId) {
+        cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
+        cancelTask(gameId, ScheduledGameTask.AUTO_ADVANCE);
+        cancelTask(gameId, ScheduledGameTask.READY_OPEN);
+        cancelTask(gameId, ScheduledGameTask.READY_TIMEOUT);
+        cancelTask(gameId, ScheduledGameTask.NEW_HAND);
+    }
+
     /** Cancels a game's runtime registrations, optionally retaining its cleanup registration. */
     void cancelAllForGame(String gameId, boolean keepCleanup) {
         runtimeTasks.forEach((key, registration) -> {
@@ -135,8 +166,8 @@ final class GameRuntimeTimers {
         });
     }
 
-    /** Returns the number of runtime registrations currently tracked for the game. */
+    /** Returns the number of tracked game tasks, excluding room-backed inactivity. */
     int countForGame(String gameId) {
-        return (int) runtimeTasks.keySet().stream().filter(k -> k.gameId().equals(gameId)).count();
+        return (int) runtimeTasks.keySet().stream().filter(k -> k.task() != null && k.gameId().equals(gameId)).count();
     }
 }

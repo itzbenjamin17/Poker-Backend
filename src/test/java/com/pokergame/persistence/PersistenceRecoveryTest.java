@@ -32,6 +32,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ScheduledFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -600,6 +601,7 @@ class PersistenceRecoveryTest {
         GameStateService gameStateService = mock(GameStateService.class);
         SimpMessagingTemplate messagingTemplate = mock(SimpMessagingTemplate.class);
         TaskScheduler taskScheduler = mock(TaskScheduler.class);
+        doReturn(mock(ScheduledFuture.class)).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
 
         GameLifecycleService realLifecycle = new GameLifecycleService(
                 roomService, evaluator, gameStateService, messagingTemplate, taskScheduler);

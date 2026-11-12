@@ -47,7 +47,7 @@ All production packages are under `src/main/java/com/pokergame/`.
 | [RoomController](../../src/main/java/com/pokergame/controller/RoomController.java) | Create/join, room snapshot, leave, and host-authorized start. |
 | [GameController](../../src/main/java/com/pokergame/controller/GameController.java) | Public/private snapshots, STOMP action/ready/unready, REST leave/claim-win. |
 | [RoomService](../../src/main/java/com/pokergame/service/RoomService.java) | Room registry, name lookup, membership, host tracking, lobby destruction, and room broadcasts. |
-| [GameLifecycleService](../../src/main/java/com/pokergame/service/GameLifecycleService.java) | Active game registry, hand starts, auto-advance, ready gates, scheduled work, disconnect transitions, completion, and cleanup. |
+| [GameLifecycleService](../../src/main/java/com/pokergame/service/GameLifecycleService.java) | Active game registry, hand starts, auto-advance, room-coordinated durable entry points, recovery orchestration, and cleanup. |
 | [PlayerActionService](../../src/main/java/com/pokergame/service/PlayerActionService.java) | Action authorization, betting mutations, turn/round progression, and lifecycle scheduling. |
 | [GameStateService](../../src/main/java/com/pokergame/service/GameStateService.java) | Public/private projections and broadcasts deferred until the accepted mutation finishes its save attempt. |
 | [HandEvaluatorService](../../src/main/java/com/pokergame/service/HandEvaluatorService.java) | Best five-card hand evaluation from available cards. |
@@ -73,7 +73,9 @@ Package-private model collaborators calculate betting rules (`BettingRound`), se
 
 `Game.restoreBuilder()` returns the top-level `GameRestoreBuilder`; code compiled against the former nested `Game.GameRestoreBuilder` must be updated and recompiled.
 
-The lifecycle service records delayed work with absolute deadlines and task identifiers such as auto-advance, ready-open, new-hand, cleanup, and game-end. Runtime callbacks check their expected state/deadline so obsolete callbacks do not advance a newer hand.
+`GameTimerRegistry` owns process-local scheduler registrations for game tasks and active-game inactivity. `Game` retains task deadlines and generations, and `Room` retains the active-game inactivity deadline. Scheduled callbacks re-enter `GameLifecycleService` through the Spring proxy and validate current state under the room lease.
+
+`GameReadinessCoordinator` orchestrates the `Game`/`ReadyGate` transitions and returns timeout or progression decisions. `GameLifecycleService` applies those decisions at the existing durable boundary. `GameInactivityPolicy` calculates deadlines and checks whether they apply. `GameParticipantDepartureHandler` handles departures, disconnects, reconnection, and grace expiry. `GameTerminalSettlement` freezes terminal results and authorizes review.
 
 WebSocket identity can have multiple active browser sessions. Session tracking only treats the player as disconnected after the last active session is gone, applies a grace deadline, and cancels cleanup on reconnect. A final game-end event and later aggregate cleanup are separate from an individual hand's showdown/ready transition.
 

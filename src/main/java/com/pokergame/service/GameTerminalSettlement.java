@@ -16,9 +16,9 @@ import java.util.Set;
 final class GameTerminalSettlement {
 
     private final GameStateService gameStateService;
-    private final GameRuntimeTimers runtimeTimers;
+    private final GameTimerRegistry runtimeTimers;
 
-    GameTerminalSettlement(GameStateService gameStateService, GameRuntimeTimers runtimeTimers) {
+    GameTerminalSettlement(GameStateService gameStateService, GameTimerRegistry runtimeTimers) {
         this.gameStateService = gameStateService;
         this.runtimeTimers = runtimeTimers;
     }
@@ -56,6 +56,18 @@ final class GameTerminalSettlement {
             game.setRetainedTerminalResult(event);
         }
         return new SettlementOutcome(true, winner, event);
+    }
+
+    /** Freezes an abandonment result without paying out the unfinished pot. */
+    GameEndResponse captureAbandonmentUnderLock(String gameId, Game game, Room room) {
+        GameEndResponse event = null;
+        if (gameStateService != null) {
+            gameStateService.clearRetainedSettlement(gameId);
+            int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
+            event = gameStateService.captureAbandonment(gameId, game, maxPlayers);
+        }
+        game.setRetainedTerminalResult(event);
+        return event;
     }
 
     /**

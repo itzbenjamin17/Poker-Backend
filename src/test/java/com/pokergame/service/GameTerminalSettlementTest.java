@@ -65,7 +65,7 @@ class GameTerminalSettlementTest {
 
     @BeforeEach
     void setUp() {
-        GameRuntimeTimers runtimeTimers = new GameRuntimeTimers(taskScheduler);
+        GameTimerRegistry runtimeTimers = new GameTimerRegistry(taskScheduler);
         terminalSettlement = new GameTerminalSettlement(gameStateService, runtimeTimers);
         gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
                 taskScheduler);

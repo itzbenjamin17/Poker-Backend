@@ -15,7 +15,7 @@ import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.persistence.transaction.DurableTransactionContext;
-import com.pokergame.service.GameRuntimeTimers.TaskIntent;
+import com.pokergame.service.GameTimerRegistry.TaskIntent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.pokergame.util.MdcUtils;
@@ -29,10 +29,8 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
-import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledFuture;
 import com.pokergame.enums.GamePhase;
 
 /**
@@ -46,7 +44,7 @@ public class GameLifecycleService {
     public static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = 6000;
     private static final long AUTO_ADVANCE_STEP_DELAY_MS = 4000;
     public static final long TURN_ALLOWANCE_MS = 60_000;
-    public static final long GAME_INACTIVITY_ALLOWANCE_MS = 15 * 60_000L;
+    public static final long GAME_INACTIVITY_ALLOWANCE_MS = GameInactivityPolicy.ALLOWANCE_MS;
     private java.time.Clock clock = java.time.Clock.systemUTC();
 
     /** Supplies the authoritative clock without changing legacy construction. */
@@ -83,16 +81,8 @@ public class GameLifecycleService {
 
     private final SimpMessagingTemplate messagingTemplate;
 
-    private TaskScheduler inactivityScheduler;
-
-    private final Map<String, ScheduledFuture<?>> gameInactivityFutures = new ConcurrentHashMap<>();
-
-    @Autowired(required = false)
-    void setInactivityScheduler(@Qualifier("taskScheduler") TaskScheduler inactivityScheduler) {
-        this.inactivityScheduler = inactivityScheduler;
-    }
-
-    private final GameRuntimeTimers runtimeTimers;
+    private final GameTimerRegistry runtimeTimers;
+    private final GameReadinessCoordinator readiness;
     private final GameTerminalSettlement terminalSettlement;
     private final GameParticipantDepartureHandler departureHandler;
     private final RoomCoordinator roomCoordinator;
@@ -160,7 +150,8 @@ public class GameLifecycleService {
         this.handEvaluator = handEvaluatorService;
         this.gameStateService = gameStateService;
         this.messagingTemplate = messagingTemplate;
-        this.runtimeTimers = new GameRuntimeTimers(taskScheduler);
+        this.runtimeTimers = new GameTimerRegistry(taskScheduler);
+        this.readiness = new GameReadinessCoordinator(gameStateService, runtimeTimers);
         this.terminalSettlement = new GameTerminalSettlement(gameStateService, runtimeTimers);
         this.departureHandler = new GameParticipantDepartureHandler(this, roomService, gameStateService, terminalSettlement, activeGames);
         this.roomCoordinator = roomCoordinator != null ? roomCoordinator : new RoomCoordinator();
@@ -215,12 +206,9 @@ public class GameLifecycleService {
 
             if (roomService.getRoom(roomId) != room) return;
             Game game = getGame(roomId);
-            if (game != null) {
-                Long inactivityDeadline = room.getInactivityDeadlineEpochMs();
-                if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
-                    mutationProxy().abandonGameDueToInactivity(roomId);
-                    return;
-                }
+            if (game != null && GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
+                mutationProxy().abandonGameDueToInactivity(roomId);
+                return;
             }
             departureHandler.departParticipantsUnderLock(roomId, playerNames, room, game);
         });
@@ -284,7 +272,7 @@ public class GameLifecycleService {
             // Mark room started and capture start event payload before scheduling broadcast
             room.setGameStarted(true);
             roomService.cancelLobbyInactivity(roomId);
-            long gameInactivityDeadline = clock.millis() + GAME_INACTIVITY_ALLOWANCE_MS;
+            long gameInactivityDeadline = GameInactivityPolicy.nextDeadline(clock.millis());
             room.setInactivityDeadlineEpochMs(gameInactivityDeadline);
             scheduleGameInactivity(roomId, gameInactivityDeadline);
             RoomDataResponse startPayload = roomService.getRoomData(roomId);
@@ -325,9 +313,10 @@ public class GameLifecycleService {
                 logger.warn("Ignoring new-hand request for unsettled game {} hand {}", gameId, game.getHandNumber());
                 return;
             }
-            cancelRuntimeTasks(gameId, false);
+            runtimeTimers.cancelProgressionForGame(gameId);
+            // Invalidate obsolete durable intent independently of the runtime cancellation scope.
             game.invalidateProgressionTasks();
-            cancelReadyTimeout(gameId);
+            readiness.cancelTimeout(gameId);
             game.closeReadyCountdown();
             game.clearScheduledTask(ScheduledGameTask.CLEANUP);
 
@@ -517,39 +506,15 @@ public class GameLifecycleService {
         });
     }
 
-    /**
-     * Abandons an active game authoritatively due to inactivity.
-     * Stops gameplay immediately without declaring a winner, preserves completed-hand payouts,
-     * leaves unfinished pots unawarded, broadcasts the abandonment terminal outcome,
-     * and durably schedules cleanup 20 seconds later.
-     *
-     * @param gameId game identifier
-     */
+    /** Registers the room's captured inactivity deadline with the runtime timer owner. */
     public void scheduleGameInactivity(String gameId, Long deadlineEpochMs) {
-        if (inactivityScheduler == null || deadlineEpochMs == null || deadlineEpochMs <= 0) return;
-        cancelGameInactivity(gameId);
-        long delay = Math.max(0, deadlineEpochMs - clock.millis());
-        ScheduledFuture<?> future = inactivityScheduler.schedule(
-                () -> {
-                    try {
-                        mutationProxy().executeInactivityCleanup(gameId, deadlineEpochMs);
-                    } catch (Exception e) {
-                        logger.error("Error executing game inactivity abandonment for game {}", gameId, e);
-                    }
-                },
-                Instant.ofEpochMilli(System.currentTimeMillis() + delay)
-        );
-        if (future != null) {
-            gameInactivityFutures.put(gameId, future);
-        }
+        runtimeTimers.scheduleInactivity(gameId, deadlineEpochMs, clock.millis(),
+                () -> mutationProxy().executeInactivityCleanup(gameId, deadlineEpochMs));
     }
 
+    /** Cancels runtime inactivity work without changing the room's deadline. */
     public void cancelGameInactivity(String gameId) {
-        if (gameId == null) return;
-        ScheduledFuture<?> future = gameInactivityFutures.remove(gameId);
-        if (future != null) {
-            future.cancel(false);
-        }
+        runtimeTimers.cancelInactivity(gameId);
     }
 
     /**
@@ -576,12 +541,11 @@ public class GameLifecycleService {
             if (game.isGameOver() && game.getRetainedTerminalResult() != null) {
                 return;
             }
-            Long currentDeadline = room.getInactivityDeadlineEpochMs();
-            if (currentDeadline == null || !currentDeadline.equals(expectedDeadlineEpochMs)) {
+            if (!GameInactivityPolicy.matchesDeadline(room, expectedDeadlineEpochMs)) {
                 logger.debug("Skipping inactivity cleanup: deadline changed for game {}", gameId);
                 return;
             }
-            if (clock.millis() < expectedDeadlineEpochMs) {
+            if (!GameInactivityPolicy.hasElapsed(expectedDeadlineEpochMs, clock.millis())) {
                 logger.debug("Skipping inactivity cleanup: deadline has not elapsed for game {}", gameId);
                 return;
             }
@@ -604,7 +568,6 @@ public class GameLifecycleService {
             Game game = getGame(gameId);
             if (game == null) return;
             Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            GameEndResponse event;
             if (game.isGameOver() && game.getRetainedTerminalResult() != null) {
                 return;
             }
@@ -617,14 +580,7 @@ public class GameLifecycleService {
             game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
             game.clearScheduledTask(ScheduledGameTask.READY_OPEN);
             game.clearScheduledTask(ScheduledGameTask.NEW_HAND);
-            if (gameStateService != null) {
-                gameStateService.clearRetainedSettlement(gameId);
-            }
-            int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
-            event = gameStateService != null
-                    ? gameStateService.captureAbandonment(gameId, game, maxPlayers)
-                    : null;
-            game.setRetainedTerminalResult(event);
+            GameEndResponse event = terminalSettlement.captureAbandonmentUnderLock(gameId, game, room);
 
             if (room != null) {
                 room.setTerminal(true);
@@ -645,8 +601,8 @@ public class GameLifecycleService {
      */
     void resetGameInactivityUnderLock(String gameId, Game game) {
         roomCoordinator.assertHeldByCurrentThread(gameId);
-        if (game == null || game.isGameOver()) return;
-        long newDeadline = clock.millis() + GAME_INACTIVITY_ALLOWANCE_MS;
+        if (!GameInactivityPolicy.canReset(game)) return;
+        long newDeadline = GameInactivityPolicy.nextDeadline(clock.millis());
         Room room = roomService != null ? roomService.getRoom(gameId) : null;
         if (room != null) {
             room.setInactivityDeadlineEpochMs(newDeadline);
@@ -705,7 +661,6 @@ public class GameLifecycleService {
     public void performGameCleanup(String gameId) {
         if (gameId == null) return;
         roomCoordinator.coordinate(gameId, () -> {
-            cancelGameInactivity(gameId);
             cancelRuntimeTasks(gameId, false);
             activeGames.remove(gameId);
             if (gameStateService != null) {
@@ -804,7 +759,7 @@ public class GameLifecycleService {
             }
             MdcUtils.runWithRoomId(gameId, () -> {
                 boolean normalized = game.normalizeRecoveredReadyCountdown(System.currentTimeMillis() + configuredReadyCountdownMs);
-                List<TaskIntent> intents = GameRuntimeTimers.captureAllIntents(gameId, game);
+                List<TaskIntent> intents = GameTimerRegistry.captureAllIntents(gameId, game);
                 int rebuiltCount = intents.size();
                 DurableTransactionContext.afterCommit(() -> intents.forEach(this::scheduleRuntimeTask));
                 if (normalized) gameStateService.broadcastGameState(gameId, game);
@@ -825,7 +780,7 @@ public class GameLifecycleService {
         roomCoordinator.coordinate(gameId, () -> {
             Game game = getGame(gameId);
             if (game == null) return null;
-            List<TaskIntent> intents = GameRuntimeTimers.captureAllIntents(gameId, game);
+            List<TaskIntent> intents = GameTimerRegistry.captureAllIntents(gameId, game);
             intents.forEach(this::scheduleRuntimeTask);
             Room room = roomService != null ? roomService.getRoom(gameId) : null;
             if (room != null && room.getInactivityDeadlineEpochMs() != null && !game.isGameOver()) {
@@ -939,10 +894,7 @@ public class GameLifecycleService {
                 case EXECUTE -> { }
             }
             Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            Long inactivityDeadline = room != null ? room.getInactivityDeadlineEpochMs() : null;
-            boolean inactivityDue = inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline;
-
-            if (inactivityDue) {
+            if (GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
                 logger.info("Inactivity deadline expired concurrently with turn timeout for game {}; abandonment takes precedence", gameId);
                 abandonGameDueToInactivity(gameId);
                 return;
@@ -1111,7 +1063,7 @@ public class GameLifecycleService {
         }
         if (game.isForfeitPending()) return;
         game.scheduleTask(task, deadline);
-        TaskIntent intent = GameRuntimeTimers.captureIntent(gameId, game, task, deadline);
+        TaskIntent intent = GameTimerRegistry.captureIntent(gameId, game, task, deadline);
         DurableTransactionContext.afterCommit(() -> scheduleRuntimeTask(intent));
     }
 
@@ -1122,14 +1074,13 @@ public class GameLifecycleService {
     }
 
     public void cancelRuntimeTasks(String gameId, boolean keepCleanup) {
-        cancelGameInactivity(gameId);
         runtimeTimers.cancelAllForGame(gameId, keepCleanup);
     }
 
     public Long getInactivityDeadline(String gameId) {
         return roomCoordinator.coordinate(gameId, () -> {
             Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            return room != null ? room.getInactivityDeadlineEpochMs() : null;
+            return GameInactivityPolicy.deadline(room);
         });
     }
 
@@ -1141,7 +1092,7 @@ public class GameLifecycleService {
      */
     public boolean isGameInactivityExpired(String gameId) {
         Long deadline = getInactivityDeadline(gameId);
-        return deadline != null && deadline > 0 && clock.millis() >= deadline;
+        return GameInactivityPolicy.isExpired(deadline, clock.millis());
     }
 
     public int getRuntimeTaskCount(String gameId) {
@@ -1278,32 +1229,17 @@ public class GameLifecycleService {
                 return;
             }
 
-            long deadlineEpochMs = clock.millis() + countdownMs;
-            TaskIntent readyIntent;
-            Game.ReadyCountdownStartOutcome outcome = game.startOrWaitReadyCountdown(deadlineEpochMs);
-            switch (outcome) {
-                case IGNORE -> { return; }
-                case TOURNAMENT_OVER -> {
-                    DurableTransactionContext.afterCommit(() -> mutationProxy().handleGameEnd(gameId, false));
-                    return;
+            GameReadinessCoordinator.Opening opening = readiness.open(gameId, game, clock.millis() + countdownMs);
+            switch (opening.progression()) {
+                case END_GAME -> DurableTransactionContext.afterCommit(() -> mutationProxy().handleGameEnd(gameId, false));
+                case START_HAND -> startNewHand(gameId);
+                case NONE -> {
+                    TaskIntent timeout = opening.timeout();
+                    if (timeout != null) {
+                        DurableTransactionContext.afterCommit(() -> scheduleRuntimeTask(timeout));
+                    }
                 }
-                case WAITING_FOR_PLAYERS -> {
-                    cancelReadyTimeout(gameId);
-                    gameStateService.broadcastGameState(gameId, game);
-                    return;
-                }
-                case ALL_READY -> {
-                    gameStateService.broadcastGameState(gameId, game);
-                    completeReadyCountdownAndStartNextHand(gameId, game);
-                    return;
-                }
-                case OPENED -> {
-                    readyIntent = GameRuntimeTimers.captureIntent(gameId, game, ScheduledGameTask.READY_TIMEOUT, deadlineEpochMs);
-                    gameStateService.broadcastGameState(gameId, game);
-                }
-                default -> throw new IllegalStateException("Unexpected ready start outcome: " + outcome);
             }
-            DurableTransactionContext.afterCommit(() -> scheduleRuntimeTask(readyIntent));
         });
     }
 
@@ -1315,35 +1251,7 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void markPlayerReadyForNextHand(String gameId, String playerName) {
-        roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null) {
-                throw new ResourceNotFoundException("Game not found");
-            }
-
-            Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            Long inactivityDeadline = room != null ? room.getInactivityDeadlineEpochMs() : null;
-            if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
-                mutationProxy().abandonGameDueToInactivity(gameId);
-                throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
-            }
-
-            Player player = game.findPlayerByName(playerName);
-            boolean previousReady = player != null && player.getIsReadyForNextHand();
-
-            game.setPlayerReadyForNextHand(playerName, true);
-            if (!previousReady) {
-                resetGameInactivityUnderLock(gameId, game);
-            }
-            logger.debug("Player {} marked ready for next hand in game {}", playerName, gameId);
-
-            if (game.areAllReadyEligiblePlayersReady()) {
-                completeReadyCountdownAndStartNextHand(gameId, game);
-            } else {
-                gameStateService.broadcastGameState(gameId, game);
-            }
-            return null;
-        });
+        setPlayerReadyForNextHand(gameId, playerName, true);
     }
 
     /**
@@ -1354,6 +1262,19 @@ public class GameLifecycleService {
      */
     @DurableMutation(roomId = "#gameId")
     public void unmarkPlayerReadyForNextHand(String gameId, String playerName) {
+        setPlayerReadyForNextHand(gameId, playerName, false);
+    }
+
+    /** Rejects expired activity within the caller's durable mutation. */
+    private void rejectExpiredActivity(String gameId, Room room) {
+        if (GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
+            mutationProxy().abandonGameDueToInactivity(gameId);
+            throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
+        }
+    }
+
+    /** Resolves current aggregates and applies inactivity validation before changing readiness. */
+    private void setPlayerReadyForNextHand(String gameId, String playerName, boolean ready) {
         roomCoordinator.coordinate(gameId, () -> {
             Game game = getGame(gameId);
             if (game == null) {
@@ -1361,23 +1282,10 @@ public class GameLifecycleService {
             }
 
             Room room = roomService != null ? roomService.getRoom(gameId) : null;
-            Long inactivityDeadline = room != null ? room.getInactivityDeadlineEpochMs() : null;
-            if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
-                mutationProxy().abandonGameDueToInactivity(gameId);
-                throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
+            rejectExpiredActivity(gameId, room);
+            if (readiness.setReady(gameId, game, playerName, ready, () -> resetGameInactivityUnderLock(gameId, game))) {
+                startNewHand(gameId);
             }
-
-            Player player = game.findPlayerByName(playerName);
-            boolean previousReady = player != null && player.getIsReadyForNextHand();
-
-            game.setPlayerReadyForNextHand(playerName, false);
-            if (previousReady) {
-                resetGameInactivityUnderLock(gameId, game);
-            }
-            logger.debug("Player {} unmarked ready for next hand in game {}", playerName, gameId);
-
-            gameStateService.broadcastGameState(gameId, game);
-            return null;
         });
     }
 
@@ -1393,19 +1301,8 @@ public class GameLifecycleService {
             return;
         }
         roomCoordinator.coordinate(gameId, () -> {
-            Game game = getGame(gameId);
-            if (game == null) {
-                cancelReadyTimeout(gameId);
-                return;
-            }
-
-            switch (game.expireReadyCountdown(expectedDeadlineEpochMs)) {
-                case IGNORE_STALE -> { }
-                case WAITING_FOR_PLAYERS -> {
-                    cancelReadyTimeout(gameId);
-                    gameStateService.broadcastGameState(gameId, game);
-                }
-                case FORCED_READY -> completeReadyCountdownAndStartNextHand(gameId, game);
+            if (readiness.expire(gameId, getGame(gameId), expectedDeadlineEpochMs)) {
+                startNewHand(gameId);
             }
         });
     }
@@ -1431,17 +1328,9 @@ public class GameLifecycleService {
      * @param game   authoritative game state
      */
     void completeReadyCountdownAndStartNextHand(String gameId, Game game) {
-        cancelReadyTimeout(gameId);
-        cancelTurnTimeout(gameId);
-
-        game.closeReadyCountdown();
-        game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
-        game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
+        roomCoordinator.assertHeldByCurrentThread(gameId);
+        readiness.complete(gameId, game);
         startNewHand(gameId);
-    }
-
-    private void cancelReadyTimeout(String gameId) {
-        runtimeTimers.cancelTask(gameId, ScheduledGameTask.READY_TIMEOUT);
     }
 
     public void cancelTurnTimeout(String gameId) {
@@ -1468,11 +1357,7 @@ public class GameLifecycleService {
             Room room = roomService.getRoom(gameId);
             if (room == null) throw new ResourceNotFoundException("Room not found");
 
-            Long inactivityDeadline = room.getInactivityDeadlineEpochMs();
-            if (inactivityDeadline != null && inactivityDeadline > 0 && clock.millis() >= inactivityDeadline) {
-                mutationProxy().abandonGameDueToInactivity(gameId);
-                throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
-            }
+            rejectExpiredActivity(gameId, room);
             if (game.isGameOver()) {
                 GameEndResponse retained = game.getRetainedTerminalResult();
                 if (retained != null && retained.abandoned()) {

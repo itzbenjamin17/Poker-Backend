@@ -1,11 +1,13 @@
 package com.pokergame.service;
 
 import com.pokergame.model.HandEvaluationResult;
+import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
+import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
@@ -15,7 +17,7 @@ import com.pokergame.model.Game;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.service.GameRuntimeTimers.TaskIntent;
+import com.pokergame.service.GameTimerRegistry.TaskIntent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -29,7 +31,11 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,12 +47,12 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for {@link GameRuntimeTimers} in-memory scheduler registrations and
+ * Unit tests for {@link GameTimerRegistry} in-memory scheduler registrations and
  * scheduled task execution guards migrated from {@link GameLifecycleServiceTest}.
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("GameRuntimeTimers and Scheduled Task Dispatch")
-class GameRuntimeTimersTest {
+@DisplayName("GameTimerRegistry and Scheduled Task Dispatch")
+class GameTimerRegistryTest {
 
     @Mock
     private TaskScheduler taskScheduler;
@@ -64,13 +70,13 @@ class GameRuntimeTimersTest {
     private SimpMessagingTemplate messagingTemplate;
 
     private GameLifecycleService gameLifecycleService;
-    private GameRuntimeTimers runtimeTimers;
+    private GameTimerRegistry runtimeTimers;
     private Room testRoom;
     private static final String ROOM_ID = "test-room-id";
 
     @BeforeEach
     void setUp() {
-        runtimeTimers = new GameRuntimeTimers(taskScheduler);
+        runtimeTimers = new GameTimerRegistry(taskScheduler);
         gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
                 taskScheduler);
         lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
@@ -88,6 +94,135 @@ class GameRuntimeTimersTest {
         testRoom.addPlayer("Host");
         testRoom.addPlayer("Player2");
         stubGameEndCapture();
+    }
+
+    @Test
+    void immediateInactivityCompletionDoesNotRemoveReplacement() {
+        ScheduledFuture<?> first = mock(ScheduledFuture.class);
+        ScheduledFuture<?> replacement = mock(ScheduledFuture.class);
+        Runnable replacementCallback = mock(Runnable.class);
+        when(taskScheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenAnswer(invocation -> {
+                    invocation.<Runnable>getArgument(0).run();
+                    return first;
+                })
+                .thenAnswer(invocation -> replacement);
+
+        runtimeTimers.scheduleInactivity(ROOM_ID, 100L, 100L,
+                () -> runtimeTimers.scheduleInactivity(ROOM_ID, 200L, 100L, replacementCallback));
+
+        verify(first).cancel(false);
+        verifyNoInteractions(replacement, replacementCallback);
+        assertEquals(0, runtimeTimers.countForGame(ROOM_ID));
+
+        runtimeTimers.cancelAllForGame(ROOM_ID, true);
+        verify(replacement).cancel(false);
+    }
+
+    @Test
+    void cancellingInactivityBeforeFutureAttachmentCancelsReturnedFuture() {
+        ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        when(taskScheduler.schedule(any(Runnable.class), any(Instant.class))).thenAnswer(invocation -> {
+            runtimeTimers.cancelInactivity(ROOM_ID);
+            invocation.<Runnable>getArgument(0).run();
+            return future;
+        });
+
+        runtimeTimers.scheduleInactivity(ROOM_ID, 200L, 100L, () -> fail("Unexpected timeout"));
+
+        verify(future).cancel(false);
+        runtimeTimers.cancelInactivity(ROOM_ID);
+        verifyNoMoreInteractions(future);
+    }
+
+    @Test
+    void failedInactivitySchedulingLeavesNoRunnableRegistration() {
+        ArgumentCaptor<Runnable> callbacks = ArgumentCaptor.forClass(Runnable.class);
+        RuntimeException schedulerFailure = new IllegalStateException("Scheduler unavailable");
+        when(taskScheduler.schedule(callbacks.capture(), any(Instant.class)))
+                .thenReturn(null)
+                .thenThrow(schedulerFailure);
+        Runnable expire = mock(Runnable.class);
+
+        runtimeTimers.scheduleInactivity(ROOM_ID, 100L, 100L, expire);
+        callbacks.getValue().run();
+        verifyNoInteractions(expire);
+        assertSame(schedulerFailure, assertThrows(RuntimeException.class,
+                () -> runtimeTimers.scheduleInactivity(ROOM_ID, 100L, 100L, expire)));
+
+        callbacks.getValue().run();
+        verifyNoInteractions(expire);
+    }
+
+    @Test
+    void missingGameIdDoesNotScheduleInactivity() {
+        runtimeTimers.scheduleInactivity(null, 100L, 100L, () -> fail("Unexpected timeout"));
+
+        verifyNoInteractions(taskScheduler);
+    }
+
+    @Test
+    void firstHandKeepsTheOriginalInactivityCallbackExecutable() {
+        Instant startedAt = Instant.now();
+        List<Runnable> inactivityCallbacks = captureInactivityCallbacks();
+        gameLifecycleService.setClock(Clock.fixed(startedAt, ZoneOffset.UTC));
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+
+        long deadline = startedAt.toEpochMilli() + GameLifecycleService.GAME_INACTIVITY_ALLOWANCE_MS;
+        assertEquals(deadline, gameLifecycleService.getInactivityDeadline(ROOM_ID));
+        assertEquals(1, inactivityCallbacks.size());
+        assertEquals(1, gameLifecycleService.getRuntimeTaskCount(ROOM_ID), "Only the turn timer is counted");
+        gameLifecycleService.setClock(Clock.fixed(Instant.ofEpochMilli(deadline), ZoneOffset.UTC));
+        inactivityCallbacks.getFirst().run();
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        assertTrue(game.isGameOver(), "The original inactivity callback must abandon the first hand");
+        assertTrue(testRoom.isTerminal());
+    }
+
+    @Test
+    void readinessActivitySupersedesTheOldInactivityCallbackAndTheNextHandKeepsItsReplacement() {
+        Instant startedAt = Instant.now();
+        List<Runnable> inactivityCallbacks = captureInactivityCallbacks();
+        gameLifecycleService.setClock(Clock.fixed(startedAt, ZoneOffset.UTC));
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        long firstHand = game.getHandNumber();
+        PlayerActionService actions = new PlayerActionService(gameLifecycleService, gameStateService);
+        actions.processPlayerAction(ROOM_ID, new PlayerActionRequest(PlayerAction.FOLD, null),
+                game.getCurrentPlayer().getName());
+        Runnable previousInactivity = inactivityCallbacks.getLast();
+
+        Instant readiedAt = startedAt.plusSeconds(1);
+        gameLifecycleService.setClock(Clock.fixed(readiedAt, ZoneOffset.UTC));
+        gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host");
+        gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Player2");
+
+        long deadline = readiedAt.toEpochMilli() + GameLifecycleService.GAME_INACTIVITY_ALLOWANCE_MS;
+        assertEquals(firstHand + 1, game.getHandNumber());
+        assertEquals(deadline, gameLifecycleService.getInactivityDeadline(ROOM_ID));
+        assertNotSame(previousInactivity, inactivityCallbacks.getLast());
+        gameLifecycleService.setClock(Clock.fixed(Instant.ofEpochMilli(deadline - 1), ZoneOffset.UTC));
+        previousInactivity.run();
+        assertFalse(game.isGameOver());
+        gameLifecycleService.setClock(Clock.fixed(Instant.ofEpochMilli(deadline), ZoneOffset.UTC));
+        inactivityCallbacks.getLast().run();
+        assertTrue(game.isGameOver(), "The replacement inactivity callback must abandon the next hand");
+        assertTrue(testRoom.isTerminal());
+    }
+
+    /** Captures the 15-minute allowance separately from shorter turn and ready timers. */
+    private List<Runnable> captureInactivityCallbacks() {
+        List<Runnable> callbacks = new ArrayList<>();
+        when(taskScheduler.schedule(any(Runnable.class), any(Instant.class))).thenAnswer(call -> {
+            if (call.getArgument(1, Instant.class).isAfter(Instant.now().plusSeconds(600))) {
+                callbacks.add(call.getArgument(0));
+            }
+            return mock(ScheduledFuture.class);
+        });
+        return callbacks;
     }
 
     private void stubGameEndCapture() {
@@ -121,11 +256,11 @@ class GameRuntimeTimersTest {
     }
 
     // =========================================================================
-    // 1. Direct GameRuntimeTimers Unit Tests
+    // 1. Direct GameTimerRegistry Unit Tests
     // =========================================================================
 
     @Nested
-    @DisplayName("Direct GameRuntimeTimers Unit Tests")
+    @DisplayName("Direct GameTimerRegistry Unit Tests")
     class DirectRuntimeTimersTests {
 
         @Test
@@ -133,7 +268,7 @@ class GameRuntimeTimersTest {
         void captureAllIntents_WhenNoTasks_ReturnsEmptyList() {
             Game game = startedGame();
             game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-            List<TaskIntent> intents = GameRuntimeTimers.captureAllIntents(ROOM_ID, game);
+            List<TaskIntent> intents = GameTimerRegistry.captureAllIntents(ROOM_ID, game);
             assertTrue(intents.isEmpty());
         }
 
@@ -145,7 +280,7 @@ class GameRuntimeTimersTest {
             game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 10_000L);
             game.scheduleTask(ScheduledGameTask.CLEANUP, 60_000L);
 
-            List<TaskIntent> intents = GameRuntimeTimers.captureAllIntents(ROOM_ID, game);
+            List<TaskIntent> intents = GameTimerRegistry.captureAllIntents(ROOM_ID, game);
             assertEquals(2, intents.size());
 
             TaskIntent autoAdvanceIntent = intents.stream()
@@ -277,6 +412,43 @@ class GameRuntimeTimersTest {
 
             runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.CLEANUP);
             verify(future).cancel(false);
+            assertEquals(0, runtimeTimers.countForGame(ROOM_ID));
+        }
+
+        @Test
+        void cancellingProgressionPreservesInactivityAndTerminalRegistrations() {
+            Game game = startedGame();
+            long now = System.currentTimeMillis();
+            long deadline = now + 60_000;
+            Map<ScheduledGameTask, ScheduledFuture<?>> futures = new EnumMap<>(ScheduledGameTask.class);
+            ScheduledFuture<?> inactivity = mock(ScheduledFuture.class);
+            for (ScheduledGameTask task : ScheduledGameTask.values()) {
+                ScheduledFuture<?> future = mock(ScheduledFuture.class);
+                futures.put(task, future);
+                doReturn(future).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
+                game.scheduleTask(task, deadline);
+                runtimeTimers.schedule(GameTimerRegistry.captureIntent(ROOM_ID, game, task, deadline),
+                        game, (g, t, d, h, generation) -> {});
+            }
+            doReturn(inactivity).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
+            runtimeTimers.scheduleInactivity(ROOM_ID, deadline, now, () -> {});
+
+            runtimeTimers.cancelProgressionForGame(ROOM_ID);
+
+            for (ScheduledGameTask task : List.of(ScheduledGameTask.TURN_TIMEOUT, ScheduledGameTask.AUTO_ADVANCE,
+                    ScheduledGameTask.READY_OPEN, ScheduledGameTask.READY_TIMEOUT, ScheduledGameTask.NEW_HAND)) {
+                verify(futures.get(task)).cancel(false);
+            }
+            verifyNoInteractions(inactivity, futures.get(ScheduledGameTask.CLEANUP), futures.get(ScheduledGameTask.GAME_END));
+            assertEquals(2, runtimeTimers.countForGame(ROOM_ID));
+
+            runtimeTimers.cancelAllForGame(ROOM_ID, true);
+
+            verify(inactivity).cancel(false);
+            verify(futures.get(ScheduledGameTask.GAME_END)).cancel(false);
+            verifyNoInteractions(futures.get(ScheduledGameTask.CLEANUP));
+            runtimeTimers.cancelAllForGame(ROOM_ID, false);
+            verify(futures.get(ScheduledGameTask.CLEANUP)).cancel(false);
             assertEquals(0, runtimeTimers.countForGame(ROOM_ID));
         }
 
