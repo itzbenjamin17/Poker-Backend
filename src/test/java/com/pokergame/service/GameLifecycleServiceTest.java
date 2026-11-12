@@ -912,6 +912,20 @@ class GameLifecycleServiceTest {
     }
 
     @Test
+    void deadlineOnlyDispatchCanExpireAGateWithoutRecordedTaskIntent() {
+        Game game = gameWithReadyCountdown();
+        long deadline = game.getReadyCountdownDeadlineEpochMs();
+        long hand = game.getHandNumber();
+        game.conductShowdown();
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+
+        gameLifecycleService.executeScheduledTask(ROOM_ID, ScheduledGameTask.READY_TIMEOUT, deadline);
+
+        assertEquals(hand + 1, game.getHandNumber());
+        assertNull(game.getReadyCountdownDeadlineEpochMs());
+    }
+
+    @Test
     void readyTimeoutWithOneConnectedEligiblePlayerWaitsWithoutStartingOrPostingBlinds() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);

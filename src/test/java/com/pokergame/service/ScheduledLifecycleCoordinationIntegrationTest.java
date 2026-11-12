@@ -11,6 +11,7 @@ import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;
 import com.pokergame.security.PlayerPrincipal;
@@ -333,6 +334,57 @@ class ScheduledLifecycleCoordinationIntegrationTest {
             assertThat(game.isGameOver()).isFalse();
             assertThat(room.isTerminal()).isFalse();
             assertThat(lifecycle.gameExists(roomId)).isTrue();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void lastReadyRacingTimeoutStartsExactlyOneHand(boolean persistenceEnabled) throws Exception {
+        try (ConfigurableApplicationContext context = startApplication(persistenceEnabled)) {
+            RoomService rooms = context.getBean(RoomService.class);
+            GameLifecycleService lifecycle = context.getBean(GameLifecycleService.class);
+            PlayerActionService actions = context.getBean(PlayerActionService.class);
+            String roomId = rooms.createRoom(new CreateRoomRequest("Ready Race", "Host", 6, 10, 20, 1000, null));
+            rooms.joinRoom(new JoinRoomRequest("Ready Race", "Alice", null));
+            lifecycle.createGameFromRoom(roomId);
+            lifecycle.markPlayerReconnected(roomId, "Host");
+            lifecycle.markPlayerReconnected(roomId, "Alice");
+
+            Game game = lifecycle.getGame(roomId);
+            long hand = game.getHandNumber();
+            actions.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, null),
+                    game.getCurrentPlayer().getName());
+            lifecycle.markPlayerReadyForNextHand(roomId, "Host");
+            long deadline = game.getReadyCountdownDeadlineEpochMs();
+            long generation = game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT);
+            CyclicBarrier start = new CyclicBarrier(2);
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+            try {
+                Future<?> ready = executor.submit(() -> {
+                    start.await(5, TimeUnit.SECONDS);
+                    try {
+                        lifecycle.markPlayerReadyForNextHand(roomId, "Alice");
+                    } catch (UnauthorisedActionException alreadyAdvanced) {
+                        assertThat(alreadyAdvanced).hasMessage("Ready countdown is not active.");
+                    }
+                    return null;
+                });
+                Future<?> timeout = executor.submit(() -> {
+                    start.await(5, TimeUnit.SECONDS);
+                    lifecycle.executeScheduledTask(roomId, ScheduledGameTask.READY_TIMEOUT, deadline, hand, generation);
+                    return null;
+                });
+                ready.get(5, TimeUnit.SECONDS);
+                timeout.get(5, TimeUnit.SECONDS);
+            } finally {
+                stopExecutor(executor);
+            }
+
+            Game nextHand = lifecycle.getGame(roomId);
+            assertThat(nextHand.getHandNumber()).isEqualTo(hand + 1);
+            assertThat(nextHand.getReadyCountdownDeadlineEpochMs()).isNull();
+            assertThat(nextHand.getPlayers().stream().mapToInt(player -> player.getChips()).sum()
+                    + nextHand.getPot()).isEqualTo(2000);
         }
     }
 

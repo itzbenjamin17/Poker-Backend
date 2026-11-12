@@ -32,6 +32,7 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -39,9 +40,14 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static com.pokergame.util.ConcurrentTestSupport.stopExecutor;
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -223,6 +229,65 @@ class GameTimerRegistryTest {
             return mock(ScheduledFuture.class);
         });
         return callbacks;
+    }
+
+    @Test
+    void startedReadyCallbackCannotExpireAReplacementWithTheSameDeadline() throws Exception {
+        Clock clock = Clock.fixed(Instant.now(), ZoneOffset.UTC);
+        gameLifecycleService.setClock(clock);
+        when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+        List<Runnable> callbacks = new ArrayList<>();
+        when(taskScheduler.schedule(any(Runnable.class), any(Instant.class))).thenAnswer(call -> {
+            callbacks.add(call.getArgument(0));
+            return mock(ScheduledFuture.class);
+        });
+        gameLifecycleService.createGameFromRoom(ROOM_ID);
+        Game game = gameLifecycleService.getGame(ROOM_ID);
+        new PlayerActionService(gameLifecycleService, gameStateService).processPlayerAction(
+                ROOM_ID, new PlayerActionRequest(PlayerAction.FOLD, null), game.getCurrentPlayer().getName());
+        gameLifecycleService.startReadyCountdown(ROOM_ID, 60_000);
+        long hand = game.getHandNumber();
+        long deadline = game.getReadyCountdownDeadlineEpochMs();
+        long oldGeneration = game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT);
+        HandSettlementResult settled = game.getLastSettlementResult();
+        Runnable oldCallback = callbacks.getLast();
+        RoomCoordinator coordinator = gameLifecycleService.getRoomCoordinator();
+
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> started;
+            try (var lease = coordinator.acquire(ROOM_ID)) {
+                started = executor.submit(oldCallback);
+                // The second reservation can only come from the callback, after its runtime guard.
+                await().atMost(Duration.ofSeconds(5)).until(
+                        () -> coordinator.getLockRegistry().reservationCount(ROOM_ID) == 2);
+                gameLifecycleService.startReadyCountdown(ROOM_ID, 60_000);
+                assertEquals(deadline, game.getReadyCountdownDeadlineEpochMs());
+                assertNotEquals(oldGeneration, game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT));
+                gameLifecycleService.setClock(Clock.fixed(Instant.ofEpochMilli(deadline), ZoneOffset.UTC));
+            }
+            started.get(5, TimeUnit.SECONDS);
+
+            long generation = game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT);
+            assertEquals(hand, game.getHandNumber(), "Old callback must not deal the next hand");
+            assertEquals(deadline, game.getReadyCountdownDeadlineEpochMs());
+            assertEquals(deadline, game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertSame(settled, game.getLastSettlementResult());
+
+            gameLifecycleService.executeScheduledTask(ROOM_ID, ScheduledGameTask.READY_TIMEOUT,
+                    deadline, hand - 1, generation);
+            assertEquals(hand, game.getHandNumber());
+            assertEquals(deadline, game.getReadyCountdownDeadlineEpochMs());
+
+            callbacks.getLast().run();
+            gameLifecycleService.executeScheduledTask(ROOM_ID, ScheduledGameTask.READY_TIMEOUT,
+                    deadline, hand, generation);
+            assertEquals(hand + 1, game.getHandNumber());
+            assertNull(game.getReadyCountdownDeadlineEpochMs());
+            assertEquals(200, game.getPlayers().stream().mapToInt(Player::getChips).sum() + game.getPot());
+        } finally {
+            stopExecutor(executor);
+        }
     }
 
     private void stubGameEndCapture() {

@@ -981,6 +981,10 @@ public class GameLifecycleService {
         roomCoordinator.coordinate(gameId, () -> {
             Game game = getGame(gameId);
             if (game == null) return;
+            if (task == ScheduledGameTask.READY_TIMEOUT) {
+                expireReadyCountdown(gameId, expectedDeadline);
+                return;
+            }
             long generation = game.getScheduledTaskGeneration(task);
             long handNumber = game.getHandNumber();
             executeScheduledTask(gameId, task, expectedDeadline, handNumber, generation);
@@ -1013,7 +1017,15 @@ public class GameLifecycleService {
                     return;
                 }
                 case READY_TIMEOUT -> {
-                    expireReadyCountdown(gameId, expectedDeadline);
+                    Game game = getGame(gameId);
+                    // Keep the task recorded until readiness has evaluated the gate.
+                    if (game != null
+                            && game.getHandNumber() == expectedHandNumber
+                            && game.getScheduledTaskGeneration(task) == expectedGeneration
+                            && Objects.equals(game.getScheduledTaskDeadline(task), expectedDeadline)
+                            && readiness.expire(gameId, game, expectedDeadline)) {
+                        startNewHand(gameId);
+                    }
                     return;
                 }
                 default -> { }
@@ -1290,7 +1302,8 @@ public class GameLifecycleService {
     }
 
     /**
-     * Closes a ready gate only for the deadline that created this callback.
+     * Expires the ready gate by deadline for compatibility callers.
+     * Scheduled callbacks use the hand number and generation as well.
      *
      * @param gameId                 game whose ready gate may expire
      * @param expectedDeadlineEpochMs deadline captured when the timer was submitted
@@ -1308,9 +1321,8 @@ public class GameLifecycleService {
     }
 
     /**
-     * Closes a ready gate only for the deadline that created this callback. Without
-     * the comparison, a cancelled old timer could close a newly opened countdown.
-     * Backwards-compatible overload.
+     * Expires the ready gate by deadline for compatibility callers.
+     * The deadline alone cannot distinguish two gates with the same expiry.
      *
      * @param gameId                 game whose ready gate may expire
      * @param expectedDeadlineEpochMs deadline captured when the timer was submitted
