@@ -604,8 +604,7 @@ class PersistenceRecoveryTest {
         doReturn(mock(ScheduledFuture.class)).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
 
         GameLifecycleService realLifecycle = new GameLifecycleService(
-                roomService, evaluator, gameStateService, messagingTemplate, taskScheduler);
-        realLifecycle.setClock(clock);
+                roomService, evaluator, gameStateService, messagingTemplate, taskScheduler, clock);
         realLifecycle.restoreGame(game);
         when(roomService.getRoom("room-turn-recovery")).thenReturn(room);
         doAnswer(inv -> {

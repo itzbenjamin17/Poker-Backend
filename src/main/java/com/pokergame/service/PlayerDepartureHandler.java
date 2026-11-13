@@ -5,7 +5,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -37,11 +36,11 @@ final class PlayerDepartureHandler {
     private final GameTimerRegistry runtimeTimers;
     private final ActiveGameRegistry activeGames;
     private final RoomCoordinator roomCoordinator;
-    private final Supplier<Clock> clock;
+    private final Clock clock;
 
     PlayerDepartureHandler(RoomService roomService, GameStateService gameStateService, GameCompletionHandler completion,
             HandProgressionService handProgression, GameReadinessCoordinator readiness, GameTimerRegistry runtimeTimers,
-            ActiveGameRegistry activeGames, RoomCoordinator roomCoordinator, Supplier<Clock> clock) {
+            ActiveGameRegistry activeGames, RoomCoordinator roomCoordinator, Clock clock) {
         this.roomService = roomService;
         this.gameStateService = gameStateService;
         this.completion = completion;
@@ -66,7 +65,7 @@ final class PlayerDepartureHandler {
 
         if (roomService.getRoom(roomId) != room) return;
         Game game = activeGames.get(roomId);
-        if (game != null && GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.get().millis())) {
+        if (game != null && GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
             completion.abandonGameDueToInactivity(roomId);
             return;
         }
@@ -155,7 +154,7 @@ final class PlayerDepartureHandler {
     void handleTurnTimeoutUnderLock(String gameId, Game game) {
         assertHeld(gameId);
         Room room = roomService != null ? roomService.getRoom(gameId) : null;
-        if (GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.get().millis())) {
+        if (GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
             logger.info("Inactivity deadline expired concurrently with turn timeout for game {}; abandonment takes precedence", gameId);
             completion.abandonGameDueToInactivity(gameId);
             return;

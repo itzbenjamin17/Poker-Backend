@@ -11,7 +11,6 @@ import java.time.Clock;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiConsumer;
-import java.util.function.Supplier;
 
 /** Records durable timer intent, submits accepted work, and validates callbacks under the room lease. */
 final class GameTaskScheduler {
@@ -36,12 +35,12 @@ final class GameTaskScheduler {
     private final GameTimerRegistry timerRegistry;
     private final RoomCoordinator roomCoordinator;
     private final RoomService roomService;
-    private final Supplier<Clock> clock;
+    private final Clock clock;
     private final ScheduledTaskExecutor executeTask;
     private final BiConsumer<String, Long> executeInactivity;
 
     GameTaskScheduler(ActiveGameRegistry activeGames, GameTimerRegistry timerRegistry, RoomCoordinator roomCoordinator,
-            RoomService roomService, Supplier<Clock> clock, ScheduledTaskExecutor executeTask,
+            RoomService roomService, Clock clock, ScheduledTaskExecutor executeTask,
             BiConsumer<String, Long> executeInactivity) {
         this.activeGames = activeGames;
         this.timerRegistry = timerRegistry;
@@ -77,12 +76,12 @@ final class GameTaskScheduler {
 
     /** Records cleanup before returning so a restart cannot strand a finished room. */
     void scheduleGameCleanup(String gameId, long delayMs) {
-        persistScheduledTask(gameId, ScheduledGameTask.CLEANUP, clock.get().millis() + Math.max(0, delayMs));
+        persistScheduledTask(gameId, ScheduledGameTask.CLEANUP, clock.millis() + Math.max(0, delayMs));
     }
 
     /** Preserves the final board display before publishing the game-over overlay. */
     void scheduleGameEnd(String gameId, long delayMs) {
-        persistScheduledTask(gameId, ScheduledGameTask.GAME_END, clock.get().millis() + Math.max(0, delayMs));
+        persistScheduledTask(gameId, ScheduledGameTask.GAME_END, clock.millis() + Math.max(0, delayMs));
     }
 
     void scheduleAutoAdvance(String gameId) {
@@ -90,13 +89,13 @@ final class GameTaskScheduler {
     }
 
     void scheduleTurnTimeout(String gameId) {
-        persistScheduledTask(gameId, ScheduledGameTask.TURN_TIMEOUT, clock.get().millis() + TURN_ALLOWANCE_MS);
+        persistScheduledTask(gameId, ScheduledGameTask.TURN_TIMEOUT, clock.millis() + TURN_ALLOWANCE_MS);
     }
 
     /** Registers the room's captured inactivity deadline with the runtime timer owner. */
     void scheduleGameInactivity(String gameId, Long deadlineEpochMs) {
         roomCoordinator.assertHeldByCurrentThread(gameId);
-        timerRegistry.scheduleInactivity(gameId, deadlineEpochMs, clock.get().millis(),
+        timerRegistry.scheduleInactivity(gameId, deadlineEpochMs, clock.millis(),
                 () -> executeInactivity.accept(gameId, deadlineEpochMs));
     }
 
@@ -115,7 +114,7 @@ final class GameTaskScheduler {
     void resetGameInactivityUnderLock(String gameId, Game game) {
         roomCoordinator.assertHeldByCurrentThread(gameId);
         if (!GameInactivityPolicy.canReset(game)) return;
-        long newDeadline = GameInactivityPolicy.nextDeadline(clock.get().millis());
+        long newDeadline = GameInactivityPolicy.nextDeadline(clock.millis());
         Room room = roomService != null ? roomService.getRoom(gameId) : null;
         if (room != null) {
             room.setInactivityDeadlineEpochMs(newDeadline);

@@ -9,7 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.function.LongSupplier;
 
 /** Deals and advances hands, recording scheduled progression and publishing hand effects under the room lease. */
 final class HandProgressionService {
@@ -28,11 +27,11 @@ final class HandProgressionService {
     private final GameTaskScheduler scheduling;
     private final GameCompletionHandler completion;
     private final GameStateService gameStateService;
-    private final LongSupplier roundEndDisplayDelayMs;
+    private final long roundEndDisplayDelayMs;
 
     HandProgressionService(ActiveGameRegistry activeGames, RoomCoordinator roomCoordinator,
             GameTimerRegistry runtimeTimers, GameTaskScheduler scheduling, GameCompletionHandler completion,
-            GameStateService gameStateService, LongSupplier roundEndDisplayDelayMs) {
+            GameStateService gameStateService, long roundEndDisplayDelayMs) {
         this.activeGames = activeGames;
         this.roomCoordinator = roomCoordinator;
         this.runtimeTimers = runtimeTimers;
@@ -159,7 +158,7 @@ final class HandProgressionService {
             scheduling.scheduleGameEnd(gameId, FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
             return false;
         }
-        return scheduling.scheduleReadyCountdownOpen(gameId, roundEndDisplayDelayMs.getAsLong())
+        return scheduling.scheduleReadyCountdownOpen(gameId, roundEndDisplayDelayMs)
                 == GameTaskScheduler.ReadyOpening.OPEN_IMMEDIATELY;
     }
 

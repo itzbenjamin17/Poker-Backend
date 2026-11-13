@@ -45,24 +45,16 @@ public class GameLifecycleService {
     public static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = HandProgressionService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS;
     public static final long TURN_ALLOWANCE_MS = GameTaskScheduler.TURN_ALLOWANCE_MS;
     public static final long GAME_INACTIVITY_ALLOWANCE_MS = GameInactivityPolicy.ALLOWANCE_MS;
-    private Clock clock = Clock.systemUTC();
-
-    /** Supplies the authoritative clock without changing legacy construction. */
-    @Autowired(required = false)
-    public void setClock(Clock clock) { this.clock = clock; }
+    private final Clock clock;
 
     public Clock getClock() { return clock; }
 
-    @Value("${poker.game-end.display-delay-ms:20000}")
-    private long gameEndDisplayDelayMs = 20000;
+    private final long gameEndDisplayDelayMs;
 
     public long getGameEndDisplayDelayMs() { return gameEndDisplayDelayMs; }
 
-    @Value("${poker.round-end.display-delay-ms:0}")
-    private long roundEndDisplayDelayMs;
-
-    @Value("${poker.ready-countdown-ms:30000}")
-    private long configuredReadyCountdownMs = 30000;
+    private final long roundEndDisplayDelayMs;
+    private final long configuredReadyCountdownMs;
 
     /** Returns the configured ready countdown duration in milliseconds. */
     long getConfiguredReadyCountdownMs() {
@@ -96,7 +88,16 @@ public class GameLifecycleService {
             GameStateService gameStateService,
             SimpMessagingTemplate messagingTemplate,
             @Qualifier("taskScheduler") TaskScheduler taskScheduler) {
-        this(roomService, handEvaluatorService, gameStateService, messagingTemplate, taskScheduler, (RoomCoordinator) null);
+        this(roomService, handEvaluatorService, gameStateService, messagingTemplate, taskScheduler,
+                (RoomCoordinator) null, Clock.systemUTC(), 20_000, 0, 30_000);
+    }
+
+    /** Creates a lifecycle service with an explicitly supplied clock for deterministic callers. */
+    public GameLifecycleService(RoomService roomService, HandEvaluatorService handEvaluatorService,
+            GameStateService gameStateService, SimpMessagingTemplate messagingTemplate,
+            TaskScheduler taskScheduler, Clock clock) {
+        this(roomService, handEvaluatorService, gameStateService, messagingTemplate, taskScheduler,
+                (RoomCoordinator) null, clock, 20_000, 0, 30_000);
     }
 
     /** Creates the Spring service with the application room coordinator when available. */
@@ -106,9 +107,14 @@ public class GameLifecycleService {
             GameStateService gameStateService,
             SimpMessagingTemplate messagingTemplate,
             @Qualifier("taskScheduler") TaskScheduler taskScheduler,
-            ObjectProvider<RoomCoordinator> roomCoordinatorProvider) {
+            ObjectProvider<RoomCoordinator> roomCoordinatorProvider,
+            Clock clock,
+            @Value("${poker.game-end.display-delay-ms:20000}") long gameEndDisplayDelayMs,
+            @Value("${poker.round-end.display-delay-ms:0}") long roundEndDisplayDelayMs,
+            @Value("${poker.ready-countdown-ms:30000}") long configuredReadyCountdownMs) {
         this(roomService, handEvaluatorService, gameStateService, messagingTemplate, taskScheduler,
-                roomCoordinatorProvider != null ? roomCoordinatorProvider.getIfAvailable(RoomCoordinator::new) : null);
+                roomCoordinatorProvider != null ? roomCoordinatorProvider.getIfAvailable(RoomCoordinator::new) : null,
+                clock, gameEndDisplayDelayMs, roundEndDisplayDelayMs, configuredReadyCountdownMs);
     }
 
     /** Creates the lifecycle service and its workflow owners with a shared room coordinator. */
@@ -118,24 +124,51 @@ public class GameLifecycleService {
             SimpMessagingTemplate messagingTemplate,
             TaskScheduler taskScheduler,
             RoomCoordinator roomCoordinator) {
+        this(roomService, handEvaluatorService, gameStateService, messagingTemplate, taskScheduler, roomCoordinator,
+                Clock.systemUTC(), 20_000, 0, 30_000);
+    }
+
+    /** Creates a lifecycle service and its workflow owners with a supplied clock. */
+    public GameLifecycleService(RoomService roomService, HandEvaluatorService handEvaluatorService,
+            GameStateService gameStateService, SimpMessagingTemplate messagingTemplate,
+            TaskScheduler taskScheduler, RoomCoordinator roomCoordinator, Clock clock) {
+        this(roomService, handEvaluatorService, gameStateService, messagingTemplate, taskScheduler,
+                roomCoordinator, clock, 20_000, 0, 30_000);
+    }
+
+    /** Creates the lifecycle service and its workflow owners with fixed runtime dependencies. */
+    private GameLifecycleService(RoomService roomService,
+            HandEvaluatorService handEvaluatorService,
+            GameStateService gameStateService,
+            SimpMessagingTemplate messagingTemplate,
+            TaskScheduler taskScheduler,
+            RoomCoordinator roomCoordinator,
+            Clock clock,
+            long gameEndDisplayDelayMs,
+            long roundEndDisplayDelayMs,
+            long configuredReadyCountdownMs) {
         this.roomService = roomService;
         this.handEvaluator = handEvaluatorService;
         this.messagingTemplate = messagingTemplate;
+        this.clock = Objects.requireNonNull(clock);
+        this.gameEndDisplayDelayMs = gameEndDisplayDelayMs;
+        this.roundEndDisplayDelayMs = roundEndDisplayDelayMs;
+        this.configuredReadyCountdownMs = configuredReadyCountdownMs;
         this.runtimeTimers = new GameTimerRegistry(taskScheduler);
         this.roomCoordinator = roomCoordinator != null ? roomCoordinator : new RoomCoordinator();
         this.scheduling = new GameTaskScheduler(activeGames, runtimeTimers, this.roomCoordinator, roomService,
-                this::getClock,
+                clock,
                 (gameId, task, deadline, hand, generation) -> mutationProxy().executeScheduledTask(gameId, task, deadline, hand, generation),
                 (gameId, deadline) -> mutationProxy().executeInactivityCleanup(gameId, deadline));
         this.completion = new GameCompletionHandler(activeGames, roomService, gameStateService, runtimeTimers,
-                scheduling, this.roomCoordinator, this::getClock, this::getGameEndDisplayDelayMs);
+                scheduling, this.roomCoordinator, clock, gameEndDisplayDelayMs);
         this.handProgression = new HandProgressionService(activeGames, this.roomCoordinator, runtimeTimers, scheduling,
-                completion, gameStateService, () -> roundEndDisplayDelayMs);
+                completion, gameStateService, roundEndDisplayDelayMs);
         this.readiness = new GameReadinessCoordinator(activeGames, roomService, gameStateService, runtimeTimers,
-                scheduling, completion, handProgression, this.roomCoordinator, this::getClock,
-                this::getConfiguredReadyCountdownMs, gameId -> mutationProxy().handleGameEnd(gameId, false));
+                scheduling, completion, handProgression, this.roomCoordinator, clock,
+                configuredReadyCountdownMs, gameId -> mutationProxy().handleGameEnd(gameId, false));
         this.departureHandler = new PlayerDepartureHandler(roomService, gameStateService, completion, handProgression,
-                readiness, runtimeTimers, activeGames, this.roomCoordinator, this::getClock);
+                readiness, runtimeTimers, activeGames, this.roomCoordinator, clock);
         this.recovery = new GameRecoveryService(activeGames, roomService, gameStateService, runtimeTimers,
                 this.roomCoordinator, scheduling);
     }

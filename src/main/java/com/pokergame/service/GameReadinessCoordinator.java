@@ -12,8 +12,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.util.function.Consumer;
-import java.util.function.LongSupplier;
-import java.util.function.Supplier;
 
 /** Orchestrates ready-gate transitions and their effects under the caller's room lease. */
 final class GameReadinessCoordinator {
@@ -33,14 +31,14 @@ final class GameReadinessCoordinator {
     private final GameCompletionHandler completion;
     private final HandProgressionService handProgression;
     private final RoomCoordinator roomCoordinator;
-    private final Supplier<Clock> clock;
-    private final LongSupplier configuredCountdownMs;
+    private final Clock clock;
+    private final long configuredCountdownMs;
     private final Consumer<String> endGameMutation;
 
     GameReadinessCoordinator(ActiveGameRegistry activeGames, RoomService roomService, GameStateService gameStateService,
             GameTimerRegistry runtimeTimers, GameTaskScheduler scheduling, GameCompletionHandler completion,
-            HandProgressionService handProgression, RoomCoordinator roomCoordinator, Supplier<Clock> clock,
-            LongSupplier configuredCountdownMs, Consumer<String> endGameMutation) {
+            HandProgressionService handProgression, RoomCoordinator roomCoordinator, Clock clock,
+            long configuredCountdownMs, Consumer<String> endGameMutation) {
         this.activeGames = activeGames;
         this.roomService = roomService;
         this.gameStateService = gameStateService;
@@ -59,7 +57,7 @@ final class GameReadinessCoordinator {
         roomCoordinator.assertHeldByCurrentThread(gameId);
         Game game = activeGames.get(gameId);
         if (game == null) return Progression.NONE;
-        Opening opening = open(gameId, game, clock.get().millis() + countdownMs);
+        Opening opening = open(gameId, game, clock.millis() + countdownMs);
         if (opening.timeout() != null) {
             scheduling.submitAfterCommit(opening.timeout());
         }
@@ -68,7 +66,7 @@ final class GameReadinessCoordinator {
 
     /** Opens readiness using the configured countdown in the current mutation. */
     void openConfiguredCountdown(String gameId) {
-        applyProgression(gameId, startReadyCountdown(gameId, configuredCountdownMs.getAsLong()));
+        applyProgression(gameId, startReadyCountdown(gameId, configuredCountdownMs));
     }
 
     Progression markPlayerReadyForNextHand(String gameId, String playerName) {

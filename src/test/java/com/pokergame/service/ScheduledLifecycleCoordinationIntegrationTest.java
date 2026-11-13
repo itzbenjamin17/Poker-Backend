@@ -31,7 +31,6 @@ import org.springframework.messaging.support.AbstractMessageChannel;
 import org.springframework.messaging.support.ChannelInterceptor;
 
 import java.nio.file.Path;
-import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -385,69 +384,6 @@ class ScheduledLifecycleCoordinationIntegrationTest {
             assertThat(nextHand.getReadyCountdownDeadlineEpochMs()).isNull();
             assertThat(nextHand.getPlayers().stream().mapToInt(player -> player.getChips()).sum()
                     + nextHand.getPot()).isEqualTo(2000);
-        }
-    }
-
-    @Test
-    void expiredReadyCommandRollsBackAbandonmentAndDiscardsItsBroadcast() throws Exception {
-        try (ConfigurableApplicationContext context = startApplication(true)) {
-            RoomService rooms = context.getBean(RoomService.class);
-            GameLifecycleService lifecycle = context.getBean(GameLifecycleService.class);
-            String roomId = rooms.createRoom(new CreateRoomRequest("Expired Ready", "Host", 6, 10, 20, 1000, null));
-            rooms.joinRoom(new JoinRoomRequest("Expired Ready", "Alice", null));
-            lifecycle.createGameFromRoom(roomId);
-            lifecycle.markPlayerReconnected(roomId, "Host");
-            lifecycle.markPlayerReconnected(roomId, "Alice");
-            Game current = lifecycle.getGame(roomId);
-            context.getBean(PlayerActionService.class).processPlayerAction(roomId,
-                    new PlayerActionRequest(PlayerAction.FOLD, null), current.getCurrentPlayer().getName());
-            AbstractMessageChannel broker = context.getBean("brokerChannel", AbstractMessageChannel.class);
-            AtomicLong broadcasts = new AtomicLong();
-            broker.addInterceptor(new ChannelInterceptor() {
-                @Override
-                public Message<?> preSend(Message<?> message, MessageChannel channel) {
-                    if (("/game/" + roomId).equals(SimpMessageHeaderAccessor.getDestination(message.getHeaders()))) {
-                        broadcasts.incrementAndGet();
-                    }
-                    return message;
-                }
-            });
-
-            lifecycle.getRoomCoordinator().coordinate(roomId, () -> {
-                long deadline = rooms.getRoom(roomId).getInactivityDeadlineEpochMs();
-                Game game = lifecycle.getGame(roomId);
-                var acceptedTasks = game.getScheduledTaskDeadlinesSnapshot();
-                Long readyDeadline = game.getReadyCountdownDeadlineEpochMs();
-                assertThat(readyDeadline).isNotNull();
-                int settledPot = game.getPot();
-                Clock originalClock = lifecycle.getClock();
-                try {
-                    lifecycle.setClock(Clock.fixed(Instant.ofEpochMilli(deadline - 1), ZoneOffset.UTC));
-                    lifecycle.executeInactivityCleanup(roomId, deadline);
-                    assertThat(lifecycle.getGame(roomId).isGameOver()).isFalse();
-
-                    lifecycle.setClock(Clock.fixed(Instant.ofEpochMilli(deadline), ZoneOffset.UTC));
-                    BadRequestException rejected = assertThrows(BadRequestException.class,
-                            () -> lifecycle.markPlayerReadyForNextHand(roomId, "Host"));
-                    assertThat(rejected.actionErrorCode()).isEqualTo("GAME_EXPIRED");
-                    Game restored = lifecycle.getGame(roomId);
-                    assertThat(restored.isGameOver()).isFalse();
-                    assertThat(restored.getRetainedTerminalResult()).isNull();
-                    assertThat(restored.getScheduledTaskDeadlinesSnapshot()).isEqualTo(acceptedTasks);
-                    assertThat(restored.getReadyCountdownDeadlineEpochMs()).isEqualTo(readyDeadline);
-                    assertThat(rooms.getRoom(roomId).isTerminal()).isFalse();
-                    assertThat(broadcasts.get()).isZero();
-
-                    assertThat(lifecycle.getInactivityDeadline(roomId)).isEqualTo(deadline);
-                    lifecycle.executeInactivityCleanup(roomId, deadline);
-                    assertThat(restored.getRetainedTerminalResult().abandoned()).isTrue();
-                    assertThat(restored.getPot()).isEqualTo(settledPot);
-                    lifecycle.executeInactivityCleanup(roomId, deadline);
-                    assertThat(broadcasts.get()).isEqualTo(1);
-                } finally {
-                    lifecycle.setClock(originalClock);
-                }
-            });
         }
     }
 

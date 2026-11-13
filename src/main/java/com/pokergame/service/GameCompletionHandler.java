@@ -15,8 +15,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.util.Set;
-import java.util.function.LongSupplier;
-import java.util.function.Supplier;
 
 /** Owns game completion, terminal review, and removal under the caller's room lease. */
 final class GameCompletionHandler {
@@ -29,12 +27,12 @@ final class GameCompletionHandler {
     private final GameTimerRegistry runtimeTimers;
     private final GameTaskScheduler scheduling;
     private final RoomCoordinator roomCoordinator;
-    private final Supplier<Clock> clock;
-    private final LongSupplier cleanupDelayMs;
+    private final Clock clock;
+    private final long cleanupDelayMs;
 
     GameCompletionHandler(ActiveGameRegistry activeGames, RoomService roomService, GameStateService gameStateService,
             GameTimerRegistry runtimeTimers, GameTaskScheduler scheduling, RoomCoordinator roomCoordinator,
-            Supplier<Clock> clock, LongSupplier cleanupDelayMs) {
+            Clock clock, long cleanupDelayMs) {
         this.activeGames = activeGames;
         this.roomService = roomService;
         this.gameStateService = gameStateService;
@@ -75,7 +73,7 @@ final class GameCompletionHandler {
         if (outcome.event() != null) {
             gameStateService.sendGameEnd(outcome.event());
         }
-        scheduling.scheduleGameCleanup(gameId, cleanupDelayMs.getAsLong());
+        scheduling.scheduleGameCleanup(gameId, cleanupDelayMs);
     }
 
     /** Abandons the game only if the captured inactivity deadline is still due. */
@@ -96,7 +94,7 @@ final class GameCompletionHandler {
             logger.debug("Skipping inactivity cleanup: deadline changed for game {}", gameId);
             return;
         }
-        if (!GameInactivityPolicy.hasElapsed(expectedDeadlineEpochMs, clock.get().millis())) {
+        if (!GameInactivityPolicy.hasElapsed(expectedDeadlineEpochMs, clock.millis())) {
             logger.debug("Skipping inactivity cleanup: deadline has not elapsed for game {}", gameId);
             return;
         }
@@ -130,7 +128,7 @@ final class GameCompletionHandler {
         if (event != null) {
             gameStateService.sendGameEnd(event);
         }
-        long displayDelayMs = cleanupDelayMs.getAsLong();
+        long displayDelayMs = cleanupDelayMs;
         scheduling.scheduleGameCleanup(gameId, displayDelayMs);
         logger.info("Game {} abandoned due to inactivity; scheduled {}ms cleanup", gameId, displayDelayMs);
     }
@@ -182,13 +180,13 @@ final class GameCompletionHandler {
 
     /** Reports whether a supplied game has passed its cleanup deadline. */
     boolean isGameExpired(Game game) {
-        return game == null || game.isCleanupExpired(clock.get().millis());
+        return game == null || game.isCleanupExpired(clock.millis());
     }
 
     /** Rejects late activity after abandonment in the same durable mutation. */
     void rejectExpiredActivity(String gameId, Room room) {
         roomCoordinator.assertHeldByCurrentThread(gameId);
-        if (GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.get().millis())) {
+        if (GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
             abandonGameDueToInactivity(gameId);
             throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
         }

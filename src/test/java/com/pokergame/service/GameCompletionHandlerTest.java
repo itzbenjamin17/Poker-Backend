@@ -27,6 +27,7 @@ import org.mockito.stubbing.Answer;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
 
+import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -65,15 +66,20 @@ class GameCompletionHandlerTest {
 
     @BeforeEach
     void setUp() {
+        Clock clock = Clock.systemUTC();
         GameTimerRegistry runtimeTimers = new GameTimerRegistry(taskScheduler);
         RoomCoordinator coordinator = new RoomCoordinator();
+
         gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
                 taskScheduler, coordinator);
+
         ActiveGameRegistry activeGames = new ActiveGameRegistry();
         GameTaskScheduler scheduling = new GameTaskScheduler(activeGames, runtimeTimers, coordinator, roomService,
-                gameLifecycleService::getClock, (id, task, deadline, hand, generation) -> {}, (id, deadline) -> {});
+                clock, (id, task, deadline, hand, generation) -> {}, (id, deadline) -> {});
+
         completion = new GameCompletionHandler(activeGames, roomService, gameStateService, runtimeTimers,
-                scheduling, coordinator, gameLifecycleService::getClock, gameLifecycleService::getGameEndDisplayDelayMs);
+                scheduling, coordinator, clock, gameLifecycleService.getGameEndDisplayDelayMs());
+
         lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
                 .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
 

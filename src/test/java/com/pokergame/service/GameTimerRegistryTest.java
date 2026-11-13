@@ -76,6 +76,7 @@ class GameTimerRegistryTest {
     private SimpMessagingTemplate messagingTemplate;
 
     private GameLifecycleService gameLifecycleService;
+    private Clock clock;
     private GameTimerRegistry runtimeTimers;
     private Room testRoom;
     private static final String ROOM_ID = "test-room-id";
@@ -83,8 +84,10 @@ class GameTimerRegistryTest {
     @BeforeEach
     void setUp() {
         runtimeTimers = new GameTimerRegistry(taskScheduler);
+        clock = mock(Clock.class);
+        when(clock.millis()).thenReturn(System.currentTimeMillis());
         gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
-                taskScheduler);
+                taskScheduler, clock);
         lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
                 .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
 
@@ -171,7 +174,7 @@ class GameTimerRegistryTest {
     void firstHandKeepsTheOriginalInactivityCallbackExecutable() {
         Instant startedAt = Instant.now();
         List<Runnable> inactivityCallbacks = captureInactivityCallbacks();
-        gameLifecycleService.setClock(Clock.fixed(startedAt, ZoneOffset.UTC));
+        when(clock.millis()).thenReturn(startedAt.toEpochMilli());
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
 
         gameLifecycleService.createGameFromRoom(ROOM_ID);
@@ -180,7 +183,7 @@ class GameTimerRegistryTest {
         assertEquals(deadline, gameLifecycleService.getInactivityDeadline(ROOM_ID));
         assertEquals(1, inactivityCallbacks.size());
         assertEquals(1, gameLifecycleService.getRuntimeTaskCount(ROOM_ID), "Only the turn timer is counted");
-        gameLifecycleService.setClock(Clock.fixed(Instant.ofEpochMilli(deadline), ZoneOffset.UTC));
+        when(clock.millis()).thenReturn(deadline);
         inactivityCallbacks.getFirst().run();
         Game game = gameLifecycleService.getGame(ROOM_ID);
         assertTrue(game.isGameOver(), "The original inactivity callback must abandon the first hand");
@@ -191,7 +194,7 @@ class GameTimerRegistryTest {
     void readinessActivitySupersedesTheOldInactivityCallbackAndTheNextHandKeepsItsReplacement() {
         Instant startedAt = Instant.now();
         List<Runnable> inactivityCallbacks = captureInactivityCallbacks();
-        gameLifecycleService.setClock(Clock.fixed(startedAt, ZoneOffset.UTC));
+        when(clock.millis()).thenReturn(startedAt.toEpochMilli());
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         gameLifecycleService.createGameFromRoom(ROOM_ID);
         Game game = gameLifecycleService.getGame(ROOM_ID);
@@ -202,7 +205,7 @@ class GameTimerRegistryTest {
         Runnable previousInactivity = inactivityCallbacks.getLast();
 
         Instant readiedAt = startedAt.plusSeconds(1);
-        gameLifecycleService.setClock(Clock.fixed(readiedAt, ZoneOffset.UTC));
+        when(clock.millis()).thenReturn(readiedAt.toEpochMilli());
         gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host");
         gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Player2");
 
@@ -210,10 +213,10 @@ class GameTimerRegistryTest {
         assertEquals(firstHand + 1, game.getHandNumber());
         assertEquals(deadline, gameLifecycleService.getInactivityDeadline(ROOM_ID));
         assertNotSame(previousInactivity, inactivityCallbacks.getLast());
-        gameLifecycleService.setClock(Clock.fixed(Instant.ofEpochMilli(deadline - 1), ZoneOffset.UTC));
+        when(clock.millis()).thenReturn(deadline - 1);
         previousInactivity.run();
         assertFalse(game.isGameOver());
-        gameLifecycleService.setClock(Clock.fixed(Instant.ofEpochMilli(deadline), ZoneOffset.UTC));
+        when(clock.millis()).thenReturn(deadline);
         inactivityCallbacks.getLast().run();
         assertTrue(game.isGameOver(), "The replacement inactivity callback must abandon the next hand");
         assertTrue(testRoom.isTerminal());
@@ -233,8 +236,7 @@ class GameTimerRegistryTest {
 
     @Test
     void startedReadyCallbackCannotExpireAReplacementWithTheSameDeadline() throws Exception {
-        Clock clock = Clock.fixed(Instant.now(), ZoneOffset.UTC);
-        gameLifecycleService.setClock(clock);
+        when(clock.millis()).thenReturn(Instant.now().toEpochMilli());
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
         List<Runnable> callbacks = new ArrayList<>();
         when(taskScheduler.schedule(any(Runnable.class), any(Instant.class))).thenAnswer(call -> {
@@ -264,7 +266,7 @@ class GameTimerRegistryTest {
                 gameLifecycleService.startReadyCountdown(ROOM_ID, 60_000);
                 assertEquals(deadline, game.getReadyCountdownDeadlineEpochMs());
                 assertNotEquals(oldGeneration, game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT));
-                gameLifecycleService.setClock(Clock.fixed(Instant.ofEpochMilli(deadline), ZoneOffset.UTC));
+                when(clock.millis()).thenReturn(deadline);
             }
             started.get(5, TimeUnit.SECONDS);
 
@@ -295,7 +297,7 @@ class GameTimerRegistryTest {
         ActiveGameRegistry games = new ActiveGameRegistry();
         RoomCoordinator coordinator = gameLifecycleService.getRoomCoordinator();
         GameTaskScheduler scheduler = new GameTaskScheduler(games, runtimeTimers, coordinator, roomService,
-                gameLifecycleService::getClock, callback, (id, deadline) -> {});
+                gameLifecycleService.getClock(), callback, (id, deadline) -> {});
         coordinator.coordinate(intent.gameId(), () -> {
             if (game != null) games.replace(game);
             scheduler.scheduleRuntimeTask(intent);
