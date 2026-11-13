@@ -9,10 +9,12 @@ import java.util.concurrent.ConcurrentHashMap;
 final class ActiveGameRegistry {
     private final Map<String, Game> games = new ConcurrentHashMap<>();
 
+    /** Returns the game with the given identity, or null if none exists. */
     Game get(String gameId) {
         return games.get(gameId);
     }
 
+    /** Returns true if the registry contains a game with the given identity. */
     boolean contains(String gameId) {
         return games.containsKey(gameId);
     }
