@@ -207,7 +207,7 @@ final class GameCompletionHandler {
         game.closeReadyCountdown();
         for (ScheduledGameTask task : ScheduledGameTask.values()) game.clearScheduledTask(task);
         runtimeTimers.cancelAllForGame(gameId, false);
-        activeGames.remove(gameId, game);
+        activeGames.remove(gameId);
         if (gameStateService != null) {
             gameStateService.clearRetainedSettlement(gameId);
         }

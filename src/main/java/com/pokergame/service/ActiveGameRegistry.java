@@ -27,11 +27,8 @@ final class ActiveGameRegistry {
         games.put(game.getGameId(), game);
     }
 
-    Game remove(String gameId) {
-        return games.remove(gameId);
-    }
-
-    boolean remove(String gameId, Game expectedGame) {
-        return games.remove(gameId, expectedGame);
+    /** Removes a given game from the registry. */
+    void remove(String gameId) {
+        games.remove(gameId);
     }
 }
