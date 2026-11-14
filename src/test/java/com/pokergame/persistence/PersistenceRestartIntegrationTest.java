@@ -106,7 +106,7 @@ class PersistenceRestartIntegrationTest {
             assertNotNull(inactivityDeadline);
             assertNotNull(turnDeadline);
             GameStateService states = first.getBean(GameStateService.class);
-            publicBefore = states.getPublicGameStateSnapshot(roomId, game);
+            publicBefore = states.getPublicGameStateSnapshot(game);
             currentPlayerName = game.getCurrentPlayer().getName();
             privateBefore = states.getPrivatePlayerStateSnapshot(game, currentPlayerName);
             deckBefore = game.getRemainingDeckSnapshot();
@@ -122,7 +122,7 @@ class PersistenceRestartIntegrationTest {
             assertEquals(turnDeadline, restored.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
             assertTrue(games.getRuntimeTaskCount(roomId) > 0);
             GameStateService states = second.getBean(GameStateService.class);
-            PublicGameStateResponse publicAfter = states.getPublicGameStateSnapshot(roomId, restored);
+            PublicGameStateResponse publicAfter = states.getPublicGameStateSnapshot(restored);
             assertEquals(publicBefore.pot(), publicAfter.pot());
             assertEquals(publicBefore.phase(), publicAfter.phase());
             assertEquals(publicBefore.currentPlayerId(), publicAfter.currentPlayerId());

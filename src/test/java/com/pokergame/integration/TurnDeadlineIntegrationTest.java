@@ -63,7 +63,7 @@ class TurnDeadlineIntegrationTest extends AbstractIntegrationTestSupport {
         long before = clock.millis();
         String roomId = host.path("roomId").asText();
         startGame(roomId, host.path("token").asText());
-        var state = states.getPublicGameStateSnapshot(roomId, lifecycle.getGame(roomId));
+        var state = states.getPublicGameStateSnapshot(lifecycle.getGame(roomId));
         assertThat(state.turnDeadlineEpochMs()).isBetween(before + 60_000, clock.millis() + 60_000);
     }
 
@@ -78,7 +78,7 @@ class TurnDeadlineIntegrationTest extends AbstractIntegrationTestSupport {
         lifecycle.markPlayerReconnected(id, "Guest");
         var game = lifecycle.getGame(id);
         String actor = game.getCurrentPlayer().getName();
-        long deadline = states.getPublicGameStateSnapshot(id, game).turnDeadlineEpochMs();
+        long deadline = states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs();
         clock.now = deadline;
         lifecycle.executeScheduledTask(id, ScheduledGameTask.TURN_TIMEOUT, deadline,
                 game.getHandNumber(), game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT));
@@ -102,7 +102,7 @@ class TurnDeadlineIntegrationTest extends AbstractIntegrationTestSupport {
 
         var game = lifecycle.getGame(id);
         String actor1 = game.getCurrentPlayer().getName();
-        long deadline1 = states.getPublicGameStateSnapshot(id, game).turnDeadlineEpochMs();
+        long deadline1 = states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs();
 
         // Advance clock to 1ms before deadline
         clock.now = deadline1 - 1;
@@ -111,7 +111,7 @@ class TurnDeadlineIntegrationTest extends AbstractIntegrationTestSupport {
         // Next actor should have a fresh 60s deadline from current clock
         var nextActor = game.getCurrentPlayer().getName();
         assertThat(nextActor).isNotEqualTo(actor1);
-        long deadline2 = states.getPublicGameStateSnapshot(id, game).turnDeadlineEpochMs();
+        long deadline2 = states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs();
         assertThat(deadline2).isEqualTo(clock.now + 60_000);
     }
 
@@ -127,7 +127,7 @@ class TurnDeadlineIntegrationTest extends AbstractIntegrationTestSupport {
 
         var game = lifecycle.getGame(id);
         String actor = game.getCurrentPlayer().getName();
-        long deadline = states.getPublicGameStateSnapshot(id, game).turnDeadlineEpochMs();
+        long deadline = states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs();
 
         // Exactly at deadline
         clock.now = deadline;
@@ -157,7 +157,7 @@ class TurnDeadlineIntegrationTest extends AbstractIntegrationTestSupport {
         var game = lifecycle.getGame(id);
         String actor = game.getCurrentPlayer().getName();
         int initialPot = game.getPot();
-        long deadline = states.getPublicGameStateSnapshot(id, game).turnDeadlineEpochMs();
+        long deadline = states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs();
 
         clock.now = deadline;
         lifecycle.executeScheduledTask(id, ScheduledGameTask.TURN_TIMEOUT, deadline,
@@ -172,7 +172,7 @@ class TurnDeadlineIntegrationTest extends AbstractIntegrationTestSupport {
         var nextActor = game.getCurrentPlayer();
         assertThat(nextActor).isNotNull();
         assertThat(nextActor.getName()).isNotEqualTo(actor);
-        long nextDeadline = states.getPublicGameStateSnapshot(id, game).turnDeadlineEpochMs();
+        long nextDeadline = states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs();
         assertThat(nextDeadline).isEqualTo(clock.now + 60_000);
     }
 
@@ -190,7 +190,7 @@ class TurnDeadlineIntegrationTest extends AbstractIntegrationTestSupport {
 
         var game = lifecycle.getGame(id);
         String actor1 = game.getCurrentPlayer().getName();
-        long staleDeadline = states.getPublicGameStateSnapshot(id, game).turnDeadlineEpochMs();
+        long staleDeadline = states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs();
         long staleHandNumber = game.getHandNumber();
         long staleGen = game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT);
 
@@ -233,7 +233,7 @@ class TurnDeadlineIntegrationTest extends AbstractIntegrationTestSupport {
 
         // Action returns to firstActor facing the raise
         assertThat(game.getCurrentPlayer().getName()).isEqualTo(firstActor);
-        long returnedDeadline = states.getPublicGameStateSnapshot(id, game).turnDeadlineEpochMs();
+        long returnedDeadline = states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs();
         // Crucial requirement: fresh 60s, earlier thinking time did not reduce new allowance
         assertThat(returnedDeadline).isEqualTo(clock.now + 60_000);
     }
@@ -253,7 +253,7 @@ class TurnDeadlineIntegrationTest extends AbstractIntegrationTestSupport {
         // First actor folds -> hand immediately enters SHOWDOWN with 1 winner
         playerActionService.processPlayerAction(id, new PlayerActionRequest(PlayerAction.FOLD, null), firstActor);
 
-        var state = states.getPublicGameStateSnapshot(id, game);
+        var state = states.getPublicGameStateSnapshot(game);
         assertThat(state.turnDeadlineEpochMs()).isNull();
     }
 }

@@ -50,13 +50,13 @@ class GameCompletionHandler {
     }
 
     /**
-     * Settles a finished game and broadcasts the final winner result before scheduling cleanup.
+     * Settles a finished non-forfeit game and broadcasts the final winner result before scheduling
+     * cleanup.
      *
-     * @param gameId    the unique ID of the game
-     * @param isForfeit {@code true} if the game ended due to forfeit
+     * @param gameId the unique ID of the game
      */
-    void handleGameEnd(String gameId, boolean isForfeit) {
-        handleGameEndInternal(gameId, isForfeit, null, Set.of());
+    void handleGameEnd(String gameId) {
+        handleGameEndInternal(gameId, false, null, Set.of());
     }
 
     /**
@@ -121,8 +121,7 @@ class GameCompletionHandler {
         game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
         game.clearScheduledTask(ScheduledGameTask.READY_OPEN);
         game.clearScheduledTask(ScheduledGameTask.NEW_HAND);
-        int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
-        GameEndResponse event = gameStateService.recordAbandonment(gameId, game, maxPlayers);
+        GameEndResponse event = gameStateService.recordAbandonment(game);
         game.setRetainedTerminalResult(event);
 
         if (room != null) {
@@ -166,10 +165,9 @@ class GameCompletionHandler {
             throw new ConflictException("Game has not finished");
         }
 
-        Room room = roomService.getRoom(gameId);
         GameEndResponse result = game.getRetainedTerminalResult();
         if (result == null) {
-            result = buildFallbackGameEnd(gameId, game, room);
+            result = buildFallbackGameEnd(game);
         }
         if (!game.isParticipantInTerminalRoster(playerName, result)) {
             throw new UnauthorisedActionException("You are not part of this game's terminal result.");
@@ -251,21 +249,19 @@ class GameCompletionHandler {
             return;
         }
 
-        int maxPlayers = room == null ? 0 : room.getMaxPlayers();
         GameEndResponse event = game.getRetainedTerminalResult();
         if (event == null) {
-            event = gameStateService.recordGameEnd(gameId, game, winner, isForfeit, maxPlayers);
+            event = gameStateService.recordGameEnd(game, winner, isForfeit);
             game.setRetainedTerminalResult(event);
         }
         gameStateService.sendGameEnd(event);
         taskScheduler.scheduleGameCleanup(gameId, timings.gameEndDisplayDelayMs());
     }
 
-    private GameEndResponse buildFallbackGameEnd(String gameId, Game game, Room room) {
-        int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
+    private GameEndResponse buildFallbackGameEnd(Game game) {
         Player winner = game.resolveWinnerOrFallback(null);
         return winner != null
-                ? gameStateService.buildGameEndResponse(gameId, game, winner, game.isFallbackForfeit(), maxPlayers)
-                : gameStateService.buildAbandonmentResponse(gameId, game, maxPlayers);
+                ? gameStateService.buildGameEndResponse(game, winner, game.isFallbackForfeit())
+                : gameStateService.buildAbandonmentResponse(game);
     }
 }

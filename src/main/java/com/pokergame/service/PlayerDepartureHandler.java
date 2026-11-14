@@ -143,7 +143,7 @@ class PlayerDepartureHandler {
         if (game.isSettledTerminal()) {
             room.setTerminal(true);
             if (!game.isGameOver() || !game.isTerminalCarryOverSettled()) {
-                completion.handleGameEnd(roomId, false);
+                completion.handleGameEnd(roomId);
             }
             detachRoomMembers(roomId, room, game, departing);
             return;
@@ -200,14 +200,15 @@ class PlayerDepartureHandler {
         }
 
         if (game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive()) {
-            gameStateService.broadcastGameState(roomId, game);
+            gameStateService.broadcastGameState(game);
         } else {
-            readiness.handlePostHandTransition(roomId,
-                    handProgression.applyTurnOutcome(roomId, game, game.reconcileAfterPlayerRemoval()));
+            if (handProgression.applyTurnOutcome(roomId, game, game.reconcileAfterPlayerRemoval())) {
+                readiness.openReadyGate(roomId);
+            }
         }
 
         if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
-            completeReadyCountdownAndStartNextHand(roomId, game);
+            readiness.completeReadyCountdown(game);
         }
     }
 
@@ -245,11 +246,11 @@ class PlayerDepartureHandler {
                 playerName, gameId, disconnectDeadlineEpochMs);
 
         if (roomService.getRoom(gameId) != null) {
-            gameStateService.broadcastGameState(gameId, game);
+            gameStateService.broadcastGameState(game);
         }
 
         if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
-            completeReadyCountdownAndStartNextHand(gameId, game);
+            readiness.completeReadyCountdown(game);
         }
     }
 
@@ -283,11 +284,11 @@ class PlayerDepartureHandler {
                 }
 
                 if (room != null) {
-                    gameStateService.broadcastGameState(gameId, game);
+                    gameStateService.broadcastGameState(game);
                 }
                 if (game.getReadyGateState() == ReadyGateState.WAITING_FOR_PLAYERS
                         && game.getReadyEligibleCount() >= 2) {
-                    readiness.startDefaultReadyCountdown(gameId);
+                    readiness.openReadyGate(gameId);
                 }
             }
         }
@@ -441,7 +442,7 @@ class PlayerDepartureHandler {
         String survivingHost = selectNextHost(room, game, membersToDetach);
         roomService.leavePlayersBatch(roomId, membersToDetach, survivingHost);
         if (roomService.getRoom(roomId) != null) {
-            gameStateService.broadcastGameState(roomId, game);
+            gameStateService.broadcastGameState(game);
         }
         completion.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
     }
@@ -463,7 +464,7 @@ class PlayerDepartureHandler {
             runtimeTimers.cancelAllForGame(roomId, false);
             detachRoomMembersIfRoomPresent(roomId, room, game, departing);
             if (roomService.getRoom(roomId) != null) {
-                gameStateService.broadcastGameState(roomId, game);
+                gameStateService.broadcastGameState(game);
             }
             completion.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
             return;
@@ -496,11 +497,6 @@ class PlayerDepartureHandler {
             room.setPlayerConnected(playerName, true);
             room.setAbsenceDeadline(playerName, null);
         }
-    }
-
-    private void completeReadyCountdownAndStartNextHand(String gameId, Game game) {
-        readiness.closeReadyGate(gameId, game);
-        readiness.handlePostHandTransition(gameId, handProgression.startNewHand(gameId));
     }
 
     private boolean hasDisconnectGraceExpired(Room room, Game game, String playerName, long expectedDeadlineEpochMs) {

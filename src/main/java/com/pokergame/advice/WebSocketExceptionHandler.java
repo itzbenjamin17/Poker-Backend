@@ -153,7 +153,7 @@ public class WebSocketExceptionHandler {
                     : "Enter a valid action amount";
         }
 
-        gameStateService.sendActionError(playerPrincipal, code, action, displayMessage);
+        gameStateService.sendActionError(playerPrincipal, code, RejectedAction.from(action), displayMessage);
     }
 
     private boolean isValidationOrConversionFailure(Throwable throwable) {

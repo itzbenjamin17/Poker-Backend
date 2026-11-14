@@ -7,7 +7,6 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.service.GameTaskScheduler.ScheduledTimer;
-import com.pokergame.service.HandProgressionService.PostHandTransition;
 import java.time.Clock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,8 +23,8 @@ class GameReadinessCoordinator {
     private final RoomService roomService;
     private final GameStateService gameStateService;
     private final GameTimerRegistry runtimeTimers;
-    private final GameTaskScheduler scheduling;
-    private final GameCompletionHandler completion;
+    private final GameTaskScheduler taskScheduler;
+    private final GameCompletionHandler completionHandler;
     private final HandProgressionService handProgression;
     private final Clock clock;
     private final LifecycleTimingProperties timings;
@@ -35,8 +34,8 @@ class GameReadinessCoordinator {
             RoomService roomService,
             GameStateService gameStateService,
             GameTimerRegistry runtimeTimers,
-            GameTaskScheduler scheduling,
-            GameCompletionHandler completion,
+            GameTaskScheduler taskScheduler,
+            GameCompletionHandler completionHandler,
             HandProgressionService handProgression,
             Clock clock,
             LifecycleTimingProperties timings) {
@@ -44,51 +43,55 @@ class GameReadinessCoordinator {
         this.roomService = roomService;
         this.gameStateService = gameStateService;
         this.runtimeTimers = runtimeTimers;
-        this.scheduling = scheduling;
-        this.completion = completion;
+        this.taskScheduler = taskScheduler;
+        this.completionHandler = completionHandler;
         this.handProgression = handProgression;
         this.clock = clock;
         this.timings = timings;
     }
 
     /**
-     * Opens the ready gate with {@code countdownMs} duration and schedules its timeout timer.
-     *
-     * @param gameId      the unique ID of the game
-     * @param countdownMs ready countdown duration in milliseconds
-     * @return the next lifecycle action triggered immediately, if any
-     */
-    Progression startReadyCountdown(String gameId, long countdownMs) {
-        Game game = activeGames.get(gameId);
-        if (game == null) {
-            return Progression.NONE;
-        }
-        ReadyGateOutcome outcome = openReadyGate(gameId, game, clock.millis() + countdownMs);
-        if (outcome.timeout() != null) {
-            scheduling.registerTimerAfterSave(outcome.timeout());
-        }
-        return outcome.progression();
-    }
-
-    /**
-     * Opens the ready gate using the default configured countdown duration and applies any
-     * resulting next-hand or game-end progression.
+     * Opens the ready gate using the configured countdown duration and applies any resulting
+     * next-hand or game-end progression.
      *
      * @param gameId the unique ID of the game
      */
-    void startDefaultReadyCountdown(String gameId) {
-        applyProgression(gameId, startReadyCountdown(gameId, timings.readyCountdownMs()));
+    void openReadyGate(String gameId) {
+        Game game = activeGames.get(gameId);
+        if (game == null) {
+            return;
+        }
+        long deadline = clock.millis() + timings.readyCountdownMs();
+        switch (game.startOrWaitReadyCountdown(deadline)) {
+            case IGNORE -> {
+            }
+            case TOURNAMENT_OVER -> completionHandler.handleGameEnd(gameId);
+            case WAITING_FOR_PLAYERS -> {
+                cancelTimeout(gameId);
+                gameStateService.broadcastGameState(game);
+            }
+            case ALL_READY -> {
+                gameStateService.broadcastGameState(game);
+                completeReadyCountdown(game);
+            }
+            case OPENED -> {
+                ScheduledTimer timer = GameTaskScheduler.createTimer(
+                        gameId, game, ScheduledGameTask.READY_TIMEOUT, deadline);
+                gameStateService.broadcastGameState(game);
+                taskScheduler.registerTimerAfterSave(timer);
+            }
+        }
     }
 
     /**
-     * Marks a player as ready for the next hand after checking game inactivity expiration.
+     * Marks a player as ready for the next hand after checking game inactivity expiration, starting
+     * the next hand if all eligible players are now ready.
      *
      * @param gameId     the unique ID of the game
      * @param playerName the player marking ready
-     * @return the resulting lifecycle progression
      */
-    Progression markPlayerReadyForNextHand(String gameId, String playerName) {
-        return setPlayerReadyForNextHand(gameId, playerName, true);
+    void markPlayerReadyForNextHand(String gameId, String playerName) {
+        setPlayerReadyForNextHand(gameId, playerName, true);
     }
 
     /**
@@ -96,135 +99,55 @@ class GameReadinessCoordinator {
      *
      * @param gameId     the unique ID of the game
      * @param playerName the player unmarking ready
-     * @return the resulting lifecycle progression
      */
-    Progression unmarkPlayerReadyForNextHand(String gameId, String playerName) {
-        return setPlayerReadyForNextHand(gameId, playerName, false);
+    void unmarkPlayerReadyForNextHand(String gameId, String playerName) {
+        setPlayerReadyForNextHand(gameId, playerName, false);
     }
 
     /**
-     * Applies a readiness {@link Progression} step to either start the next hand or settle game end.
-     *
-     * @param gameId      the unique ID of the game
-     * @param progression the progression decision to apply
-     */
-    void applyProgression(String gameId, Progression progression) {
-        switch (progression) {
-            case START_HAND -> handlePostHandTransition(gameId, handProgression.startNewHand(gameId));
-            case END_GAME -> completion.handleGameEnd(gameId, false);
-            case NONE -> {
-            }
-        }
-    }
-
-    /**
-     * Opens the default ready gate immediately when a hand transition requires it, then broadcasts
-     * any deferred showdown result.
-     *
-     * @param gameId     the unique ID of the game
-     * @param transition the follow-up transition returned from hand progression, or {@code null}
-     */
-    void handlePostHandTransition(String gameId, PostHandTransition transition) {
-        if (transition == null) {
-            return;
-        }
-        startDefaultReadyCountdown(gameId);
-        handProgression.broadcastPendingShowdown(gameId, transition);
-    }
-
-    /**
-     * Transitions the game's ready gate toward {@code deadline}, broadcasting updates or returning a
-     * progression decision when all players are already ready or the tournament has ended.
-     *
-     * @param gameId   the unique ID of the game
-     * @param game     the active game instance
-     * @param deadline target expiration epoch time in milliseconds
-     * @return the opening outcome containing any progression decision and timeout descriptor
-     */
-    ReadyGateOutcome openReadyGate(String gameId, Game game, long deadline) {
-        return switch (game.startOrWaitReadyCountdown(deadline)) {
-            case IGNORE -> new ReadyGateOutcome(Progression.NONE, null);
-            case TOURNAMENT_OVER -> new ReadyGateOutcome(Progression.END_GAME, null);
-            case WAITING_FOR_PLAYERS -> {
-                cancelTimeout(gameId);
-                gameStateService.broadcastGameState(gameId, game);
-                yield new ReadyGateOutcome(Progression.NONE, null);
-            }
-            case ALL_READY -> {
-                gameStateService.broadcastGameState(gameId, game);
-                closeReadyGate(gameId, game);
-                yield new ReadyGateOutcome(Progression.START_HAND, null);
-            }
-            case OPENED -> {
-                ScheduledTimer timer = GameTaskScheduler.createTimer(
-                        gameId, game, ScheduledGameTask.READY_TIMEOUT, deadline);
-                gameStateService.broadcastGameState(gameId, game);
-                yield new ReadyGateOutcome(Progression.NONE, timer);
-            }
-        };
-    }
-
-    /**
-     * Updates a player's ready state, resets inactivity when the state changed, and signals when
-     * all eligible players are ready.
-     *
-     * @param gameId     the unique ID of the game
-     * @param game       the active game instance
-     * @param playerName the player whose readiness is changing
-     * @param ready      {@code true} to mark ready, {@code false} to unmark
-     * @return whether the next hand should start immediately
-     */
-    Progression setReady(String gameId, Game game, String playerName, boolean ready) {
-        Player player = game.findPlayerByName(playerName);
-        boolean previouslyReady = player != null && player.getIsReadyForNextHand();
-        game.setPlayerReadyForNextHand(playerName, ready);
-        if (previouslyReady != ready) {
-            scheduling.resetGameInactivity(gameId, game);
-        }
-        logger.debug("Player {} {} ready for next hand in game {}",
-                playerName, ready ? "marked" : "unmarked", gameId);
-        if (ready && game.areAllReadyEligiblePlayersReady()) {
-            closeReadyGate(gameId, game);
-            return Progression.START_HAND;
-        }
-        gameStateService.broadcastGameState(gameId, game);
-        return Progression.NONE;
-    }
-
-    /**
-     * Processes expiration of the ready countdown for {@code expectedDeadline}.
+     * Processes expiration of the ready countdown for {@code expectedDeadline} and starts the next
+     * hand if the gate forces remaining players ready.
      *
      * @param gameId           the unique ID of the game
      * @param game             the active game instance, or {@code null} if removed
      * @param expectedDeadline the deadline captured when the ready timeout was scheduled
-     * @return whether the next hand should start after forcing remaining players ready
      */
-    Progression expire(String gameId, Game game, long expectedDeadline) {
+    void handleReadyTimeout(String gameId, Game game, long expectedDeadline) {
         if (game == null) {
             cancelTimeout(gameId);
-            return Progression.NONE;
+            return;
         }
-        return switch (game.expireReadyCountdown(expectedDeadline)) {
-            case IGNORE_STALE -> Progression.NONE;
+        switch (game.expireReadyCountdown(expectedDeadline)) {
+            case IGNORE_STALE -> {
+            }
             case WAITING_FOR_PLAYERS -> {
                 cancelTimeout(gameId);
-                gameStateService.broadcastGameState(gameId, game);
-                yield Progression.NONE;
+                gameStateService.broadcastGameState(game);
             }
-            case FORCED_READY -> {
-                closeReadyGate(gameId, game);
-                yield Progression.START_HAND;
-            }
-        };
+            case FORCED_READY -> completeReadyCountdown(game);
+        }
+    }
+
+    /**
+     * Closes the ready gate for {@code game} and immediately deals the next hand.
+     *
+     * @param game the active game instance
+     */
+    void completeReadyCountdown(Game game) {
+        closeReadyGate(game);
+        String gameId = game.getGameId();
+        if (handProgression.startNewHand(gameId)) {
+            openReadyGate(gameId);
+        }
     }
 
     /**
      * Cancels ready and turn timers and closes the ready gate on {@code game}.
      *
-     * @param gameId the unique ID of the game
-     * @param game   the active game instance
+     * @param game the active game instance
      */
-    void closeReadyGate(String gameId, Game game) {
+    void closeReadyGate(Game game) {
+        String gameId = game.getGameId();
         cancelTimeout(gameId);
         runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
         game.closeReadyCountdown();
@@ -241,29 +164,26 @@ class GameReadinessCoordinator {
         runtimeTimers.cancelTask(gameId, ScheduledGameTask.READY_TIMEOUT);
     }
 
-    private Progression setPlayerReadyForNextHand(String gameId, String playerName, boolean ready) {
+    private void setPlayerReadyForNextHand(String gameId, String playerName, boolean ready) {
         Game game = activeGames.get(gameId);
         if (game == null) {
             throw new ResourceNotFoundException("Game not found");
         }
         Room room = roomService.getRoom(gameId);
-        completion.rejectExpiredActivity(gameId, room);
-        return setReady(gameId, game, playerName, ready);
-    }
+        completionHandler.rejectExpiredActivity(gameId, room);
 
-    enum Progression {
-        NONE,
-        START_HAND,
-        END_GAME
-    }
-
-    /**
-     * Result of opening the ready gate, pairing an immediate progression step with an optional
-     * timeout timer to register after saving.
-     *
-     * @param progression next lifecycle step to run immediately
-     * @param timeout     ready-timeout timer descriptor to register, or {@code null}
-     */
-    record ReadyGateOutcome(Progression progression, ScheduledTimer timeout) {
+        Player player = game.findPlayerByName(playerName);
+        boolean previouslyReady = player != null && player.getIsReadyForNextHand();
+        game.setPlayerReadyForNextHand(playerName, ready);
+        if (previouslyReady != ready) {
+            taskScheduler.resetGameInactivity(gameId, game);
+        }
+        logger.debug("Player {} {} ready for next hand in game {}",
+                playerName, ready ? "marked" : "unmarked", gameId);
+        if (ready && game.areAllReadyEligiblePlayersReady()) {
+            completeReadyCountdown(game);
+            return;
+        }
+        gameStateService.broadcastGameState(game);
     }
 }

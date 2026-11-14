@@ -88,7 +88,7 @@ class GameInactivityIntegrationTest extends AbstractIntegrationTestSupport {
 
         // Game public snapshot has 15-minute deadline
         var game = lifecycle.getGame(roomId);
-        var snapshot = states.getPublicGameStateSnapshot(roomId, game);
+        var snapshot = states.getPublicGameStateSnapshot(game);
         assertThat(snapshot.inactivityDeadlineEpochMs()).isEqualTo(startTime + FIFTEEN_MINUTES_MS);
     }
 
@@ -118,7 +118,7 @@ class GameInactivityIntegrationTest extends AbstractIntegrationTestSupport {
 
         // Inactivity deadline reset to actionTime + 15 minutes
         assertThat(rooms.getRoom(roomId).getInactivityDeadlineEpochMs()).isEqualTo(actionTime + FIFTEEN_MINUTES_MS);
-        assertThat(states.getPublicGameStateSnapshot(roomId, game).inactivityDeadlineEpochMs())
+        assertThat(states.getPublicGameStateSnapshot(game).inactivityDeadlineEpochMs())
                 .isEqualTo(actionTime + FIFTEEN_MINUTES_MS);
     }
 

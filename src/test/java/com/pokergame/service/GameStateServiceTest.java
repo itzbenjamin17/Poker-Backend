@@ -648,7 +648,7 @@ class GameStateServiceTest {
         gameStateService.broadcastShowdownResults(GAME_ID, settled, winners, 0);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), initialCaptor.capture());
         PublicGameStateResponse initial = (PublicGameStateResponse) initialCaptor.getValue();
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, settled);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(settled);
 
         assertEquals(List.of("Main", "Side1", "Side2"), response.winners());
         assertNull(response.winningsPerPlayer(), "Unequal side-pot awards have no equal-share scalar");
@@ -686,7 +686,7 @@ class GameStateServiceTest {
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                 .handEvaluator(handEvaluator).build();
 
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, settled);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(settled);
 
         assertEquals(Boolean.TRUE, response.claimWinAvailable());
         assertEquals(connected.getName(), response.claimWinPlayerName());
@@ -709,7 +709,7 @@ class GameStateServiceTest {
                 .readyCountdownActive(true).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
 
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, voidGame);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(voidGame);
 
         assertTrue(response.handSettled());
         assertEquals(List.of(), response.winners());
@@ -746,7 +746,7 @@ class GameStateServiceTest {
         gameStateService.broadcastShowdownResults(GAME_ID, settled, List.of(winner), 150);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         PublicGameStateResponse initial = (PublicGameStateResponse) captor.getValue();
-        PublicGameStateResponse ready = gameStateService.getPublicGameStateSnapshot(GAME_ID, settled);
+        PublicGameStateResponse ready = gameStateService.getPublicGameStateSnapshot(settled);
 
         assertNull(initial.players().stream().filter(p -> p.id().equals(winner.getPlayerId())).findFirst().orElseThrow().holeCards());
         assertNull(ready.players().stream().filter(p -> p.id().equals(winner.getPlayerId())).findFirst().orElseThrow().holeCards());
@@ -780,7 +780,7 @@ class GameStateServiceTest {
                 .handEvaluator(handEvaluator)
                 .build();
 
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, showdownGame);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(showdownGame);
 
         assertNull(response.currentPlayerName(), "currentPlayerName must be null during SHOWDOWN phase");
         assertNull(response.currentPlayerId(), "currentPlayerId must be null during SHOWDOWN phase");
@@ -817,7 +817,7 @@ class GameStateServiceTest {
                 .handEvaluator(handEvaluator)
                 .build();
 
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, countdownGame);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(countdownGame);
 
         assertNull(response.currentPlayerName(), "currentPlayerName must be null during ready countdown");
         assertNull(response.currentPlayerId(), "currentPlayerId must be null during ready countdown");
@@ -1030,7 +1030,7 @@ class GameStateServiceTest {
                 .handEvaluator(handEvaluator)
                 .build();
 
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, countdownGame);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(countdownGame);
 
         assertEquals(List.of("Player1"), response.winners());
         assertEquals(300, response.winningsPerPlayer());
@@ -1317,7 +1317,7 @@ class GameStateServiceTest {
                 .build();
         testGame.getPlayers().set(0, player);
 
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
         PublicPlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();
@@ -1339,7 +1339,7 @@ class GameStateServiceTest {
                 .build();
         testGame.getPlayers().set(0, player);
 
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
         PublicPlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();
@@ -1361,7 +1361,7 @@ class GameStateServiceTest {
                 .build();
         testGame.getPlayers().set(0, player);
 
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
         PublicPlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();
@@ -1383,7 +1383,7 @@ class GameStateServiceTest {
                 .build();
         testGame.getPlayers().set(0, player);
 
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
         PublicPlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();
@@ -1404,7 +1404,7 @@ class GameStateServiceTest {
                 .build();
         testGame.getPlayers().set(0, player);
 
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
         PublicPlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();
@@ -1424,7 +1424,7 @@ class GameStateServiceTest {
                 .build();
         testGame.getPlayers().set(0, player);
 
-        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(GAME_ID, testGame);
+        PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
         PublicPlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();

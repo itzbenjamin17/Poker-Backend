@@ -46,27 +46,27 @@ class HandProgressionService {
      * game if tournament elimination leaves a winner.
      *
      * @param gameId the unique ID of the game
-     * @return a follow-up transition when the ready gate should open immediately, or {@code null}
+     * @return {@code true} if the ready gate should open immediately, {@code false} otherwise
      */
-    PostHandTransition startNewHand(String gameId) {
+    boolean startNewHand(String gameId) {
         Game game = activeGames.get(gameId);
         if (game == null) {
             logger.warn("Cannot start new hand - game {} not found", gameId);
-            return null;
+            return false;
         }
         logger.info("Starting new hand for game: {}", gameId);
         if (game.isForfeitPending()) {
-            return null;
+            return false;
         }
         if (game.isGameOver()) {
             if (!game.isTerminalCarryOverSettled()) {
-                completion.handleGameEnd(gameId, false);
+                completion.handleGameEnd(gameId);
             }
-            return null;
+            return false;
         }
         if (game.getHandNumber() > 0 && (game.getCurrentPhase() != GamePhase.SHOWDOWN || !game.isHandSettled())) {
             logger.warn("Ignoring new-hand request for unsettled game {} hand {}", gameId, game.getHandNumber());
-            return null;
+            return false;
         }
 
         runtimeTimers.cancelProgressionForGame(gameId);
@@ -78,21 +78,21 @@ class HandProgressionService {
         boolean gameEnded = game.resetForNewHand();
         if (gameEnded) {
             logger.warn("Game {} became over after reset", gameId);
-            completion.handleGameEnd(gameId, false);
-            return null;
+            completion.handleGameEnd(gameId);
+            return false;
         }
 
         game.beginHand();
         game.dealHoleCards();
         game.postBlinds();
-        PostHandTransition transition = applyTurnOutcome(gameId, game, game.reconcileAfterForcedBlinds());
+        boolean openReadyGateNow = applyTurnOutcome(gameId, game, game.reconcileAfterForcedBlinds());
 
         logger.info("New hand started successfully for game: {} | Current player: {} | Phase: {} | Pot: {}",
                 gameId,
                 game.getCurrentPlayer() == null ? "none" : game.getCurrentPlayer().getName(),
                 game.getCurrentPhase(),
                 game.getPot());
-        return transition;
+        return openReadyGateNow;
     }
 
     /**
@@ -101,9 +101,9 @@ class HandProgressionService {
      * @param gameId  the unique ID of the game
      * @param game    the active game instance
      * @param outcome the resulting turn state
-     * @return a follow-up transition when the ready gate should open immediately, or {@code null}
+     * @return {@code true} if the ready gate should open immediately, {@code false} otherwise
      */
-    PostHandTransition applyTurnOutcome(String gameId, Game game, TurnOutcome outcome) {
+    boolean applyTurnOutcome(String gameId, Game game, TurnOutcome outcome) {
         return applyTurnOutcome(gameId, game, outcome, false);
     }
 
@@ -115,9 +115,9 @@ class HandProgressionService {
      * @param game                       the active game instance
      * @param outcome                    the resulting turn state
      * @param notifyImmediateAutoAdvance {@code true} to send an immediate all-in notice banner
-     * @return a follow-up transition when the ready gate should open immediately, or {@code null}
+     * @return {@code true} if the ready gate should open immediately, {@code false} otherwise
      */
-    PostHandTransition applyTurnOutcome(
+    boolean applyTurnOutcome(
             String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
         switch (outcome.type()) {
             case NEXT_PLAYER, PHASE_ADVANCED -> {
@@ -129,7 +129,7 @@ class HandProgressionService {
                     game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
                     runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
                 }
-                gameStateService.broadcastGameState(gameId, game);
+                gameStateService.broadcastGameState(game);
             }
             case AUTO_ADVANCING -> {
                 game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
@@ -138,34 +138,20 @@ class HandProgressionService {
                     scheduling.scheduleAutoAdvance(gameId);
                 }
                 if (notifyImmediateAutoAdvance) {
-                    gameStateService.broadcastAutoAdvanceNotification(gameId, game);
+                    gameStateService.broadcastAutoAdvanceNotification(game);
                 } else {
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Auto-advancing...");
+                    gameStateService.broadcastGameStateWithAutoAdvance(game, "Auto-advancing...");
                 }
             }
             case SHOWDOWN -> {
                 game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
                 game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
                 runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
-                if (schedulePostShowdownProgression(gameId, game)) {
-                    return new PostHandTransition(game, outcome);
-                }
-                broadcastShowdown(gameId, game, outcome);
+                gameStateService.broadcastShowdownResults(game);
+                return schedulePostShowdownProgression(gameId, game);
             }
         }
-        return null;
-    }
-
-    /**
-     * Broadcasts a showdown whose publication was deferred until after the ready gate opened.
-     *
-     * @param gameId     the unique ID of the game
-     * @param transition the post-hand transition holding the pending showdown outcome
-     */
-    void broadcastPendingShowdown(String gameId, PostHandTransition transition) {
-        if (transition.pendingShowdown() != null) {
-            broadcastShowdown(gameId, transition.game(), transition.pendingShowdown());
-        }
+        return false;
     }
 
     /**
@@ -186,25 +172,23 @@ class HandProgressionService {
         return switch (game.getCurrentPhase()) {
             case PRE_FLOP -> {
                 game.dealFlop();
-                gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing flop...");
+                gameStateService.broadcastGameStateWithAutoAdvance(game, "Dealing flop...");
                 yield false;
             }
             case FLOP -> {
                 game.dealTurn();
-                gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing turn...");
+                gameStateService.broadcastGameStateWithAutoAdvance(game, "Dealing turn...");
                 yield false;
             }
             case TURN -> {
                 game.dealRiver();
-                gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing river...");
+                gameStateService.broadcastGameStateWithAutoAdvance(game, "Dealing river...");
                 yield false;
             }
             case RIVER -> {
-                int potBeforeDistribution = game.getPot();
-                List<Player> winners = game.conductShowdown();
-                int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
-                gameStateService.broadcastShowdownResults(gameId, game, winners, winningsPerPlayer);
-                gameStateService.broadcastAutoAdvanceComplete(gameId, game);
+                game.conductShowdown();
+                gameStateService.broadcastShowdownResults(game);
+                gameStateService.broadcastAutoAdvanceComplete(game);
                 yield true;
             }
             case SHOWDOWN -> {
@@ -221,23 +205,19 @@ class HandProgressionService {
      *
      * @param gameId the unique ID of the game
      * @param game   the active game instance
-     * @return a post-hand transition if readiness should open immediately, or {@code null}
+     * @return {@code true} if the ready gate should open immediately, {@code false} otherwise
      */
-    PostHandTransition applyAutoAdvanceTimeout(String gameId, Game game) {
+    boolean applyAutoAdvanceTimeout(String gameId, Game game) {
         if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
             game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
-            return null;
+            return false;
         }
         boolean complete = advanceAutoAdvanceStep(gameId);
         if (complete) {
-            return schedulePostShowdownProgression(gameId, game) ? new PostHandTransition(game, null) : null;
+            return schedulePostShowdownProgression(gameId, game);
         }
         scheduling.scheduleAutoAdvance(gameId);
-        return null;
-    }
-
-    private void broadcastShowdown(String gameId, Game game, TurnOutcome outcome) {
-        gameStateService.broadcastShowdownResults(gameId, game, outcome.winners(), outcome.winningsPerPlayer());
+        return false;
     }
 
     private boolean schedulePostShowdownProgression(String gameId, Game game) {
@@ -245,17 +225,6 @@ class HandProgressionService {
             scheduling.scheduleGameEnd(gameId, FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
             return false;
         }
-        return scheduling.scheduleReadyCountdownOpen(gameId, timings.roundEndDisplayDelayMs())
-                == GameTaskScheduler.ReadyOpening.OPEN_IMMEDIATELY;
-    }
-
-    /**
-     * Follow-up transition returned when the ready gate should open immediately before
-     * broadcasting a pending showdown result.
-     *
-     * @param game            the active game instance
-     * @param pendingShowdown the showdown outcome to broadcast after opening readiness, or {@code null}
-     */
-    record PostHandTransition(Game game, TurnOutcome pendingShowdown) {
+        return scheduling.scheduleReadyCountdownOpen(gameId, timings.roundEndDisplayDelayMs());
     }
 }

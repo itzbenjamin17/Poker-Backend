@@ -159,7 +159,7 @@ public class PlayerActionService {
                 logger.error("Error in post-processing for game {} (action was successful): {}",
                         gameId, e.getMessage(), e);
                 try {
-                    gameStateService.broadcastGameState(gameId, game);
+                    gameStateService.broadcastGameState(game);
                 } catch (Exception broadcastError) {
                     logger.error("Failed to re-broadcast game state for game {}: {}",
                             gameId, broadcastError.getMessage());

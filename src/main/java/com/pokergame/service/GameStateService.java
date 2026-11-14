@@ -10,13 +10,11 @@ import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
-import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.PlayerStatus;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.RejectedAction;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.ScheduledGameTask;
-import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
@@ -32,7 +30,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -45,6 +42,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class GameStateService {
     private static final Logger logger = LoggerFactory.getLogger(GameStateService.class);
+    private static final String PRIVATE_QUEUE = "/queue/private";
     private final RoomService roomService;
     private final SimpMessagingTemplate messagingTemplate;
     private final Clock clock;
@@ -61,18 +59,14 @@ public class GameStateService {
     /**
      * Builds the current public game-state snapshot for REST endpoints.
      *
-     * @param gameId the unique ID of the game
-     * @param game   the active game instance
+     * @param game the active game instance
      * @return public game-state response for the requested game
-     * @throws ResourceNotFoundException if the backing room does not exist
+     * @throws ResourceNotFoundException if the room for {@code game} does not exist
      */
-    public PublicGameStateResponse getPublicGameStateSnapshot(String gameId, Game game) {
-        Room room = roomService.getRoom(gameId);
-        if (room == null) {
-            logger.warn("Game state build failed: room not found for gameId {}", gameId);
-            throw new ResourceNotFoundException("Room not found");
-        }
-        return buildLiveGameState(gameId, game, room);
+    public PublicGameStateResponse getPublicGameStateSnapshot(Game game) {
+        requireNonNull(game, "game must not be null");
+        Room room = requireRoom(game.getGameId());
+        return buildLiveGameState(game, room);
     }
 
     /**
@@ -84,6 +78,9 @@ public class GameStateService {
      * @throws ResourceNotFoundException if the player is not in {@code game}
      */
     public PrivatePlayerState getPrivatePlayerStateSnapshot(Game game, String playerName) {
+        requireNonNull(game, "game must not be null");
+        requireNonNull(playerName, "playerName must not be null");
+
         Player player = game.getPlayers().stream()
                 .filter(p -> p.getName().equals(playerName))
                 .findFirst()
@@ -96,27 +93,19 @@ public class GameStateService {
      * Broadcasts the public table state to the game topic and each player's private hole cards
      * to their private queue after save.
      *
-     * @param gameId the unique ID of the game
-     * @param game   the active game instance
-     * @throws BadRequestException       if {@code game} is {@code null}
-     * @throws ResourceNotFoundException if the backing room does not exist
+     * @param game the active game instance
+     * @throws ResourceNotFoundException if the room for {@code game} does not exist
      */
-    public void broadcastGameState(String gameId, Game game) {
-        if (game == null) {
-            logger.warn("Cannot broadcast game state - game {} not found", gameId);
-            throw new BadRequestException("Trying to broadcast state for a non existent room: " + gameId);
-        }
+    public void broadcastGameState(Game game) {
+        requireNonNull(game, "game must not be null");
+        String gameId = game.getGameId();
 
         logger.debug("Broadcasting game state for game {}", gameId);
 
-        Room room = roomService.getRoom(gameId);
-        if (room == null) {
-            logger.warn("Game state build failed: room not found for gameId {}", gameId);
-            throw new ResourceNotFoundException("Room not found");
-        }
+        Room room = requireRoom(gameId);
 
         game.incrementStateRevision();
-        PublicGameStateResponse publicResponse = buildLiveGameState(gameId, game, room);
+        PublicGameStateResponse publicResponse = buildLiveGameState(game, room);
         Map<String, PrivatePlayerState> playerPrivateStates = new HashMap<>();
         for (Player player : game.getPlayers()) {
             playerPrivateStates.put(player.getName(), buildPrivatePlayerState(game, player));
@@ -125,26 +114,26 @@ public class GameStateService {
         sendAfterSave("/game/" + gameId, publicResponse);
 
         playerPrivateStates.forEach((playerName, privateState) ->
-                sendToPlayerAfterSave(gameId, playerName, "/queue/private", privateState));
+                sendToPlayerAfterSave(gameId, playerName, privateState));
     }
 
     /**
-     * Broadcasts hand showdown results to all players after save, revealing winning hand ranks,
-     * awards, and hole cards for actual showdowns while clearing current-turn pointers.
+     * Broadcasts settled hand showdown results to all players after save, revealing winning hand
+     * ranks, awards, and hole cards for actual showdowns while clearing current-turn pointers.
      *
-     * @param gameId            the unique ID of the game
-     * @param game              the game instance containing showdown state
-     * @param winners           the winning players for the hand
-     * @param winningsPerPlayer the chip award per winner for equal splits
+     * @param game the settled game instance containing showdown results
+     * @throws ResourceNotFoundException if the room for {@code game} does not exist
+     * @throws IllegalStateException     if the current hand has not been settled yet
      */
-    public void broadcastShowdownResults(String gameId, Game game, List<Player> winners, int winningsPerPlayer) {
-        if (game == null) {
-            logger.warn("Cannot broadcast showdown - game {} not found", gameId);
-            return;
-        }
+    public void broadcastShowdownResults(Game game) {
+        requireNonNull(game, "game must not be null");
+        String gameId = game.getGameId();
+        Room room = requireRoom(gameId);
 
-        Room room = roomService.getRoom(gameId);
-        int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+        HandSettlementResult settlement = game.getLastSettlementResult();
+        if (settlement == null || !settlement.settled()) {
+            throw new IllegalStateException("Cannot broadcast showdown results for unsettled game " + gameId);
+        }
 
         game.incrementStateRevision();
 
@@ -153,31 +142,16 @@ public class GameStateService {
         String currentPlayerName = null;
         String currentPlayerId = null;
 
-        HandSettlementResult settlement = game.getLastSettlementResult();
-        boolean settled = settlement != null && settlement.settled();
-        Set<String> winnerIds;
-        Map<String, Integer> contestedAwards;
-        HandSettlementResult effectiveSettlement;
-        if (settled) {
-            winnerIds = settlement.winnerIds();
-            contestedAwards = settlement.contestedAwards();
-            effectiveSettlement = settlement;
-        } else {
-            winnerIds = winners.stream().map(Player::getPlayerId).collect(Collectors.toSet());
-            contestedAwards = winners.stream().collect(Collectors.toMap(
-                    Player::getPlayerId,
-                    ignored -> winningsPerPlayer,
-                    (left, right) -> left));
-            effectiveSettlement = new HandSettlementResult(contestedAwards, Map.of(), winnerIds, 0, true);
-        }
+        Set<String> winnerIds = settlement.winnerIds();
+        Map<String, Integer> contestedAwards = settlement.contestedAwards();
 
-        List<Player> projectedWinners = game.getPlayers().stream()
+        List<Player> winningPlayers = game.getPlayers().stream()
                 .filter(player -> winnerIds.contains(player.getPlayerId()))
                 .toList();
-        List<String> winnerNames = projectedWinners.stream().map(Player::getName).toList();
-        Integer legacyWinnings = computeEqualWinnerAward(winnerIds, contestedAwards);
+        List<String> winnerNames = winningPlayers.stream().map(Player::getName).toList();
+        Integer equalWinnerAward = computeEqualWinnerAward(winnerIds, contestedAwards);
 
-        boolean isActualShowdown = projectedWinners.stream()
+        boolean isActualShowdown = winningPlayers.stream()
                 .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != HandRank.NO_HAND);
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
@@ -198,7 +172,7 @@ public class GameStateService {
         }).toList();
 
         PublicGameStateResponse showdownResponse = new PublicGameStateResponse(
-                maxPlayers,
+                room.getMaxPlayers(),
                 game.getPot(),
                 game.getPotBreakdown(),
                 game.getUncalledAmount(),
@@ -209,15 +183,15 @@ public class GameStateService {
                 currentPlayerName,
                 currentPlayerId,
                 winnerNames,
-                legacyWinnings,
+                equalWinnerAward,
                 null,
                 null,
                 game.isReadyCountdownActive(),
                 game.getReadyCountdownDeadlineEpochMs(),
                 null,
                 null,
-                settled,
-                settled ? effectiveSettlement.remainder() : null,
+                true,
+                settlement.remainder(),
                 null,
                 null,
                 null,
@@ -230,25 +204,21 @@ public class GameStateService {
 
         logger.info("Broadcasted showdown results for game {} with {} winner(s): {}",
                 gameId, winnerNames.size(), winnerNames);
-        logger.debug("Showdown game state - winners: {}, winnerCount: {}, winnings per player: {}",
-                winnerNames, winnerNames.size(), winningsPerPlayer);
+        logger.debug("Showdown game state - winners: {}, winnerCount: {}, equalWinnerAward: {}",
+                winnerNames, winnerNames.size(), equalWinnerAward);
     }
 
     /**
      * Broadcasts public game state flagged for all-in auto-advance with a status message.
      *
-     * @param gameId  the unique ID of the game
      * @param game    the active game instance
      * @param message the status banner message to display while auto-advancing
+     * @throws ResourceNotFoundException if the room for {@code game} does not exist
      */
-    public void broadcastGameStateWithAutoAdvance(String gameId, Game game, String message) {
-        if (game == null) {
-            logger.warn("Cannot broadcast auto-advance state - game {} not found", gameId);
-            return;
-        }
-
-        Room room = roomService.getRoom(gameId);
-        int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+    public void broadcastGameStateWithAutoAdvance(Game game, String message) {
+        requireNonNull(game, "game must not be null");
+        String gameId = game.getGameId();
+        Room room = requireRoom(gameId);
 
         game.incrementStateRevision();
 
@@ -269,7 +239,7 @@ public class GameStateService {
                 .toList();
 
         PublicGameStateResponse autoAdvanceResponse = new PublicGameStateResponse(
-                maxPlayers,
+                room.getMaxPlayers(),
                 game.getPot(),
                 game.getPotBreakdown(),
                 game.getUncalledAmount(),
@@ -304,31 +274,24 @@ public class GameStateService {
     /**
      * Broadcasts an immediate notice that all-in auto-advance to showdown has begun.
      *
-     * @param gameId the unique ID of the game
-     * @param game   the active game instance
+     * @param game the active game instance
      */
-    public void broadcastAutoAdvanceNotification(String gameId, Game game) {
-        if (game == null) {
-            logger.warn("Cannot broadcast auto-advance notification - game {} not found", gameId);
-            return;
-        }
+    public void broadcastAutoAdvanceNotification(Game game) {
+        requireNonNull(game, "game must not be null");
 
-        logger.info("Broadcasting immediate auto-advance state for game {}", gameId);
-        broadcastGameStateWithAutoAdvance(gameId, game,
+        logger.info("Broadcasting immediate auto-advance state for game {}", game.getGameId());
+        broadcastGameStateWithAutoAdvance(game,
                 "No further betting actions are possible. Auto-advancing to showdown...");
     }
 
     /**
      * Broadcasts a notice that all community cards for auto-advance have been dealt.
      *
-     * @param gameId the unique ID of the game
-     * @param game   the active game instance
+     * @param game the active game instance
      */
-    public void broadcastAutoAdvanceComplete(String gameId, Game game) {
-        if (game == null) {
-            logger.warn("Cannot broadcast auto-advance complete - game {} not found", gameId);
-            return;
-        }
+    public void broadcastAutoAdvanceComplete(Game game) {
+        requireNonNull(game, "game must not be null");
+        String gameId = game.getGameId();
 
         logger.info("Broadcasting auto-advance complete for game {}: {}", gameId, game.getCommunityCards());
         sendAfterSave("/game/" + gameId,
@@ -346,7 +309,7 @@ public class GameStateService {
     public void sendPrivatePlayerNotification(String gameId, String playerName, String message, ResponseMessage type) {
         PlayerNotificationResponse notification = new PlayerNotificationResponse(
                 type, message, playerName, gameId);
-        sendToPlayerAfterSave(gameId, playerName, "/queue/private", notification);
+        sendToPlayerAfterSave(gameId, playerName, notification);
     }
 
     /**
@@ -358,20 +321,8 @@ public class GameStateService {
      * @param type    the notification category
      */
     public void sendPrivatePlayerNotification(PlayerPrincipal origin, String message, ResponseMessage type) {
-        sendToPrincipalAfterSave(origin, "/queue/private",
+        sendToPrincipalAfterSave(origin,
                 new PlayerNotificationResponse(type, message, origin.playerName(), origin.roomId()));
-    }
-
-    /**
-     * Sends a private action-error response for a rejected gameplay action.
-     *
-     * @param origin  the principal bound to the originating WebSocket session
-     * @param code    application error code
-     * @param action  the poker action that was rejected
-     * @param message explanation shown to the player
-     */
-    public void sendActionError(PlayerPrincipal origin, String code, PlayerAction action, String message) {
-        sendActionError(origin, code, RejectedAction.from(action), message);
     }
 
     /**
@@ -383,64 +334,51 @@ public class GameStateService {
      * @param message explanation shown to the player
      */
     public void sendActionError(PlayerPrincipal origin, String code, RejectedAction action, String message) {
-        sendToPrincipalAfterSave(origin, "/queue/private", new ActionErrorResponse(code, action, message));
+        sendToPrincipalAfterSave(origin, new ActionErrorResponse(code, action, message));
     }
 
     /**
      * Increments the game's state revision and builds the final game-end payload for a won game.
      *
-     * @param gameId     the unique ID of the game
-     * @param game       the completed game instance
-     * @param winner     the winning player, or {@code null} if unavailable
-     * @param isForfeit  {@code true} if the game ended by forfeit
-     * @param maxPlayers configured maximum seats for the room
-     * @return the final {@link GameEndResponse}, or {@code null} when {@code winner} is {@code null}
+     * @param game      the completed game instance
+     * @param winner    the winning player
+     * @param isForfeit {@code true} if the game ended by forfeit
+     * @return the final {@link GameEndResponse}
      */
-    public GameEndResponse recordGameEnd(String gameId, Game game, Player winner, boolean isForfeit, int maxPlayers) {
-        if (winner == null) {
-            return null;
-        }
-        if (game != null) {
-            game.incrementStateRevision();
-        }
-        return buildGameEndResponse(gameId, game, winner, isForfeit, maxPlayers);
+    public GameEndResponse recordGameEnd(Game game, Player winner, boolean isForfeit) {
+        requireNonNull(game, "game must not be null");
+        requireNonNull(winner, "winner must not be null");
+        game.incrementStateRevision();
+        return buildGameEndResponse(game, winner, isForfeit);
     }
 
     /**
      * Increments the game's state revision and builds the final payload for a game closed due
      * to inactivity.
      *
-     * @param gameId     the unique ID of the game
-     * @param game       the abandoned game instance
-     * @param maxPlayers configured maximum seats for the room
+     * @param game the abandoned game instance
      * @return the abandonment {@link GameEndResponse}
      */
-    public GameEndResponse recordAbandonment(String gameId, Game game, int maxPlayers) {
-        if (game != null) {
-            game.incrementStateRevision();
-        }
-        return buildAbandonmentResponse(gameId, game, maxPlayers);
+    public GameEndResponse recordAbandonment(Game game) {
+        requireNonNull(game, "game must not be null");
+        game.incrementStateRevision();
+        return buildAbandonmentResponse(game);
     }
 
     /**
      * Builds a read-only final game-end response without mutating {@code game}'s state revision.
      *
-     * @param gameId     the unique ID of the game
-     * @param game       the completed game instance
-     * @param winner     the winning player, or {@code null} if unavailable
-     * @param isForfeit  {@code true} if the game ended by forfeit
-     * @param maxPlayers configured maximum seats for the room
-     * @return the final {@link GameEndResponse}, or {@code null} when {@code winner} is {@code null}
+     * @param game      the completed game instance
+     * @param winner    the winning player
+     * @param isForfeit {@code true} if the game ended by forfeit
+     * @return the final {@link GameEndResponse}
      */
-    public GameEndResponse buildGameEndResponse(
-            String gameId, Game game, Player winner, boolean isForfeit, int maxPlayers) {
-        if (winner == null) {
-            return null;
-        }
-        String message = "🏆 " + winner.getName() + " wins the game with " + winner.getChips() + " chips!";
-        PublicGameStateResponse finalState = game == null
-                ? null
-                : buildCompletedGameState(gameId, game, winner, isForfeit, maxPlayers);
+    public GameEndResponse buildGameEndResponse(Game game, Player winner, boolean isForfeit) {
+        requireNonNull(game, "game must not be null");
+        requireNonNull(winner, "winner must not be null");
+        String gameId = game.getGameId();
+        String message = winner.getName() + " wins the game with " + winner.getChips() + " chips!";
+        PublicGameStateResponse finalState = buildCompletedGameState(game, winner, isForfeit);
         return new GameEndResponse(
                 ResponseMessage.GAME_END.getMessage(), gameId, winner.getName(),
                 winner.getChips(), isForfeit, message, finalState);
@@ -449,14 +387,14 @@ public class GameStateService {
     /**
      * Builds a read-only inactivity abandonment response without mutating {@code game}'s state revision.
      *
-     * @param gameId     the unique ID of the game
-     * @param game       the abandoned game instance
-     * @param maxPlayers configured maximum seats for the room
+     * @param game the abandoned game instance
      * @return the abandonment {@link GameEndResponse}
      */
-    public GameEndResponse buildAbandonmentResponse(String gameId, Game game, int maxPlayers) {
+    public GameEndResponse buildAbandonmentResponse(Game game) {
+        requireNonNull(game, "game must not be null");
+        String gameId = game.getGameId();
         String message = "Game abandoned due to inactivity.";
-        PublicGameStateResponse finalState = game == null ? null : buildAbandonedGameState(gameId, game, maxPlayers);
+        PublicGameStateResponse finalState = buildAbandonedGameState(game);
         return new GameEndResponse(
                 ResponseMessage.GAME_END.getMessage(), gameId, null,
                 null, false, true, "INACTIVITY", message, finalState);
@@ -473,26 +411,22 @@ public class GameStateService {
         }
     }
 
-    private int resolveMaxPlayers(String gameId, Game game, int maxPlayers) {
-        if (maxPlayers >= 2 && maxPlayers <= 10) {
-            return maxPlayers;
-        }
-        Room room = roomService.getRoom(gameId);
+    private int resolveMaxPlayers(Game game) {
+        Room room = roomService.getRoom(game.getGameId());
         if (room != null && room.getMaxPlayers() >= 2 && room.getMaxPlayers() <= 10) {
             return room.getMaxPlayers();
         }
-        int retainedPlayerCount = game != null && game.getPlayers() != null ? game.getPlayers().size() : 2;
-        return Math.max(2, Math.min(10, retainedPlayerCount));
+        // Departures can leave 0 or 1 players once the room is gone; keep [2, 10] for client validation.
+        return Math.clamp(game.getPlayers().size(), 2, 10);
     }
 
-    private PublicGameStateResponse buildAbandonedGameState(String gameId, Game game, int maxPlayers) {
-        requireNonNull(game, "game must not be null");
-        int resolvedMaxPlayers = resolveMaxPlayers(gameId, game, maxPlayers);
+    private PublicGameStateResponse buildAbandonedGameState(Game game) {
+        int maxPlayers = resolveMaxPlayers(game);
 
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
 
-        List<PublicPlayerState> playersList = game.getPlayers().stream()
+        List<PublicPlayerState> playerStates = game.getPlayers().stream()
                 .map(player -> toPublicPlayerState(
                         player,
                         false,
@@ -508,14 +442,14 @@ public class GameStateService {
         boolean handSettled = game.getLastSettlementResult() != null && game.getLastSettlementResult().settled();
 
         return new PublicGameStateResponse(
-                resolvedMaxPlayers,
+                maxPlayers,
                 game.getPot(),
                 game.getPotBreakdown(),
                 game.getUncalledAmount(),
                 game.getCurrentPhase(),
                 game.getCurrentHighestBet(),
                 game.getCommunityCards(),
-                playersList,
+                playerStates,
                 null,
                 null,
                 List.of(),
@@ -539,13 +473,12 @@ public class GameStateService {
                 null);
     }
 
-    private PublicGameStateResponse buildCompletedGameState(
-            String gameId, Game game, Player winner, boolean isForfeit, int maxPlayers) {
-        requireNonNull(game, "game must not be null");
-        int resolvedMaxPlayers = resolveMaxPlayers(gameId, game, maxPlayers);
+    private PublicGameStateResponse buildCompletedGameState(Game game, Player winner, boolean isForfeit) {
+        int maxPlayers = resolveMaxPlayers(game);
 
+        boolean handSettled = game.getLastSettlementResult() != null && game.getLastSettlementResult().settled();
         boolean contestedShowdown = game.getCurrentPhase() == GamePhase.SHOWDOWN
-                && game.getLastSettlementResult() != null && game.getLastSettlementResult().settled()
+                && handSettled
                 && game.getActivePlayers().stream()
                         .filter(player -> !player.getHasFolded() && !player.getIsOut())
                         .count() > 1;
@@ -554,8 +487,8 @@ public class GameStateService {
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
 
-        List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
-            boolean isWinner = winner != null && winner.equals(player);
+        List<PublicPlayerState> playerStates = game.getPlayers().stream().map(player -> {
+            boolean isWinner = winner.equals(player);
             boolean isActive = !player.getHasFolded() && !player.getIsOut();
             return toPublicPlayerState(
                     player,
@@ -569,18 +502,17 @@ public class GameStateService {
                     (revealHoleCards && isActive) ? player.getHoleCards() : null);
         }).toList();
 
-        List<String> winnerNames = winner != null ? List.of(winner.getName()) : List.of();
-        boolean handSettled = game.getLastSettlementResult() != null && game.getLastSettlementResult().settled();
+        List<String> winnerNames = List.of(winner.getName());
 
         return new PublicGameStateResponse(
-                resolvedMaxPlayers,
+                maxPlayers,
                 game.getPot(),
                 game.getPotBreakdown(),
                 game.getUncalledAmount(),
                 game.getCurrentPhase(),
                 game.getCurrentHighestBet(),
                 game.getCommunityCards(),
-                playersList,
+                playerStates,
                 null,
                 null,
                 winnerNames,
@@ -602,24 +534,29 @@ public class GameStateService {
                 game.getStateRevision());
     }
 
-    private PublicGameStateResponse buildLiveGameState(String gameId, Game game, Room room) {
+    private Room requireRoom(String gameId) {
+        Room room = roomService.getRoom(gameId);
         if (room == null) {
             logger.warn("Game state build failed: room not found for gameId {}", gameId);
             throw new ResourceNotFoundException("Room not found");
         }
+        return room;
+    }
+
+    private PublicGameStateResponse buildLiveGameState(Game game, Room room) {
+        requireNonNull(room, "room must not be null");
 
         boolean autoAdvancing = game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE) != null;
-        HandSettlementResult rawSettlement = game.getLastSettlementResult();
-        boolean isShowdown = game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive();
-        HandSettlementResult projectionSettlement = rawSettlement != null && rawSettlement.settled()
-                ? rawSettlement
-                : new HandSettlementResult(Map.of(), Map.of(), Set.of(), 0, false);
-        boolean handSettled = projectionSettlement.settled();
-        boolean revealSettledHands = handSettled && game.getPlayers().stream()
-                .filter(player -> projectionSettlement.winnerIds().contains(player.getPlayerId()))
+        HandSettlementResult lastSettlement = game.getLastSettlementResult();
+        boolean inShowdownOrCountdown = game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive();
+        boolean handSettled = lastSettlement != null && lastSettlement.settled();
+        Set<String> settledWinnerIds = handSettled ? lastSettlement.winnerIds() : Set.of();
+        Map<String, Integer> settledAwards = handSettled ? lastSettlement.contestedAwards() : Map.of();
+        boolean revealHoleCards = handSettled && game.getPlayers().stream()
+                .filter(player -> settledWinnerIds.contains(player.getPlayerId()))
                 .anyMatch(player -> player.getHandRank() != null && player.getHandRank() != HandRank.NO_HAND);
 
-        Player currentPlayer = !isShowdown && !autoAdvancing && !handSettled && !game.getActivePlayers().isEmpty()
+        Player currentPlayer = !inShowdownOrCountdown && !autoAdvancing && !handSettled && !game.getActivePlayers().isEmpty()
                 ? game.getCurrentPlayer()
                 : null;
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
@@ -631,35 +568,35 @@ public class GameStateService {
             logger.debug("Building game state - no active players found");
         }
 
-        List<PublicPlayerState> playerStateList = new ArrayList<>();
+        List<PublicPlayerState> playerStates = new ArrayList<>();
         for (Player player : game.getPlayers()) {
             boolean isActive = !player.getHasFolded() && !player.getIsOut();
-            Boolean isWinner = handSettled ? projectionSettlement.winnerIds().contains(player.getPlayerId()) : null;
+            Boolean isWinner = handSettled ? settledWinnerIds.contains(player.getPlayerId()) : null;
             Integer chipsWon = handSettled
-                    ? projectionSettlement.contestedAwards().getOrDefault(player.getPlayerId(), 0)
+                    ? settledAwards.getOrDefault(player.getPlayerId(), 0)
                     : null;
-            playerStateList.add(toPublicPlayerState(
+            playerStates.add(toPublicPlayerState(
                     player,
                     player.equals(currentPlayer),
                     smallBlindPlayerId,
                     bigBlindPlayerId,
-                    handSettled && !projectionSettlement.winnerIds().isEmpty() && isActive ? player.getHandRank() : null,
-                    handSettled && !projectionSettlement.winnerIds().isEmpty() && isActive ? player.getBestHand() : null,
+                    handSettled && !settledWinnerIds.isEmpty() && isActive ? player.getHandRank() : null,
+                    handSettled && !settledWinnerIds.isEmpty() && isActive ? player.getBestHand() : null,
                     isWinner,
                     chipsWon,
-                    revealSettledHands && isActive ? player.getHoleCards() : null));
+                    revealHoleCards && isActive ? player.getHoleCards() : null));
         }
 
         String claimWinPlayerName = computeClaimWinPlayerName(game);
         boolean claimWinAvailable = claimWinPlayerName != null;
         List<String> winnerNames = handSettled
                 ? game.getPlayers().stream()
-                        .filter(player -> projectionSettlement.winnerIds().contains(player.getPlayerId()))
+                        .filter(player -> settledWinnerIds.contains(player.getPlayerId()))
                         .map(Player::getName)
                         .toList()
                 : null;
         Integer winningsPerPlayer = handSettled
-                ? computeEqualWinnerAward(projectionSettlement.winnerIds(), projectionSettlement.contestedAwards())
+                ? computeEqualWinnerAward(settledWinnerIds, settledAwards)
                 : null;
 
         return new PublicGameStateResponse(
@@ -670,7 +607,7 @@ public class GameStateService {
                 game.getCurrentPhase(),
                 game.getCurrentHighestBet(),
                 game.getCommunityCards(),
-                playerStateList,
+                playerStates,
                 currentPlayer != null ? currentPlayer.getName() : null,
                 currentPlayer != null ? currentPlayer.getPlayerId() : null,
                 winnerNames,
@@ -682,7 +619,7 @@ public class GameStateService {
                 claimWinAvailable,
                 claimWinPlayerName,
                 handSettled,
-                handSettled ? projectionSettlement.remainder() : null,
+                handSettled ? lastSettlement.remainder() : null,
                 currentPlayer == null ? List.of() : game.getLegalActionsFor(currentPlayer),
                 currentPlayer == null ? null : game.getBigBlind(),
                 currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer),
@@ -773,7 +710,7 @@ public class GameStateService {
         PostSaveActions.runAfterSave(() -> messagingTemplate.convertAndSend(destination, payload));
     }
 
-    private void sendToPlayerAfterSave(String gameId, String playerName, String destination, Object payload) {
+    private void sendToPlayerAfterSave(String gameId, String playerName, Object payload) {
         Room room = roomService.getRoom(gameId);
         if (room == null) {
             return;
@@ -783,14 +720,14 @@ public class GameStateService {
         if (membershipId == null || membershipId.isBlank()) {
             return;
         }
-        sendToPrincipalAfterSave(new PlayerPrincipal(playerName, gameId, membershipId), destination, payload);
+        sendToPrincipalAfterSave(new PlayerPrincipal(playerName, gameId, membershipId), payload);
     }
 
-    private void sendToPrincipalAfterSave(PlayerPrincipal origin, String destination, Object payload) {
+    private void sendToPrincipalAfterSave(PlayerPrincipal origin, Object payload) {
         if (origin.membershipId() == null || origin.membershipId().isBlank()) {
             return;
         }
         String user = origin.getName();
-        PostSaveActions.runAfterSave(() -> messagingTemplate.convertAndSendToUser(user, destination, payload));
+        PostSaveActions.runAfterSave(() -> messagingTemplate.convertAndSendToUser(user, PRIVATE_QUEUE, payload));
     }
 }

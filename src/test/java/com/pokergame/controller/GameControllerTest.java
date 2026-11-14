@@ -111,7 +111,7 @@ class GameControllerTest {
         when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
         when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(true);
         when(gameLifecycleService.getGame(gameId)).thenReturn(game);
-        when(gameStateService.getPublicGameStateSnapshot(gameId, game)).thenReturn(response);
+        when(gameStateService.getPublicGameStateSnapshot(game)).thenReturn(response);
 
         mockMvc.perform(get("/api/game/{gameId}/state", gameId)
                 .principal(auth))
@@ -567,7 +567,7 @@ class GameControllerTest {
                 .andExpect(jsonPath("$.message").value("Token membership is stale or invalid."));
 
         // The boundary runs before game state is read, so no snapshot is produced for a refused token.
-        verify(gameStateService, never()).getPublicGameStateSnapshot(anyString(), any());
+        verify(gameStateService, never()).getPublicGameStateSnapshot(any());
     }
 
     @Test
@@ -587,7 +587,7 @@ class GameControllerTest {
         when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
         when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(true);
         when(gameLifecycleService.getGame(gameId)).thenReturn(game);
-        when(gameStateService.getPublicGameStateSnapshot(gameId, game)).thenReturn(response);
+        when(gameStateService.getPublicGameStateSnapshot(game)).thenReturn(response);
 
         mockMvc.perform(get("/api/game/{gameId}/state", gameId)
                 .principal(matchingAuth))

@@ -68,19 +68,19 @@ class GameTaskScheduler {
     }
 
     /**
-     * Schedules the post-showdown delay before opening the next-hand ready gate, or instructs
-     * the caller to open it immediately when {@code delayMs <= 0}.
+     * Schedules the post-showdown delay before opening the next-hand ready gate, returning
+     * {@code true} when readiness should open immediately ({@code delayMs <= 0}).
      *
      * @param gameId  the room/game ID
      * @param delayMs delay before opening the ready gate, in milliseconds
-     * @return whether readiness opens now or via a deferred timer
+     * @return {@code true} if the ready gate should open immediately, {@code false} if deferred
      */
-    ReadyOpening scheduleReadyCountdownOpen(String gameId, long delayMs) {
+    boolean scheduleReadyCountdownOpen(String gameId, long delayMs) {
         if (delayMs <= 0) {
-            return ReadyOpening.OPEN_IMMEDIATELY;
+            return true;
         }
         scheduleTask(gameId, ScheduledGameTask.READY_OPEN, clock.millis() + delayMs);
-        return ReadyOpening.DEFERRED;
+        return false;
     }
 
     /**
@@ -190,8 +190,8 @@ class GameTaskScheduler {
     }
 
     /**
-     * Validates that a firing timer callback still matches the current hand and generation, and
-     * marks one-shot timers as claimed.
+     * Validates that a firing timer callback still matches the current hand and generation,
+     * marks one-shot timers as claimed, and cancels stale game-over futures.
      *
      * @param gameId     the room/game ID
      * @param game       the current game instance, or {@code null} if already removed
@@ -199,22 +199,22 @@ class GameTaskScheduler {
      * @param deadline   the captured deadline
      * @param handNumber the captured hand number
      * @param generation the captured timer generation
-     * @return whether to ignore, cancel, or execute the timer callback
+     * @return {@code true} if the timer callback should execute, {@code false} otherwise
      */
-    Claim claim(String gameId, Game game, ScheduledGameTask task, long deadline, long handNumber, long generation) {
+    boolean claim(String gameId, Game game, ScheduledGameTask task, long deadline, long handNumber, long generation) {
         if (game == null) {
-            return Claim.IGNORE;
+            return false;
         }
         if (task == ScheduledGameTask.READY_TIMEOUT) {
-            return matches(game, task, deadline, handNumber, generation) ? Claim.EXECUTE : Claim.IGNORE;
+            return matches(game, task, deadline, handNumber, generation);
         }
         return switch (game.claimScheduledTaskExecution(task, deadline, handNumber, generation)) {
-            case IGNORE -> Claim.IGNORE;
+            case IGNORE -> false;
             case CANCEL_GAME_OVER -> {
                 timerRegistry.cancelTask(gameId, task);
-                yield Claim.CANCEL;
+                yield false;
             }
-            case EXECUTE -> Claim.EXECUTE;
+            case EXECUTE -> true;
         };
     }
 
@@ -232,17 +232,6 @@ class GameTaskScheduler {
                 && game.getHandNumber() == handNumber
                 && game.getScheduledTaskGeneration(task) == generation
                 && Objects.equals(game.getScheduledTaskDeadline(task), deadline);
-    }
-
-    enum Claim {
-        IGNORE,
-        CANCEL,
-        EXECUTE
-    }
-
-    enum ReadyOpening {
-        DEFERRED,
-        OPEN_IMMEDIATELY
     }
 
     /**

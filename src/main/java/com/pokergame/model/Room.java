@@ -454,11 +454,11 @@ public class Room {
      * Returns whether the configured inactivity deadline has elapsed by {@code nowMs}.
      *
      * @param nowMs current epoch time in milliseconds
-     * @return {@code true} if a positive deadline is configured and {@code nowMs} has reached it
+     * @return {@code true} if a deadline is configured and {@code nowMs} has reached it
      */
     public boolean isInactivityExpired(long nowMs) {
         Long deadline = inactivityDeadlineEpochMs;
-        return deadline != null && deadline > 0 && nowMs >= deadline;
+        return deadline != null && nowMs >= deadline;
     }
 
     /**

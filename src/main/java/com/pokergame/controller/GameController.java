@@ -76,7 +76,7 @@ public class GameController {
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
             Game game = getAuthorisedGame(gameId, playerName);
-            return ResponseEntity.ok(gameStateService.getPublicGameStateSnapshot(gameId, game));
+            return ResponseEntity.ok(gameStateService.getPublicGameStateSnapshot(game));
         }
     }
 

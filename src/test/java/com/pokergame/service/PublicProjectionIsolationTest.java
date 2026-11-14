@@ -138,7 +138,7 @@ class PublicProjectionIsolationTest {
             p1.setReadyForNextHand(r1);
             p2.setReadyForNextHand(r2);
 
-            PublicGameStateResponse snapshot = gameStateService.getPublicGameStateSnapshot(ROOM_A, game);
+            PublicGameStateResponse snapshot = gameStateService.getPublicGameStateSnapshot(game);
 
             // Turn pointers MUST be nullified
             assertNull(snapshot.currentPlayerName(), "Iteration " + i + ": currentPlayerName must be null during showdown countdown");
@@ -236,7 +236,7 @@ class PublicProjectionIsolationTest {
                 .handEvaluator(handEvaluator)
                 .build();
 
-        PublicGameStateResponse snapshotB = gameStateService.getPublicGameStateSnapshot(ROOM_B, gameB);
+        PublicGameStateResponse snapshotB = gameStateService.getPublicGameStateSnapshot(gameB);
 
         assertFalse(snapshotB.handSettled(), "Room B must NOT be marked settled");
         assertNull(snapshotB.winners(), "Room B must have no winners");

@@ -154,7 +154,9 @@ public class GameLifecycleService {
             roomService.broadcastGameStarted(roomId);
 
             logger.info("Game created and started for room: {} with {} players", roomId, room.getPlayers().size());
-            readinessCoordinator.handlePostHandTransition(roomId, handProgression.startNewHand(roomId));
+            if (handProgression.startNewHand(roomId)) {
+                readinessCoordinator.openReadyGate(roomId);
+            }
             return roomId;
         }
     }
@@ -171,20 +173,20 @@ public class GameLifecycleService {
     @DurableMutation(roomId = "#gameId")
     public void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            readinessCoordinator.handlePostHandTransition(
-                    gameId, handProgression.applyTurnOutcome(gameId, game, outcome, notifyImmediateAutoAdvance));
+            if (handProgression.applyTurnOutcome(gameId, game, outcome, notifyImmediateAutoAdvance)) {
+                readinessCoordinator.openReadyGate(gameId);
+            }
         }
     }
 
     /**
-     * Schedules the inactivity expiration timer for an active game if {@code deadlineEpochMs} is
-     * positive.
+     * Schedules the inactivity expiration timer for an active game.
      *
      * @param gameId          the unique ID of the game
      * @param deadlineEpochMs target expiration epoch time in milliseconds
      */
     public void scheduleGameInactivity(String gameId, Long deadlineEpochMs) {
-        if (gameId == null || deadlineEpochMs == null || deadlineEpochMs <= 0) {
+        if (gameId == null || deadlineEpochMs == null) {
             return;
         }
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
@@ -311,7 +313,7 @@ public class GameLifecycleService {
                 List<ScheduledTimer> timers = GameTaskScheduler.listActiveTimers(gameId, game);
                 PostSaveActions.runAfterSave(() -> timers.forEach(taskScheduler::registerTimer));
                 if (normalized) {
-                    gameStateService.broadcastGameState(gameId, game);
+                    gameStateService.broadcastGameState(game);
                 }
                 logger.info("Resumed {} recovered timers for game {}", timers.size(), gameId);
             }
@@ -363,19 +365,24 @@ public class GameLifecycleService {
         }
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
             Game game = activeGames.get(gameId);
-            if (taskScheduler.claim(gameId, game, task, expectedDeadline, expectedHandNumber, expectedGeneration)
-                    != GameTaskScheduler.Claim.EXECUTE) {
+            if (!taskScheduler.claim(gameId, game, task, expectedDeadline, expectedHandNumber, expectedGeneration)) {
                 return;
             }
             switch (task) {
                 case TURN_TIMEOUT -> departureHandler.handleTurnTimeout(gameId, game);
-                case AUTO_ADVANCE -> readinessCoordinator.handlePostHandTransition(
-                        gameId, handProgression.applyAutoAdvanceTimeout(gameId, game));
-                case READY_TIMEOUT -> readinessCoordinator.applyProgression(
-                        gameId, readinessCoordinator.expire(gameId, game, expectedDeadline));
-                case NEW_HAND -> readinessCoordinator.handlePostHandTransition(gameId, handProgression.startNewHand(gameId));
-                case READY_OPEN -> readinessCoordinator.startDefaultReadyCountdown(gameId);
-                case GAME_END -> completionHandler.handleGameEnd(gameId, false);
+                case AUTO_ADVANCE -> {
+                    if (handProgression.applyAutoAdvanceTimeout(gameId, game)) {
+                        readinessCoordinator.openReadyGate(gameId);
+                    }
+                }
+                case READY_TIMEOUT -> readinessCoordinator.handleReadyTimeout(gameId, game, expectedDeadline);
+                case NEW_HAND -> {
+                    if (handProgression.startNewHand(gameId)) {
+                        readinessCoordinator.openReadyGate(gameId);
+                    }
+                }
+                case READY_OPEN -> readinessCoordinator.openReadyGate(gameId);
+                case GAME_END -> completionHandler.handleGameEnd(gameId);
                 case CLEANUP -> completionHandler.deleteGameAndRoom(gameId);
             }
         }
@@ -505,7 +512,7 @@ public class GameLifecycleService {
     @DurableMutation(roomId = "#gameId")
     public void markPlayerReadyForNextHand(String gameId, String playerName) {
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            readinessCoordinator.applyProgression(gameId, readinessCoordinator.markPlayerReadyForNextHand(gameId, playerName));
+            readinessCoordinator.markPlayerReadyForNextHand(gameId, playerName);
         }
     }
 
@@ -518,7 +525,7 @@ public class GameLifecycleService {
     @DurableMutation(roomId = "#gameId")
     public void unmarkPlayerReadyForNextHand(String gameId, String playerName) {
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            readinessCoordinator.applyProgression(gameId, readinessCoordinator.unmarkPlayerReadyForNextHand(gameId, playerName));
+            readinessCoordinator.unmarkPlayerReadyForNextHand(gameId, playerName);
         }
     }
 

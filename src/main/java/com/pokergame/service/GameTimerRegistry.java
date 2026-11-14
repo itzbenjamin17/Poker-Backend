@@ -53,7 +53,7 @@ class GameTimerRegistry {
      * @param callback action to execute if inactivity expires
      */
     void scheduleInactivity(String gameId, Long deadline, long now, Runnable callback) {
-        if (gameId == null || deadline == null || deadline <= 0) {
+        if (gameId == null || deadline == null) {
             return;
         }
         long delay = Math.max(0, deadline - now);

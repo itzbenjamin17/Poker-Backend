@@ -451,19 +451,19 @@ public class Game {
      * successor by {@link #removePlayerFromGame(Player)}.
      */
     public TurnOutcome reconcileAfterPlayerRemoval() {
-        if (activePlayers.isEmpty()) return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null, null, 0);
+        if (activePlayers.isEmpty()) return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null);
         currentHighestBet = BettingRound.highestBetAfterRemoval(activePlayers, currentHighestBet);
         return reconcileProgressionAfterMutation(null, false);
     }
 
     /** Resolves whether forced blinds leave an actor or require an automatic runout. */
     public TurnOutcome reconcileAfterForcedBlinds() {
-        if (activePlayers.isEmpty()) return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null, null, 0);
+        if (activePlayers.isEmpty()) return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null);
         BettingRound.ForcedBlindProgression progression = BettingRound.afterForcedBlinds(isHandOver(), shouldAutoRunout());
         if (progression == BettingRound.ForcedBlindProgression.RECONCILE) return reconcileProgressionAfterMutation(null, false);
-        if (progression == BettingRound.ForcedBlindProgression.AUTO_RUNOUT) return new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, null, null, 0);
+        if (progression == BettingRound.ForcedBlindProgression.AUTO_RUNOUT) return new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, null);
         if (BettingRound.needsNextActor(getCurrentPlayer())) nextPlayer();
-        return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null, null, 0);
+        return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null);
     }
 
     private TurnOutcome reconcileProgressionAfterMutation(String conversionMessage, boolean selectNextActor) {
@@ -476,10 +476,8 @@ public class Game {
         TurnOutcome.TurnOutcomeType outcome = BettingRound.progression(
                 isHandOver(), roundComplete, currentPhase, shouldAutoRunout());
         if (outcome == TurnOutcome.TurnOutcomeType.SHOWDOWN) {
-            int potBeforeDistribution = getPot();
-            List<Player> winners = conductShowdown();
-            int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
-            return new TurnOutcome(outcome, conversionMessage, winners, winningsPerPlayer);
+            conductShowdown();
+            return new TurnOutcome(outcome, conversionMessage);
         }
         if (outcome == TurnOutcome.TurnOutcomeType.PHASE_ADVANCED) {
             actedPlayersInRound.clear();
@@ -487,7 +485,7 @@ public class Game {
         } else if (outcome == TurnOutcome.TurnOutcomeType.NEXT_PLAYER && selectNextActor) {
             nextPlayer();
         }
-        return new TurnOutcome(outcome, conversionMessage, null, 0);
+        return new TurnOutcome(outcome, conversionMessage);
     }
 
     /**
