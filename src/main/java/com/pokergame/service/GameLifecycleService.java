@@ -144,7 +144,8 @@ public class GameLifecycleService {
                 players.add(player);
             }
 
-            Game game = new Game(roomId, players, room.getSmallBlind(), room.getBigBlind(), handEvaluator);
+            Game game = new Game(
+                    roomId, players, room.getMaxPlayers(), room.getSmallBlind(), room.getBigBlind(), handEvaluator);
             activeGames.register(game);
 
             room.setGameStarted(true);
@@ -309,7 +310,7 @@ public class GameLifecycleService {
                 return;
             }
             try (MdcScope _ = MdcUtils.withRoomId(gameId)) {
-                boolean normalized = game.normalizeRecoveredReadyCountdown(clock.millis() + timings.readyCountdownMs());
+                boolean normalized = game.repairRecoveredReadyGate(clock.millis() + timings.readyCountdownMs());
                 List<ScheduledTimer> timers = GameTaskScheduler.listActiveTimers(gameId, game);
                 PostSaveActions.runAfterSave(() -> timers.forEach(taskScheduler::registerTimer));
                 if (normalized) {

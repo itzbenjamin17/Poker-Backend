@@ -10,7 +10,7 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.model.TournamentEligibility;
+import com.pokergame.model.GameEligibility;
 import java.time.Clock;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -109,7 +109,7 @@ class GameCompletionHandler {
             return;
         }
         Room room = roomService.getRoom(gameId);
-        if (game.isGameOver() && game.getRetainedTerminalResult() != null) {
+        if (game.isGameOver() && game.getGameEndResult() != null) {
             return;
         }
         game.markGameOver();
@@ -122,7 +122,7 @@ class GameCompletionHandler {
         game.clearScheduledTask(ScheduledGameTask.READY_OPEN);
         game.clearScheduledTask(ScheduledGameTask.NEW_HAND);
         GameEndResponse event = gameStateService.recordAbandonment(game);
-        game.setRetainedTerminalResult(event);
+        game.setGameEndResult(event);
 
         if (room != null) {
             room.setTerminal(true);
@@ -165,11 +165,11 @@ class GameCompletionHandler {
             throw new ConflictException("Game has not finished");
         }
 
-        GameEndResponse result = game.getRetainedTerminalResult();
+        GameEndResponse result = game.getGameEndResult();
         if (result == null) {
             result = buildFallbackGameEnd(game);
         }
-        if (!game.isParticipantInTerminalRoster(playerName, result)) {
+        if (!wasPlayerInGame(game, result, playerName)) {
             throw new UnauthorisedActionException("You are not part of this game's terminal result.");
         }
         return result;
@@ -210,7 +210,7 @@ class GameCompletionHandler {
      * @param game   the game instance
      */
     void cleanupAbandonedGameIfRoomEmpty(String gameId, Room room, Game game) {
-        if (TournamentEligibility.countContenders(game) != 0 || !room.getPlayers().isEmpty()) {
+        if (GameEligibility.countContenders(game) != 0 || !room.getPlayers().isEmpty()) {
             return;
         }
         game.closeReadyCountdown();
@@ -233,11 +233,11 @@ class GameCompletionHandler {
         if (game.isForfeitPending() && preferredWinner == null) {
             return;
         }
-        if (game.isGameOver() && game.isTerminalCarryOverSettled()) {
+        if (game.isGameOver() && game.isFinalPotSettled()) {
             return;
         }
 
-        Player winner = game.settleTerminalState(preferredWinner, forfeitedPlayers);
+        Player winner = game.settleGameEnd(preferredWinner, forfeitedPlayers);
         runtimeTimers.cancelAllForGame(gameId, true);
 
         Room room = roomService.getRoom(gameId);
@@ -249,19 +249,29 @@ class GameCompletionHandler {
             return;
         }
 
-        GameEndResponse event = game.getRetainedTerminalResult();
+        GameEndResponse event = game.getGameEndResult();
         if (event == null) {
             event = gameStateService.recordGameEnd(game, winner, isForfeit);
-            game.setRetainedTerminalResult(event);
+            game.setGameEndResult(event);
         }
         gameStateService.sendGameEnd(event);
         taskScheduler.scheduleGameCleanup(gameId, timings.gameEndDisplayDelayMs());
     }
 
     private GameEndResponse buildFallbackGameEnd(Game game) {
-        Player winner = game.resolveWinnerOrFallback(null);
+        Player winner = GameEligibility.resolveWinnerOrFallback(game, null);
         return winner != null
-                ? gameStateService.buildGameEndResponse(game, winner, game.isFallbackForfeit())
+                ? gameStateService.buildGameEndResponse(game, winner, game.endedBeforeShowdown())
                 : gameStateService.buildAbandonmentResponse(game);
+    }
+
+    private static boolean wasPlayerInGame(Game game, GameEndResponse result, String playerName) {
+        boolean inFinalState = result != null
+                && result.finalState() != null
+                && result.finalState().players() != null
+                && result.finalState().players().stream().anyMatch(p -> p.name().equals(playerName));
+        boolean inGameRoster = game.getPlayers() != null
+                && game.getPlayers().stream().anyMatch(p -> p.getName().equals(playerName));
+        return inFinalState || inGameRoster;
     }
 }

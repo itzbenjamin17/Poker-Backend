@@ -19,6 +19,7 @@ import java.util.Set;
 public class GameRestoreBuilder {
 
     private String gameId;
+    private int maxPlayers;
     private List<Player> players;
     private List<String> activePlayerIds;
     private List<Card> remainingDeck;
@@ -65,6 +66,11 @@ public class GameRestoreBuilder {
 
     public GameRestoreBuilder gameId(String gameId) {
         this.gameId = gameId;
+        return this;
+    }
+
+    public GameRestoreBuilder maxPlayers(int maxPlayers) {
+        this.maxPlayers = maxPlayers;
         return this;
     }
 
@@ -254,6 +260,10 @@ public class GameRestoreBuilder {
 
     String getGameId() {
         return gameId;
+    }
+
+    int getMaxPlayers() {
+        return maxPlayers;
     }
 
     List<Player> getPlayers() {

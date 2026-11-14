@@ -62,10 +62,10 @@ class GameReadinessCoordinator {
             return;
         }
         long deadline = clock.millis() + timings.readyCountdownMs();
-        switch (game.startOrWaitReadyCountdown(deadline)) {
+        switch (game.openOrWaitReadyGate(deadline)) {
             case IGNORE -> {
             }
-            case TOURNAMENT_OVER -> completionHandler.handleGameEnd(gameId);
+            case GAME_DECIDED -> completionHandler.handleGameEnd(gameId);
             case WAITING_FOR_PLAYERS -> {
                 cancelTimeout(gameId);
                 gameStateService.broadcastGameState(game);
@@ -180,7 +180,7 @@ class GameReadinessCoordinator {
         }
         logger.debug("Player {} {} ready for next hand in game {}",
                 playerName, ready ? "marked" : "unmarked", gameId);
-        if (ready && game.areAllReadyEligiblePlayersReady()) {
+        if (ready && game.areAllEligiblePlayersReady()) {
             completeReadyCountdown(game);
             return;
         }

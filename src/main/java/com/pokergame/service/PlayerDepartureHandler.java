@@ -9,7 +9,7 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.model.TournamentEligibility;
+import com.pokergame.model.GameEligibility;
 import java.time.Clock;
 import java.util.Collection;
 import java.util.List;
@@ -140,9 +140,9 @@ class PlayerDepartureHandler {
             return;
         }
 
-        if (game.isSettledTerminal()) {
+        if (game.isFinishedOrEliminated()) {
             room.setTerminal(true);
-            if (!game.isGameOver() || !game.isTerminalCarryOverSettled()) {
+            if (!game.isGameOver() || !game.isFinalPotSettled()) {
                 completion.handleGameEnd(roomId);
             }
             detachRoomMembers(roomId, room, game, departing);
@@ -154,16 +154,16 @@ class PlayerDepartureHandler {
             return;
         }
 
-        int contendersBefore = TournamentEligibility.countContenders(game);
+        int contendersBefore = GameEligibility.countContenders(game);
         List<Player> departingContenders = departingGamePlayers.stream()
-                .filter(p -> TournamentEligibility.isContender(game, p))
+                .filter(p -> GameEligibility.isContender(game, p))
                 .toList();
         int contendersRemaining = contendersBefore - departingContenders.size();
 
         if (contendersRemaining == 1 && contendersBefore >= 2) {
             Player survivor = game.getPlayers().stream()
                     .filter(candidate -> !departing.contains(candidate.getName()))
-                    .filter(candidate -> TournamentEligibility.isContender(game, candidate))
+                    .filter(candidate -> GameEligibility.isContender(game, candidate))
                     .findFirst()
                     .orElse(null);
 
@@ -175,7 +175,7 @@ class PlayerDepartureHandler {
 
         if (contendersRemaining <= 0) {
             for (Player departingPlayer : departingGamePlayers) {
-                game.removePlayerFromGame(departingPlayer);
+                game.removePlayer(departingPlayer);
             }
             detachRoomMembersIfRoomPresent(roomId, room, game, departing);
             completion.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
@@ -183,7 +183,7 @@ class PlayerDepartureHandler {
         }
 
         for (Player departingPlayer : departingGamePlayers) {
-            game.removePlayerFromGame(departingPlayer);
+            game.removePlayer(departingPlayer);
         }
         detachRoomMembersIfRoomPresent(roomId, room, game, departing);
 
@@ -202,12 +202,12 @@ class PlayerDepartureHandler {
         if (game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive()) {
             gameStateService.broadcastGameState(game);
         } else {
-            if (handProgression.applyTurnOutcome(roomId, game, game.reconcileAfterPlayerRemoval())) {
+            if (handProgression.applyTurnOutcome(roomId, game, game.advanceAfterPlayerRemoval())) {
                 readiness.openReadyGate(roomId);
             }
         }
 
-        if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
+        if (game.isReadyCountdownActive() && game.areAllEligiblePlayersReady()) {
             readiness.completeReadyCountdown(game);
         }
     }
@@ -249,7 +249,7 @@ class PlayerDepartureHandler {
             gameStateService.broadcastGameState(game);
         }
 
-        if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
+        if (game.isReadyCountdownActive() && game.areAllEligiblePlayersReady()) {
             readiness.completeReadyCountdown(game);
         }
     }
@@ -275,8 +275,8 @@ class PlayerDepartureHandler {
                 player.setDisconnectDeadlineEpochMs(null);
                 logger.info("Player {} marked reconnected in game {}", playerName, gameId);
 
-                if (game.isForfeitPending() && TournamentEligibility.countContenders(game) == 1
-                        && TournamentEligibility.isContender(game, player)) {
+                if (game.isForfeitPending() && GameEligibility.countContenders(game) == 1
+                        && GameEligibility.isContender(game, player)) {
                     game.setForfeitPending(false);
                     completion.handleGameEndWithForfeits(gameId, player, Set.of());
                     markRoomMemberConnected(room, playerName);
@@ -318,7 +318,7 @@ class PlayerDepartureHandler {
 
         completion.rejectExpiredActivity(gameId, room);
         if (game.isGameOver()) {
-            GameEndResponse retained = game.getRetainedTerminalResult();
+            GameEndResponse retained = game.getGameEndResult();
             if (retained != null && retained.abandoned()) {
                 throw new BadRequestException(
                         "Game was abandoned due to inactivity.",
@@ -327,12 +327,12 @@ class PlayerDepartureHandler {
             }
             return completion.getGameReview(gameId, playerName);
         }
-        if (!TournamentEligibility.canPlayerClaimWin(game, playerName)) {
+        if (!GameEligibility.canPlayerClaimWin(game, playerName)) {
             throw new UnauthorisedActionException("Cannot claim win right now.");
         }
-        List<String> opponents = TournamentEligibility.disconnectedContenderNamesExcept(game, playerName);
+        List<String> opponents = GameEligibility.disconnectedContenderNamesExcept(game, playerName);
         removePlayersFromRoomAndGame(gameId, opponents, room, game);
-        return game.getRetainedTerminalResult();
+        return game.getGameEndResult();
     }
 
     /**
@@ -410,13 +410,13 @@ class PlayerDepartureHandler {
         if (game != null) {
             for (String name : remaining) {
                 Player player = game.findPlayerByName(name);
-                if (player != null && TournamentEligibility.isContender(game, player) && !player.getIsDisconnected()) {
+                if (player != null && GameEligibility.isContender(game, player) && !player.getIsDisconnected()) {
                     return name;
                 }
             }
             for (String name : remaining) {
                 Player player = game.findPlayerByName(name);
-                if (player != null && TournamentEligibility.isContender(game, player)) {
+                if (player != null && GameEligibility.isContender(game, player)) {
                     return name;
                 }
             }
@@ -432,11 +432,11 @@ class PlayerDepartureHandler {
         }
         for (Player departingPlayer : departingGamePlayers) {
             if (roomMembersToLeave.contains(departingPlayer.getName())
-                    && TournamentEligibility.isContender(game, departingPlayer)) {
+                    && GameEligibility.isContender(game, departingPlayer)) {
                 departingPlayer.setIsOut();
             }
         }
-        List<String> membersToDetach = TournamentEligibility.countContenders(game) == 0
+        List<String> membersToDetach = GameEligibility.countContenders(game) == 0
                 ? room.getPlayers()
                 : roomMembersToLeave;
         String survivingHost = selectNextHost(room, game, membersToDetach);
@@ -506,7 +506,7 @@ class PlayerDepartureHandler {
             return false;
         }
         Long deadline = player == null ? room.getAbsenceDeadline(playerName) : player.getDisconnectDeadlineEpochMs();
-        if (deadline == null && player != null && game != null && game.isSettledTerminal()) {
+        if (deadline == null && player != null && game != null && game.isFinishedOrEliminated()) {
             deadline = room.getAbsenceDeadline(playerName);
         }
         return deadline != null && deadline == expectedDeadlineEpochMs && clock.millis() >= expectedDeadlineEpochMs;

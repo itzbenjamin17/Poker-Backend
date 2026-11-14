@@ -187,7 +187,7 @@ public final class AggregateSnapshotMapper {
             if (image.game().pot() < 0) {
                 throw new PersistenceException("Invalid negative pot in snapshot");
             }
-            game = restoreGame(image.game());
+            game = restoreGame(image.game(), state.maxPlayers());
         }
 
         // Room membership is authoritative independently of retained final Game rows.
@@ -235,14 +235,14 @@ public final class AggregateSnapshotMapper {
             game.getCurrentPlayerPosition(), game.getCurrentHighestBet(), game.getCurrentPhase(),
             game.isGameOver(), game.getSmallBlind(), game.getBigBlind(), game.getHandContributionsSnapshot(),
             game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs(),
-            game.hasEveryoneHadInitialTurn(), game.getActedPlayerIdsSnapshot(),
-            game.getScheduledTaskDeadlinesSnapshot(), game.getPreHandCarryOver(),
+            game.hasAllPlayersHadInitialTurn(), game.getActedPlayerIdsSnapshot(),
+            game.getScheduledTaskDeadlinesSnapshot(), game.getCarryOverPot(),
             game.getLastFullRaiseByStreetSnapshot(), game.getLastActedWagerByPlayerSnapshot(),
-            game.getHandSeatOrderSnapshot(), game.getDealerAnchorPlayerId(), game.getSmallBlindPlayerId(),
+            game.getHandSeatOrderSnapshot(), game.getDealerPlayerId(), game.getSmallBlindPlayerId(),
             game.getBigBlindPlayerId(), settlementState(game.getLastSettlementResult()),
-            game.isTerminalCarryOverSettled(), game.getReadyGateState(), game.getHandNumber(),
+            game.isFinalPotSettled(), game.getReadyGateState(), game.getHandNumber(),
             game.getScheduledTaskGenerationsSnapshot(), game.isForfeitPending(), game.getStateRevision(),
-            toTerminalResultState(game.getRetainedTerminalResult()));
+            toTerminalResultState(game.getGameEndResult()));
     }
 
     /**
@@ -292,7 +292,7 @@ public final class AggregateSnapshotMapper {
                 .build();
     }
 
-    private Game restoreGame(AggregateStateImage.GameState state) {
+    private Game restoreGame(AggregateStateImage.GameState state, int maxPlayers) {
         if (state.stateRevision() < 0) {
             throw new PersistenceException("Invalid negative public state revision in snapshot");
         }
@@ -318,6 +318,7 @@ public final class AggregateSnapshotMapper {
         // Put the game back together with the exact same deck, pot, and turn order
         return Game.restoreBuilder()
                 .gameId(state.gameId())
+                .maxPlayers(maxPlayers)
                 .players(players)
                 .activePlayerIds(state.activePlayerIds())
                 .remainingDeck(cardsFromState(state.remainingDeck()))

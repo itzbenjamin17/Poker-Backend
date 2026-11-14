@@ -96,7 +96,7 @@ class GameTaskScheduler {
     }
 
     /**
-     * Schedules final tournament completion after displaying the final showdown board.
+     * Schedules final game completion after displaying the final showdown board.
      *
      * @param gameId  the room/game ID
      * @param delayMs display delay in milliseconds ({@code >= 0})
@@ -211,7 +211,7 @@ class GameTaskScheduler {
         if (task == ScheduledGameTask.READY_TIMEOUT) {
             return matches(game, task, deadline, handNumber, generation);
         }
-        return switch (game.claimScheduledTaskExecution(task, deadline, handNumber, generation)) {
+        return switch (game.claimScheduledTask(task, deadline, handNumber, generation)) {
             case IGNORE -> false;
             case CANCEL_GAME_OVER -> {
                 timerRegistry.cancelTask(gameId, task);

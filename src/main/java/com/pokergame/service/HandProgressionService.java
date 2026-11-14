@@ -43,7 +43,7 @@ class HandProgressionService {
 
     /**
      * Deals the next hand for {@code gameId} if the game is ready for a new hand, or settles the
-     * game if tournament elimination leaves a winner.
+     * game if elimination leaves a single winner.
      *
      * @param gameId the unique ID of the game
      * @return {@code true} if the ready gate should open immediately, {@code false} otherwise
@@ -59,7 +59,7 @@ class HandProgressionService {
             return false;
         }
         if (game.isGameOver()) {
-            if (!game.isTerminalCarryOverSettled()) {
+            if (!game.isFinalPotSettled()) {
                 completion.handleGameEnd(gameId);
             }
             return false;
@@ -74,7 +74,7 @@ class HandProgressionService {
         game.closeReadyCountdown();
         game.clearScheduledTask(ScheduledGameTask.CLEANUP);
 
-        // Reset before dealing so a finished tournament preserves the previous final board cleanly.
+        // Reset before dealing so a decided game preserves the previous final board cleanly.
         boolean gameEnded = game.resetForNewHand();
         if (gameEnded) {
             logger.warn("Game {} became over after reset", gameId);
@@ -85,7 +85,7 @@ class HandProgressionService {
         game.beginHand();
         game.dealHoleCards();
         game.postBlinds();
-        boolean openReadyGateNow = applyTurnOutcome(gameId, game, game.reconcileAfterForcedBlinds());
+        boolean openReadyGateNow = applyTurnOutcome(gameId, game, game.advanceAfterBlinds());
 
         logger.info("New hand started successfully for game: {} | Current player: {} | Phase: {} | Pot: {}",
                 gameId,
@@ -165,7 +165,7 @@ class HandProgressionService {
         if (game == null || game.isForfeitPending() || game.isGameOver()) {
             return true;
         }
-        if (game.isHandSettled() || game.isTerminalCarryOverSettled()) {
+        if (game.isHandSettled() || game.isFinalPotSettled()) {
             logger.info("Skipping stale auto-advance callback for settled game {}", gameId);
             return true;
         }
@@ -221,7 +221,7 @@ class HandProgressionService {
     }
 
     private boolean schedulePostShowdownProgression(String gameId, Game game) {
-        if (game.isTournamentOver()) {
+        if (game.isGameDecided()) {
             scheduling.scheduleGameEnd(gameId, FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
             return false;
         }

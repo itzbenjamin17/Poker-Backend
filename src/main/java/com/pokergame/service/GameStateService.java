@@ -21,7 +21,7 @@ import com.pokergame.model.Game;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.model.TournamentEligibility;
+import com.pokergame.model.GameEligibility;
 import com.pokergame.persistence.transaction.PostSaveActions;
 import com.pokergame.security.PlayerPrincipal;
 import java.time.Clock;
@@ -66,7 +66,7 @@ public class GameStateService {
     public PublicGameStateResponse getPublicGameStateSnapshot(Game game) {
         requireNonNull(game, "game must not be null");
         Room room = requireRoom(game.getGameId());
-        return buildLiveGameState(game, room);
+        return buildLiveGameState(game, room.getInactivityDeadlineEpochMs());
     }
 
     /**
@@ -105,7 +105,7 @@ public class GameStateService {
         Room room = requireRoom(gameId);
 
         game.incrementStateRevision();
-        PublicGameStateResponse publicResponse = buildLiveGameState(game, room);
+        PublicGameStateResponse publicResponse = buildLiveGameState(game, room.getInactivityDeadlineEpochMs());
         Map<String, PrivatePlayerState> playerPrivateStates = new HashMap<>();
         for (Player player : game.getPlayers()) {
             playerPrivateStates.put(player.getName(), buildPrivatePlayerState(game, player));
@@ -122,13 +122,11 @@ public class GameStateService {
      * ranks, awards, and hole cards for actual showdowns while clearing current-turn pointers.
      *
      * @param game the settled game instance containing showdown results
-     * @throws ResourceNotFoundException if the room for {@code game} does not exist
-     * @throws IllegalStateException     if the current hand has not been settled yet
+     * @throws IllegalStateException if the current hand has not been settled yet
      */
     public void broadcastShowdownResults(Game game) {
         requireNonNull(game, "game must not be null");
         String gameId = game.getGameId();
-        Room room = requireRoom(gameId);
 
         HandSettlementResult settlement = game.getLastSettlementResult();
         if (settlement == null || !settlement.settled()) {
@@ -172,7 +170,7 @@ public class GameStateService {
         }).toList();
 
         PublicGameStateResponse showdownResponse = new PublicGameStateResponse(
-                room.getMaxPlayers(),
+                game.getMaxPlayers(),
                 game.getPot(),
                 game.getPotBreakdown(),
                 game.getUncalledAmount(),
@@ -213,12 +211,10 @@ public class GameStateService {
      *
      * @param game    the active game instance
      * @param message the status banner message to display while auto-advancing
-     * @throws ResourceNotFoundException if the room for {@code game} does not exist
      */
     public void broadcastGameStateWithAutoAdvance(Game game, String message) {
         requireNonNull(game, "game must not be null");
         String gameId = game.getGameId();
-        Room room = requireRoom(gameId);
 
         game.incrementStateRevision();
 
@@ -239,7 +235,7 @@ public class GameStateService {
                 .toList();
 
         PublicGameStateResponse autoAdvanceResponse = new PublicGameStateResponse(
-                room.getMaxPlayers(),
+                game.getMaxPlayers(),
                 game.getPot(),
                 game.getPotBreakdown(),
                 game.getUncalledAmount(),
@@ -411,18 +407,7 @@ public class GameStateService {
         }
     }
 
-    private int resolveMaxPlayers(Game game) {
-        Room room = roomService.getRoom(game.getGameId());
-        if (room != null && room.getMaxPlayers() >= 2 && room.getMaxPlayers() <= 10) {
-            return room.getMaxPlayers();
-        }
-        // Departures can leave 0 or 1 players once the room is gone; keep [2, 10] for client validation.
-        return Math.clamp(game.getPlayers().size(), 2, 10);
-    }
-
     private PublicGameStateResponse buildAbandonedGameState(Game game) {
-        int maxPlayers = resolveMaxPlayers(game);
-
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
 
@@ -442,7 +427,7 @@ public class GameStateService {
         boolean handSettled = game.getLastSettlementResult() != null && game.getLastSettlementResult().settled();
 
         return new PublicGameStateResponse(
-                maxPlayers,
+                game.getMaxPlayers(),
                 game.getPot(),
                 game.getPotBreakdown(),
                 game.getUncalledAmount(),
@@ -474,8 +459,6 @@ public class GameStateService {
     }
 
     private PublicGameStateResponse buildCompletedGameState(Game game, Player winner, boolean isForfeit) {
-        int maxPlayers = resolveMaxPlayers(game);
-
         boolean handSettled = game.getLastSettlementResult() != null && game.getLastSettlementResult().settled();
         boolean contestedShowdown = game.getCurrentPhase() == GamePhase.SHOWDOWN
                 && handSettled
@@ -505,7 +488,7 @@ public class GameStateService {
         List<String> winnerNames = List.of(winner.getName());
 
         return new PublicGameStateResponse(
-                maxPlayers,
+                game.getMaxPlayers(),
                 game.getPot(),
                 game.getPotBreakdown(),
                 game.getUncalledAmount(),
@@ -543,9 +526,7 @@ public class GameStateService {
         return room;
     }
 
-    private PublicGameStateResponse buildLiveGameState(Game game, Room room) {
-        requireNonNull(room, "room must not be null");
-
+    private PublicGameStateResponse buildLiveGameState(Game game, Long inactivityDeadlineEpochMs) {
         boolean autoAdvancing = game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE) != null;
         HandSettlementResult lastSettlement = game.getLastSettlementResult();
         boolean inShowdownOrCountdown = game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive();
@@ -600,7 +581,7 @@ public class GameStateService {
                 : null;
 
         return new PublicGameStateResponse(
-                room.getMaxPlayers(),
+                game.getMaxPlayers(),
                 game.getPot(),
                 game.getPotBreakdown(),
                 game.getUncalledAmount(),
@@ -628,7 +609,7 @@ public class GameStateService {
                 clock.millis(),
                 game.getStateRevision(),
                 currentPlayer == null ? null : game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT),
-                room.getInactivityDeadlineEpochMs());
+                inactivityDeadlineEpochMs);
     }
 
     private Integer computeEqualWinnerAward(Set<String> winnerIds, Map<String, Integer> contestedAwards) {
@@ -688,11 +669,11 @@ public class GameStateService {
     }
 
     private String computeClaimWinPlayerName(Game game) {
-        if (!TournamentEligibility.canClaim(game)) {
+        if (!GameEligibility.canClaim(game)) {
             return null;
         }
         return game.getPlayers().stream()
-                .filter(player -> TournamentEligibility.isContender(game, player))
+                .filter(player -> GameEligibility.isContender(game, player))
                 .filter(player -> !player.getIsDisconnected())
                 .map(Player::getName)
                 .findFirst()
