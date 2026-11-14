@@ -105,15 +105,6 @@ public class GameController {
         }
     }
 
-    /**
-     * Resolves a game only when it exists and still contains the requesting player.
-     *
-     * @param gameId requested game identifier
-     * @param playerName authenticated player name
-     * @return authorized active game
-     * @throws ResourceNotFoundException if the game does not exist
-     * @throws UnauthorisedActionException if the player is no longer in the game
-     */
     private Game getAuthorisedGame(String gameId, String playerName) {
         if (!gameLifecycleService.gameExists(gameId)) {
             throw new ResourceNotFoundException("Game not found");

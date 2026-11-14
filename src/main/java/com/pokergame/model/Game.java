@@ -347,10 +347,6 @@ public class Game {
         }
     }
 
-    /**
-     * Normalizes the blind positions to be within the bounds of the active players
-     * list.
-     */
     private void normalizeBlindPositions() {
         if (activePlayers.isEmpty()) {
             smallBlindPosition = 0;
@@ -363,13 +359,6 @@ public class Game {
         this.bigBlindPosition = positions.bigBlindPosition();
     }
 
-    /**
-     * Forces a player to post a blind amount, pushing them all-in if they don't have enough chips.
-     * Updates the game pot and tracks the player's contribution.
-     *
-     * @param player      the player posting the blind
-     * @param blindAmount the target blind amount
-     */
     private void postBlind(Player player, int blindAmount) {
         int betBefore = player.getCurrentBet();
         if (player.getChips() <= blindAmount) {
@@ -564,14 +553,6 @@ public class Game {
                 currentHighestBet, lastActedWagerByPlayer, getLastFullRaise());
     }
 
-    /**
-     * Tracks how many chips each player has committed during the current hand.
-     * This contribution map is later used to build main/side pots and detect
-     * uncalled chips.
-     *
-     * @param player the player whose contribution changed
-     * @param amount number of chips newly committed to the pot
-     */
     private void trackContribution(Player player, int amount) {
         PotCalculator.trackContribution(this.handContributions, player, amount, this.gameId);
     }
@@ -697,21 +678,10 @@ public class Game {
         return winners;
     }
 
-    /**
-     * Evaluates the poker hands for all given players using community cards
-     * and their hole cards. Updates each player's best hand and hand rank.
-     *
-     * @param players list of players whose hands should be evaluated
-     */
     private void evaluateHands(List<Player> players) {
         ShowdownResolver.evaluateHands(handEvaluator, communityCards, players);
     }
 
-    /**
-     * Resolves and distributes all side pots at showdown.
-     *
-     * @return ordered set of unique players who won at least one allocation
-     */
     private List<Player> distributeSidePotsAtShowdown(List<Player> showdownPlayers) {
         logger.info("Distributing side pots for game {}", gameId);
         PotComputationResult computation = computePotAllocationsAndUncalled(showdownPlayers);
@@ -722,21 +692,11 @@ public class Game {
         return distribution.winners();
     }
 
-    /**
-     * Decomposes the current pot into contested allocation layers and uncalled
-     * layers.
-     *
-     * @return a full breakdown used for payout distribution and UI pot rendering
-     */
     private PotComputationResult computePotAllocationsAndUncalled(List<Player> eligibleHandContenders) {
         return PotCalculator.computePotAllocationsAndUncalled(
                 pot, preHandCarryOver, handContributions, activePlayers, players, eligibleHandContenders, gameId);
     }
 
-    /**
-     * Clears per-hand contribution ledger and round action bookkeeping
-     * after showdown distribution completes.
-     */
     private void resetHandAccountingAfterShowdown() {
         handContributions.clear();
         actedPlayersInRound.clear();
@@ -798,11 +758,6 @@ public class Game {
         bigBlindPlayerId = null;
     }
 
-    /**
-     * Recomputes blind and first-action positions after table-size changes. Heads-up
-     * poker is handled separately because the dealer is also the small blind and acts
-     * first pre-flop.
-     */
     private void updatePositionsForCurrentTable() {
         TableSeating.TablePositions positions = TableSeating.updatePositionsForCurrentTable(
                 activePlayers, dealerPosition);
@@ -894,11 +849,6 @@ public class Game {
         ReadyGate.setPlayerReady(players, readyCountdownActive, playerName, ready);
     }
 
-    /**
-     * Applies a ready-gate state transition to this game's fields.
-     *
-     * @param transition state transition to apply, or {@code null} if no-op
-     */
     private void applyReadyGateTransition(ReadyGate.ReadyGateStateTransition transition) {
         if (transition == null) return;
         this.readyCountdownActive = transition.active();
@@ -1163,10 +1113,6 @@ public class Game {
                 activePlayers, handSeatOrder, dealerAnchorPlayerId, dealerPosition);
     }
 
-    /**
-     * Normalizes the current player position to be within the bounds of the active
-     * players list.
-     */
     private void normalizeCurrentPlayerPosition() {
         this.currentPlayerPosition = TableSeating.normalizeCurrentPlayerPosition(activePlayers, currentPlayerPosition);
     }

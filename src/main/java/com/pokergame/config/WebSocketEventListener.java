@@ -248,11 +248,6 @@ public class WebSocketEventListener {
         }
     }
 
-    /**
-     * Cleans up a disconnected user from the game.
-     * 
-     * @param principal The PlayerPrincipal of the disconnected user.
-     */
     private void cleanupDisconnectedUser(PlayerPrincipal principal, PendingDisconnect expected) {
         String compositeName = playerKey(principal);
         String playerName = principal.playerName();
@@ -422,12 +417,6 @@ public class WebSocketEventListener {
     }
 
 
-    /**
-     * Registers an active WebSocket session for the given user.
-     * 
-     * @param principal The PlayerPrincipal of the user.
-     * @param sessionId The session ID of the user.
-     */
     private void registerActiveSession(PlayerPrincipal principal, String sessionId) {
         String compositeName = playerKey(principal);
         // Get the set of active sessions for the user or create a new one if it
@@ -447,12 +436,6 @@ public class WebSocketEventListener {
         sessionToPrincipal.put(sessionId, principal);
     }
 
-    /**
-     * Unregisters an active WebSocket session for the given user.
-     * 
-     * @param principal The authenticated player whose session is being removed.
-     * @param sessionId The session ID of the user.
-     */
     private boolean unregisterActiveSession(PlayerPrincipal principal, String sessionId) {
         if (principal == null || sessionId == null) { return false; }
         PlayerPrincipal registeredPrincipal = sessionToPrincipal.get(sessionId);
@@ -466,12 +449,6 @@ public class WebSocketEventListener {
     }
 
 
-    /**
-     * Checks if the given user has any active WebSocket sessions.
-     * 
-     * @param username The username of the user.
-     * @return True if the user has any active WebSocket sessions, false otherwise.
-     */
     private boolean hasActiveSession(String username) {
         Set<String> sessions = activeSessionsByUser.get(username);
         return sessions != null && !sessions.isEmpty();
@@ -510,12 +487,6 @@ public class WebSocketEventListener {
         }
     }
 
-    /**
-     * Acquires the room boundary for session transitions and cleanup callbacks.
-     *
-     * @param roomId room whose session state is changing
-     * @return room lease, or a no-op lease when roomId is null
-     */
     private LockLease acquireRoomLease(String roomId) {
         if (roomId == null) {
             return LockLease.none();
@@ -526,9 +497,6 @@ public class WebSocketEventListener {
     /**
      * Returns the room/player key used only for runtime connection tracking.
      * Spring private routing uses the separate membership-bound principal name.
-     *
-     * @param principal player being tracked
-     * @return stable room/player connection key
      */
     private static String playerKey(PlayerPrincipal principal) {
         return principal.playerName() + ":" + principal.roomId();
@@ -582,9 +550,6 @@ public class WebSocketEventListener {
      * takes the room lease itself and so runs once the publishing mutation has released it.
      * A rejected task (scheduler shut down) is dropped: this state is process-local and
      * disappears with the process.
-     *
-     * @param description what is being cleaned up, for logging
-     * @param cleanup     cleanup to run
      */
     private void scheduleCleanup(String description, Runnable cleanup) {
         try {
@@ -600,7 +565,6 @@ public class WebSocketEventListener {
         }
     }
 
-    /** Retires matching membership state under room lease. */
     private void processMembershipRetired(String roomId, String playerName, String membershipId) {
         String compositeName = playerName + ":" + roomId;
         try (LockLease _ = acquireRoomLease(roomId)) {
@@ -617,13 +581,11 @@ public class WebSocketEventListener {
         }
     }
 
-    /** Tests the room suffix of a player routing key. */
     private static boolean belongsToRoom(String user, String roomId) {
         int separator = user.lastIndexOf(':');
         return separator >= 0 && user.substring(separator + 1).equals(roomId);
     }
 
-    /** Removes transient room state under the room lease. */
     private void processRoomDestroyed(String roomId) {
         if (roomId == null) {
             return;

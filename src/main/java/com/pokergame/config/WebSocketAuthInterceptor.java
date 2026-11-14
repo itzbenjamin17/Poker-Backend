@@ -103,13 +103,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         MDC.remove(MdcKeys.SESSION_ID);
     }
 
-    /**
-     * Restricts SEND frames to valid application destinations (/app/**) and verifies
-     * caller authentication and room authorization for room-targeted destinations.
-     *
-     * @param accessor headers for the SEND frame
-     * @throws AccessDeniedException if destination prefix is unauthorized, caller is unauthenticated, or room does not match
-     */
     private void handleSend(StompHeaderAccessor accessor) {
         String destination = accessor.getDestination();
         if (destination == null || !destination.startsWith("/app/")) {
@@ -141,12 +134,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         validateMembership(principal);
     }
 
-    /**
-     * Resolves the PlayerPrincipal from user header or session attributes.
-     *
-     * @param accessor STOMP frame headers
-     * @return resolved PlayerPrincipal or null
-     */
     private PlayerPrincipal resolvePlayerPrincipal(StompHeaderAccessor accessor) {
         PlayerPrincipal principal = SecurityUtils.getPlayerOrNull(accessor.getUser());
         if (principal != null) {
@@ -171,13 +158,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         return null;
     }
 
-    /**
-     * Checks if the principal is authorized for the given room identifier.
-     *
-     * @param principal caller principal
-     * @param destinationRoomId extracted room identifier
-     * @return true if authorized, false otherwise
-     */
     private boolean isRoomAuthorized(PlayerPrincipal principal, String destinationRoomId) {
         if (principal == null || principal.roomId() == null) {
             return false;
@@ -193,12 +173,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         }
     }
 
-    /**
-     * Extracts a room identifier from a validated {@code /app/{roomId}/...} destination path.
-     *
-     * @param destination STOMP destination
-     * @return extracted roomId or null if destination is not room-scoped
-     */
     private String extractRoomIdFromSendDestination(String destination) {
         if (destination == null || !destination.startsWith("/app/")) {
             return null;
@@ -211,12 +185,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         return null;
     }
 
-    /**
-     * Validates the connection bearer token and attaches its player principal.
-     *
-     * @param accessor mutable headers for the CONNECT frame
-     * @throws MessagingException if the authorization token is missing or invalid
-     */
     private void handleConnect(StompHeaderAccessor accessor) {
         String authHeader = accessor.getFirstNativeHeader("Authorization");
 
@@ -240,12 +208,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         }
     }
 
-    /**
-     * Restricts room and game subscriptions to the principal's own room.
-     *
-     * @param accessor headers for the SUBSCRIBE frame
-     * @throws MessagingException if the subscription is unauthenticated or targets another room
-     */
     private void handleSubscribe(StompHeaderAccessor accessor) {
         PlayerPrincipal principal = (PlayerPrincipal) accessor.getUser();
         if (principal == null) {
@@ -269,7 +231,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         }
     }
 
-    /** Rejects absent claims, then validates current membership inside the room operation boundary. */
     private void validateMembership(PlayerPrincipal principal) {
         if (principal == null || principal.roomId() == null
                 || principal.membershipId() == null || principal.membershipId().isBlank()) {

@@ -215,7 +215,6 @@ public class WebSocketExceptionHandler {
         }
     }
 
-    /** Retains technical feedback for frames without a supported poker action. */
     private String technicalMessage(Exception exception) {
         String message = exception.getMessage();
         if (exception instanceof MessageConversionException ||

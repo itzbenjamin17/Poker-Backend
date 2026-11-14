@@ -152,15 +152,6 @@ public class HandEvaluatorService {
         }
     }
 
-    /**
-     * Compares two one-pair hands. First compares the pair values, then compares
-     * kickers
-     * in descending order if pairs are equal.
-     *
-     * @param sortedCombination the first one-pair hand
-     * @param bestHand          the second one-pair hand
-     * @return true if sortedCombination is better, false otherwise
-     */
     private boolean compareOnePair(List<Card> sortedCombination, List<Card> bestHand) {
         // Get pair and kickers for sortedCombination
         @SuppressWarnings("DuplicatedCode")
@@ -218,14 +209,6 @@ public class HandEvaluatorService {
         return false; // Identical hands
     }
 
-    /**
-     * Compares two two-pair hands. Compares the higher pair first, then lower pair,
-     * then kicker if necessary.
-     *
-     * @param sortedCombination the first two-pair hand
-     * @param bestHand          the second two-pair hand
-     * @return true if sortedCombination is better, false otherwise
-     */
     private boolean compareTwoPair(List<Card> sortedCombination, List<Card> bestHand) {
         // Get pairs and kicker for sortedCombination
         @SuppressWarnings("DuplicatedCode")
@@ -288,14 +271,6 @@ public class HandEvaluatorService {
         return better;
     }
 
-    /**
-     * Compares two three-of-a-kind hands. First compares the triplet values,
-     * then compares kickers in descending order if triplets are equal.
-     *
-     * @param sortedCombination the first three-of-a-kind hand
-     * @param bestHand          the second three-of-a-kind hand
-     * @return true if sortedCombination is better, false otherwise
-     */
     private boolean compareThreeOfAKind(List<Card> sortedCombination, List<Card> bestHand) {
         // Get three-of-a-kind and kickers for sortedCombination
         @SuppressWarnings("DuplicatedCode")
@@ -353,15 +328,6 @@ public class HandEvaluatorService {
         return false; // Identical hands
     }
 
-    /**
-     * Compares two straight hands by their highest card.
-     * Handles the special case of low Ace straight (A,2,3,4,5) which is treated as
-     * 5-high.
-     *
-     * @param sortedCombination the first straight hand (sorted ascending)
-     * @param bestHand          the second straight hand (sorted ascending)
-     * @return true if sortedCombination is better, false otherwise
-     */
     private boolean compareStraight(List<Card> sortedCombination, List<Card> bestHand) {
         // Get the highest card value (assuming cards are sorted ascending)
         int highCard1 = sortedCombination.get(4).getValue();
@@ -390,13 +356,6 @@ public class HandEvaluatorService {
         return better;
     }
 
-    /**
-     * Compares two flush hands by comparing cards from highest to lowest.
-     *
-     * @param sortedCombination the first flush hand
-     * @param bestHand          the second flush hand
-     * @return true if sortedCombination is better, false otherwise
-     */
     private boolean compareFlush(List<Card> sortedCombination, List<Card> bestHand) {
         List<Card> sorted1 = new ArrayList<>(sortedCombination.reversed());
         List<Card> sorted2 = new ArrayList<>(bestHand.reversed());
@@ -418,13 +377,6 @@ public class HandEvaluatorService {
         return false;
     }
 
-    /**
-     * Compares otherwise unranked hands from their highest card downward.
-     *
-     * @param sortedCombination candidate hand in ascending or descending rank order
-     * @param bestHand incumbent hand in ascending or descending rank order
-     * @return {@code true} when the candidate wins at the first unequal card
-     */
     private boolean compareHighCard(List<Card> sortedCombination, List<Card> bestHand) {
         // The evaluator returns high-card hands in descending order, while several
         // category comparators receive ascending combinations. Normalize copies so
@@ -453,14 +405,6 @@ public class HandEvaluatorService {
         return false;
     }
 
-    /**
-     * Compares two full house hands. First compares the three-of-a-kind values,
-     * then compares pair values if triplets are equal.
-     *
-     * @param sortedCombination the first full house hand
-     * @param bestHand          the second full house hand
-     * @return true if sortedCombination is better, false otherwise
-     */
     private boolean compareFullHouse(List<Card> sortedCombination, List<Card> bestHand) {
         // Get three-of-a-kind and pair for sortedCombination
         @SuppressWarnings("DuplicatedCode")
@@ -514,14 +458,6 @@ public class HandEvaluatorService {
         return better;
     }
 
-    /**
-     * Compares two four-of-a-kind hands. First compares the quad values,
-     * then compares kickers if quads are equal.
-     *
-     * @param sortedCombination the first four-of-a-kind hand
-     * @param bestHand          the second four-of-a-kind hand
-     * @return true if sortedCombination is better, false otherwise
-     */
     private boolean compareFourOfAKind(List<Card> sortedCombination, List<Card> bestHand) {
         // Get four-of-a-kind values
         int quadValue1 = getFourOfAKindValue(sortedCombination);
@@ -553,12 +489,6 @@ public class HandEvaluatorService {
         return better;
     }
 
-    /**
-     * Extracts the value of the four-of-a-kind from a hand.
-     *
-     * @param hand the hand containing four-of-a-kind
-     * @return the value of the four matching cards, or 0 if not found
-     */
     private int getFourOfAKindValue(List<Card> hand) {
         Map<Rank, List<Card>> rankGroups = hand.stream()
                 .collect(Collectors.groupingBy(Card::rank));
@@ -570,12 +500,6 @@ public class HandEvaluatorService {
                 .orElse(0);
     }
 
-    /**
-     * Extracts the value of the kicker (single card) from a hand.
-     *
-     * @param hand the hand to extract the kicker from
-     * @return the value of the kicker card, or 0 if not found
-     */
     private int getKickerValue(List<Card> hand) {
         Map<Rank, List<Card>> rankGroups = hand.stream()
                 .collect(Collectors.groupingBy(Card::rank));
@@ -588,13 +512,6 @@ public class HandEvaluatorService {
                 .orElse(0);
     }
 
-    /**
-     * Returns the best 5-card high card hand from a list of cards.
-     * Selects the five highest-value cards.
-     *
-     * @param cards the list of cards to select from
-     * @return the best 5-card high card hand
-     */
     private List<Card> getBestHighCardHand(List<Card> cards) {
         if (cards == null) {
             throw new BadRequestException("Card list cannot be null");
@@ -612,35 +529,16 @@ public class HandEvaluatorService {
         return new ArrayList<>(sortedCards.subList(0, handSize));
     }
 
-    /**
-     * Checks if a hand is a royal flush (10, J, Q, K, A of the same suit).
-     *
-     * @param hand the 5-card hand to check
-     * @return true if the hand is a royal flush, false otherwise
-     */
     private boolean isRoyalFlush(List<Card> hand) {
         Suit firstCardSuit = hand.getFirst().suit();
 
         return hand.stream().allMatch(card -> card.suit().equals(firstCardSuit) && card.getValue() >= 10);
     }
 
-    /**
-     * Checks if a hand is a straight flush (five consecutive cards of the same
-     * suit).
-     *
-     * @param hand the 5-card hand to check
-     * @return true if the hand is a straight flush, false otherwise
-     */
     private boolean isStraightFlush(List<Card> hand) {
         return isFlush(hand) && isStraight(hand);
     }
 
-    /**
-     * Reports whether a five-card hand contains four cards of one rank.
-     *
-     * @param hand five-card hand to inspect
-     * @return {@code true} when one rank occurs four times
-     */
     private boolean isFourOfAKind(List<Card> hand) {
         Map<Rank, Long> rankCounts = hand.stream()
                 .collect(Collectors.groupingBy(Card::rank, Collectors.counting()));
@@ -648,13 +546,6 @@ public class HandEvaluatorService {
         return rankCounts.containsValue(4L);
     }
 
-    /**
-     * Checks if a hand is a full house (three cards of one rank and two of
-     * another).
-     *
-     * @param hand the 5-card hand to check
-     * @return true if the hand is a full house, false otherwise
-     */
     private boolean isFullHouse(List<Card> hand) {
         Map<Rank, Long> rankCounts = hand.stream()
                 .collect(Collectors.groupingBy(Card::rank, Collectors.counting()));
@@ -666,24 +557,11 @@ public class HandEvaluatorService {
         return counts.size() == 2 && counts.get(0) == 3L && counts.get(1) == 2L;
     }
 
-    /**
-     * Checks if a hand is a flush (five cards of the same suit).
-     *
-     * @param hand the 5-card hand to check
-     * @return true if the hand is a flush, false otherwise
-     */
     private boolean isFlush(List<Card> hand) {
         Suit firstCardSuit = hand.getFirst().suit();
         return hand.stream().allMatch(card -> card.suit().equals(firstCardSuit));
     }
 
-    /**
-     * Checks if a hand is a straight (five consecutive cards).
-     * Handles the special case of low Ace straight (A,2,3,4,5).
-     *
-     * @param hand the 5-card hand to check
-     * @return true if the hand is a straight, false otherwise
-     */
     private boolean isStraight(List<Card> hand) {
         boolean regularStraight = true;
         for (int i = 0; i < hand.size() - 1; i++) {
@@ -703,12 +581,6 @@ public class HandEvaluatorService {
                 hand.get(4).rank().equals(Rank.ACE);
     }
 
-    /**
-     * Reports whether a five-card hand contains three cards of one rank.
-     *
-     * @param hand five-card hand to inspect
-     * @return {@code true} when one rank occurs three times
-     */
     private boolean isThreeOfAKind(List<Card> hand) {
         Map<Rank, Long> rankCounts = hand.stream()
                 .collect(Collectors.groupingBy(Card::rank, Collectors.counting()));
@@ -716,12 +588,6 @@ public class HandEvaluatorService {
         return rankCounts.containsValue(3L);
     }
 
-    /**
-     * Checks if a hand contains two pairs of cards with matching ranks.
-     *
-     * @param hand the 5-card hand to check
-     * @return true if the hand is two pair, false otherwise
-     */
     private boolean isTwoPair(List<Card> hand) {
         Map<Rank, Long> rankCounts = hand.stream()
                 .collect(Collectors.groupingBy(Card::rank, Collectors.counting()));
@@ -733,12 +599,6 @@ public class HandEvaluatorService {
         return counts.size() == 3 && counts.get(0) == 2L && counts.get(1) == 2L && counts.get(2) == 1L;
     }
 
-    /**
-     * Checks if a hand contains exactly one pair of cards with matching ranks.
-     *
-     * @param hand the 5-card hand to check
-     * @return true if the hand is one pair, false otherwise
-     */
     private boolean isOnePair(List<Card> hand) {
         Map<Rank, Long> rankCounts = hand.stream()
                 .collect(Collectors.groupingBy(Card::rank, Collectors.counting()));

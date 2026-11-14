@@ -424,13 +424,7 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * Finds out the next available number in the save sequence for this room.
-     * We read this from the file instead of just relying on memory, in case of a crash.
-     *
-     * @param roomId the room to check
-     * @return the next number in the sequence
-     */
+    /** Reads the next sequence number from disk when not cached, in case of a prior crash. */
     private long nextSequence(String roomId) {
         Long cached = nextSequences.get(roomId);
         if (cached != null) {
@@ -450,16 +444,6 @@ public final class EncryptedWalStore {
         return calculated;
     }
 
-    /**
-     * Encrypts one piece of data and safely writes it to the file.
-     *
-     * @param roomId       the room this save belongs to
-     * @param sequence     the number in the sequence
-     * @param transactionId an ID linking a prepare and commit
-     * @param type         whether this is a prepare or a commit
-     * @param payload      the game data to save
-     * @throws PersistenceException if we can't save it to disk
-     */
     private void append(String roomId, long sequence, UUID transactionId, RecordType type, byte[] payload) {
         faultInjector.check(type == RecordType.PREPARE ? WalFaultPoint.BEFORE_PREPARE_WRITE
                 : WalFaultPoint.BEFORE_COMMIT_WRITE, roomId);
@@ -481,18 +465,6 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * Encrypts the data and packages it with some plain-text info (like the key ID).
-     * The plain-text info is protected so we know if it was tampered with.
-     *
-     * @param roomId       the room this save belongs to
-     * @param sequence     the number in the sequence
-     * @param transactionId an ID linking a prepare and commit
-     * @param type         whether this is a prepare or a commit
-     * @param payload      the unencrypted game data
-     * @return the fully encrypted and packaged data ready to save
-     * @throws PersistenceException if something goes wrong with encryption
-     */
     private byte[] encodeFrame(String roomId, long sequence, UUID transactionId, RecordType type, byte[] payload) {
         try {
             String keyId = keyring.currentKeyId();
@@ -527,14 +499,6 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * Reads through the entire save file, checking for tampering and pulling out the latest valid game state.
-     *
-     * @param path           the path to the file
-     * @param expectedRoomId the room we expect this file to be for
-     * @return the latest valid game state and the next number in the sequence
-     * @throws PersistenceException if the file is out of order or tampered with
-     */
     private Recovery readWal(Path path, String expectedRoomId) {
         deleteCompactingFileQuietly(expectedRoomId);
         try {
@@ -595,13 +559,6 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * Truncates a WAL file at the given valid byte offset and flushes the truncation to disk.
-     *
-     * @param path        the WAL file path to truncate
-     * @param validLength the byte offset of the last complete frame
-     * @throws IOException if truncating or flushing the file fails
-     */
     private static void truncateWalAt(Path path, long validLength) throws IOException {
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
             channel.truncate(validLength);
@@ -609,15 +566,6 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * Decrypts a piece of data from the file and makes sure it wasn't tampered with.
-     * We also check that it belongs to the right room.
-     *
-     * @param frame          the encrypted data
-     * @param expectedRoomId the room this data should belong to
-     * @return the decrypted data
-     * @throws PersistenceException if the data is tampered with or we can't find the key
-     */
     private WalRecord decodeFrame(ByteBuffer frame, String expectedRoomId) {
         try {
             short format = frame.getShort();
@@ -653,16 +601,6 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * Bundles together the plain-text information that we want to protect from tampering.
-     *
-     * @param roomId       the room ID
-     * @param sequence     the number in the sequence
-     * @param transactionId the ID linking a prepare and commit
-     * @param type         whether this is a prepare or a commit
-     * @param keyId        the ID of the encryption key used
-     * @return the bundled data
-     */
     private byte[] associatedData(String roomId, long sequence, UUID transactionId, RecordType type, String keyId) {
         byte[] room = roomId.getBytes(StandardCharsets.UTF_8);
         byte[] key = keyId.getBytes(StandardCharsets.UTF_8);
@@ -673,15 +611,6 @@ public final class EncryptedWalStore {
         return aad.array();
     }
 
-    /**
-     * Writes a brand new save file to a temporary location. We do this before swapping it
-     * in, so we don't accidentally delete the old one before the new one is completely ready.
-     *
-     * @param path    where to put the temporary file
-     * @param roomId  the room this save belongs to
-     * @param payload the latest game data
-     * @throws IOException if we can't write the file
-     */
     private void writeFreshWal(Path path, String roomId, byte[] payload) throws IOException {
         UUID transactionId = UUID.randomUUID();
         byte[] prepare = encodeFrame(roomId, 1, transactionId, RecordType.PREPARE, new byte[0]);
@@ -700,14 +629,6 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * Safely swaps out the old save file for a new one in one single move.
-     *
-     * @param source the new file
-     * @param target the old file to replace
-     * @throws IOException if we can't move the file
-     * @throws PersistenceException if the computer doesn't support swapping files safely
-     */
     private static void replaceAtomically(Path source, Path target) throws IOException {
         try {
             Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
@@ -716,11 +637,6 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * Makes sure changes to the folder itself (like adding or removing files) are saved to the disk immediately.
-     *
-     * @throws IOException if we can't update the folder on the disk
-     */
     private void forceDirectory() throws IOException {
         try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
             channel.force(true);
@@ -732,14 +648,6 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * Writes text to the file, making sure it isn't too long.
-     *
-     * @param output where to write the text
-     * @param value  the text to write
-     * @throws IOException if we can't write to the file
-     * @throws PersistenceException if the text is too long
-     */
     private static void writeUtf8(DataOutputStream output, String value) throws IOException {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
         if (bytes.length > Short.MAX_VALUE) {
@@ -749,13 +657,6 @@ public final class EncryptedWalStore {
         output.write(bytes);
     }
 
-    /**
-     * Reads text from the file safely, making sure it doesn't try to read past the end.
-     *
-     * @param input the data to read from
-     * @return the text
-     * @throws PersistenceException if the text is cut off
-     */
     private static String readUtf8(ByteBuffer input) {
         int length = Short.toUnsignedInt(input.getShort());
         if (length > input.remaining()) {
@@ -766,19 +667,10 @@ public final class EncryptedWalStore {
         return new String(bytes, StandardCharsets.UTF_8);
     }
 
-    /**
-     * Figures out the exact file path for a room's save file.
-     *
-     * @param roomId the room's ID
-     * @return the full file path
-     */
     private Path walPath(String roomId) {
         return directory.resolve(roomId + ".wal");
     }
 
-    /**
-     * Cleans up orphaned .compacting files left behind by prior crashes during compaction.
-     */
     private void cleanOrphanedCompactingFiles() {
         try (var paths = Files.list(directory)) {
             for (Path path : paths.filter(p -> p.getFileName().toString().endsWith(".compacting")).toList()) {
@@ -794,11 +686,6 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * Deletes the compaction temporary file for a specific room if it exists.
-     *
-     * @param roomId the room whose temporary compaction file should be removed
-     */
     private void deleteCompactingFileQuietly(String roomId) {
         try {
             Path compacting = directory.resolve(roomId + ".wal.compacting");
@@ -809,24 +696,14 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * Makes sure the room ID doesn't contain any weird characters that might trick the computer
-     * into saving the file somewhere else.
-     *
-     * @param roomId the room's ID
-     * @throws PersistenceException if the ID has bad characters
-     */
+    /** Rejects characters that could cause path traversal in WAL filenames. */
     private static void validateRoomId(String roomId) {
         if (roomId == null || !roomId.matches("[A-Za-z0-9._-]+")) {
             throw new PersistenceException("Invalid room ID for WAL path");
         }
     }
 
-    /**
-     * Rejects ordinary appends until failed rooms have confirmed full checkpoints.
-     *
-     * @throws PersistenceException if the storage broke earlier
-     */
+    /** Rejects ordinary appends until failed rooms have confirmed full checkpoints. */
     private void requireHealthy() {
         if (!isHealthy()) {
             throw new PersistenceException("Persistence needs a full checkpoint before further appends");
@@ -862,13 +739,6 @@ public final class EncryptedWalStore {
             this.code = code;
         }
 
-        /**
-         * Reads the number from the file and turns it back into the type of piece.
-         *
-         * @param code the number from the file
-         * @return the matching piece type
-         * @throws PersistenceException if the number is unknown
-         */
         private static RecordType from(byte code) {
             for (RecordType value : values()) {
                 if (value.code == code) return value;

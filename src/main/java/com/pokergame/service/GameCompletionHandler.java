@@ -223,15 +223,6 @@ class GameCompletionHandler {
         activeGames.remove(gameId);
     }
 
-    /**
-     * Finalizes a completed game, records and broadcasts the {@link GameEndResponse}, and
-     * schedules post-game cleanup.
-     *
-     * @param gameId           the unique ID of the game
-     * @param isForfeit        {@code true} if the game ended by forfeit
-     * @param preferredWinner  explicit winner when known (such as the sole remaining player), or {@code null}
-     * @param forfeitedPlayers names of players who forfeited at game end
-     */
     private void handleGameEndInternal(
             String gameId,
             boolean isForfeit,
@@ -270,15 +261,6 @@ class GameCompletionHandler {
         taskScheduler.scheduleGameCleanup(gameId, timings.gameEndDisplayDelayMs());
     }
 
-    /**
-     * Builds a fallback {@link GameEndResponse} from current game state when a finished game
-     * does not have a saved final result.
-     *
-     * @param gameId the unique ID of the game
-     * @param game   the finished game instance
-     * @param room   the backing room, or {@code null}
-     * @return the reconstructed {@link GameEndResponse}
-     */
     private GameEndResponse buildFallbackGameEnd(String gameId, Game game, Room room) {
         int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
         Player winner = game.resolveWinnerOrFallback(null);

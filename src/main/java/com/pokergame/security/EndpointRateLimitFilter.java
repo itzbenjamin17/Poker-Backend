@@ -69,23 +69,10 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    /**
-     * Resolves the client address, honoring the first forwarded address only when
-     * proxy trust is explicitly enabled.
-     *
-     * @param request current HTTP request
-     * @return address used as the rate-limit identity
-     */
     private String getClientIp(HttpServletRequest request) {
         return SecurityUtils.getClientIp(request, trustProxy);
     }
 
-    /**
-     * Writes the REST rate-limit response.
-     *
-     * @param response current HTTP response
-     * @throws IOException if the response body cannot be written
-     */
     private void sendRateLimitError(HttpServletResponse response) throws IOException {
         response.setStatus(429); // Too Many Requests
         response.setContentType("application/json");

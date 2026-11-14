@@ -201,13 +201,6 @@ public final class AggregateSnapshotMapper {
         return new RecoveredAggregate(restoreRoom(state), reconciledHost, game, false);
     }
 
-    /**
-     * Wraps the standard JSON writing so that errors are easy to catch and log.
-     *
-     * @param image the snapshot data to convert to bytes
-     * @return the saved bytes
-     * @throws PersistenceException if the conversion fails
-     */
     private byte[] write(AggregateStateImage image) {
         try {
             return objectMapper.writeValueAsBytes(image);
@@ -364,14 +357,6 @@ public final class AggregateSnapshotMapper {
                 .build();
     }
 
-    /**
-     * Validates that the persisted terminal result matches the active game identity and contains
-     * structurally sound winner, chip balance, and final state projection fields.
-     *
-     * @param expectedGameId the authoritative game identifier
-     * @param state the persisted terminal result state image to validate
-     * @throws PersistenceException if identity or required fields are missing or corrupt
-     */
     private void validateTerminalResult(String expectedGameId, AggregateStateImage.TerminalResultState state) {
         if (state == null) return;
         final long jsMaxSafeInteger = 9_007_199_254_740_991L;
@@ -511,12 +496,6 @@ public final class AggregateSnapshotMapper {
         return true;
     }
 
-    /**
-     * Maps an in-memory {@link GameEndResponse} into a durable {@link AggregateStateImage.TerminalResultState}.
-     *
-     * @param response the game-end response to serialize
-     * @return the persistent terminal result state image, or {@code null} if response is null
-     */
     private AggregateStateImage.TerminalResultState toTerminalResultState(GameEndResponse response) {
         if (response == null) return null;
         return new AggregateStateImage.TerminalResultState(
@@ -531,12 +510,6 @@ public final class AggregateSnapshotMapper {
                 toFinalGameState(response.finalState()));
     }
 
-    /**
-     * Converts a public game state response into an immutable {@link AggregateStateImage.FinalGameState} image.
-     *
-     * @param finalState the public game state response representing the terminal game table
-     * @return the persistent final game state snapshot image, or {@code null} if finalState is null
-     */
     private AggregateStateImage.FinalGameState toFinalGameState(PublicGameStateResponse finalState) {
         if (finalState == null) return null;
         return new AggregateStateImage.FinalGameState(
@@ -569,12 +542,6 @@ public final class AggregateSnapshotMapper {
                 finalState.stateRevision());
     }
 
-    /**
-     * Converts an individual public player state into an immutable {@link AggregateStateImage.FinalPlayerState} image.
-     *
-     * @param player the public player state to serialize
-     * @return the persistent final player state image, or {@code null} if player is null
-     */
     private AggregateStateImage.FinalPlayerState toFinalPlayerState(PublicPlayerState player) {
         if (player == null) return null;
         return new AggregateStateImage.FinalPlayerState(
@@ -597,12 +564,6 @@ public final class AggregateSnapshotMapper {
                 player.isReadyForNextHand());
     }
 
-    /**
-     * Reconstitutes an in-memory {@link GameEndResponse} from a persistent {@link AggregateStateImage.TerminalResultState}.
-     *
-     * @param state the persistent terminal result state image
-     * @return the restored game-end response, or {@code null} if state is null
-     */
     private GameEndResponse fromTerminalResultState(AggregateStateImage.TerminalResultState state) {
         if (state == null) return null;
         return new GameEndResponse(
@@ -617,12 +578,6 @@ public final class AggregateSnapshotMapper {
                 fromFinalGameState(state.finalState()));
     }
 
-    /**
-     * Reconstructs a {@link PublicGameStateResponse} from a persisted {@link AggregateStateImage.FinalGameState}.
-     *
-     * @param state the persistent final game state snapshot image
-     * @return the reconstructed public game state response, or {@code null} if state is null
-     */
     private PublicGameStateResponse fromFinalGameState(AggregateStateImage.FinalGameState state) {
         if (state == null) return null;
         return new PublicGameStateResponse(
@@ -655,12 +610,6 @@ public final class AggregateSnapshotMapper {
                 state.stateRevision());
     }
 
-    /**
-     * Reconstructs a {@link PublicPlayerState} from a persisted {@link AggregateStateImage.FinalPlayerState}.
-     *
-     * @param state the persistent final player state image
-     * @return the reconstructed public player state, or {@code null} if state is null
-     */
     private PublicPlayerState fromFinalPlayerState(AggregateStateImage.FinalPlayerState state) {
         if (state == null) return null;
         return new PublicPlayerState(
@@ -695,47 +644,21 @@ public final class AggregateSnapshotMapper {
                 state.winnerIds(), state.remainder(), state.settled());
     }
 
-    /**
-     * Converts an individual domain {@link Card} into an immutable {@link AggregateStateImage.CardState} image.
-     *
-     * @param card the domain card to convert
-     * @return the persistent card state image record, or {@code null} if card is null
-     */
     private static AggregateStateImage.CardState toCardState(Card card) {
         if (card == null) return null;
         return new AggregateStateImage.CardState(card.rank(), card.suit());
     }
 
-    /**
-     * Reconstructs an individual domain {@link Card} from an immutable {@link AggregateStateImage.CardState} image.
-     *
-     * @param state the persistent card state image record
-     * @return the reconstructed domain Card, or {@code null} if state is null
-     */
     private static Card fromCardState(AggregateStateImage.CardState state) {
         if (state == null) return null;
         return new Card(state.rank(), state.suit());
     }
 
-    /**
-     * Converts a list of cards into a simple format that's safe to save,
-     * keeping it completely separate from how the game actually manages cards in memory.
-     *
-     * @param cards the cards from the game
-     * @return a safe-to-save list of card records
-     */
     private static List<AggregateStateImage.CardState> cards(List<Card> cards) {
         if (cards == null) return null;
         return cards.stream().filter(Objects::nonNull).map(AggregateSnapshotMapper::toCardState).toList();
     }
 
-    /**
-     * Puts the cards back exactly in the order they were saved,
-     * skipping any random shuffling so the deck stays identical.
-     *
-     * @param cards the saved card records
-     * @return the restored game cards
-     */
     private static List<Card> cardsFromState(List<AggregateStateImage.CardState> cards) {
         if (cards == null) return null;
         return cards.stream().map(AggregateSnapshotMapper::fromCardState).toList();

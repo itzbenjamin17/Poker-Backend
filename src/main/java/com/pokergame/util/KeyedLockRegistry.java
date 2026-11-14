@@ -64,14 +64,6 @@ public class KeyedLockRegistry<K> {
         return new Lease(key, entry);
     }
 
-    /**
-     * Atomically gets or creates the entry for the key and increments its reservation count
-     * before the caller attempts to acquire the lock.
-     *
-     * @param key the key to reserve
-     * @return the reserved entry
-     * @throws NullPointerException if the key is null
-     */
     private LockEntry reserveEntry(K key) {
         requireNonNull(key, "key cannot be null");
         return entries.compute(key, (_, existing) -> {
@@ -83,13 +75,6 @@ public class KeyedLockRegistry<K> {
         });
     }
 
-    /**
-     * Releases one reservation if the entry is still mapped to the key.
-     * Removes the entry when its reservation count reaches zero.
-     *
-     * @param key the key whose reservation is being released
-     * @param entry the entry that holds the reservation
-     */
     private void releaseReservation(K key, LockEntry entry) {
         entries.compute(key, (_, existing) -> {
             if (existing == entry) {
@@ -152,12 +137,6 @@ public class KeyedLockRegistry<K> {
         private final LockEntry entry;
         private final AtomicBoolean closed = new AtomicBoolean(false);
 
-        /**
-         * Creates a lease for an acquired lock and its existing reservation.
-         *
-         * @param key the key used to release the reservation
-         * @param entry the reserved entry whose lock the caller holds
-         */
         private Lease(K key, LockEntry entry) {
             this.key = key;
             this.entry = entry;

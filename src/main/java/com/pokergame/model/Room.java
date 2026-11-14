@@ -71,12 +71,7 @@ public class Room {
     private volatile boolean isTerminal;
     private volatile Long inactivityDeadlineEpochMs;
 
-    /**
-     * Recognizes an existing BCrypt hash so restored room credentials are not hashed again.
-     *
-     * @param value stored hash or legacy constructor password
-     * @return whether the value has a supported BCrypt version prefix
-     */
+    /** Recognizes an existing BCrypt hash so restored room credentials are not hashed again. */
     private static boolean isBcryptHash(String value) {
         if (value == null) {
             return false;

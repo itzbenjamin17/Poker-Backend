@@ -187,7 +187,6 @@ public final class DurableMutationAspect {
         }
     }
 
-    /** Captures and encodes the latest accepted room state for a save attempt. */
     private PendingSave captureState(String roomId) {
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
             Room room = roomService.getObject().getRoom(roomId);
@@ -200,7 +199,6 @@ public final class DurableMutationAspect {
         }
     }
 
-    /** Saves accepted bytes without replaying the domain command or its effects. */
     private void saveState(String roomId, PendingSave pending, WalTransaction transaction) {
         boolean checkpoint = transaction == null || !store.isHealthy() || store.requiresCheckpoint(roomId);
         if (checkpoint) {
@@ -220,7 +218,6 @@ public final class DurableMutationAspect {
         pendingSaves.remove(roomId, pending);
     }
 
-    /** Reports storage degradation while keeping accepted gameplay available. */
     private void recordStorageFailure(String roomId, RuntimeException failure) {
         store.recordWriteFailure(roomId, failure);
         logger.warn("Persistence unavailable for room {}; continuing in memory ({})",
@@ -231,7 +228,6 @@ public final class DurableMutationAspect {
         private PendingSave { image = image == null ? null : image.clone(); }
     }
 
-    /** Captures live rollback data independently of serialization and WAL availability. */
     private RollbackState captureRollbackState(String roomId) {
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
             Room room = roomService.getObject().getRoom(roomId);
@@ -255,9 +251,6 @@ public final class DurableMutationAspect {
     /**
      * Restores the independent pre-mutation RAM image after a rejection. Disk may lag
      * accepted gameplay, so WAL bytes are never a safe rollback source.
-     *
-     * @param roomId identifier of the room whose failed mutation must be rolled back
-     * @param beforeMutation immutable state captured before the rejected command, or null if capture failed
      */
     private void rollbackOrEvictAggregate(String roomId, RollbackState beforeMutation) {
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
@@ -293,13 +286,6 @@ public final class DurableMutationAspect {
         }
     }
 
-    /**
-     * Rehydrates the room and optional game state into the active service registries
-     * from a recovered snapshot, or evicts any uncommitted game if the snapshot was in lobby state.
-     *
-     * @param roomId    identifier of the room being restored
-     * @param aggregate deserialized room and game snapshot to restore
-     */
     private void restoreAggregate(String roomId, RecoveredAggregate aggregate) {
         Room restoredRoom = aggregate.room();
         if (restoredRoom != null) {
@@ -320,12 +306,6 @@ public final class DurableMutationAspect {
         }
     }
 
-    /**
-     * Cancels active runtime tasks and removes both the game and room aggregates
-     * from the in-memory registries when no committed state can be restored.
-     *
-     * @param roomId identifier of the room and game aggregate to evict
-     */
     private void evictAggregate(String roomId) {
         try {
             GameLifecycleService games = gameLifecycleService.getObject();
@@ -361,7 +341,6 @@ public final class DurableMutationAspect {
         }
     }
 
-    /** Determines whether the accepted WAL prefix is large enough to compact. */
     private boolean shouldCompact(String roomId) {
         int records = recordsSinceCompaction.computeIfAbsent(roomId, ignored -> new AtomicInteger())
                 .addAndGet(2);
@@ -369,7 +348,6 @@ public final class DurableMutationAspect {
                 || store.walSize(roomId) >= properties.getCompactAfterBytes();
     }
 
-    /** Resolves the annotated aggregate identity before any mutation is executed. */
     private String resolveRoomId(ProceedingJoinPoint joinPoint, String expression) {
         Method method = ((MethodSignature) joinPoint.getSignature()).getMethod();
         String[] names = parameterNames.getParameterNames(method);

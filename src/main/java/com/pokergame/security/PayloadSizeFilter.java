@@ -72,14 +72,6 @@ public class PayloadSizeFilter extends OncePerRequestFilter {
         }
     }
 
-    /**
-     * Writes the documented HTTP 413 rejection response and logs the event (throttled per client).
-     *
-     * @param request current HTTP request, used for client IP and path resolution
-     * @param response current HTTP response to write the rejection to
-     * @param size observed payload size in bytes (declared or counted), for the log line
-     * @throws IOException if the rejection response cannot be written
-     */
     private void rejectOversized(HttpServletRequest request, HttpServletResponse response, long size)
             throws IOException {
         String clientIp = SecurityUtils.getClientIp(request, trustProxy);

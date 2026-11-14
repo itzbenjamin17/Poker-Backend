@@ -171,7 +171,6 @@ public class JwtService {
         return subject == null ? "" : subject;
     }
 
-    /** Verifies the signature and expiry before exposing token claims. */
     private Claims parseClaims(String token) {
         return Jwts.parser()
                 .verifyWith(secretKey)

@@ -203,12 +203,6 @@ public class Player {
         this.currentBet = 0;
     }
 
-    /**
-     * Moves all remaining chips to the pot and marks player as all-in.
-     *
-     * @param pot the current pot value
-     * @return the updated pot value after going all-in
-     */
     private int goAllIn(int pot) {
         isAllIn = true;
         pot += chips;

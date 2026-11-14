@@ -10,7 +10,6 @@ public final class RoomPasswordPolicy {
     private static final int MAX_CHARACTERS = 50;
     private static final int MAX_UTF8_BYTES = 72;
 
-    /** Prevents instantiation of the password policy. */
     private RoomPasswordPolicy() { }
 
     /**

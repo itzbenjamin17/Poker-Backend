@@ -32,8 +32,6 @@ public class Deck {
     /**
      * Reconstructs an already shuffled remainder without consuming randomness. This
      * path exists only for exact restart recovery; normal games use {@link #Deck()}.
-     *
-     * @param cards remaining cards in their persisted draw order
      */
     private Deck(List<Card> cards) {
         this.cards = new ArrayList<>(cards);
@@ -60,9 +58,6 @@ public class Deck {
         return List.copyOf(cards);
     }
 
-    /**
-     * Initialises the deck with all 52 cards.
-     */
     private void initializeDeck() {
         for (Suit suit : Suit.values()) {
             for (Rank rank : Rank.values()) {
