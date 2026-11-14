@@ -13,9 +13,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 /**
- * Schedules game timers onto {@link Game} state before saving, registers the matching runtime
- * futures after saving completes, and verifies that firing timer callbacks still belong to the
- * active hand and timer generation.
+ * Records scheduled timers on {@link Game} before saving, registers the runtime timers after
+ * saving completes, and verifies when a timer fires that it has not been cancelled or replaced.
  */
 @Component
 class GameTaskScheduler {
@@ -42,7 +41,8 @@ class GameTaskScheduler {
     }
 
     /**
-     * Snapshots a game's current hand and generation identity for an already scheduled timer.
+     * Captures a timer descriptor for {@code task} tied to {@code game}'s current hand and
+     * schedule count so callbacks from cancelled or replaced timers are ignored.
      *
      * @param gameId   the room/game ID
      * @param game     the active game instance
@@ -69,14 +69,15 @@ class GameTaskScheduler {
 
     /**
      * Schedules the post-showdown delay before opening the next-hand ready gate, returning
-     * {@code true} when readiness should open immediately ({@code delayMs <= 0}).
+     * {@code true} when readiness should open immediately ({@code delayMs == 0}).
      *
      * @param gameId  the room/game ID
-     * @param delayMs delay before opening the ready gate, in milliseconds
+     * @param delayMs delay before opening the ready gate, in milliseconds ({@code >= 0})
      * @return {@code true} if the ready gate should open immediately, {@code false} if deferred
+     * @throws IllegalArgumentException if {@code delayMs} is negative
      */
     boolean scheduleReadyCountdownOpen(String gameId, long delayMs) {
-        if (delayMs <= 0) {
+        if (requireNonNegativeDelay(delayMs) == 0) {
             return true;
         }
         scheduleTask(gameId, ScheduledGameTask.READY_OPEN, clock.millis() + delayMs);
@@ -87,20 +88,22 @@ class GameTaskScheduler {
      * Schedules final game and room cleanup after the configured post-game delay.
      *
      * @param gameId  the room/game ID
-     * @param delayMs delay before deleting game and room state, in milliseconds
+     * @param delayMs delay before deleting game and room state, in milliseconds ({@code >= 0})
+     * @throws IllegalArgumentException if {@code delayMs} is negative
      */
     void scheduleGameCleanup(String gameId, long delayMs) {
-        scheduleTask(gameId, ScheduledGameTask.CLEANUP, clock.millis() + Math.max(0, delayMs));
+        scheduleTask(gameId, ScheduledGameTask.CLEANUP, clock.millis() + requireNonNegativeDelay(delayMs));
     }
 
     /**
      * Schedules final tournament completion after displaying the final showdown board.
      *
      * @param gameId  the room/game ID
-     * @param delayMs display delay in milliseconds
+     * @param delayMs display delay in milliseconds ({@code >= 0})
+     * @throws IllegalArgumentException if {@code delayMs} is negative
      */
     void scheduleGameEnd(String gameId, long delayMs) {
-        scheduleTask(gameId, ScheduledGameTask.GAME_END, clock.millis() + Math.max(0, delayMs));
+        scheduleTask(gameId, ScheduledGameTask.GAME_END, clock.millis() + requireNonNegativeDelay(delayMs));
     }
 
     /**
@@ -225,6 +228,13 @@ class GameTaskScheduler {
         }
         game.scheduleTask(task, deadline);
         registerTimerAfterSave(createTimer(gameId, game, task, deadline));
+    }
+
+    private static long requireNonNegativeDelay(long delayMs) {
+        if (delayMs < 0) {
+            throw new IllegalArgumentException("delayMs must be >= 0: " + delayMs);
+        }
+        return delayMs;
     }
 
     private static boolean matches(Game game, ScheduledGameTask task, long deadline, long handNumber, long generation) {
