@@ -1,7 +1,6 @@
 package com.pokergame.model;
 
 import com.pokergame.enums.ScheduledGameTask;
-import com.pokergame.enums.TaskExecutionClaim;
 
 import java.util.EnumMap;
 import java.util.List;
@@ -115,9 +114,10 @@ final class GameScheduling {
      * @param expectedDeadline   deadline captured when the timer was scheduled
      * @param expectedHandNumber hand number captured when the timer was scheduled
      * @param expectedGeneration schedule count captured when the timer was scheduled
-     * @return claim outcome indicating whether to execute, cancel, or ignore the callback
+     * @return {@code true} if the task was claimed for execution, {@code false} if stale,
+     *         cancelled on game over, or blocked by a pending forfeit
      */
-    TaskExecutionClaim claimTask(
+    boolean claimTask(
             boolean forfeitPending,
             boolean gameOver,
             long currentHandNumber,
@@ -126,24 +126,24 @@ final class GameScheduling {
             long expectedHandNumber,
             long expectedGeneration) {
         if (forfeitPending) {
-            return TaskExecutionClaim.IGNORE;
+            return false;
         }
         if ((task != ScheduledGameTask.CLEANUP && currentHandNumber != expectedHandNumber)
                 || getGeneration(task) != expectedGeneration) {
-            return TaskExecutionClaim.IGNORE;
+            return false;
         }
         if (gameOver && task != ScheduledGameTask.CLEANUP) {
             clearTask(task);
-            return TaskExecutionClaim.CANCEL_GAME_OVER;
+            return false;
         }
         Long currentDeadline = getDeadline(task);
         if (currentDeadline == null || currentDeadline != expectedDeadline) {
-            return TaskExecutionClaim.IGNORE;
+            return false;
         }
         if (task != ScheduledGameTask.CLEANUP) {
             clearTask(task);
         }
-        return TaskExecutionClaim.EXECUTE;
+        return true;
     }
 
     /**

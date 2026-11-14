@@ -193,32 +193,27 @@ class GameTaskScheduler {
     }
 
     /**
-     * Validates that a firing timer callback still matches the current hand and generation,
-     * marks one-shot timers as claimed, and cancels stale game-over futures.
+     * Claims a firing timer for execution if it still matches {@code game}'s active hand,
+     * schedule count, and deadline, cancelling any non-cleanup future once the game is over.
      *
-     * @param gameId     the room/game ID
      * @param game       the current game instance, or {@code null} if already removed
      * @param task       the timer type that fired
-     * @param deadline   the captured deadline
-     * @param handNumber the captured hand number
-     * @param generation the captured timer generation
+     * @param deadline   the deadline captured when the timer was scheduled
+     * @param handNumber the hand number captured when the timer was scheduled
+     * @param generation the schedule count captured when the timer was scheduled
      * @return {@code true} if the timer callback should execute, {@code false} otherwise
      */
-    boolean claim(String gameId, Game game, ScheduledGameTask task, long deadline, long handNumber, long generation) {
+    boolean claimTimer(Game game, ScheduledGameTask task, long deadline, long handNumber, long generation) {
         if (game == null) {
             return false;
         }
-        if (task == ScheduledGameTask.READY_TIMEOUT) {
-            return matches(game, task, deadline, handNumber, generation);
+        if (game.claimScheduledTask(task, deadline, handNumber, generation)) {
+            return true;
         }
-        return switch (game.claimScheduledTask(task, deadline, handNumber, generation)) {
-            case IGNORE -> false;
-            case CANCEL_GAME_OVER -> {
-                timerRegistry.cancelTask(gameId, task);
-                yield false;
-            }
-            case EXECUTE -> true;
-        };
+        if (game.isGameOver() && task != ScheduledGameTask.CLEANUP) {
+            timerRegistry.cancelTask(game.getGameId(), task);
+        }
+        return false;
     }
 
     private void scheduleTask(String gameId, ScheduledGameTask task, long deadline) {

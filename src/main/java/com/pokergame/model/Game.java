@@ -9,7 +9,6 @@ import com.pokergame.enums.ReadyCountdownStartOutcome;
 import com.pokergame.enums.ReadyCountdownTimeoutOutcome;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
-import com.pokergame.enums.TaskExecutionClaim;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.PotCalculator.PotComputationResult;
@@ -590,9 +589,9 @@ public class Game {
      * @param expectedDeadline   deadline captured when the timer was scheduled
      * @param expectedHandNumber hand number captured when the timer was scheduled
      * @param expectedGeneration schedule count captured when the timer was scheduled
-     * @return claim outcome indicating whether to execute, cancel, or ignore
+     * @return {@code true} if the task was claimed for execution, {@code false} otherwise
      */
-    public TaskExecutionClaim claimScheduledTask(
+    public boolean claimScheduledTask(
             ScheduledGameTask task,
             long expectedDeadline,
             long expectedHandNumber,

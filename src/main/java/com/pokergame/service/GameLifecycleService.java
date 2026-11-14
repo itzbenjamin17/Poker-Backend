@@ -366,7 +366,7 @@ public class GameLifecycleService {
         }
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
             Game game = activeGames.get(gameId);
-            if (!taskScheduler.claim(gameId, game, task, expectedDeadline, expectedHandNumber, expectedGeneration)) {
+            if (!taskScheduler.claimTimer(game, task, expectedDeadline, expectedHandNumber, expectedGeneration)) {
                 return;
             }
             switch (task) {
