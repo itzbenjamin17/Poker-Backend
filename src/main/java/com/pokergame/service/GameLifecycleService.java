@@ -17,6 +17,7 @@ import com.pokergame.persistence.transaction.PostSaveActions;
 import com.pokergame.service.GameTaskScheduler.ScheduledTimer;
 import com.pokergame.util.LockLease;
 import com.pokergame.util.MdcUtils;
+import com.pokergame.util.MdcUtils.MdcScope;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -40,10 +41,10 @@ public class GameLifecycleService {
     private final GameStateService gameStateService;
     private final ActiveGameRegistry activeGames;
     private final GameTimerRegistry runtimeTimers;
-    private final GameTaskScheduler scheduling;
-    private final GameCompletionHandler completion;
+    private final GameTaskScheduler taskScheduler;
+    private final GameCompletionHandler completionHandler;
     private final HandProgressionService handProgression;
-    private final GameReadinessCoordinator readiness;
+    private final GameReadinessCoordinator readinessCoordinator;
     private final PlayerDepartureHandler departureHandler;
     private final RoomCoordinator roomCoordinator;
     private final Clock clock;
@@ -55,10 +56,10 @@ public class GameLifecycleService {
             GameStateService gameStateService,
             ActiveGameRegistry activeGames,
             GameTimerRegistry runtimeTimers,
-            GameTaskScheduler scheduling,
-            GameCompletionHandler completion,
+            GameTaskScheduler taskScheduler,
+            GameCompletionHandler completionHandler,
             HandProgressionService handProgression,
-            GameReadinessCoordinator readiness,
+            GameReadinessCoordinator readinessCoordinator,
             PlayerDepartureHandler departureHandler,
             RoomCoordinator roomCoordinator,
             Clock clock,
@@ -68,10 +69,10 @@ public class GameLifecycleService {
         this.gameStateService = gameStateService;
         this.activeGames = activeGames;
         this.runtimeTimers = runtimeTimers;
-        this.scheduling = scheduling;
-        this.completion = completion;
+        this.taskScheduler = taskScheduler;
+        this.completionHandler = completionHandler;
         this.handProgression = handProgression;
-        this.readiness = readiness;
+        this.readinessCoordinator = readinessCoordinator;
         this.departureHandler = departureHandler;
         this.roomCoordinator = roomCoordinator;
         this.clock = clock;
@@ -149,11 +150,11 @@ public class GameLifecycleService {
             room.setGameStarted(true);
             roomService.cancelLobbyInactivity(roomId);
             room.extendGameInactivityDeadline(clock.millis());
-            scheduling.scheduleGameInactivity(roomId, room.getInactivityDeadlineEpochMs());
+            taskScheduler.scheduleGameInactivity(roomId, room.getInactivityDeadlineEpochMs());
             roomService.broadcastGameStarted(roomId);
 
             logger.info("Game created and started for room: {} with {} players", roomId, room.getPlayers().size());
-            readiness.handlePostHandTransition(roomId, handProgression.startNewHand(roomId));
+            readinessCoordinator.handlePostHandTransition(roomId, handProgression.startNewHand(roomId));
             return roomId;
         }
     }
@@ -170,7 +171,7 @@ public class GameLifecycleService {
     @DurableMutation(roomId = "#gameId")
     public void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            readiness.handlePostHandTransition(
+            readinessCoordinator.handlePostHandTransition(
                     gameId, handProgression.applyTurnOutcome(gameId, game, outcome, notifyImmediateAutoAdvance));
         }
     }
@@ -187,7 +188,7 @@ public class GameLifecycleService {
             return;
         }
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            scheduling.scheduleGameInactivity(gameId, deadlineEpochMs);
+            taskScheduler.scheduleGameInactivity(gameId, deadlineEpochMs);
         }
     }
 
@@ -204,7 +205,7 @@ public class GameLifecycleService {
             return;
         }
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            completion.abandonGameIfInactive(gameId, expectedDeadlineEpochMs);
+            completionHandler.abandonGameIfInactive(gameId, expectedDeadlineEpochMs);
         }
     }
 
@@ -220,7 +221,7 @@ public class GameLifecycleService {
             return;
         }
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            completion.abandonGameDueToInactivity(gameId);
+            completionHandler.abandonGameDueToInactivity(gameId);
         }
     }
 
@@ -235,7 +236,7 @@ public class GameLifecycleService {
             return;
         }
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            scheduling.resetGameInactivity(gameId);
+            taskScheduler.resetGameInactivity(gameId);
         }
     }
 
@@ -305,15 +306,15 @@ public class GameLifecycleService {
             if (game == null) {
                 return;
             }
-            MdcUtils.runWithRoomId(gameId, () -> {
+            try (MdcScope _ = MdcUtils.withRoomId(gameId)) {
                 boolean normalized = game.normalizeRecoveredReadyCountdown(clock.millis() + timings.readyCountdownMs());
                 List<ScheduledTimer> timers = GameTaskScheduler.listActiveTimers(gameId, game);
-                PostSaveActions.runAfterSave(() -> timers.forEach(scheduling::registerTimer));
+                PostSaveActions.runAfterSave(() -> timers.forEach(taskScheduler::registerTimer));
                 if (normalized) {
                     gameStateService.broadcastGameState(gameId, game);
                 }
                 logger.info("Resumed {} recovered timers for game {}", timers.size(), gameId);
-            });
+            }
         }
     }
 
@@ -332,10 +333,10 @@ public class GameLifecycleService {
             if (game == null) {
                 return;
             }
-            GameTaskScheduler.listActiveTimers(gameId, game).forEach(scheduling::registerTimer);
+            GameTaskScheduler.listActiveTimers(gameId, game).forEach(taskScheduler::registerTimer);
             Room room = roomService.getRoom(gameId);
             if (room != null && room.getInactivityDeadlineEpochMs() != null && !game.isGameOver()) {
-                scheduling.scheduleGameInactivity(gameId, room.getInactivityDeadlineEpochMs());
+                taskScheduler.scheduleGameInactivity(gameId, room.getInactivityDeadlineEpochMs());
             }
         }
     }
@@ -362,20 +363,20 @@ public class GameLifecycleService {
         }
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
             Game game = activeGames.get(gameId);
-            if (scheduling.claim(gameId, game, task, expectedDeadline, expectedHandNumber, expectedGeneration)
+            if (taskScheduler.claim(gameId, game, task, expectedDeadline, expectedHandNumber, expectedGeneration)
                     != GameTaskScheduler.Claim.EXECUTE) {
                 return;
             }
             switch (task) {
                 case TURN_TIMEOUT -> departureHandler.handleTurnTimeout(gameId, game);
-                case AUTO_ADVANCE -> readiness.handlePostHandTransition(
+                case AUTO_ADVANCE -> readinessCoordinator.handlePostHandTransition(
                         gameId, handProgression.applyAutoAdvanceTimeout(gameId, game));
-                case READY_TIMEOUT -> readiness.applyProgression(
-                        gameId, readiness.expire(gameId, game, expectedDeadline));
-                case NEW_HAND -> readiness.handlePostHandTransition(gameId, handProgression.startNewHand(gameId));
-                case READY_OPEN -> readiness.startDefaultReadyCountdown(gameId);
-                case GAME_END -> completion.handleGameEnd(gameId, false);
-                case CLEANUP -> completion.deleteGameAndRoom(gameId);
+                case READY_TIMEOUT -> readinessCoordinator.applyProgression(
+                        gameId, readinessCoordinator.expire(gameId, game, expectedDeadline));
+                case NEW_HAND -> readinessCoordinator.handlePostHandTransition(gameId, handProgression.startNewHand(gameId));
+                case READY_OPEN -> readinessCoordinator.startDefaultReadyCountdown(gameId);
+                case GAME_END -> completionHandler.handleGameEnd(gameId, false);
+                case CLEANUP -> completionHandler.deleteGameAndRoom(gameId);
             }
         }
     }
@@ -412,7 +413,7 @@ public class GameLifecycleService {
     public boolean gameExists(String gameId) {
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
             Game game = activeGames.get(gameId);
-            return game != null && !completion.isGameExpired(game);
+            return game != null && !completionHandler.isGameExpired(game);
         }
     }
 
@@ -504,7 +505,7 @@ public class GameLifecycleService {
     @DurableMutation(roomId = "#gameId")
     public void markPlayerReadyForNextHand(String gameId, String playerName) {
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            readiness.applyProgression(gameId, readiness.markPlayerReadyForNextHand(gameId, playerName));
+            readinessCoordinator.applyProgression(gameId, readinessCoordinator.markPlayerReadyForNextHand(gameId, playerName));
         }
     }
 
@@ -517,7 +518,7 @@ public class GameLifecycleService {
     @DurableMutation(roomId = "#gameId")
     public void unmarkPlayerReadyForNextHand(String gameId, String playerName) {
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            readiness.applyProgression(gameId, readiness.unmarkPlayerReadyForNextHand(gameId, playerName));
+            readinessCoordinator.applyProgression(gameId, readinessCoordinator.unmarkPlayerReadyForNextHand(gameId, playerName));
         }
     }
 
@@ -554,7 +555,7 @@ public class GameLifecycleService {
      */
     public GameEndResponse getGameReview(String gameId, String playerName) {
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            return completion.getGameReview(gameId, playerName);
+            return completionHandler.getGameReview(gameId, playerName);
         }
     }
 

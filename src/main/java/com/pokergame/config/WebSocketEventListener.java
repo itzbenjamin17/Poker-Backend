@@ -6,6 +6,7 @@ import com.pokergame.model.Game;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
 import com.pokergame.util.MdcUtils;
+import com.pokergame.util.MdcUtils.MdcScope;
 import com.pokergame.util.SecurityUtils;
 import com.pokergame.service.event.RoomDestroyed;
 import com.pokergame.service.event.RoomMemberRegistered;
@@ -103,14 +104,14 @@ public class WebSocketEventListener {
         String roomId = playerPrincipal != null ? playerPrincipal.roomId() : null;
         String playerName = playerPrincipal != null ? playerPrincipal.playerName() : null;
 
-        MdcUtils.runWithMdc(roomId, playerName, sessionId, () -> {
+        try (MdcScope _ = MdcUtils.withMdc(roomId, playerName, sessionId)) {
             if (playerPrincipal == null || sessionId == null) {
                 logger.warn("WebSocket connect rejected: null playerPrincipal or sessionId (sessionId={})", sessionId);
                 return;
             }
 
             registerSession(playerPrincipal, sessionId);
-        });
+        }
     }
 
     /**
@@ -164,22 +165,21 @@ public class WebSocketEventListener {
         String sessionId = headerAccessor.getSessionId();
         
         // Recover principal from session storage if not present in the event
-        PlayerPrincipal principal = SecurityUtils.getPlayerOrNull(headerAccessor.getUser());
-        if (principal == null && sessionId != null) {
-            principal = sessionToPrincipal.get(sessionId);
+        PlayerPrincipal resolvedPrincipal = SecurityUtils.getPlayerOrNull(headerAccessor.getUser());
+        if (resolvedPrincipal == null && sessionId != null) {
+            resolvedPrincipal = sessionToPrincipal.get(sessionId);
         }
-        final PlayerPrincipal recoveredPrincipal = principal;
+        PlayerPrincipal playerPrincipal = resolvedPrincipal;
 
-        String roomId = recoveredPrincipal != null ? recoveredPrincipal.roomId() : null;
-        String playerName = recoveredPrincipal != null ? recoveredPrincipal.playerName() : null;
+        String roomId = playerPrincipal != null ? playerPrincipal.roomId() : null;
+        String playerName = playerPrincipal != null ? playerPrincipal.playerName() : null;
 
-        MdcUtils.runWithMdc(roomId, playerName, sessionId, () -> {
-            if (recoveredPrincipal == null) {
+        try (MdcScope _ = MdcUtils.withMdc(roomId, playerName, sessionId)) {
+            if (playerPrincipal == null) {
                 logger.debug("WebSocket disconnected without resolvable principal. sessionId={}", sessionId);
                 return;
             }
 
-            final PlayerPrincipal playerPrincipal = recoveredPrincipal;
             String compositeName = playerKey(playerPrincipal);
             
             try (LockLease _ = acquireRoomLease(roomId)) {
@@ -245,7 +245,7 @@ public class WebSocketEventListener {
                         scheduleInstant);
                 registration.attach(future);
             }
-        });
+        }
     }
 
     /**
@@ -307,42 +307,41 @@ public class WebSocketEventListener {
     public void registerInitialConnection(String roomId, String playerName, String membershipId, long deadlineEpochMs) {
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
         String compositeName = playerKey(principal);
-        MdcUtils.runWithMdc(roomId, playerName, () -> {
-            try (LockLease _ = acquireRoomLease(roomId)) {
-                Room room = roomService.getRoom(roomId);
-                if (room == null) {
-                    return;
-                }
-                if (!room.hasPlayer(playerName)) {
-                    return;
-                }
-                String currentMemId = room.getMembershipId(playerName);
-                boolean playerConnected = room.isPlayerConnected(playerName);
-                if (!Objects.equals(membershipId, currentMemId)) {
-                    return;
-                }
-
-                if (hasActiveSession(compositeName) || playerConnected) {
-                    logger.debug("Player {} in room {} already connected; skipping initial disconnect registration",
-                            playerName, roomId);
-                    return;
-                }
-
-                PendingDisconnect existing = pendingDisconnects.get(compositeName);
-                if (existing != null) {
-                    return;
-                }
-
-                PendingDisconnect registration = new PendingDisconnect(membershipId, deadlineEpochMs);
-                pendingDisconnects.put(compositeName, registration);
-                ScheduledFuture<?> future = taskScheduler.schedule(
-                        () -> cleanupDisconnectedUser(principal, registration),
-                        Instant.ofEpochMilli(deadlineEpochMs));
-                registration.attach(future);
-                logger.info("Registered initial connection allowance for {} in room {} until {}",
-                        playerName, roomId, deadlineEpochMs);
+        try (MdcScope _ = MdcUtils.withMdc(roomId, playerName);
+                LockLease _ = acquireRoomLease(roomId)) {
+            Room room = roomService.getRoom(roomId);
+            if (room == null) {
+                return;
             }
-        });
+            if (!room.hasPlayer(playerName)) {
+                return;
+            }
+            String currentMemId = room.getMembershipId(playerName);
+            boolean playerConnected = room.isPlayerConnected(playerName);
+            if (!Objects.equals(membershipId, currentMemId)) {
+                return;
+            }
+
+            if (hasActiveSession(compositeName) || playerConnected) {
+                logger.debug("Player {} in room {} already connected; skipping initial disconnect registration",
+                        playerName, roomId);
+                return;
+            }
+
+            PendingDisconnect existing = pendingDisconnects.get(compositeName);
+            if (existing != null) {
+                return;
+            }
+
+            PendingDisconnect registration = new PendingDisconnect(membershipId, deadlineEpochMs);
+            pendingDisconnects.put(compositeName, registration);
+            ScheduledFuture<?> future = taskScheduler.schedule(
+                    () -> cleanupDisconnectedUser(principal, registration),
+                    Instant.ofEpochMilli(deadlineEpochMs));
+            registration.attach(future);
+            logger.info("Registered initial connection allowance for {} in room {} until {}",
+                    playerName, roomId, deadlineEpochMs);
+        }
     }
 
     /**
@@ -359,34 +358,33 @@ public class WebSocketEventListener {
         String compositeName = playerKey(principal);
         long delay = Math.max(0, deadlineEpochMs - System.currentTimeMillis());
         logger.info("Scheduling recovered disconnect for player {} in room {} with delayMs={}", playerName, roomId, delay);
-        MdcUtils.runWithMdc(roomId, playerName, () -> {
-            try (LockLease _ = acquireRoomLease(roomId)) {
-                PendingDisconnect existing = pendingDisconnects.remove(compositeName);
-                if (existing != null) existing.cancel();
-                Room restoredRoom = roomService.getRoom(roomId);
-                if (hasActiveSession(compositeName)) {
-                    try {
-                        gameLifecycleService.markPlayerReconnected(roomId, playerName);
-                    } catch (Exception e) {
-                        logger.warn("Failed to mark player '{}' reconnected in room '{}': {}", playerName, roomId, e.getMessage());
-                    }
-                    return;
+        try (MdcScope _ = MdcUtils.withMdc(roomId, playerName);
+                LockLease _ = acquireRoomLease(roomId)) {
+            PendingDisconnect existing = pendingDisconnects.remove(compositeName);
+            if (existing != null) existing.cancel();
+            Room restoredRoom = roomService.getRoom(roomId);
+            if (hasActiveSession(compositeName)) {
+                try {
+                    gameLifecycleService.markPlayerReconnected(roomId, playerName);
+                } catch (Exception e) {
+                    logger.warn("Failed to mark player '{}' reconnected in room '{}': {}", playerName, roomId, e.getMessage());
                 }
-                String restoredMembershipId = null;
-                if (restoredRoom != null) {
-                    if (restoredRoom.hasPlayer(playerName)) {
-                        restoredRoom.setPlayerConnected(playerName, false);
-                        restoredRoom.setAbsenceDeadline(playerName, deadlineEpochMs);
-                    }
-                    restoredMembershipId = restoredRoom.getMembershipId(playerName);
-                }
-                PendingDisconnect registration = new PendingDisconnect(restoredMembershipId, deadlineEpochMs);
-                pendingDisconnects.put(compositeName, registration);
-                ScheduledFuture<?> future = taskScheduler.schedule(
-                        () -> cleanupDisconnectedUser(principal, registration), Instant.ofEpochMilli(deadlineEpochMs));
-                registration.attach(future);
+                return;
             }
-        });
+            String restoredMembershipId = null;
+            if (restoredRoom != null) {
+                if (restoredRoom.hasPlayer(playerName)) {
+                    restoredRoom.setPlayerConnected(playerName, false);
+                    restoredRoom.setAbsenceDeadline(playerName, deadlineEpochMs);
+                }
+                restoredMembershipId = restoredRoom.getMembershipId(playerName);
+            }
+            PendingDisconnect registration = new PendingDisconnect(restoredMembershipId, deadlineEpochMs);
+            pendingDisconnects.put(compositeName, registration);
+            ScheduledFuture<?> future = taskScheduler.schedule(
+                    () -> cleanupDisconnectedUser(principal, registration), Instant.ofEpochMilli(deadlineEpochMs));
+            registration.attach(future);
+        }
     }
 
     /**
@@ -400,10 +398,10 @@ public class WebSocketEventListener {
         PlayerPrincipal p = SecurityUtils.getPlayerOrNull(h.getUser());
         String roomId = p != null ? p.roomId() : null;
         String playerName = p != null ? p.playerName() : null;
-        MdcUtils.runWithMdc(roomId, playerName, h.getSessionId(), () -> {
+        try (MdcScope _ = MdcUtils.withMdc(roomId, playerName, h.getSessionId())) {
             logger.debug("STOMP subscribe: user={} destination={} session={}",
                     p == null ? "anonymous" : p.getName(), h.getDestination(), h.getSessionId());
-        });
+        }
     }
 
     /**
@@ -417,10 +415,10 @@ public class WebSocketEventListener {
         PlayerPrincipal p = SecurityUtils.getPlayerOrNull(h.getUser());
         String roomId = p != null ? p.roomId() : null;
         String playerName = p != null ? p.playerName() : null;
-        MdcUtils.runWithMdc(roomId, playerName, h.getSessionId(), () -> {
+        try (MdcScope _ = MdcUtils.withMdc(roomId, playerName, h.getSessionId())) {
             logger.debug("STOMP unsubscribe: user={} subscriptionId={} session={}",
                     p == null ? "anonymous" : p.getName(), h.getSubscriptionId(), h.getSessionId());
-        });
+        }
     }
 
 
