@@ -3,7 +3,6 @@ package com.pokergame.util;
 import static java.util.Objects.requireNonNull;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
@@ -53,33 +52,6 @@ public class KeyedLockRegistry<K> {
         boolean acquired = false;
         try {
             acquired = entry.lock.tryLock();
-        } finally {
-            if (!acquired) {
-                releaseReservation(key, entry);
-            }
-        }
-
-        if (!acquired) {
-            return null;
-        }
-        return new Lease(key, entry);
-    }
-
-    /**
-     * Attempts to acquire an exclusive lease for the given key, waiting up to the specified timeout.
-     *
-     * @param key     the key to lock
-     * @param timeout the maximum time to wait
-     * @param unit    the time unit of the timeout argument
-     * @return the lock lease if acquired, or {@code null} if timed out or interrupted
-     * @throws InterruptedException if interrupted while waiting
-     */
-    public LockLease tryAcquire(K key, long timeout, TimeUnit unit) throws InterruptedException {
-        LockEntry entry = reserveEntry(key);
-
-        boolean acquired = false;
-        try {
-            acquired = entry.lock.tryLock(timeout, unit);
         } finally {
             if (!acquired) {
                 releaseReservation(key, entry);

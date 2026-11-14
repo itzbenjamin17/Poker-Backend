@@ -61,21 +61,9 @@ public final class PersistenceRecovery implements ApplicationRunner {
      * @param webSocketEventListener  handles player connections and disconnections
      * @param applicationContext      tells the application when it's safe to start taking requests
      * @param disconnectGracePeriodMs extra time given to players to reconnect after a server restart
+     * @param clock                   clock used to evaluate expired deadlines during recovery
+     * @param roomCoordinator         coordinator managing per-room concurrency
      */
-    public PersistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper, RoomService roomService,
-            GameLifecycleService gameLifecycleService, WebSocketEventListener webSocketEventListener,
-            ApplicationContext applicationContext, long disconnectGracePeriodMs) {
-        this(store, mapper, roomService, gameLifecycleService, webSocketEventListener, applicationContext,
-                disconnectGracePeriodMs, java.time.Clock.systemUTC(), null);
-    }
-
-    public PersistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper, RoomService roomService,
-            GameLifecycleService gameLifecycleService, WebSocketEventListener webSocketEventListener,
-            ApplicationContext applicationContext, long disconnectGracePeriodMs, java.time.Clock clock) {
-        this(store, mapper, roomService, gameLifecycleService, webSocketEventListener, applicationContext,
-                disconnectGracePeriodMs, clock, null);
-    }
-
     public PersistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper, RoomService roomService,
             GameLifecycleService gameLifecycleService, WebSocketEventListener webSocketEventListener,
             ApplicationContext applicationContext, long disconnectGracePeriodMs, java.time.Clock clock,
@@ -89,15 +77,6 @@ public final class PersistenceRecovery implements ApplicationRunner {
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
         this.clock = clock != null ? clock : java.time.Clock.systemUTC();
         this.roomCoordinator = roomCoordinator != null ? roomCoordinator : new RoomCoordinator();
-    }
-
-    /**
-     * Returns the room coordinator managing per-room concurrency.
-     *
-     * @return the room coordinator
-     */
-    public RoomCoordinator getRoomCoordinator() {
-        return roomCoordinator;
     }
 
     /**
@@ -152,7 +131,9 @@ public final class PersistenceRecovery implements ApplicationRunner {
             // If the room was marked for deletion before the crash, permanently delete it now
             if (aggregate.deleted()) {
                 logger.info("Deleted tombstone room {}", roomId);
-                roomCoordinator.coordinate(roomId, () -> store.delete(roomId));
+                try (LockLease _ = roomCoordinator.acquire(roomId)) {
+                    store.delete(roomId);
+                }
                 roomsDeleted++;
                 continue;
             }

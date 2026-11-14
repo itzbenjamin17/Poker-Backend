@@ -33,9 +33,10 @@ import java.util.UUID;
  */
 public class Room {
     private static final Logger logger = LoggerFactory.getLogger(Room.class);
+    public static final long GAME_INACTIVITY_ALLOWANCE_MS = 15 * 60_000L;
     private final String roomId;
     private final String roomName;
-    private final String hostName;
+    private volatile String hostName;
     /**
      * Join-order and arrival timestamps for players in this room.
      * Guarded by the room-ID coordination lease after publication.
@@ -423,17 +424,6 @@ public class Room {
     }
 
     /**
-     * Alias for {@link #checkPassword(String, PasswordEncoder)}.
-     *
-     * @param rawPassword cleartext password to check
-     * @param encoder password encoder to verify with
-     * @return true if password matches or room is public, false otherwise
-     */
-    public boolean matchesPassword(String rawPassword, PasswordEncoder encoder) {
-        return checkPassword(rawPassword, encoder);
-    }
-
-    /**
      * Returns a string representation of this room including name, ID, host, and
      * player count, masking any sensitive credentials.
      *
@@ -446,12 +436,45 @@ public class Room {
                 + " players [password=" + protectedPass + "]";
     }
 
-    /** @return absolute lobby inactivity deadline, or null once gameplay starts */
-    public Long getInactivityDeadlineEpochMs() { return inactivityDeadlineEpochMs; }
+    /** @return absolute inactivity deadline, or null when no deadline is set */
+    public Long getInactivityDeadlineEpochMs() {
+        return inactivityDeadlineEpochMs;
+    }
 
-    /** @param deadlineEpochMs persisted absolute lobby inactivity deadline */
+    /** @param deadlineEpochMs persisted absolute inactivity deadline */
     public void setInactivityDeadlineEpochMs(Long deadlineEpochMs) {
         inactivityDeadlineEpochMs = deadlineEpochMs;
+    }
+
+    /**
+     * Extends the active game's inactivity deadline relative to {@code nowMs}.
+     *
+     * @param nowMs current epoch time in milliseconds
+     */
+    public void extendGameInactivityDeadline(long nowMs) {
+        inactivityDeadlineEpochMs = nowMs + GAME_INACTIVITY_ALLOWANCE_MS;
+    }
+
+    /**
+     * Returns whether the configured inactivity deadline has elapsed by {@code nowMs}.
+     *
+     * @param nowMs current epoch time in milliseconds
+     * @return {@code true} if a positive deadline is configured and {@code nowMs} has reached it
+     */
+    public boolean isInactivityExpired(long nowMs) {
+        Long deadline = inactivityDeadlineEpochMs;
+        return deadline != null && deadline > 0 && nowMs >= deadline;
+    }
+
+    /**
+     * Returns whether this room currently carries the exact expected inactivity deadline.
+     *
+     * @param expectedDeadlineMs expected epoch millisecond deadline
+     * @return {@code true} if the current deadline matches {@code expectedDeadlineMs}
+     */
+    public boolean hasInactivityDeadline(long expectedDeadlineMs) {
+        Long deadline = inactivityDeadlineEpochMs;
+        return deadline != null && deadline == expectedDeadlineMs;
     }
 
     /**
@@ -477,8 +500,20 @@ public class Room {
      *
      * @return the host's name
      */
-    public String getHostName() {
+    public synchronized String getHostName() {
         return hostName;
+    }
+
+    /**
+     * Updates the current host for the room after host transfer.
+     *
+     * @param hostName the new host's name
+     */
+    public synchronized void setHostName(String hostName) {
+        if (hostName == null || hostName.trim().isEmpty()) {
+            throw new IllegalArgumentException("hostName must not be blank");
+        }
+        this.hostName = hostName;
     }
 
     /**
@@ -575,16 +610,6 @@ public class Room {
         if (hasPlayer(playerName) && membershipId != null && !membershipId.isBlank()) {
             playerMembershipIds.put(playerName, membershipId);
         }
-    }
-
-    /**
-     * Exposes the hashed password for aggregate snapshot persistence. Public room DTOs
-     * continue to reveal only whether a password exists.
-     *
-     * @return room password hash, or {@code null} for a public room
-     */
-    public String getPasswordForPersistence() {
-        return passwordHash;
     }
 
     /**

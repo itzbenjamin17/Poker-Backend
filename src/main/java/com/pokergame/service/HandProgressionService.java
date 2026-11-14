@@ -1,108 +1,124 @@
 package com.pokergame.service;
 
+import com.pokergame.config.LifecycleTimingProperties;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
-import java.util.List;
-
-/** Deals and advances hands, recording scheduled progression and publishing hand effects under the room lease. */
-final class HandProgressionService {
+/**
+ * Deals new hands, processes turn and betting-round outcomes, advances all-in streets, and
+ * schedules post-showdown transitions.
+ */
+@Component
+class HandProgressionService {
     private static final Logger logger = LoggerFactory.getLogger(HandProgressionService.class);
     static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = 6000;
-
-    /**
-     * Opens readiness immediately. A normal showdown publishes its result after that opening;
-     * auto-advance has already published its result. This continuation stays within the current lease.
-     */
-    record OpenReadiness(Game game, TurnOutcome pendingShowdown) { }
-
     private final ActiveGameRegistry activeGames;
-    private final RoomCoordinator roomCoordinator;
     private final GameTimerRegistry runtimeTimers;
     private final GameTaskScheduler scheduling;
     private final GameCompletionHandler completion;
     private final GameStateService gameStateService;
-    private final long roundEndDisplayDelayMs;
+    private final LifecycleTimingProperties timings;
 
-    HandProgressionService(ActiveGameRegistry activeGames, RoomCoordinator roomCoordinator,
-            GameTimerRegistry runtimeTimers, GameTaskScheduler scheduling, GameCompletionHandler completion,
-            GameStateService gameStateService, long roundEndDisplayDelayMs) {
+    HandProgressionService(
+            ActiveGameRegistry activeGames,
+            GameTimerRegistry runtimeTimers,
+            GameTaskScheduler scheduling,
+            GameCompletionHandler completion,
+            GameStateService gameStateService,
+            LifecycleTimingProperties timings) {
         this.activeGames = activeGames;
-        this.roomCoordinator = roomCoordinator;
         this.runtimeTimers = runtimeTimers;
         this.scheduling = scheduling;
         this.completion = completion;
         this.gameStateService = gameStateService;
-        this.roundEndDisplayDelayMs = roundEndDisplayDelayMs;
+        this.timings = timings;
     }
 
-    /** Starts the next hand and returns any immediate readiness opening from the forced blinds. */
-    OpenReadiness startNewHand(String gameId) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
+    /**
+     * Deals the next hand for {@code gameId} if the game is ready for a new hand, or settles the
+     * game if tournament elimination leaves a winner.
+     *
+     * @param gameId the unique ID of the game
+     * @return a follow-up transition when the ready gate should open immediately, or {@code null}
+     */
+    PostHandTransition startNewHand(String gameId) {
         Game game = activeGames.get(gameId);
         if (game == null) {
             logger.warn("Cannot start new hand - game {} not found", gameId);
             return null;
         }
         logger.info("Starting new hand for game: {}", gameId);
-        if (game.isForfeitPending()) return null;
-        if (game.isGameOver()) {
-            if (!game.isTerminalCarryOverSettled()) completion.handleGameEnd(gameId, false);
+        if (game.isForfeitPending()) {
             return null;
         }
-        if (game.getHandNumber() > 0 && (game.getCurrentPhase() != GamePhase.SHOWDOWN
-                || !game.isHandSettled())) {
+        if (game.isGameOver()) {
+            if (!game.isTerminalCarryOverSettled()) {
+                completion.handleGameEnd(gameId, false);
+            }
+            return null;
+        }
+        if (game.getHandNumber() > 0 && (game.getCurrentPhase() != GamePhase.SHOWDOWN || !game.isHandSettled())) {
             logger.warn("Ignoring new-hand request for unsettled game {} hand {}", gameId, game.getHandNumber());
             return null;
         }
+
         runtimeTimers.cancelProgressionForGame(gameId);
-        // Invalidate obsolete durable intent independently of the runtime cancellation scope.
         game.invalidateProgressionTasks();
         game.closeReadyCountdown();
         game.clearScheduledTask(ScheduledGameTask.CLEANUP);
 
-        // Reset determines game completion before cards are dealt so the final
-        // winner state remains visible during the configured display window.
+        // Reset before dealing so a finished tournament preserves the previous final board cleanly.
         boolean gameEnded = game.resetForNewHand();
         if (gameEnded) {
             logger.warn("Game {} became over after reset", gameId);
             completion.handleGameEnd(gameId, false);
             return null;
         }
-        if (gameStateService != null) {
-            gameStateService.clearRetainedSettlement(gameId);
-        }
 
         game.beginHand();
-
         game.dealHoleCards();
         game.postBlinds();
-        OpenReadiness continuation = applyTurnOutcome(gameId, game, game.reconcileAfterForcedBlinds());
+        PostHandTransition transition = applyTurnOutcome(gameId, game, game.reconcileAfterForcedBlinds());
 
         logger.info("New hand started successfully for game: {} | Current player: {} | Phase: {} | Pot: {}",
-                gameId, game.getCurrentPlayer() == null ? "none" : game.getCurrentPlayer().getName(),
-                game.getCurrentPhase(), game.getPot());
-        return continuation;
+                gameId,
+                game.getCurrentPlayer() == null ? "none" : game.getCurrentPlayer().getName(),
+                game.getCurrentPhase(),
+                game.getPot());
+        return transition;
     }
 
-    /** Applies the outcome of blinds or a participant departure. */
-    OpenReadiness applyTurnOutcome(String gameId, Game game, TurnOutcome outcome) {
-        return applyTurnOutcomeUnderLock(gameId, game, outcome, false);
+    /**
+     * Applies the result of forced blinds or a player departure without an immediate auto-advance alert.
+     *
+     * @param gameId  the unique ID of the game
+     * @param game    the active game instance
+     * @param outcome the resulting turn state
+     * @return a follow-up transition when the ready gate should open immediately, or {@code null}
+     */
+    PostHandTransition applyTurnOutcome(String gameId, Game game, TurnOutcome outcome) {
+        return applyTurnOutcome(gameId, game, outcome, false);
     }
 
-    /** Applies the outcome of a player action, optionally publishing the all-in notification. */
-    OpenReadiness applyTurnOutcome(String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
-        return applyTurnOutcomeUnderLock(gameId, game, outcome, notifyImmediateAutoAdvance);
-    }
-
-    private OpenReadiness applyTurnOutcomeUnderLock(String gameId, Game game, TurnOutcome outcome,
-            boolean notifyImmediateAutoAdvance) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
+    /**
+     * Applies a turn, forced-blind, or departure outcome by scheduling the next timer and
+     * broadcasting the resulting table state.
+     *
+     * @param gameId                     the unique ID of the game
+     * @param game                       the active game instance
+     * @param outcome                    the resulting turn state
+     * @param notifyImmediateAutoAdvance {@code true} to send an immediate all-in notice banner
+     * @return a follow-up transition when the ready gate should open immediately, or {@code null}
+     */
+    PostHandTransition applyTurnOutcome(
+            String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
         switch (outcome.type()) {
             case NEXT_PLAYER, PHASE_ADVANCED -> {
                 game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
@@ -132,48 +148,38 @@ final class HandProgressionService {
                 game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
                 runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
                 if (schedulePostShowdownProgression(gameId, game)) {
-                    return new OpenReadiness(game, outcome);
+                    return new PostHandTransition(game, outcome);
                 }
-                publishShowdown(gameId, game, outcome);
+                broadcastShowdown(gameId, game, outcome);
             }
         }
         return null;
     }
 
-    /** Publishes a deferred showdown after the immediate readiness transition. */
-    void publishPendingShowdown(String gameId, OpenReadiness continuation) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        if (continuation.pendingShowdown() != null) {
-            publishShowdown(gameId, continuation.game(), continuation.pendingShowdown());
+    /**
+     * Broadcasts a showdown whose publication was deferred until after the ready gate opened.
+     *
+     * @param gameId     the unique ID of the game
+     * @param transition the post-hand transition holding the pending showdown outcome
+     */
+    void broadcastPendingShowdown(String gameId, PostHandTransition transition) {
+        if (transition.pendingShowdown() != null) {
+            broadcastShowdown(gameId, transition.game(), transition.pendingShowdown());
         }
     }
 
-    private void publishShowdown(String gameId, Game game, TurnOutcome outcome) {
-        gameStateService.broadcastShowdownResults(gameId, game, outcome.winners(), outcome.winningsPerPlayer());
-    }
-
-    /** Records the terminal or ready-opening intent, returning true for an immediate ready opening. */
-    private boolean schedulePostShowdownProgression(String gameId, Game game) {
-        if (game.isTournamentOver()) {
-            scheduling.scheduleGameEnd(gameId, FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
-            return false;
-        }
-        return scheduling.scheduleReadyCountdownOpen(gameId, roundEndDisplayDelayMs)
-                == GameTaskScheduler.ReadyOpening.OPEN_IMMEDIATELY;
-    }
-
-    /** Deals one street or settles the final street of an all-in hand. */
+    /**
+     * Deals the next street or resolves showdown for a single all-in auto-advance step.
+     *
+     * @param gameId the unique ID of the game
+     * @return {@code true} if the hand has reached showdown or finished
+     */
     boolean advanceAutoAdvanceStep(String gameId) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
         Game game = activeGames.get(gameId);
-        if (game == null) {
+        if (game == null || game.isForfeitPending() || game.isGameOver()) {
             return true;
         }
-
-        if (game.isForfeitPending()) return true;
-        if (game.isGameOver()) return true;
-        if (game.isHandSettled()
-                || game.isTerminalCarryOverSettled()) {
+        if (game.isHandSettled() || game.isTerminalCarryOverSettled()) {
             logger.info("Skipping stale auto-advance callback for settled game {}", gameId);
             return true;
         }
@@ -202,25 +208,54 @@ final class HandProgressionService {
                 yield true;
             }
             case SHOWDOWN -> {
-                logger.warn("Auto-advance step invoked for game {} already in SHOWDOWN - skipping duplicate distribution", gameId);
+                logger.warn("Auto-advance step invoked for game {} already in SHOWDOWN - skipping duplicate distribution",
+                        gameId);
                 yield true;
             }
         };
     }
 
-    /** Advances a claimed auto-advance callback and records any subsequent work. */
-    OpenReadiness applyAutoAdvanceTimeout(String gameId, Game game) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
+    /**
+     * Executes an auto-advance timer step and either schedules the next street or transitions to
+     * post-hand readiness/game-end handling when showdown completes.
+     *
+     * @param gameId the unique ID of the game
+     * @param game   the active game instance
+     * @return a post-hand transition if readiness should open immediately, or {@code null}
+     */
+    PostHandTransition applyAutoAdvanceTimeout(String gameId, Game game) {
         if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
             game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
             return null;
         }
         boolean complete = advanceAutoAdvanceStep(gameId);
         if (complete) {
-            return schedulePostShowdownProgression(gameId, game) ? new OpenReadiness(game, null) : null;
-        } else {
-            scheduling.scheduleAutoAdvance(gameId);
+            return schedulePostShowdownProgression(gameId, game) ? new PostHandTransition(game, null) : null;
         }
+        scheduling.scheduleAutoAdvance(gameId);
         return null;
+    }
+
+    private void broadcastShowdown(String gameId, Game game, TurnOutcome outcome) {
+        gameStateService.broadcastShowdownResults(gameId, game, outcome.winners(), outcome.winningsPerPlayer());
+    }
+
+    private boolean schedulePostShowdownProgression(String gameId, Game game) {
+        if (game.isTournamentOver()) {
+            scheduling.scheduleGameEnd(gameId, FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
+            return false;
+        }
+        return scheduling.scheduleReadyCountdownOpen(gameId, timings.roundEndDisplayDelayMs())
+                == GameTaskScheduler.ReadyOpening.OPEN_IMMEDIATELY;
+    }
+
+    /**
+     * Follow-up transition returned when the ready gate should open immediately before
+     * broadcasting a pending showdown result.
+     *
+     * @param game            the active game instance
+     * @param pendingShowdown the showdown outcome to broadcast after opening readiness, or {@code null}
+     */
+    record PostHandTransition(Game game, TurnOutcome pendingShowdown) {
     }
 }

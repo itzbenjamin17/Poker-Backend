@@ -10,7 +10,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.EnableAspectJAutoProxy;
 import org.springframework.beans.factory.annotation.Value;
 
 import javax.crypto.SecretKey;
@@ -48,7 +47,6 @@ import org.springframework.context.ApplicationContext;
  * </p>
  */
 @Configuration
-@EnableAspectJAutoProxy
 @EnableConfigurationProperties(PersistenceProperties.class)
 public class PersistenceConfiguration {
     private static final Logger logger = LoggerFactory.getLogger(PersistenceConfiguration.class);
@@ -146,13 +144,10 @@ public class PersistenceConfiguration {
             GameLifecycleService gameLifecycleService,
             WebSocketEventListener webSocketEventListener,
             ApplicationContext applicationContext,
-            @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs,
+            @Value("${poker.room.disconnect-grace-period-ms:120000}") long disconnectGracePeriodMs,
             java.time.Clock clock,
             ObjectProvider<RoomCoordinator> roomCoordinatorProvider) {
-        RoomCoordinator coordinator = roomCoordinatorProvider.getIfAvailable(() ->
-                roomService != null && roomService.getRoomCoordinator() != null
-                        ? roomService.getRoomCoordinator()
-                        : new RoomCoordinator());
+        RoomCoordinator coordinator = roomCoordinatorProvider.getIfAvailable(RoomCoordinator::new);
         return new PersistenceRecovery(store, mapper, roomService, gameLifecycleService, webSocketEventListener,
                 applicationContext, disconnectGracePeriodMs, clock, coordinator);
     }

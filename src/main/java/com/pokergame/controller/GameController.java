@@ -24,8 +24,6 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import jakarta.validation.Valid;
 
-import java.util.List;
-
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -204,45 +202,16 @@ public class GameController {
     }
 
     /**
-     * Removes a player from an active game. Hand is automatically folded if in a
-     * round.
-     * SECURED ENDPOINT - Requires JWT token.
-     *
-     * @param gameId    game identifier
-     * @param playerPrincipal authenticated player principal
-     * @return success confirmation
-     */
-    @PostMapping("/{gameId}/leave")
-    public ResponseEntity<ApiResponse<Void>> leaveGame(
-            @PathVariable String gameId,
-            @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
-        String playerName = playerPrincipal.playerName();
-        logger.info("Player {} requesting to leave game {}", playerName, gameId);
-
-        // Security check: ensure the token is actually for THIS game
-        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
-
-        try (LockLease _ = roomCoordinator.acquire(gameId)) {
-            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
-            gameLifecycleService.departParticipants(gameId, List.of(playerName));
-            logger.info("Player {} successfully left game {}", playerName, gameId);
-            return ResponseEntity.ok(ApiResponse.success("Successfully left game"));
-        }
-    }
-
-    /**
      * Fetches the frozen terminal result for post-game review.
      * SECURED ENDPOINT - Requires JWT token.
      *
-     * @param gameId              game identifier
-     * @param requestedPlayerName optional querying player name to match against principal
-     * @param playerPrincipal     authenticated player principal
+     * @param gameId          game identifier
+     * @param playerPrincipal authenticated player principal
      * @return direct GameEndResponse
      */
     @GetMapping("/{gameId}/review")
     public ResponseEntity<GameEndResponse> getGameReview(
             @PathVariable String gameId,
-            @RequestParam(value = "playerName", required = false) String requestedPlayerName,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         if (playerPrincipal == null) {
             throw new UnauthorisedActionException("Authentication required.");
@@ -253,11 +222,6 @@ public class GameController {
 
         // Security check: ensure the token is actually for THIS game/room (null-safe)
         playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
-
-        // Security check: ensure querying player name matches the authenticated principal
-        if (requestedPlayerName != null && !requestedPlayerName.isBlank() && !requestedPlayerName.equals(playerName)) {
-            throw new UnauthorisedActionException("Query player name does not match authenticated player.");
-        }
 
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());

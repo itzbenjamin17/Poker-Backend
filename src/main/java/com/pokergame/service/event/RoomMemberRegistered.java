@@ -1,13 +1,13 @@
 package com.pokergame.service.event;
 
 /**
- * Published after a room is created or joined and the membership is accepted.
- * Lets the transport layer schedule the member's first-connection grace period.
+ * Event published after a player creates or joins a room and the update has been saved.
+ * Notifies WebSocket session listeners to start tracking the player's initial connection timeout.
  *
- * @param roomId          room the member belongs to
- * @param playerName      sanitized player name
- * @param membershipId    membership identifier issued for this join, or null if unavailable
- * @param deadlineEpochMs deadline for the member's first connection, in milliseconds since the Unix epoch
+ * @param roomId          the unique ID of the room the player joined
+ * @param playerName      the sanitized player name
+ * @param membershipId    the unique membership ID assigned for this join, or {@code null} if unavailable
+ * @param deadlineEpochMs initial connection timeout deadline in epoch milliseconds
  */
 public record RoomMemberRegistered(String roomId, String playerName, String membershipId, long deadlineEpochMs) {
 }

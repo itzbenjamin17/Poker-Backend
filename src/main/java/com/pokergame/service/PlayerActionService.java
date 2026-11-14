@@ -1,231 +1,175 @@
 package com.pokergame.service;
 
+import static java.util.Objects.requireNonNull;
+
 import com.pokergame.dto.internal.PlayerDecision;
+import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.exception.BadRequestException;
-import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ResponseMessage;
+import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.persistence.transaction.DurableMutation;
+import com.pokergame.util.LockLease;
+import java.time.Clock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-
-import com.pokergame.dto.internal.TurnOutcome;
-import com.pokergame.enums.ScheduledGameTask;
-
 /**
- * Service class responsible for processing player actions and game progression.
- * Handles player decisions, betting rounds, and automatic game advancement.
+ * Validates and applies in-game poker actions (fold, check, call, bet, raise, all-in) for the
+ * active player and broadcasts the resulting game state.
  */
 @Service
 public class PlayerActionService {
-
     private static final Logger logger = LoggerFactory.getLogger(PlayerActionService.class);
-
     private final GameLifecycleService gameLifecycleService;
-
     private final GameStateService gameStateService;
-
     private final RoomCoordinator roomCoordinator;
+    private final Clock clock;
 
-    private java.time.Clock clock = java.time.Clock.systemUTC();
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    public void setClock(java.time.Clock clock) {
+    public PlayerActionService(
+            GameLifecycleService gameLifecycleService,
+            GameStateService gameStateService,
+            RoomCoordinator roomCoordinator,
+            Clock clock) {
+        this.gameLifecycleService = gameLifecycleService;
+        this.gameStateService = gameStateService;
+        this.roomCoordinator = roomCoordinator;
         this.clock = clock;
     }
 
     /**
-     * Creates the action orchestrator with lifecycle scheduling and client-state
-     * publishing behind the same room durability boundary.
+     * Returns whether the inactivity deadline for {@code gameId} has already passed.
      *
-     * @param gameLifecycleService authoritative game registry and scheduler owner
-     * @param gameStateService     committed client-state publisher
-     */
-    public PlayerActionService(GameLifecycleService gameLifecycleService, GameStateService gameStateService) {
-        this(gameLifecycleService, gameStateService, null);
-    }
-
-    @org.springframework.beans.factory.annotation.Autowired
-    public PlayerActionService(GameLifecycleService gameLifecycleService,
-            GameStateService gameStateService,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) RoomCoordinator roomCoordinator) {
-        this.gameLifecycleService = gameLifecycleService;
-        this.gameStateService = gameStateService;
-        if (roomCoordinator != null) {
-            this.roomCoordinator = roomCoordinator;
-        } else if (gameLifecycleService != null && gameLifecycleService.getRoomCoordinator() != null) {
-            this.roomCoordinator = gameLifecycleService.getRoomCoordinator();
-        } else {
-            this.roomCoordinator = new RoomCoordinator();
-        }
-        if (gameLifecycleService != null && gameLifecycleService.getClock() != null) {
-            this.clock = gameLifecycleService.getClock();
-        }
-    }
-
-    public RoomCoordinator getRoomCoordinator() {
-        return roomCoordinator;
-    }
-
-    private PlayerActionService self;
-
-    @org.springframework.context.annotation.Lazy
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    void setSelf(PlayerActionService self) {
-        this.self = self;
-    }
-
-    private PlayerActionService mutationProxy() {
-        return self == null ? this : self;
-    }
-
-    /**
-     * Checks if the game has expired due to inactivity.
-     *
-     * @param gameId unique game identifier
-     * @return true if game inactivity deadline has passed
+     * @param gameId the unique ID of the game
+     * @return {@code true} if the game's inactivity deadline has elapsed
      */
     public boolean isGameInactivityExpired(String gameId) {
-        return gameLifecycleService != null && gameLifecycleService.isGameInactivityExpired(gameId);
+        return gameLifecycleService.isGameInactivityExpired(gameId);
     }
 
     /**
-     * Processes a player action request and orchestrates the resulting game state updates.
-     * Validates the request, delegates the decision to the Game model, and handles the resulting TurnOutcome by broadcasting changes.
+     * Validates a player's requested poker action, applies it to the game, resets the inactivity
+     * timer, and publishes updated turn or showdown state.
      *
-     * @param gameId        the unique identifier of the game
-     * @param actionRequest the action request containing the action type and amount
-     * @param playerName    the authenticated player name (from JWT Principal)
-     * @throws UnauthorisedActionException if the requesting player is not the
-     *                                     current player
-     * @throws ResourceNotFoundException   if the game is not found
+     * @param gameId        the unique ID of the game
+     * @param actionRequest the requested action type and optional wager amount
+     * @param playerName    the authenticated player's name
+     * @throws ResourceNotFoundException   if the game does not exist
+     * @throws BadRequestException         if the game expired/ended, the turn deadline passed,
+     *                                     or the action request is invalid
+     * @throws UnauthorisedActionException if it is not {@code playerName}'s turn or the player is
+     *                                     marked disconnected
      */
+    @DurableMutation(roomId = "#gameId")
     public void processPlayerAction(String gameId, PlayerActionRequest actionRequest, String playerName) {
-        roomCoordinator.coordinate(gameId, () -> {
+        requireNonNull(gameId, "gameId must not be null");
+        requireNonNull(playerName, "playerName must not be null");
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
             if (isGameInactivityExpired(gameId)) {
                 logger.warn("Player {} attempted to act in game {} at or after inactivity deadline (now={})",
                         playerName, gameId, clock.millis());
                 gameLifecycleService.abandonGameDueToInactivity(gameId);
-                throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
+                throw new BadRequestException(
+                        "Game has expired due to inactivity.",
+                        "GAME_EXPIRED",
+                        "Game has expired due to inactivity");
             }
 
-            mutationProxy().executePlayerAction(gameId, actionRequest, playerName);
-        });
-    }
+            Game game = gameLifecycleService.getGame(gameId);
+            if (game == null) {
+                logger.warn("Game not found for ID: {} when trying to process player action", gameId);
+                throw new ResourceNotFoundException("Game not found:");
+            }
+            if (game.isGameOver()) {
+                logger.warn("Player {} attempted to act in game {} after it has finished", playerName, gameId);
+                throw new BadRequestException("This game has finished.", "GAME_FINISHED", "Game has finished");
+            }
+            if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
+                logger.warn("Player {} attempted to act in game {} after the hand was resolved (phase=SHOWDOWN)",
+                        playerName, gameId);
+                throw new BadRequestException("This hand is already complete.", "HAND_COMPLETE", "Hand is complete");
+            }
+            if (game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE) != null) {
+                logger.warn("Player {} attempted to act in game {} while it is auto-advancing", playerName, gameId);
+                throw new BadRequestException(
+                        "Actions are not allowed while the game is auto-advancing.",
+                        "HAND_ADVANCING",
+                        "Wait for the next turn");
+            }
 
-    /**
-     * Executes the authoritative player action within a durable mutation boundary.
-     *
-     * @param gameId        the unique identifier of the game
-     * @param actionRequest the action request containing the action type and amount
-     * @param playerName    the authenticated player name (from JWT Principal)
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void executePlayerAction(String gameId, PlayerActionRequest actionRequest, String playerName) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        Game game = gameLifecycleService.getGame(gameId);
-        if (game == null) {
-            logger.warn("Game not found for ID: {} when trying to process player action", gameId);
-            throw new ResourceNotFoundException(
-                    "Game not found:");
-        }
+            Long turnDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT);
+            if (turnDeadline != null && clock.millis() >= turnDeadline) {
+                logger.warn("Player {} attempted to act in game {} at or after turn deadline (now={}, deadline={})",
+                        playerName, gameId, clock.millis(), turnDeadline);
+                throw new BadRequestException("Turn deadline expired.", "TURN_EXPIRED", "Your turn has expired");
+            }
 
-        if (game.isGameOver()) {
-            logger.warn("Player {} attempted to act in game {} after it has finished", playerName, gameId);
-            throw new BadRequestException("This game has finished.", "GAME_FINISHED", "Game has finished");
-        }
+            Player currentPlayer = getCurrentPlayer(actionRequest, game);
 
-        if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
-            logger.warn("Player {} attempted to act in game {} after the hand was resolved (phase=SHOWDOWN)",
-                    playerName, gameId);
-            throw new BadRequestException("This hand is already complete.", "HAND_COMPLETE", "Hand is complete");
-        }
+            logger.debug("Processing player action - Game: {}, Player: {}, Action: {}",
+                    gameId, currentPlayer.getName(), actionRequest.action());
+            logger.debug("Game state - Phase: {}, Current bet: {}",
+                    game.getCurrentPhase(), game.getCurrentHighestBet());
 
-        if (game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE) != null) {
-            logger.warn("Player {} attempted to act in game {} while it is auto-advancing", playerName, gameId);
-            throw new BadRequestException("Actions are not allowed while the game is auto-advancing.", "HAND_ADVANCING", "Wait for the next turn");
-        }
-
-        Long turnDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT);
-        if (turnDeadline != null && clock.millis() >= turnDeadline) {
-            logger.warn("Player {} attempted to act in game {} at or after turn deadline (now={}, deadline={})",
-                    playerName, gameId, clock.millis(), turnDeadline);
-            throw new BadRequestException("Turn deadline expired.", "TURN_EXPIRED", "Your turn has expired");
-        }
-
-        Player currentPlayer = getCurrentPlayer(actionRequest, game);
-
-        logger.debug("Processing player action - Game: {}, Player: {}, Action: {}",
-                gameId, currentPlayer.getName(), actionRequest.action());
-        logger.debug("Game state - Phase: {}, Current bet: {}",
-                game.getCurrentPhase(), game.getCurrentHighestBet());
-
-        // Verify that the requesting player is the current player
-        if (!currentPlayer.getName().equals(playerName)) {
-            logger.warn("Player name mismatch: expected {}, got {}",
-                    currentPlayer.getName(), playerName);
-            throw new UnauthorisedActionException(
-                    "It's not your turn. Current player is: " + currentPlayer.getName(),
-                    "NOT_YOUR_TURN", "Wait for your turn");
-        }
-
-        if (currentPlayer.getIsDisconnected()) {
-            logger.warn("Disconnected player {} attempted to act in game {}", playerName, gameId);
-            throw new UnauthorisedActionException("You are disconnected. Reconnect to continue your turn.",
-                    "DISCONNECTED", "Reconnect to act");
-        }
+            if (!currentPlayer.getName().equals(playerName)) {
+                logger.warn("Player name mismatch: expected {}, got {}", currentPlayer.getName(), playerName);
+                throw new UnauthorisedActionException(
+                        "It's not your turn. Current player is: " + currentPlayer.getName(),
+                        "NOT_YOUR_TURN",
+                        "Wait for your turn");
+            }
+            if (currentPlayer.getIsDisconnected()) {
+                logger.warn("Disconnected player {} attempted to act in game {}", playerName, gameId);
+                throw new UnauthorisedActionException(
+                        "You are disconnected. Reconnect to continue your turn.",
+                        "DISCONNECTED",
+                        "Reconnect to act");
+            }
 
             PlayerDecision decision = new PlayerDecision(
-                actionRequest.action(),
-                actionRequest.amount() != null ? actionRequest.amount() : 0,
-                currentPlayer.getPlayerId());
+                    actionRequest.action(),
+                    actionRequest.amount() != null ? actionRequest.amount() : 0,
+                    currentPlayer.getPlayerId());
 
-        logger.debug("Processing decision: {}", decision);
+            logger.debug("Processing decision: {}", decision);
+            game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
+            gameLifecycleService.cancelTurnTimeout(gameId);
 
-        game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-        gameLifecycleService.cancelTurnTimeout(gameId);
+            TurnOutcome outcome = game.processPlayerDecision(currentPlayer, decision);
+            logger.debug("Decision processed successfully");
+            gameLifecycleService.resetGameInactivity(gameId);
 
-        TurnOutcome outcome = game.processPlayerDecision(currentPlayer, decision);
-        logger.debug("Decision processed successfully");
-        gameLifecycleService.resetGameInactivity(gameId);
-
-        // If there was a conversion, notify the player
-        if (outcome.conversionMessage() != null) {
-            logger.info("Sending conversion message to player {}: {}", currentPlayer.getName(), outcome.conversionMessage());
-            gameStateService.sendPrivatePlayerNotification(gameId, currentPlayer.getName(), outcome.conversionMessage(), ResponseMessage.PLAYER_NOTIFICATION);
-        }
-
-        try {
-            gameLifecycleService.applyTurnOutcome(gameId, game, outcome, true);
-        } catch (Exception e) {
-            logger.error("Error in post-processing for game {} (action was successful): {}", gameId, e.getMessage(), e);
-            // Re-broadcast to ensure clients have the updated state
-            try {
-                gameStateService.broadcastGameState(gameId, game);
-            } catch (Exception broadcastError) {
-                logger.error("Failed to re-broadcast game state for game {}: {}", gameId, broadcastError.getMessage());
+            if (outcome.conversionMessage() != null) {
+                logger.info("Sending conversion message to player {}: {}",
+                        currentPlayer.getName(), outcome.conversionMessage());
+                gameStateService.sendPrivatePlayerNotification(
+                        gameId, currentPlayer.getName(), outcome.conversionMessage(), ResponseMessage.PLAYER_NOTIFICATION);
             }
-        }
 
-        logger.debug("Player action processing complete for game {}", gameId);
+            try {
+                gameLifecycleService.applyTurnOutcome(gameId, game, outcome, true);
+            } catch (Exception e) {
+                logger.error("Error in post-processing for game {} (action was successful): {}",
+                        gameId, e.getMessage(), e);
+                try {
+                    gameStateService.broadcastGameState(gameId, game);
+                } catch (Exception broadcastError) {
+                    logger.error("Failed to re-broadcast game state for game {}: {}",
+                            gameId, broadcastError.getMessage());
+                }
+            }
+
+            logger.debug("Player action processing complete for game {}", gameId);
+        }
     }
 
-    /**
-     * Validates request shape and chip bounds before the domain model mutates, keeping
-     * rejected actions out of both memory and the committed state image.
-     *
-     * @param actionRequest requested action
-     * @param game          authoritative game
-     * @return current player after request validation
-     * @throws BadRequestException if the action or amount is invalid
-     */
     private static Player getCurrentPlayer(PlayerActionRequest actionRequest, Game game) {
         Player currentPlayer = game.getCurrentPlayer();
 
@@ -235,18 +179,24 @@ public class PlayerActionService {
 
         int requestAmount = actionRequest.amount() != null ? actionRequest.amount() : 0;
         if (requestAmount < 0) {
-            throw new BadRequestException("Action amount cannot be negative", "NEGATIVE_AMOUNT", "Amount must be positive; yours: " + requestAmount);
+            throw new BadRequestException(
+                    "Action amount cannot be negative",
+                    "NEGATIVE_AMOUNT",
+                    "Amount must be positive; yours: " + requestAmount);
         }
 
         PlayerAction action = actionRequest.action();
-
         if ((action == PlayerAction.BET || action == PlayerAction.RAISE) && requestAmount == 0) {
-            throw new BadRequestException("Bet/raise amount must be greater than 0", "AMOUNT_REQUIRED", "Enter a positive amount");
+            throw new BadRequestException(
+                    "Bet/raise amount must be greater than 0",
+                    "AMOUNT_REQUIRED",
+                    "Enter a positive amount");
         }
-
         if ((action == PlayerAction.BET || action == PlayerAction.RAISE)
                 && requestAmount > currentPlayer.getChips()) {
-            throw new BadRequestException("Action amount cannot exceed your available chips", "INSUFFICIENT_CHIPS",
+            throw new BadRequestException(
+                    "Action amount cannot exceed your available chips",
+                    "INSUFFICIENT_CHIPS",
                     "Available: " + currentPlayer.getChips() + "; yours: " + requestAmount);
         }
         return currentPlayer;

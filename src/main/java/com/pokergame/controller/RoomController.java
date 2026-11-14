@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.*;
 import com.pokergame.model.Room;
 import com.pokergame.util.LockLease;
 import java.util.List;
+import java.util.UUID;
 import jakarta.servlet.http.HttpServletRequest;
 
 import static java.util.Objects.requireNonNull;
@@ -70,7 +71,7 @@ public class RoomController {
 
         // Sanitization is owned by the room service; it returns the canonical player
         // name so the token binds to exactly the name that was stored.
-        RoomEntryResult entry = roomService.createRoomForEntry(createRequest);
+        RoomEntryResult entry = roomService.createRoom(UUID.randomUUID().toString(), createRequest);
         String roomId = entry.roomId();
         String canonicalPlayerName = entry.canonicalPlayerName();
 
@@ -102,7 +103,8 @@ public class RoomController {
 
         // Sanitization is owned by the room service; it returns the canonical player
         // name so the token binds to exactly the name that was stored.
-        RoomEntryResult entry = roomService.joinRoomForEntry(joinRequest);
+        String targetRoomId = roomService.resolveRoomIdByName(joinRequest.roomName());
+        RoomEntryResult entry = roomService.joinRoom(targetRoomId, joinRequest);
         String roomId = entry.roomId();
         String canonicalPlayerName = entry.canonicalPlayerName();
 
@@ -140,7 +142,7 @@ public class RoomController {
                 throw new BadRequestException("Room has expired due to inactivity.");
             }
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
-            gameLifecycleService.departParticipants(roomId, List.of(playerName));
+            gameLifecycleService.removePlayers(roomId, List.of(playerName));
             logger.info("Player {} successfully left room {}", playerName, roomId);
             return ResponseEntity.ok(ApiResponse.success("Successfully left room"));
         }
@@ -161,7 +163,7 @@ public class RoomController {
         // Check binding before exposing resource existence
         playerPrincipal.assertBoundTo(roomId);
 
-        return roomCoordinator.coordinate(roomId, () -> {
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
             if (roomService.checkAndCloseIfExpired(roomId)) {
                 logger.warn("Room has expired: {}", roomId);
                 return ResponseEntity.notFound().build();
@@ -179,7 +181,7 @@ public class RoomController {
             RoomDataResponse roomData = roomService.getRoomData(roomId);
             logger.debug("Room info retrieved successfully for room: {}", roomId);
             return ResponseEntity.ok(roomData);
-        });
+        }
     }
 
     /**

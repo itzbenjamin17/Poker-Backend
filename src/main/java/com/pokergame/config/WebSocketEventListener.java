@@ -79,22 +79,13 @@ public class WebSocketEventListener {
             RateLimitService rateLimitService,
             @Qualifier("taskScheduler") TaskScheduler taskScheduler,
             RoomCoordinator roomCoordinator,
-            @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
+            @Value("${poker.room.disconnect-grace-period-ms:120000}") long disconnectGracePeriodMs) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.rateLimitService = rateLimitService;
         this.taskScheduler = taskScheduler;
         this.roomCoordinator = requireNonNull(roomCoordinator, "roomCoordinator cannot be null");
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
-    }
-
-    /**
-     * Returns the room coordinator managing room-scoped concurrency boundaries.
-     *
-     * @return room coordinator
-     */
-    public RoomCoordinator getRoomCoordinator() {
-        return roomCoordinator;
     }
     
     /**
@@ -535,42 +526,6 @@ public class WebSocketEventListener {
     }
 
     /**
-     * Cancels any pending disconnect grace timer for the specified player in a room, optionally
-     * guarded by membership identity.
-     *
-     * @param roomId       room identity
-     * @param playerName   player identity
-     * @param membershipId optional membership identity to match, or null to cancel regardless
-     * @return true if a matching pending disconnect was found and cancelled
-     */
-    public boolean cancelScheduledDisconnect(String roomId, String playerName, String membershipId) {
-        if (roomId == null || playerName == null) {
-            return false;
-        }
-        String compositeName = playerName + ":" + roomId;
-        try (LockLease _ = acquireRoomLease(roomId)) {
-            PendingDisconnect pending = pendingDisconnects.get(compositeName);
-            if (pending != null && (membershipId == null || Objects.equals(pending.membershipId(), membershipId))) {
-                pendingDisconnects.remove(compositeName, pending);
-                pending.cancel();
-                return true;
-            }
-            return false;
-        }
-    }
-
-    /**
-     * Cancels any pending disconnect grace timer for the specified player in a room.
-     *
-     * @param roomId     room identity
-     * @param playerName player identity
-     * @return true if a pending disconnect was found and cancelled
-     */
-    public boolean cancelScheduledDisconnect(String roomId, String playerName) {
-        return cancelScheduledDisconnect(roomId, playerName, null);
-    }
-
-    /**
      * Returns the room/player key used only for runtime connection tracking.
      * Spring private routing uses the separate membership-bound principal name.
      *
@@ -676,7 +631,7 @@ public class WebSocketEventListener {
             return;
         }
         try (LockLease _ = acquireRoomLease(roomId)) {
-            gameLifecycleService.cancelRuntimeTasks(roomId, false);
+            gameLifecycleService.cancelTimers(roomId, false);
             Set<String> usersToClean = new HashSet<>();
             for (String user : activeSessionsByUser.keySet()) {
                 if (belongsToRoom(user, roomId)) {
@@ -732,44 +687,5 @@ public class WebSocketEventListener {
         if (!hasActiveSession(compositeName)) {
             rateLimitService.cleanUpWs(compositeName);
         }
-    }
-
-    /**
-     * Returns the number of active sessions for the specified composite user name.
-     *
-     * @param compositeName composite user name (roomId:playerName)
-     * @return number of active sessions
-     */
-    public int getActiveSessionCount(String compositeName) {
-        Set<String> sessions = activeSessionsByUser.get(compositeName);
-        return sessions != null ? sessions.size() : 0;
-    }
-
-    /**
-     * Checks whether a pending disconnect grace timer is currently registered for the user.
-     *
-     * @param compositeName composite user name (roomId:playerName)
-     * @return {@code true} if a disconnect is pending, {@code false} otherwise
-     */
-    public boolean hasPendingDisconnect(String compositeName) {
-        return pendingDisconnects.containsKey(compositeName);
-    }
-
-    /**
-     * Returns the count of pending disconnect registrations.
-     *
-     * @return number of pending disconnects
-     */
-    public int getPendingDisconnectCount() {
-        return pendingDisconnects.size();
-    }
-
-    /**
-     * Returns the count of tracked session-to-principal mappings.
-     *
-     * @return number of mapped sessions
-     */
-    public int getSessionToPrincipalCount() {
-        return sessionToPrincipal.size();
     }
 }

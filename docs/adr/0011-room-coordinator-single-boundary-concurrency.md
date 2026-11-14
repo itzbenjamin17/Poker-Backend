@@ -34,7 +34,7 @@ In a standard Java app where objects in memory are never swapped out, `synchroni
 
 ## Decision
 
-1. **One Gatekeeper per Room (`RoomCoordinator`)**: Every operation that reads or changes a room—REST endpoints, WebSocket actions, connect/disconnect events, scheduled timers, background WAL save retries, and state snapshots—must enter through `RoomCoordinator.coordinate(roomId, ...)` or `RoomCoordinator.acquire(roomId)`.
+1. **One Gatekeeper per Room (`RoomCoordinator`)**: Every operation that reads or changes a room—REST endpoints, WebSocket actions, connect/disconnect events, scheduled timers, background WAL save retries, and state snapshots—must acquire the room lease through `RoomCoordinator.acquire(roomId)`.
 2. **Lock by `roomId` String, Not Object Instance**: `RoomCoordinator` locks on the room's UUID string inside `KeyedLockRegistry<String>`. Acquire that lock before looking up the live `Room` or `Game` and hold it through the operation, including any rollback. Restoring an instance under the same ID leaves the lock in place.
 3. **No Cross-Room Locking**: A thread that already holds the lock for Room A is forbidden from acquiring the lock for Room B (`IllegalStateException` is thrown immediately). Rooms never lock each other.
 4. **Same-Room Reentrancy**: If a method already inside `RoomCoordinator` for Room A calls another helper for Room A on the same thread, it re-enters cleanly without deadlocking.

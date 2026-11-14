@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.config.LifecycleTimingProperties;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
@@ -10,104 +11,104 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.model.TournamentEligibility;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.time.Clock;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
-/** Owns game completion, terminal review, and removal under the caller's room lease. */
-final class GameCompletionHandler {
-
+/**
+ * Handles settling completed games, abandoning inactive games, retrieving post-game review
+ * results, and deleting finished games and rooms.
+ */
+@Component
+class GameCompletionHandler {
     private static final Logger logger = LoggerFactory.getLogger(GameCompletionHandler.class);
-
     private final ActiveGameRegistry activeGames;
     private final RoomService roomService;
     private final GameStateService gameStateService;
     private final GameTimerRegistry runtimeTimers;
-    private final GameTaskScheduler scheduling;
-    private final RoomCoordinator roomCoordinator;
+    private final GameTaskScheduler taskScheduler;
     private final Clock clock;
-    private final long cleanupDelayMs;
+    private final LifecycleTimingProperties timings;
 
-    GameCompletionHandler(ActiveGameRegistry activeGames, RoomService roomService, GameStateService gameStateService,
-            GameTimerRegistry runtimeTimers, GameTaskScheduler scheduling, RoomCoordinator roomCoordinator,
-            Clock clock, long cleanupDelayMs) {
+    GameCompletionHandler(
+            ActiveGameRegistry activeGames,
+            RoomService roomService,
+            GameStateService gameStateService,
+            GameTimerRegistry runtimeTimers,
+            GameTaskScheduler taskScheduler,
+            Clock clock,
+            LifecycleTimingProperties timings) {
         this.activeGames = activeGames;
         this.roomService = roomService;
         this.gameStateService = gameStateService;
         this.runtimeTimers = runtimeTimers;
-        this.scheduling = scheduling;
-        this.roomCoordinator = roomCoordinator;
+        this.taskScheduler = taskScheduler;
         this.clock = clock;
-        this.cleanupDelayMs = cleanupDelayMs;
+        this.timings = timings;
     }
 
-    /** Settles and publishes a completed game in the current durable mutation. */
+    /**
+     * Settles a finished game and broadcasts the final winner result before scheduling cleanup.
+     *
+     * @param gameId    the unique ID of the game
+     * @param isForfeit {@code true} if the game ended due to forfeit
+     */
     void handleGameEnd(String gameId, boolean isForfeit) {
         handleGameEndInternal(gameId, isForfeit, null, Set.of());
     }
 
-    /** Settles a forfeit with the original participant roster intact. */
+    /**
+     * Settles a forfeited game while keeping the full player roster intact in the final result.
+     *
+     * @param gameId           the unique ID of the game
+     * @param preferredWinner  the player declared winner, if determined before settlement
+     * @param forfeitedPlayers names of players who forfeited
+     */
     void handleGameEndWithForfeits(String gameId, Player preferredWinner, Set<String> forfeitedPlayers) {
-        handleGameEndInternal(gameId, true, preferredWinner, forfeitedPlayers == null ? Set.of() : Set.copyOf(forfeitedPlayers));
+        Set<String> forfeits = forfeitedPlayers == null ? Set.of() : Set.copyOf(forfeitedPlayers);
+        handleGameEndInternal(gameId, true, preferredWinner, forfeits);
     }
 
-    /** Freezes the terminal result before broadcasting it and recording cleanup. */
-    private void handleGameEndInternal(String gameId, boolean isForfeit, Player preferredWinner, Set<String> forfeitedPlayers) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        Game game = activeGames.get(gameId);
-        if (game == null) return;
-
+    /**
+     * Abandons an active game due to inactivity only if {@code expectedDeadlineEpochMs} still
+     * matches the room's current deadline and has expired.
+     *
+     * @param gameId                  the unique ID of the game
+     * @param expectedDeadlineEpochMs the inactivity deadline captured when the timer was scheduled
+     */
+    void abandonGameIfInactive(String gameId, long expectedDeadlineEpochMs) {
         Room room = roomService.getRoom(gameId);
-        SettlementOutcome outcome = settleUnderLock(gameId, game, room, isForfeit, preferredWinner, forfeitedPlayers);
-        if (!outcome.settledNow()) return;
-
-        if (room != null) {
-            room.setTerminal(true);
-        }
-        if (outcome.winner() == null) {
-            logger.warn("Cannot broadcast game end for {} - no winner could be determined", gameId);
-            return;
-        }
-        if (outcome.event() != null) {
-            gameStateService.sendGameEnd(outcome.event());
-        }
-        scheduling.scheduleGameCleanup(gameId, cleanupDelayMs);
-    }
-
-    /** Abandons the game only if the captured inactivity deadline is still due. */
-    void executeInactivityCleanup(String gameId, long expectedDeadlineEpochMs) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        Room room = roomService != null ? roomService.getRoom(gameId) : null;
         if (room == null) {
             return;
         }
-        Game game = activeGames.get(gameId);
-        if (game == null) {
+        // This method is called asynchronously by a background thread.
+        // The inactivity deadline may have changed since the timer was scheduled (because a player acted).
+        if (!room.hasInactivityDeadline(expectedDeadlineEpochMs)) {
+            logger.debug("Skipping inactivity abandonment: deadline changed for game {}", gameId);
             return;
         }
-        if (game.isGameOver() && game.getRetainedTerminalResult() != null) {
-            return;
-        }
-        if (!GameInactivityPolicy.matchesDeadline(room, expectedDeadlineEpochMs)) {
-            logger.debug("Skipping inactivity cleanup: deadline changed for game {}", gameId);
-            return;
-        }
-        if (!GameInactivityPolicy.hasElapsed(expectedDeadlineEpochMs, clock.millis())) {
-            logger.debug("Skipping inactivity cleanup: deadline has not elapsed for game {}", gameId);
+        if (!room.isInactivityExpired(clock.millis())) {
+            logger.debug("Skipping inactivity abandonment: deadline has not elapsed for game {}", gameId);
             return;
         }
         abandonGameDueToInactivity(gameId);
     }
 
-    /** Freezes an abandonment result and schedules its retention window. */
+    /**
+     * Ends an active game due to inactivity, cancels active hand timers, broadcasts an
+     * abandonment result, and schedules room cleanup.
+     *
+     * @param gameId the unique ID of the game
+     */
     void abandonGameDueToInactivity(String gameId) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
         runtimeTimers.cancelInactivity(gameId);
         Game game = activeGames.get(gameId);
-        if (game == null) return;
-        Room room = roomService != null ? roomService.getRoom(gameId) : null;
+        if (game == null) {
+            return;
+        }
+        Room room = roomService.getRoom(gameId);
         if (game.isGameOver() && game.getRetainedTerminalResult() != null) {
             return;
         }
@@ -120,203 +121,169 @@ final class GameCompletionHandler {
         game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
         game.clearScheduledTask(ScheduledGameTask.READY_OPEN);
         game.clearScheduledTask(ScheduledGameTask.NEW_HAND);
-        GameEndResponse event = captureAbandonmentUnderLock(gameId, game, room);
+        int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
+        GameEndResponse event = gameStateService.recordAbandonment(gameId, game, maxPlayers);
+        game.setRetainedTerminalResult(event);
 
         if (room != null) {
             room.setTerminal(true);
         }
-        if (event != null) {
-            gameStateService.sendGameEnd(event);
-        }
-        long displayDelayMs = cleanupDelayMs;
-        scheduling.scheduleGameCleanup(gameId, displayDelayMs);
+        gameStateService.sendGameEnd(event);
+        long displayDelayMs = timings.gameEndDisplayDelayMs();
+        taskScheduler.scheduleGameCleanup(gameId, displayDelayMs);
         logger.info("Game {} abandoned due to inactivity; scheduled {}ms cleanup", gameId, displayDelayMs);
     }
 
-    /** Deletes a terminal room or a game with accepted cleanup intent. */
-    void executeTerminalCleanup(String gameId) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        Game game = activeGames.get(gameId);
-        Room room = roomService != null ? roomService.getRoom(gameId) : null;
-        if (game == null && room == null) {
-            return;
-        }
-        if (game != null) {
-            if (!game.isGameOver() && game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP) == null) {
-                logger.debug("Skipping terminal cleanup for uncompleted game {}", gameId);
-                return;
-            }
-        }
-        performGameCleanup(gameId);
-    }
-
-    /** Removes the game, all timers, and its room in the current mutation. */
-    void performGameCleanup(String gameId) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
+    /**
+     * Cancels all timers for {@code gameId}, removes the game from memory, and destroys its room.
+     *
+     * @param gameId the unique ID of the game and room to delete
+     */
+    void deleteGameAndRoom(String gameId) {
         runtimeTimers.cancelAllForGame(gameId, false);
         activeGames.remove(gameId);
-        if (gameStateService != null) {
-            gameStateService.clearRetainedSettlement(gameId);
-        }
         roomService.destroyRoom(gameId);
-        logger.info("Game {} and associated room cleaned up", gameId);
+        logger.info("Game {} and associated room deleted", gameId);
     }
 
-    /** Resolves an authorized terminal review under the room lease. */
+    /**
+     * Returns the saved final game summary for {@code playerName} after verifying that the game
+     * is finished and the player participated in it.
+     *
+     * @param gameId     the unique ID of the game
+     * @param playerName the requesting player's name
+     * @return the final {@link GameEndResponse}
+     * @throws ResourceNotFoundException   if the game does not exist or has expired
+     * @throws ConflictException           if the game has not finished yet
+     * @throws UnauthorisedActionException if {@code playerName} was not in the finished game
+     */
     GameEndResponse getGameReview(String gameId, String playerName) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
         Game game = activeGames.get(gameId);
         if (game == null || isGameExpired(game)) {
             throw new ResourceNotFoundException("Game not found");
         }
-
         if (!game.isGameOver()) {
             throw new ConflictException("Game has not finished");
         }
 
-        Room room = roomService != null ? roomService.getRoom(gameId) : null;
-        return resolveTerminalResultForParticipant(gameId, game, room, playerName, false);
+        Room room = roomService.getRoom(gameId);
+        GameEndResponse result = game.getRetainedTerminalResult();
+        if (result == null) {
+            result = buildFallbackGameEnd(gameId, game, room);
+        }
+        if (!game.isParticipantInTerminalRoster(playerName, result)) {
+            throw new UnauthorisedActionException("You are not part of this game's terminal result.");
+        }
+        return result;
     }
 
-    /** Reports whether a supplied game has passed its cleanup deadline. */
+    /**
+     * Returns whether {@code game} is missing or has passed its cleanup deadline.
+     *
+     * @param game the game instance to check, or {@code null}
+     * @return {@code true} if {@code game} is {@code null} or its cleanup timer has expired
+     */
     boolean isGameExpired(Game game) {
         return game == null || game.isCleanupExpired(clock.millis());
     }
 
-    /** Rejects late activity after abandonment in the same durable mutation. */
+    /**
+     * Rejects late player activity when the room's game inactivity deadline has already expired,
+     * abandoning the game first.
+     *
+     * @param gameId the unique ID of the game
+     * @param room   the room holding the inactivity deadline, or {@code null}
+     * @throws BadRequestException if the room's inactivity deadline has elapsed
+     */
     void rejectExpiredActivity(String gameId, Room room) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        if (GameInactivityPolicy.isExpired(GameInactivityPolicy.deadline(room), clock.millis())) {
+        if (room != null && room.isInactivityExpired(clock.millis())) {
             abandonGameDueToInactivity(gameId);
-            throw new BadRequestException("Game has expired due to inactivity.", "GAME_EXPIRED", "Game has expired due to inactivity");
+            throw new BadRequestException(
+                    "Game has expired due to inactivity.",
+                    "GAME_EXPIRED",
+                    "Game has expired due to inactivity");
         }
     }
-
     /**
-     * Cleans up an abandoned game if the room is empty and has no remaining contenders.
+     * Clears and removes an abandoned game from memory once no non-eliminated players or room members remain.
      *
-     * @param gameId identifier of the game
-     * @param room   current room aggregate
-     * @param game   active game aggregate
+     * @param gameId the unique ID of the game
+     * @param room   the backing room
+     * @param game   the game instance
      */
     void cleanupAbandonedGameIfRoomEmpty(String gameId, Room room, Game game) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        if (TournamentEligibility.countContenders(game) != 0 || !room.getPlayers().isEmpty()) return;
+        if (TournamentEligibility.countContenders(game) != 0 || !room.getPlayers().isEmpty()) {
+            return;
+        }
         game.closeReadyCountdown();
-        for (ScheduledGameTask task : ScheduledGameTask.values()) game.clearScheduledTask(task);
+        for (ScheduledGameTask task : ScheduledGameTask.values()) {
+            game.clearScheduledTask(task);
+        }
         runtimeTimers.cancelAllForGame(gameId, false);
         activeGames.remove(gameId);
-        if (gameStateService != null) {
-            gameStateService.clearRetainedSettlement(gameId);
-        }
     }
 
-    /** Result of attempting to freeze and settle a terminal game under the game lock. */
-    record SettlementOutcome(boolean settledNow, Player winner, GameEndResponse event) { }
-
     /**
-     * Settles an ending game under the caller's room coordination lease, cancels
-     * non-cleanup runtime timers, clears retained hand settlement, and freezes the
-     * terminal {@link GameEndResponse}.
+     * Finalizes a completed game, records and broadcasts the {@link GameEndResponse}, and
+     * schedules post-game cleanup.
+     *
+     * @param gameId           the unique ID of the game
+     * @param isForfeit        {@code true} if the game ended by forfeit
+     * @param preferredWinner  explicit winner when known (such as the sole remaining player), or {@code null}
+     * @param forfeitedPlayers names of players who forfeited at game end
      */
-    SettlementOutcome settleUnderLock(
+    private void handleGameEndInternal(
             String gameId,
-            Game game,
-            Room room,
             boolean isForfeit,
             Player preferredWinner,
             Set<String> forfeitedPlayers) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
+        Game game = activeGames.get(gameId);
+        if (game == null) {
+            return;
+        }
         if (game.isForfeitPending() && preferredWinner == null) {
-            return new SettlementOutcome(false, null, null);
+            return;
         }
         if (game.isGameOver() && game.isTerminalCarryOverSettled()) {
-            return new SettlementOutcome(false, null, null);
+            return;
         }
+
         Player winner = game.settleTerminalState(preferredWinner, forfeitedPlayers);
         runtimeTimers.cancelAllForGame(gameId, true);
-        if (gameStateService != null) {
-            gameStateService.clearRetainedSettlement(gameId);
+
+        Room room = roomService.getRoom(gameId);
+        if (room != null) {
+            room.setTerminal(true);
         }
+        if (winner == null) {
+            logger.warn("Cannot broadcast game end for {} - no winner could be determined", gameId);
+            return;
+        }
+
         int maxPlayers = room == null ? 0 : room.getMaxPlayers();
         GameEndResponse event = game.getRetainedTerminalResult();
-        if (event == null && gameStateService != null) {
-            event = gameStateService.captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
+        if (event == null) {
+            event = gameStateService.recordGameEnd(gameId, game, winner, isForfeit, maxPlayers);
             game.setRetainedTerminalResult(event);
         }
-        return new SettlementOutcome(true, winner, event);
-    }
-
-    /** Freezes an abandonment result without paying out the unfinished pot. */
-    GameEndResponse captureAbandonmentUnderLock(String gameId, Game game, Room room) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        GameEndResponse event = null;
-        if (gameStateService != null) {
-            gameStateService.clearRetainedSettlement(gameId);
-            int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
-            event = gameStateService.captureAbandonment(gameId, game, maxPlayers);
-        }
-        game.setRetainedTerminalResult(event);
-        return event;
+        gameStateService.sendGameEnd(event);
+        taskScheduler.scheduleGameCleanup(gameId, timings.gameEndDisplayDelayMs());
     }
 
     /**
-     * Resolves or synthesizes the terminal {@link GameEndResponse} for an already
-     * finished game and verifies that {@code playerName} is part of its terminal roster.
-     * Read-only callers ({@code persistIfSynthesized == false}) project the fallback
-     * response without incrementing {@code stateRevision} or mutating durable state.
+     * Builds a fallback {@link GameEndResponse} from current game state when a finished game
+     * does not have a saved final result.
+     *
+     * @param gameId the unique ID of the game
+     * @param game   the finished game instance
+     * @param room   the backing room, or {@code null}
+     * @return the reconstructed {@link GameEndResponse}
      */
-    GameEndResponse resolveTerminalResultForParticipant(
-            String gameId,
-            Game game,
-            Room room,
-            String playerName,
-            boolean persistIfSynthesized) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        GameEndResponse retained = game.getRetainedTerminalResult();
-        if (retained == null) {
-            Player winner = game.resolveWinnerOrFallback(null);
-            if (winner != null && gameStateService != null) {
-                int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
-                boolean isForfeit = game.isFallbackForfeit();
-                if (persistIfSynthesized) {
-                    retained = gameStateService.captureGameEnd(gameId, game, winner, isForfeit, maxPlayers);
-                    game.setRetainedTerminalResult(retained);
-                } else {
-                    retained = gameStateService.projectGameEnd(gameId, game, winner, isForfeit, maxPlayers);
-                }
-            } else if (gameStateService != null) {
-                int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
-                if (persistIfSynthesized) {
-                    retained = gameStateService.captureAbandonment(gameId, game, maxPlayers);
-                    game.setRetainedTerminalResult(retained);
-                } else {
-                    retained = gameStateService.projectAbandonment(gameId, game, maxPlayers);
-                }
-            }
-        }
-        if (retained == null) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-        if (!game.isParticipantInTerminalRoster(playerName, retained)) {
-            throw new UnauthorisedActionException("You are not part of this game's terminal result.");
-        }
-        return retained;
-    }
-
-    /**
-     * Ensures a retained terminal result is captured for a disconnect-claim winner if not already present.
-     */
-    GameEndResponse ensureRetainedClaimResult(String gameId, Game game, Room room, String playerName) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        GameEndResponse retained = game.getRetainedTerminalResult();
-        if (retained == null && game.isGameOver()) {
-            Player claimant = game.findPlayerByName(playerName);
-            if (claimant != null && gameStateService != null) {
-                retained = gameStateService.captureGameEnd(gameId, game, claimant, true, room.getMaxPlayers());
-                game.setRetainedTerminalResult(retained);
-            }
-        }
-        return retained;
+    private GameEndResponse buildFallbackGameEnd(String gameId, Game game, Room room) {
+        int maxPlayers = room != null ? room.getMaxPlayers() : game.getPlayers().size();
+        Player winner = game.resolveWinnerOrFallback(null);
+        return winner != null
+                ? gameStateService.buildGameEndResponse(gameId, game, winner, game.isFallbackForfeit(), maxPlayers)
+                : gameStateService.buildAbandonmentResponse(gameId, game, maxPlayers);
     }
 }

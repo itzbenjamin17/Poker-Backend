@@ -45,19 +45,19 @@ All production packages are under `src/main/java/com/pokergame/`.
 | Package / entry point | Responsibility |
 | --- | --- |
 | [RoomController](../../src/main/java/com/pokergame/controller/RoomController.java) | Create/join, room snapshot, leave, and host-authorized start. |
-| [GameController](../../src/main/java/com/pokergame/controller/GameController.java) | Public/private snapshots, post-game review endpoint, STOMP action/ready/unready, REST leave/claim-win. |
-| [RoomService](../../src/main/java/com/pokergame/service/RoomService.java) | Room registry, name lookup, membership, host tracking, lobby destruction, and room broadcasts. |
-| [RoomCoordinator](../../src/main/java/com/pokergame/service/RoomCoordinator.java) and `ActiveGameRegistry` | Single per-room concurrency lease boundary ([ADR-0011](../adr/0011-room-coordinator-single-boundary-concurrency.md)) and active-game lookup. `assertHeldByCurrentThread(roomId)` verifies the current thread already owns the lease; it does not acquire it. |
-| [GameLifecycleService](../../src/main/java/com/pokergame/service/GameLifecycleService.java) | Game creation, room-coordinated durable entry points, and workflow routing. |
-| Lifecycle collaborators (`service/`) | `GameReadinessCoordinator` (ready gate/countdown), `HandProgressionService` (dealing/street progression), `PlayerDepartureHandler` (leave, host succession, timeout, reconnect, grace expiry, claim-win), `GameCompletionHandler` (completion, abandonment, review auth, cleanup), `GameRecoveryService`, `GameTaskScheduler`, `GameTimerRegistry`, and `GameInactivityPolicy`. |
-| [PlayerActionService](../../src/main/java/com/pokergame/service/PlayerActionService.java) | Action authorization, betting mutations, turn/round progression, and lifecycle scheduling. |
-| [GameStateService](../../src/main/java/com/pokergame/service/GameStateService.java) | Public/private projections and broadcasts deferred until the accepted mutation finishes its save attempt. |
+| [GameController](../../src/main/java/com/pokergame/controller/GameController.java) | Public/private snapshots, post-game review endpoint, STOMP action/ready/unready, REST claim-win. |
+| [RoomService](../../src/main/java/com/pokergame/service/RoomService.java) | Room registry, name lookup, lobby membership, host tracking on `Room`, lobby inactivity cleanup, and room broadcasts. `getRoom(...)` asserts room lock ownership. |
+| [RoomCoordinator](../../src/main/java/com/pokergame/service/RoomCoordinator.java) and `ActiveGameRegistry` | Single per-room concurrency lock boundary ([ADR-0011](../adr/0011-room-coordinator-single-boundary-concurrency.md)) and live game lookup. `ActiveGameRegistry` methods and `RoomService.getRoom(...)` verify the calling thread already holds the room lock. |
+| [GameLifecycleService](../../src/main/java/com/pokergame/service/GameLifecycleService.java) | Game creation, startup recovery/rollback restoration, room-coordinated entry points, and workflow routing. |
+| Lifecycle collaborators (`service/`) | Package-private Spring `@Component` beans: `GameReadinessCoordinator` (ready gate/countdown), `HandProgressionService` (dealing/street progression), `PlayerDepartureHandler` (leave, host transfer, timeout, reconnect, grace expiry, claim-win), `GameCompletionHandler` (settlement, inactivity abandonment, review lookup, game/room deletion), `GameTaskScheduler` (timer scheduling and claim validation), and `GameTimerRegistry` (`TaskScheduler` futures). |
+| [PlayerActionService](../../src/main/java/com/pokergame/service/PlayerActionService.java) | Action validation, betting mutations, turn/round progression, and lifecycle scheduling. |
+| [GameStateService](../../src/main/java/com/pokergame/service/GameStateService.java) | Public/private snapshots and WebSocket broadcasts queued via `PostSaveActions` until saving completes. |
 | [HandEvaluatorService](../../src/main/java/com/pokergame/service/HandEvaluatorService.java) | Best five-card hand evaluation from available cards. |
 | `model/` and `enums/` | `Game`, `Room`, `Player`, `Deck`/`Card` state and [GameRestoreBuilder](../../src/main/java/com/pokergame/model/GameRestoreBuilder.java); package-private collaborators `BettingRound`, `TableSeating`, `PotCalculator`, `ShowdownResolver`, `GameScheduling`, and `ReadyGate`; poker phases/actions/statuses and scheduled-task identifiers. |
 | `dto/request/`, `dto/response/`, `dto/internal/` | Validated input, client projections, and service-internal results. |
 | `advice/` and `exception/` | HTTP/STOMP error mapping and domain exceptions. |
 | `security/` and `config/` | JWT principal/filters, payload/rate limits, origins, STOMP authorization, session events, executor/scheduler setup. |
-| `persistence/transaction/`, `snapshot/`, `wal/`, `config/` | Durable AOP boundary, state-image mappings, encrypted WAL/keyring, and persistence settings/health. |
+| `persistence/transaction/`, `snapshot/`, `wal/`, `config/` | Durable AOP boundary (`DurableMutationAspect`, `PostSaveActions`), state-image mappings, encrypted WAL/keyring, and persistence settings/health. |
 | [PersistenceRecovery](../../src/main/java/com/pokergame/persistence/PersistenceRecovery.java) | Startup restoration, disconnected-client assumptions, and deadline rescheduling. |
 | `util/` | Input sanitization, principal/client-IP helpers, MDC context, and log throttling. |
 
@@ -67,7 +67,7 @@ Lifecycle work is scheduled explicitly through services and durable task metadat
 
 Rooms have UUID identities and user-visible names; joining resolves the room name. Create-room validation permits 2–10 players. Games reuse the room ID, making room/game paths and token binding refer to the same aggregate identity.
 
-`RoomService` and `ActiveGameRegistry` maintain concurrent registries, but registry concurrency does not make the mutable aggregates thread-safe. Under [ADR-0011](../adr/0011-room-coordinator-single-boundary-concurrency.md), `RoomCoordinator` provides the single authoritative concurrency boundary per room. All operations affecting a room—REST endpoints, WebSocket STOMP actions, session events, scheduled lifecycle callbacks, and projections—enter through `RoomCoordinator.coordinate(roomId, ...)` or acquire its lease. Legacy intrinsic monitors (`synchronized (room)` and `synchronized (game)`) and redundant per-player session leases have been eliminated. Internal mutation methods assert lease ownership via `RoomCoordinator.assertHeldByCurrentThread(roomId)`. Nested same-room operations reenter safely, while cross-room nested coordination throws `IllegalStateException`. In persistence-disabled mode, `@DurableMutation` advice acts as a pure `RoomCoordinator` lease pass-through. Route scheduled mutations through the Spring proxy so transactional and coordination advice executes.
+`RoomService` and `ActiveGameRegistry` maintain concurrent registries, but registry concurrency does not make the mutable aggregates thread-safe. Under [ADR-0011](../adr/0011-room-coordinator-single-boundary-concurrency.md), `RoomCoordinator` provides the single authoritative concurrency boundary per room. All operations affecting a room—REST endpoints, WebSocket STOMP actions, session events, scheduled lifecycle callbacks, and projections—acquire its lease via `RoomCoordinator.acquire(roomId)`. Legacy intrinsic monitors (`synchronized (room)` and `synchronized (game)`) and redundant per-player session leases have been eliminated. Internal mutation methods assert lease ownership via `RoomCoordinator.assertHeldByCurrentThread(roomId)`. Nested same-room operations reenter safely, while cross-room nested coordination throws `IllegalStateException`. In persistence-disabled mode, `@DurableMutation` advice acts as a pure `RoomCoordinator` lease pass-through. Route scheduled mutations through the Spring proxy so transactional and coordination advice executes.
 
 `Game` owns the deck, players, betting state, phase, pot/side-pot bookkeeping, showdown outcomes, and durable scheduled-task metadata. Phases are `PRE_FLOP`, `FLOP`, `TURN`, `RIVER`, and `SHOWDOWN`. Preserve legal-action checks, heads-up blind rules, all-in eligibility, uncalled refunds, split payouts, and total chip conservation.
 
@@ -75,9 +75,9 @@ Package-private model collaborators calculate betting rules (`BettingRound`), se
 
 `Game.restoreBuilder()` returns the top-level `GameRestoreBuilder`; code compiled against the former nested `Game.GameRestoreBuilder` must be updated and recompiled.
 
-`GameTimerRegistry` owns process-local scheduler registrations for game tasks and active-game inactivity. `Game` retains task deadlines and generations, and `Room` retains the active-game inactivity deadline. `GameRecoveryService` installs and evicts restored games and resumes their timers. `GameTaskScheduler` records durable intent, submits accepted work, and validates callback identity. Scheduled callbacks re-enter `GameLifecycleService` through the Spring proxy and validate current state under the room lease.
+`GameTimerRegistry` owns in-memory `TaskScheduler` registrations for game tasks and active-game inactivity. `Game` stores scheduled task deadlines and generation counters along with `lastSettlementResult` and `retainedTerminalResult`; `Room` owns mutable `hostName`, `GAME_INACTIVITY_ALLOWANCE_MS`, and game inactivity deadline checks (`extendGameInactivityDeadline`, `isInactivityExpired`, `hasInactivityDeadline`). `GameLifecycleService` handles startup game recovery and timer resumption directly. `GameTaskScheduler` records timer deadlines before saving, queues runtime registrations via `PostSaveActions.runAfterSave(...)`, and verifies hand/generation claims when timers fire. Scheduled callbacks re-enter `GameLifecycleService` through the Spring proxy (`ObjectProvider<GameLifecycleService>`).
 
-`GameReadinessCoordinator` owns readiness activity, gate transitions, and countdown effects. `HandProgressionService` deals hands, advances streets, and returns an immediate opening to readiness when required. `GameInactivityPolicy` calculates deadlines and checks whether they apply. `PlayerDepartureHandler` owns departures, host succession, turn timeout, reconnect, grace expiry, and claim-win. `GameCompletionHandler` owns completion, inactivity abandonment, review authorization, and cleanup.
+`GameReadinessCoordinator` owns readiness activity, gate transitions, and countdown effects. `HandProgressionService` deals hands, advances streets, and signals when the ready gate should open immediately. `PlayerDepartureHandler` owns departures, host transfer, turn timeout, reconnect, grace expiry, and disconnect win claims. `GameCompletionHandler` owns game settlement, inactivity abandonment, post-game review lookups, and game/room deletion.
 
 WebSocket identity can have multiple active browser sessions. Session tracking only treats the player as disconnected after the last active session is gone, applies a grace deadline, and cancels cleanup on reconnect. A final game-end event and later aggregate cleanup are separate from an individual hand's showdown/ready transition.
 
@@ -89,7 +89,7 @@ WebSocket identity can have multiple active browser sessions. Session tracking o
 | Room snapshot | `GET /api/room/{roomId}`; returns `RoomDataResponse`. |
 | Secured room commands | `POST /api/room/{roomId}/start-game`, `POST /api/room/{roomId}/leave`. |
 | Secured game snapshots | `GET /api/game/{gameId}/state`, `GET /api/game/{gameId}/private-state`; return direct public/private DTOs. |
-| Secured game commands | `POST /api/game/{gameId}/leave`, `POST /api/game/{gameId}/claim-win`. |
+| Secured game commands | `POST /api/game/{gameId}/claim-win`. |
 | STOMP handshake | `/ws`; bearer token supplied in CONNECT headers. |
 | Client SEND | `/app/{gameId}/action`, `/app/{gameId}/ready`, `/app/{gameId}/unready`. |
 | Client SUBSCRIBE | `/room/{roomId}`, `/game/{gameId}`, `/user/queue/private`. |
@@ -102,7 +102,7 @@ Public game DTOs contain chips, players, board cards, turn/phase/pot information
 
 Responses follow a deliberate split; keep new endpoints consistent with it rather than wrapping everything uniformly:
 
-- **Commands (mutations) return `ApiResponse<T>`** with an outcome `message` and a `data` payload. This covers `POST /api/room/create`, `/api/room/join`, `/api/room/{roomId}/leave`, `/api/room/{roomId}/start-game`, `/api/game/{gameId}/leave`, and `/api/game/{gameId}/claim-win`, plus the room-event broadcasts published to `/room/{roomId}`.
+- **Commands (mutations) return `ApiResponse<T>`** with an outcome `message` and a `data` payload. This covers `POST /api/room/create`, `/api/room/join`, `/api/room/{roomId}/leave`, `/api/room/{roomId}/start-game`, and `/api/game/{gameId}/claim-win`, plus the room-event broadcasts published to `/room/{roomId}`.
 - **Queries return the resource DTO directly** (no envelope). This covers `GET /api/room/{roomId}` (`RoomDataResponse`), `GET /api/game/{gameId}/state`, `/private-state`, and `/review`. The `message` field carries no meaning for a read, so a GET exposes the resource at the top level.
 - **Errors use a consistent error body** through [the controller advice](../../src/main/java/com/pokergame/advice/), including `application/problem+json`, independent of the success-envelope shape.
 
@@ -143,6 +143,16 @@ When running Maven checks, redirect full output to a local log file under `.scra
 Tests under `src/test/java/com/pokergame/` cover models, actions, lifecycle, controllers/advice, filters/interceptors, identity isolation, input hardening, reconnect behavior, STOMP actions/throttling, and durable mapping/WAL/restart recovery. Find relevant tests from those packages rather than rely on a cached test count.
 
 [The CI workflow](../../.github/workflows/deploy.yml) runs `./mvnw clean test` with Java 25 on pushes and pull requests targeting `main`. Successful pushes to `main` then build/push Docker images. The Dockerfile packages with tests skipped after that separate test job; a Docker build alone is not test evidence.
+
+## Service Layout, Naming, And Null-Handling Conventions
+
+Follow these conventions across `src/main/java/com/pokergame/service/`:
+
+1. **Class member order:** Place `logger`, then `static final` constants, then `private final` Spring-injected fields grouped with no blank lines between them, then one blank line before internal state collections/locks, then the single constructor, then `public` methods, package-private methods, `private` helpers, and finally nested records, enums, or helper classes at the bottom.
+2. **Constructors and dependency injection:** Use a single constructor per `@Service` or package-private `@Component` bean (no test-only overload constructors, no `@Autowired(required = false)` setters, no `Objects.requireNonNull` or null checks on Spring-injected beans, and no `@Lazy self` / `mutationProxy()` fields). When a scheduled callback needs a transactional proxy, use `ObjectProvider<...>`; when a same-bean call must enter `@DurableMutation`, enable `exposeProxy = true` and read `AopContext.currentProxy()` with a direct fallback.
+3. **Null-handling:** Import `static java.util.Objects.requireNonNull;` and use `requireNonNull(arg, "arg must not be null");` as a standalone statement for arguments validated without logging. Keep `if (obj == null)` checks when logging or throwing domain exceptions such as `ResourceNotFoundException` or `BadRequestException`.
+4. **Concurrency and canonical state:** Acquire the room lock once at entry points (`RoomCoordinator.acquire(roomId)`). `ActiveGameRegistry` and `RoomService.getRoom(...)` call `roomCoordinator.assertHeldByCurrentThread(roomId)` so internal lifecycle collaborators rely on those accessors instead of repeating lock assertions or `...UnderLock` method suffixes. Store mutable room/game state directly on `Room` (`hostName`, `inactivityDeadlineEpochMs`) and `Game` (`lastSettlementResult`, `retainedTerminalResult`) rather than shadow maps in services.
+5. **Naming and Javadocs:** Prefer plain-English verb phrases (`removePlayers`, `selectNextHost`, `deleteGameAndRoom`, `buildLiveGameState`, `PostSaveActions`) over internal jargon (*durable mutation*, *terminal result/review/room*, *cleanup intent*, *rehydrated*). Document classes and methods in plain English with `@param`, `@return`, and `@throws` tags where relevant.
 
 ## Logging And Operations
 

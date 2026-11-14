@@ -25,9 +25,10 @@ Canonical architecture, domain invariants, and agent-role definitions live in [d
 
 ## Architecture And Domain Invariants
 
-- **Room coordination:** `RoomCoordinator` is the authoritative concurrency boundary per room ([ADR-0011](docs/adr/0011-room-coordinator-single-boundary-concurrency.md)). Enter room operations through `coordinate(roomId, ...)` or acquire its lease before resolving mutable `Room` or `Game` aggregates. `assertHeldByCurrentThread(roomId)` checks that the current thread already owns the lease; it does not acquire it. Add no independent module locks or transactions.
+- **Room coordination:** `RoomCoordinator` is the authoritative concurrency boundary per room ([ADR-0011](docs/adr/0011-room-coordinator-single-boundary-concurrency.md)). Acquire the room lease via `roomCoordinator.acquire(roomId)` before resolving mutable `Room` or `Game` aggregates. `assertHeldByCurrentThread(roomId)` checks that the current thread already owns the lease; it does not acquire it. Add no independent module locks or transactions.
 - **Module ownership:** Internal lifecycle modules call their owners directly, not `GameLifecycleService` compatibility delegates. Avoid hand-progression/readiness dependency cycles.
 - **Durability:** Preserve `@DurableMutation` boundaries, injected-clock semantics, and `MEMORY_ONLY` runtime persistence-outage behavior ([ADR-0001](docs/adr/0001-encrypted-state-image-wal-with-spring-aop.md), [persistence operations](docs/persistence-operations.md)).
+- **Service conventions:** Follow the layout, single-constructor DI, `requireNonNull`/logging null-handling, plain-English naming/Javadoc, and lock-assertion boundary rules in [docs/ai/PROJECT.md](docs/ai/PROJECT.md#service-layout-naming-and-null-handling-conventions).
 - **Logging:** Follow [docs/ai/LOGGING.md](docs/ai/LOGGING.md) for MDC propagation, throttling, and secret or hole-card redaction.
 
 ## Issue Tracker And Domain References

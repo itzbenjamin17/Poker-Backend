@@ -3,7 +3,9 @@ package com.pokergame.config;
 import com.pokergame.model.Room;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
+import com.pokergame.util.LockLease;
 import com.pokergame.util.MdcKeys;
 import com.pokergame.util.SecurityUtils;
 import org.slf4j.Logger;
@@ -37,18 +39,24 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
     private static final Logger logger = LoggerFactory.getLogger(WebSocketAuthInterceptor.class);
 
     private final JwtService jwtService;
+    private final RoomCoordinator roomCoordinator;
     private final RoomService roomService;
 
     /**
-     * Creates an interceptor backed by the application's JWT service and room registry.
-     * The room registry is injected lazily because it depends on messaging infrastructure
-     * that is itself configured with this interceptor.
+     * Creates an interceptor backed by the application's JWT service, room lock coordinator,
+     * and room service. The room service is injected lazily because it depends on messaging
+     * infrastructure configured with this interceptor.
      *
-     * @param jwtService token validator and principal extractor
-     * @param roomService room registry for active membership validation
+     * @param jwtService      token validator and principal extractor
+     * @param roomCoordinator coordinator managing room locks
+     * @param roomService     room service for active membership validation
      */
-    public WebSocketAuthInterceptor(JwtService jwtService, @Lazy RoomService roomService) {
+    public WebSocketAuthInterceptor(
+            JwtService jwtService,
+            RoomCoordinator roomCoordinator,
+            @Lazy RoomService roomService) {
         this.jwtService = jwtService;
+        this.roomCoordinator = roomCoordinator;
         this.roomService = roomService;
     }
 
@@ -186,11 +194,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
     }
 
     /**
-     * Extracts a room identifier from a validated /app/ destination path.
-     * Supported patterns:
-     * - /app/game/{roomId}/...
-     * - /app/room/{roomId}/...
-     * - /app/{roomId}/... (when first segment after /app/ is not "game" or "room")
+     * Extracts a room identifier from a validated {@code /app/{roomId}/...} destination path.
      *
      * @param destination STOMP destination
      * @return extracted roomId or null if destination is not room-scoped
@@ -201,12 +205,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         }
         String sub = destination.substring(5).replaceAll("^/+", "");
         String[] parts = sub.split("/+");
-        if (parts.length == 0 || parts[0].isEmpty()) {
-            return null;
-        }
-        if ("room".equals(parts[0]) || "game".equals(parts[0])) {
-            return parts.length >= 2 && !parts[1].isBlank() ? parts[1] : null;
-        }
         if (parts.length >= 2 && !parts[0].isBlank()) {
             return parts[0];
         }
@@ -277,7 +275,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
                 || principal.membershipId() == null || principal.membershipId().isBlank()) {
             throw new AccessDeniedException("Token membership is stale or invalid.");
         }
-        roomService.getRoomCoordinator().coordinate(principal.roomId(), () -> {
+        try (LockLease _ = roomCoordinator.acquire(principal.roomId())) {
             Room room = roomService.getRoom(principal.roomId());
             if (room != null) {
                 if (!room.hasPlayer(principal.playerName())
@@ -287,6 +285,6 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
                     throw new AccessDeniedException("Token membership is stale or invalid.");
                 }
             }
-        });
+        }
     }
 }

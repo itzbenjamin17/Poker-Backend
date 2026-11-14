@@ -24,55 +24,12 @@ public class HandEvaluatorService {
     private static final Logger logger = LoggerFactory.getLogger(HandEvaluatorService.class);
 
     /**
-     * Generates all possible combinations of a specified number of cards from a
-     * given list.
-     *
-     * @param cards      the list of cards to generate combinations from
-     * @param numOfCards the number of cards in each combination
-     * @return list of all possible card combinations
-     */
-    private List<List<Card>> generateCombinations(List<Card> cards, int numOfCards) {
-        List<List<Card>> results = new ArrayList<>();
-        if (cards.size() < numOfCards) {
-            return results;
-        }
-
-        generateCombinationsHelper(cards, numOfCards, 0, new ArrayList<>(), results);
-        return results;
-    }
-
-    /**
-     * Recursive helper method for generating card combinations.
-     *
-     * @param cards              the list of cards to choose from
-     * @param numOfCards         the target number of cards in each combination
-     * @param startIndex         the starting index for the current iteration
-     * @param currentCombination the current combination being built
-     * @param results            the accumulated list of completed combinations
-     */
-    private void generateCombinationsHelper(List<Card> cards, int numOfCards, int startIndex,
-            List<Card> currentCombination, List<List<Card>> results) {
-        if (currentCombination.size() == numOfCards) {
-            results.add(new ArrayList<>(currentCombination));
-            return;
-        }
-
-        for (int i = startIndex; i < cards.size(); i++) {
-            currentCombination.add(cards.get(i));
-            generateCombinationsHelper(cards, numOfCards, i + 1, currentCombination, results);
-            currentCombination.removeLast();
-        }
-    }
-
-    /**
-     * Determines the best possible 5-card poker hand from community cards and
-     * player hole cards.
-     * Evaluates all possible 5-card combinations and returns the highest-ranking
-     * hand.
+     * Determines the best possible 5-card poker hand from the community cards and a player's hole
+     * cards.
      *
      * @param communityCards  the community cards on the table
      * @param playerHoleCards the player's hole cards
-     * @return HandEvaluationResult containing the best hand and its rank
+     * @return the best 5-card hand and its rank
      */
     public HandEvaluationResult getBestHand(List<Card> communityCards, List<Card> playerHoleCards) {
         List<Card> allCards = new ArrayList<>(playerHoleCards);
@@ -109,13 +66,49 @@ public class HandEvaluatorService {
     }
 
     /**
-     * Compares two hands of the same rank to determine which is better.
-     * Uses rank-specific comparison rules (e.g. comparing kickers for pairs).
+     * Evaluates a 5-card poker hand and returns its rank. Cards must be sorted in ascending
+     * order by value (which {@link #getBestHand(List, List)} does automatically).
      *
-     * @param sortedCombination the first hand to compare (sorted by card value)
-     * @param bestHand          the second hand to compare (sorted by card value)
-     * @param rank              the hand rank being compared
-     * @return true if sortedCombination is better than bestHand, false otherwise
+     * @param cards the 5-card hand sorted by ascending card value
+     * @return the evaluated {@link HandRank}
+     * @throws BadRequestException if {@code cards} does not contain exactly 5 cards
+     */
+    public HandRank evaluateHand(List<Card> cards) {
+        if (cards.size() != 5) {
+            logger.error("Invalid hand size: {}, expected 5", cards.size());
+            throw new BadRequestException("Invalid number of cards: " + cards.size());
+        }
+
+        if (isRoyalFlush(cards))
+            return HandRank.ROYAL_FLUSH;
+        if (isStraightFlush(cards))
+            return HandRank.STRAIGHT_FLUSH;
+        if (isFourOfAKind(cards))
+            return HandRank.FOUR_OF_A_KIND;
+        if (isFullHouse(cards))
+            return HandRank.FULL_HOUSE;
+        if (isFlush(cards))
+            return HandRank.FLUSH;
+        if (isStraight(cards))
+            return HandRank.STRAIGHT;
+        if (isThreeOfAKind(cards))
+            return HandRank.THREE_OF_A_KIND;
+        if (isTwoPair(cards))
+            return HandRank.TWO_PAIR;
+        if (isOnePair(cards))
+            return HandRank.ONE_PAIR;
+
+        return HandRank.HIGH_CARD;
+    }
+
+    /**
+     * Compares two 5-card hands of the same rank to determine whether {@code sortedCombination}
+     * beats {@code bestHand}.
+     *
+     * @param sortedCombination the candidate hand sorted by ascending card value
+     * @param bestHand          the current best hand sorted by ascending card value
+     * @param rank              the shared hand rank being compared
+     * @return {@code true} if {@code sortedCombination} beats {@code bestHand}
      */
     public boolean isBetterHandOfSameRank(List<Card> sortedCombination, List<Card> bestHand, HandRank rank) {
         boolean better = switch (rank) {
@@ -133,6 +126,30 @@ public class HandEvaluatorService {
             logger.trace("Compared hands of rank {}: candidate isBetter={}", rank, better);
         }
         return better;
+    }
+
+    private List<List<Card>> generateCombinations(List<Card> cards, int numOfCards) {
+        List<List<Card>> results = new ArrayList<>();
+        if (cards.size() < numOfCards) {
+            return results;
+        }
+
+        generateCombinationsHelper(cards, numOfCards, 0, new ArrayList<>(), results);
+        return results;
+    }
+
+    private void generateCombinationsHelper(List<Card> cards, int numOfCards, int startIndex,
+            List<Card> currentCombination, List<List<Card>> results) {
+        if (currentCombination.size() == numOfCards) {
+            results.add(new ArrayList<>(currentCombination));
+            return;
+        }
+
+        for (int i = startIndex; i < cards.size(); i++) {
+            currentCombination.add(cards.get(i));
+            generateCombinationsHelper(cards, numOfCards, i + 1, currentCombination, results);
+            currentCombination.removeLast();
+        }
     }
 
     /**
@@ -593,50 +610,6 @@ public class HandEvaluatorService {
         }
         int handSize = Math.min(5, sortedCards.size());
         return new ArrayList<>(sortedCards.subList(0, handSize));
-    }
-
-    /**
-     * Evaluates a 5-card poker hand and returns its rank.
-     *
-     * <p>
-     * <b>IMPORTANT:</b> This method requires cards to be sorted in ascending order
-     * by value
-     * Use {@link #getBestHand(List, List)} which
-     * handles
-     * sorting automatically, or manually sort cards before calling this method.
-     * </p>
-     *
-     * @param cards the 5-card hand to evaluate (must contain exactly 5 cards,
-     *              sorted by value ascending)
-     * @return the HandRank of the evaluated hand
-     * @throws BadRequestException if the hand doesn't contain exactly 5 cards
-     */
-    public HandRank evaluateHand(List<Card> cards) {
-        if (cards.size() != 5) {
-            logger.error("Invalid hand size: {}, expected 5", cards.size());
-            throw new BadRequestException("Invalid number of cards: " + cards.size());
-        }
-
-        if (isRoyalFlush(cards))
-            return HandRank.ROYAL_FLUSH;
-        if (isStraightFlush(cards))
-            return HandRank.STRAIGHT_FLUSH;
-        if (isFourOfAKind(cards))
-            return HandRank.FOUR_OF_A_KIND;
-        if (isFullHouse(cards))
-            return HandRank.FULL_HOUSE;
-        if (isFlush(cards))
-            return HandRank.FLUSH;
-        if (isStraight(cards))
-            return HandRank.STRAIGHT;
-        if (isThreeOfAKind(cards))
-            return HandRank.THREE_OF_A_KIND;
-        if (isTwoPair(cards))
-            return HandRank.TWO_PAIR;
-        if (isOnePair(cards))
-            return HandRank.ONE_PAIR;
-
-        return HandRank.HIGH_CARD;
     }
 
     /**
