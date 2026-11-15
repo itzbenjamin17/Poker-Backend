@@ -373,6 +373,41 @@ class GameCompletionHandlerTest {
         }
 
         @Test
+        @DisplayName("handleGameEnd returns early without showdown when PRE_FLOP game is already abandoned")
+        void handleGameEnd_WhenPreFlopGameAlreadyAbandoned_NoOpsWithoutShowdown() {
+            Game game = new Game(
+                    ROOM_ID,
+                    List.of(new Player("Host", "host", 100), new Player("Player2", "p2", 100)),
+                    testRoom.getMaxPlayers(),
+                    5,
+                    10,
+                    new HandEvaluatorService());
+            game.resetForNewHand();
+            game.beginHand();
+            game.dealHoleCards();
+            game.postBlinds();
+            registerGame(game);
+
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.abandonGameDueToInactivity(ROOM_ID);
+            }
+            assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
+            assertTrue(game.getCommunityCards().isEmpty());
+            assertTrue(game.isGameOver());
+            assertTrue(game.getGameEndResult().abandoned());
+            assertFalse(game.isFinalPotSettled());
+
+            clearInvocations(messagingTemplate, taskScheduler);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.handleGameEnd(ROOM_ID);
+            }
+
+            assertFalse(game.isFinalPotSettled());
+            assertTrue(game.getGameEndResult().abandoned());
+            verifyNoInteractions(messagingTemplate, taskScheduler);
+        }
+
+        @Test
         @DisplayName("rejectExpiredActivity throws GAME_EXPIRED without abandoning when room inactivity expired")
         void rejectExpiredActivity_WhenExpired_ThrowsWithoutAbandoning() {
             Game game = createAndRegisterStartedGame(List.of(

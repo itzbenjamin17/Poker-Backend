@@ -460,6 +460,37 @@ class PlayerDepartureHandlerTest {
         }
 
         @Test
+        void removePlayers_PreFlopAbandonedDuringCleanupWindow_DetachesWithoutSettling() {
+            HandEvaluatorService realEvaluator = new HandEvaluatorService();
+            lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
+                    .thenAnswer(inv -> realEvaluator.getBestHand(inv.getArgument(0), inv.getArgument(1)));
+            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.createGameFromRoom(ROOM_ID);
+                Game game = gameLifecycleService.getGame(ROOM_ID);
+                assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
+                assertTrue(game.getCommunityCards().isEmpty());
+                gameLifecycleService.abandonGameDueToInactivity(ROOM_ID);
+                assertTrue(game.isGameOver());
+                assertTrue(game.getGameEndResult().abandoned());
+                assertFalse(game.isFinalPotSettled());
+            });
+
+            reset(gameStateService, roomService);
+            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Player2")));
+
+            Game game = getGameLocked(ROOM_ID);
+            verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
+            verify(handEvaluator, never()).getBestHand(anyList(), anyList());
+            verifyNoInteractions(gameStateService);
+            assertFalse(game.isFinalPotSettled());
+            assertTrue(game.getGameEndResult().abandoned());
+        }
+
+        @Test
         void pendingForfeitSurvivorExpiryCleansSettledShowdownRoomGameAndTasks() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
@@ -1284,6 +1315,43 @@ class PlayerDepartureHandlerTest {
 
             verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of(busted.getName())), any());
             assertTrue(game.isGameOver());
+        }
+
+        @Test
+        void removeDisconnectedPlayer_PreFlopAbandonedDuringCleanupWindow_DetachesWithoutSettling() {
+            HandEvaluatorService realEvaluator = new HandEvaluatorService();
+            lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
+                    .thenAnswer(inv -> realEvaluator.getBestHand(inv.getArgument(0), inv.getArgument(1)));
+            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+            long disconnectDeadline = BASE_EPOCH_MS + 5_000L;
+
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.createGameFromRoom(ROOM_ID);
+                gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", disconnectDeadline);
+            });
+
+            long inactivityDeadline = testRoom.getInactivityDeadlineEpochMs();
+            mutableClock.setMillis(inactivityDeadline);
+            withRoomLock(ROOM_ID, () -> completionHandler.abandonGameIfInactive(ROOM_ID, inactivityDeadline));
+
+            Game game = getGameLocked(ROOM_ID);
+            assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
+            assertTrue(game.getCommunityCards().isEmpty());
+            assertTrue(game.isGameOver());
+            assertTrue(game.getGameEndResult().abandoned());
+            assertFalse(game.isFinalPotSettled());
+
+            reset(gameStateService, roomService);
+            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), disconnectDeadline));
+
+            verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
+            verify(handEvaluator, never()).getBestHand(anyList(), anyList());
+            verifyNoInteractions(gameStateService);
+            assertFalse(game.isFinalPotSettled());
+            assertTrue(game.getGameEndResult().abandoned());
         }
     }
 

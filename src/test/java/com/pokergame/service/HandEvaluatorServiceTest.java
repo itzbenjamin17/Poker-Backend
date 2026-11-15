@@ -33,7 +33,7 @@ class HandEvaluatorServiceTest {
         }
 
         @Test
-        void highCardComparisonUsesDescendingBestHandsWithoutMutatingInputs() {
+        void highCardComparisonUsesLowToHighBestHandsWithoutMutatingInputs() {
                 List<Card> board = List.of(card(Rank.TWO, Suit.SPADES), card(Rank.FOUR, Suit.HEARTS),
                                 card(Rank.SEVEN, Suit.DIAMONDS), card(Rank.NINE, Suit.CLUBS),
                                 card(Rank.JACK, Suit.SPADES));
@@ -44,6 +44,10 @@ class HandEvaluatorServiceTest {
                 HandEvaluationResult ace = service.getBestHand(board, aceHole);
                 HandEvaluationResult king = service.getBestHand(board, kingHole);
 
+                assertEquals(List.of(Rank.FOUR, Rank.SEVEN, Rank.NINE, Rank.JACK, Rank.ACE),
+                                ranksOf(ace.bestHand()));
+                assertEquals(List.of(Rank.SEVEN, Rank.EIGHT, Rank.NINE, Rank.JACK, Rank.KING),
+                                ranksOf(king.bestHand()));
                 assertTrue(service.isBetterHandOfSameRank(ace.bestHand(), king.bestHand(), HandRank.HIGH_CARD));
                 assertFalse(service.isBetterHandOfSameRank(king.bestHand(), ace.bestHand(), HandRank.HIGH_CARD));
                 assertEquals(aceBefore, aceHole);
@@ -73,10 +77,10 @@ class HandEvaluatorServiceTest {
         // Indirectly validates internal combination/high-card helpers through public
         // getBestHand API.
         /**
-         * Protects the expected behavior for get best hand with insufficient total cards should return sorted available cards.
+         * Protects the expected behavior for get best hand with fewer than five cards throwing IllegalArgumentException.
          */
         @Test
-        void testGetBestHand_WithInsufficientTotalCards_ShouldReturnSortedAvailableCards() {
+        void testGetBestHand_WithFewerThanFiveCards_ShouldThrowIllegalArgumentException() {
                 List<Card> communityCards = List.of(
                                 new Card(Rank.TWO, Suit.SPADES),
                                 new Card(Rank.FOUR, Suit.HEARTS));
@@ -85,14 +89,10 @@ class HandEvaluatorServiceTest {
                                 new Card(Rank.KING, Suit.CLUBS),
                                 new Card(Rank.NINE, Suit.DIAMONDS));
 
-                HandEvaluationResult result = service.getBestHand(communityCards, holeCards);
-
-                assertEquals(HandRank.HIGH_CARD, result.handRank());
-                assertEquals(4, result.bestHand().size());
-                assertEquals(Rank.KING, result.bestHand().get(0).rank());
-                assertEquals(Rank.NINE, result.bestHand().get(1).rank());
-                assertEquals(Rank.FOUR, result.bestHand().get(2).rank());
-                assertEquals(Rank.TWO, result.bestHand().get(3).rank());
+                IllegalArgumentException exception = assertThrows(
+                                IllegalArgumentException.class,
+                                () -> service.getBestHand(communityCards, holeCards));
+                assertTrue(exception.getMessage().contains("5"));
         }
 
         /**
@@ -380,10 +380,10 @@ class HandEvaluatorServiceTest {
         }
 
         /**
-         * Protects the expected behavior for get best hand high card selection should keep top five cards.
+         * Protects the expected behavior for get best hand high card selection should keep top five cards low to high.
          */
         @Test
-        void testGetBestHand_HighCardSelection_ShouldKeepTopFiveCards() {
+        void testGetBestHand_HighCardSelection_ShouldKeepTopFiveCardsLowToHigh() {
                 List<Card> communityCards = List.of(
                                 new Card(Rank.TWO, Suit.SPADES),
                                 new Card(Rank.FIVE, Suit.HEARTS),
@@ -400,11 +400,38 @@ class HandEvaluatorServiceTest {
 
                 assertEquals(HandRank.HIGH_CARD, result.handRank());
                 assertEquals(5, bestHand.size());
-                assertEquals(Rank.ACE, bestHand.get(0).rank());
-                assertEquals(Rank.KING, bestHand.get(1).rank());
-                assertEquals(Rank.JACK, bestHand.get(2).rank());
-                assertEquals(Rank.NINE, bestHand.get(3).rank());
-                assertEquals(Rank.SEVEN, bestHand.get(4).rank());
+                assertEquals(List.of(Rank.SEVEN, Rank.NINE, Rank.JACK, Rank.KING, Rank.ACE),
+                                ranksOf(bestHand));
+        }
+
+        @Test
+        @DisplayName("High-card best hands compare ties and kickers accurately from seven cards")
+        void highCardBestHandsCompareTiesAndKickersFromSevenCards() {
+                List<Card> board = List.of(
+                                card(Rank.TWO, Suit.SPADES),
+                                card(Rank.FIVE, Suit.HEARTS),
+                                card(Rank.SEVEN, Suit.DIAMONDS),
+                                card(Rank.JACK, Suit.CLUBS),
+                                card(Rank.KING, Suit.SPADES));
+
+                HandEvaluationResult aceQueen = service.getBestHand(board,
+                                List.of(card(Rank.ACE, Suit.HEARTS), card(Rank.QUEEN, Suit.DIAMONDS)));
+                HandEvaluationResult aceTen = service.getBestHand(board,
+                                List.of(card(Rank.ACE, Suit.CLUBS), card(Rank.TEN, Suit.DIAMONDS)));
+                HandEvaluationResult aceQueenTie = service.getBestHand(board,
+                                List.of(card(Rank.ACE, Suit.DIAMONDS), card(Rank.QUEEN, Suit.CLUBS)));
+
+                assertEquals(HandRank.HIGH_CARD, aceQueen.handRank());
+                assertEquals(List.of(Rank.SEVEN, Rank.JACK, Rank.QUEEN, Rank.KING, Rank.ACE),
+                                ranksOf(aceQueen.bestHand()));
+                assertEquals(List.of(Rank.SEVEN, Rank.TEN, Rank.JACK, Rank.KING, Rank.ACE),
+                                ranksOf(aceTen.bestHand()));
+                assertTrue(service.isBetterHandOfSameRank(aceQueen.bestHand(), aceTen.bestHand(), HandRank.HIGH_CARD));
+                assertFalse(service.isBetterHandOfSameRank(aceTen.bestHand(), aceQueen.bestHand(), HandRank.HIGH_CARD));
+                assertFalse(service.isBetterHandOfSameRank(aceQueen.bestHand(), aceQueenTie.bestHand(),
+                                HandRank.HIGH_CARD));
+                assertFalse(service.isBetterHandOfSameRank(aceQueenTie.bestHand(), aceQueen.bestHand(),
+                                HandRank.HIGH_CARD));
         }
 
         // Test isBetterHandOfSameRank - One Pair

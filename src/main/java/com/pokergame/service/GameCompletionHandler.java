@@ -234,7 +234,7 @@ class GameCompletionHandler {
         if (game.isForfeitPending() && preferredWinner == null) {
             return;
         }
-        if (game.isGameOver() && game.isFinalPotSettled()) {
+        if (game.isGameOver() && (game.isFinalPotSettled() || game.isAbandoned())) {
             return;
         }
 

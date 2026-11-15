@@ -2052,6 +2052,14 @@ class GameTest {
             assertEquals(1L, restored.getStateRevision());
         }
 
+        private static void dealToRiverAndShowdown(Game target) {
+            target.dealHoleCards();
+            target.dealFlop();
+            target.dealTurn();
+            target.dealRiver();
+            target.conductShowdown();
+        }
+
         @Test
         void readyGateAndSchedulingDelegationOnGameAggregateRoot() {
             Player p1 = new Player("Alice", "p1", 1000);
@@ -2063,7 +2071,7 @@ class GameTest {
             assertNull(aggGame.getReadyCountdownDeadlineEpochMs());
             assertNull(aggGame.getGameEndResult());
 
-            aggGame.conductShowdown();
+            dealToRiverAndShowdown(aggGame);
             long deadline = 50_000L;
             assertEquals(ReadyCountdownStartOutcome.OPENED, aggGame.openOrWaitReadyGate(deadline));
             assertEquals(ReadyGateState.COUNTING_DOWN, aggGame.getReadyGateState());
@@ -2104,7 +2112,7 @@ class GameTest {
         @Test
         void readyGateExcludesZeroChipPlayersAndHandlesRepairAndTransitions() {
             Game readyGame = createStandardGame(3, 1000, new HandEvaluatorService());
-            readyGame.conductShowdown();
+            dealToRiverAndShowdown(readyGame);
             readyGame.openOrWaitReadyGate(50_000L);
             readyGame.getPlayers().get(1).doAction(PlayerAction.ALL_IN, 0, 0);
             readyGame.getPlayers().get(0).setReadyForNextHand(true);
@@ -2113,7 +2121,7 @@ class GameTest {
             assertTrue(readyGame.areAllEligiblePlayersReady());
 
             Game fewerOpen = createStandardGame(2, 1000, new HandEvaluatorService());
-            fewerOpen.conductShowdown();
+            dealToRiverAndShowdown(fewerOpen);
             fewerOpen.getPlayers().get(1).setDisconnected(true);
             fewerOpen.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 99_999L);
             assertEquals(ReadyCountdownStartOutcome.WAITING_FOR_PLAYERS, fewerOpen.openOrWaitReadyGate(50_000L));
@@ -2121,7 +2129,7 @@ class GameTest {
             assertNull(fewerOpen.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
 
             Game fewerExpire = createStandardGame(2, 1000, new HandEvaluatorService());
-            fewerExpire.conductShowdown();
+            dealToRiverAndShowdown(fewerExpire);
             fewerExpire.openOrWaitReadyGate(50_000L);
             fewerExpire.getPlayers().get(1).setDisconnected(true);
             assertEquals(ReadyCountdownTimeoutOutcome.WAITING_FOR_PLAYERS, fewerExpire.expireReadyCountdown(50_000L));

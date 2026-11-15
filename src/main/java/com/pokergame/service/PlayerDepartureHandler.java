@@ -142,7 +142,7 @@ class PlayerDepartureHandler {
 
         if (game.isFinishedOrEliminated()) {
             room.setTerminal(true);
-            if (!game.isGameOver() || !game.isFinalPotSettled()) {
+            if (!game.isAbandoned() && (!game.isGameOver() || !game.isFinalPotSettled())) {
                 completion.handleGameEnd(roomId);
             }
             detachRoomMembers(roomId, room, game, departing);

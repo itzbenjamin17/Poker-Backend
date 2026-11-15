@@ -966,6 +966,15 @@ public class Game {
     }
 
     /**
+     * Returns whether the game concluded via abandonment rather than normal or forfeit settlement.
+     *
+     * @return {@code true} if a terminal game-end result is stored and marked abandoned
+     */
+    public boolean isAbandoned() {
+        return gameEndResult != null && gameEndResult.abandoned();
+    }
+
+    /**
      * Finds the first player in {@code tablePlayers} whose name matches {@code playerName}.
      *
      * @param tablePlayers player list to search

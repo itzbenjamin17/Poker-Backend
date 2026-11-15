@@ -14,6 +14,8 @@ import com.pokergame.exception.BadRequestException;
 
 import org.springframework.stereotype.Service;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Service for evaluating poker hands and determining hand rankings.
  * Handles generation of card combinations, hand evaluation, and comparison
@@ -25,15 +27,24 @@ public class HandEvaluatorService {
 
     /**
      * Determines the best possible 5-card poker hand from the community cards and a player's hole
-     * cards.
+     * cards, ordered low to high by card value for every hand rank.
      *
      * @param communityCards  the community cards on the table
      * @param playerHoleCards the player's hole cards
-     * @return the best 5-card hand and its rank
+     * @return the best 5-card hand (ordered low to high) and its rank
+     * @throws IllegalArgumentException if fewer than 5 total cards are provided
      */
     public HandEvaluationResult getBestHand(List<Card> communityCards, List<Card> playerHoleCards) {
+        requireNonNull(communityCards, "communityCards must not be null");
+        requireNonNull(playerHoleCards, "playerHoleCards must not be null");
+
         List<Card> allCards = new ArrayList<>(playerHoleCards);
         allCards.addAll(communityCards);
+        if (allCards.size() < 5) {
+            throw new IllegalArgumentException(
+                    "At least 5 cards are required to evaluate a hand, got " + allCards.size());
+        }
+
         List<List<Card>> combinations = generateCombinations(allCards, 5);
 
         List<Card> bestHand = null;
@@ -46,16 +57,11 @@ public class HandEvaluatorService {
             if (bestHand == null || rank.beats(bestRank)) {
                 bestHand = new ArrayList<>(sortedCombination);
                 bestRank = rank;
-            } else if (rank == bestRank && rank != HandRank.HIGH_CARD) {
+            } else if (rank == bestRank) {
                 if (isBetterHandOfSameRank(sortedCombination, bestHand, rank)) {
                     bestHand = new ArrayList<>(sortedCombination);
                 }
             }
-
-        }
-
-        if (bestRank == HandRank.HIGH_CARD) {
-            bestHand = getBestHighCardHand(allCards);
         }
 
         if (logger.isDebugEnabled()) {
@@ -378,9 +384,8 @@ public class HandEvaluatorService {
     }
 
     private boolean compareHighCard(List<Card> sortedCombination, List<Card> bestHand) {
-        // The evaluator returns high-card hands in descending order, while several
-        // category comparators receive ascending combinations. Normalize copies so
-        // both public call paths compare the same rank order without mutating input.
+        // Normalize copies to ascending value order so callers passing either ascending
+        // or descending 5-card hands compare identically without mutating inputs.
         List<Card> first = new ArrayList<>(sortedCombination);
         List<Card> second = new ArrayList<>(bestHand);
         first.sort(Comparator.comparing(Card::getValue));
@@ -510,23 +515,6 @@ public class HandEvaluatorService {
                 .findFirst()
                 .map(group -> group.getFirst().getValue()) // Use getValue() directly!
                 .orElse(0);
-    }
-
-    private List<Card> getBestHighCardHand(List<Card> cards) {
-        if (cards == null) {
-            throw new BadRequestException("Card list cannot be null");
-        }
-
-        List<Card> sortedCards = new ArrayList<>(cards);
-        sortedCards.sort((c1, c2) -> Integer.compare(c2.getValue(), c1.getValue()));
-        // Not crashing if there are less than 5 cards, just return as many as we have
-        // If there are less than 5 cards, something went wrong but just log it and
-        // return what we have instead of crashing
-        if (sortedCards.size() < 5) {
-            logger.warn("Less than 5 cards available for high card hand: {}", sortedCards.size());
-        }
-        int handSize = Math.min(5, sortedCards.size());
-        return new ArrayList<>(sortedCards.subList(0, handSize));
     }
 
     private boolean isRoyalFlush(List<Card> hand) {
