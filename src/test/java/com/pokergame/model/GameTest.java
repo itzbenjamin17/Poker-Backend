@@ -467,12 +467,12 @@ class GameTest {
             players.get(0).payChips(0, 1000);
             players.get(0).setIsOut();
 
-            Player winner = GameEligibility.resolveWinnerOrFallback(game, null);
+            Player winner = GameEligibility.resolveWinner(game, null);
             assertNotNull(winner);
             assertEquals("Player2", winner.getName());
 
             players.get(2).addChips(1000);
-            winner = GameEligibility.resolveWinnerOrFallback(game, null);
+            winner = GameEligibility.resolveWinner(game, null);
             assertEquals("Player3", winner.getName());
         }
 

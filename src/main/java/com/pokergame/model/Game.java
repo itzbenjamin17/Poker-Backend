@@ -629,7 +629,8 @@ public class Game {
      *
      * @param forfeitWinner        explicit forfeit survivor, or {@code null} for chip-based resolution
      * @param forfeitedPlayerNames names of players who forfeited before settlement
-     * @return resolved winner, or {@code null} if the roster is empty
+     * @return resolved winner
+     * @throws IllegalStateException if no eligible winner can be resolved
      */
     public Player settleGameEnd(Player forfeitWinner, Set<String> forfeitedPlayerNames) {
         if (forfeitedPlayerNames != null) {
@@ -642,9 +643,9 @@ public class Game {
         if (!isHandSettled()) {
             conductShowdown();
         }
-        Player winner = GameEligibility.resolveWinnerOrFallback(this, forfeitWinner);
+        Player winner = GameEligibility.resolveWinner(this, forfeitWinner);
         if (!finalPotSettled) {
-            if (winner != null && pot > 0) {
+            if (pot > 0) {
                 winner.addChips(pot);
                 pot = 0;
             }

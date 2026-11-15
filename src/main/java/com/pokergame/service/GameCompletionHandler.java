@@ -155,6 +155,7 @@ class GameCompletionHandler {
      * @throws ResourceNotFoundException   if the game does not exist or has expired
      * @throws ConflictException           if the game has not finished yet
      * @throws UnauthorisedActionException if {@code playerName} was not in the finished game
+     * @throws IllegalStateException       if the finished game has no stored game end result
      */
     GameEndResponse getGameReview(String gameId, String playerName) {
         Game game = activeGames.get(gameId);
@@ -167,7 +168,7 @@ class GameCompletionHandler {
 
         GameEndResponse result = game.getGameEndResult();
         if (result == null) {
-            result = buildFallbackGameEnd(game);
+            throw new IllegalStateException("Finished game " + gameId + " has no stored game end result");
         }
         if (!wasPlayerInGame(game, result, playerName)) {
             throw new UnauthorisedActionException("You are not part of this game's terminal result.");
@@ -244,10 +245,6 @@ class GameCompletionHandler {
         if (room != null) {
             room.setTerminal(true);
         }
-        if (winner == null) {
-            logger.warn("Cannot broadcast game end for {} - no winner could be determined", gameId);
-            return;
-        }
 
         GameEndResponse event = game.getGameEndResult();
         if (event == null) {
@@ -256,13 +253,6 @@ class GameCompletionHandler {
         }
         gameStateService.sendGameEnd(event);
         taskScheduler.scheduleGameCleanup(gameId, timings.gameEndDisplayDelayMs());
-    }
-
-    private GameEndResponse buildFallbackGameEnd(Game game) {
-        Player winner = GameEligibility.resolveWinnerOrFallback(game, null);
-        return winner != null
-                ? gameStateService.buildGameEndResponse(game, winner, game.endedBeforeShowdown())
-                : gameStateService.buildAbandonmentResponse(game);
     }
 
     private static boolean wasPlayerInGame(Game game, GameEndResponse result, String playerName) {

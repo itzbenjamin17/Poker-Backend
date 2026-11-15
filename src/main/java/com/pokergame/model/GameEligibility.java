@@ -101,35 +101,37 @@ public final class GameEligibility {
     }
 
     /**
-     * Resolves the game winner, preferring {@code preferredWinner} when seated, otherwise
-     * choosing by chip count and falling back to the first connected non-out or seated player.
+     * Resolves the game winner, returning {@code preferredWinner} when provided and eligible, or
+     * otherwise picking the chip leader among players who are not out (breaking ties by earliest
+     * seat).
      *
      * @param game            finished or settling game
      * @param preferredWinner explicit forfeit survivor, or {@code null} for chip-based resolution
-     * @return resolved winner, or {@code null} if the roster is empty
+     * @return resolved non-out winner on the game roster
+     * @throws IllegalStateException if {@code preferredWinner} is not an eligible seated player or
+     *                               no non-out player exists on the roster
      */
-    public static Player resolveWinnerOrFallback(Game game, Player preferredWinner) {
+    public static Player resolveWinner(Game game, Player preferredWinner) {
         List<Player> players = game.getPlayers();
+        if (preferredWinner != null) {
+            if (players == null || !players.contains(preferredWinner) || preferredWinner.getIsOut()) {
+                throw new IllegalStateException(
+                        "Preferred winner must be seated on the roster and not out: " + preferredWinner.getName());
+            }
+            return preferredWinner;
+        }
         if (players == null || players.isEmpty()) {
-            return null;
+            throw new IllegalStateException("Cannot resolve winner from an empty roster");
         }
-        Player winner = preferredWinner != null && players.contains(preferredWinner)
-                ? preferredWinner
-                : resolveChipWinner(players);
-        if (winner != null) {
-            return winner;
-        }
-        return players.stream()
-                .filter(player -> !player.getIsOut() && !player.getIsDisconnected())
-                .findFirst()
-                .orElse(players.getFirst());
+        return resolveChipWinner(players);
     }
 
     private static Player resolveChipWinner(List<Player> players) {
+        // Break chip ties deterministically by earliest seat in roster order.
         return players.stream()
                 .filter(player -> !player.getIsOut())
                 .max(Comparator.comparingInt(Player::getChips)
                         .thenComparing(Comparator.comparingInt(players::indexOf).reversed()))
-                .orElse(null);
+                .orElseThrow(() -> new IllegalStateException("Cannot resolve winner when every player is out"));
     }
 }

@@ -613,6 +613,9 @@ class PlayerDepartureHandlerTest {
             assertFalse(restored.isForfeitPending());
             assertEquals(departingStackBefore, findGamePlayer(restored, departing.getName()).getChips());
             assertEquals(expectedSurvivorEndChips, restoredSurvivor.getChips());
+            assertEquals(BASE_EPOCH_MS + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
+                    restored.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            verify(taskScheduler, atLeastOnce()).schedule(any(Runnable.class), any(Instant.class));
             verify(gameStateService, times(1)).sendGameEnd(any(GameEndResponse.class));
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReconnected(ROOM_ID, restoredSurvivor.getName()));
@@ -945,6 +948,8 @@ class PlayerDepartureHandlerTest {
                 assertEquals(0, result.finalState().pot());
                 assertEquals(1510, result.finalState().players().stream()
                         .filter(PublicPlayerState::isWinner).findFirst().orElseThrow().chips());
+                assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP),
+                        "Cleanup deadline should be scheduled for " + ending);
 
                 try (LockLease _ = roomCoordinator.acquire(gameId)) {
                     completionHandler.handleGameEnd(gameId);

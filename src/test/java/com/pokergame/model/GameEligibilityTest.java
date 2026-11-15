@@ -14,8 +14,8 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -146,27 +146,50 @@ class GameEligibilityTest {
     }
 
     @Test
-    @DisplayName("resolveWinnerOrFallback prefers explicit seated winner, then chips with lower-seat tiebreak, then fallbacks")
-    void resolveWinnerOrFallbackAppliesPreferenceChipCountAndFallbacks() {
+    @DisplayName("resolveWinner returns eligible preferred winner or chip leader with earliest-seat tiebreak")
+    void resolveWinnerSelectsEligiblePreferredWinnerOrChipLeader() {
         Player alice = player("p1", "Alice", 1000, true, false);
         Player bob = player("p2", "Bob", 1000, false, false);
         Player carol = player("p3", "Carol", 1000, false, false);
-        Game game = gameWith(List.of(alice, bob, carol), GamePhase.SHOWDOWN, true, true);
+        Game tiedGame = gameWith(List.of(alice, bob, carol), GamePhase.SHOWDOWN, true, true);
 
-        assertSame(bob, GameEligibility.resolveWinnerOrFallback(game, null));
+        assertSame(bob, GameEligibility.resolveWinner(tiedGame, null));
+        assertSame(carol, GameEligibility.resolveWinner(tiedGame, carol));
 
-        Player outsider = player("p9", "Outsider", 5000, false, false);
-        assertSame(bob, GameEligibility.resolveWinnerOrFallback(game, outsider));
-        assertSame(carol, GameEligibility.resolveWinnerOrFallback(game, carol));
+        Player richCarol = player("p3", "Carol", 2000, false, false);
+        Game chipLeadGame = gameWith(List.of(alice, bob, richCarol), GamePhase.SHOWDOWN, true, true);
+        assertSame(richCarol, GameEligibility.resolveWinner(chipLeadGame, null));
+    }
 
+    @Test
+    @DisplayName("resolveWinner throws IllegalStateException when every player is out or roster is empty")
+    void resolveWinnerThrowsWhenAllOutOrEmptyRoster() {
         Player allOutDc = player("p1", "Alice", 0, true, true);
         Player allOutConnected = player("p2", "Bob", 0, true, false);
         Game allOutGame = gameWith(List.of(allOutDc, allOutConnected), GamePhase.SHOWDOWN, true, true);
-        assertSame(allOutDc, GameEligibility.resolveWinnerOrFallback(allOutGame, null));
+        assertThrows(IllegalStateException.class, () -> GameEligibility.resolveWinner(allOutGame, null));
 
         Game emptyGame = Game.restoreBuilder().gameId("empty").players(List.of()).activePlayerIds(List.of())
                 .remainingDeck(List.of())
                 .handEvaluator(new HandEvaluatorService()).build();
-        assertNull(GameEligibility.resolveWinnerOrFallback(emptyGame, null));
+        assertThrows(IllegalStateException.class, () -> GameEligibility.resolveWinner(emptyGame, null));
+    }
+
+    @Test
+    @DisplayName("resolveWinner throws IllegalStateException when preferred winner is out, off-roster, or roster is empty")
+    void resolveWinnerThrowsWhenPreferredWinnerIsOutOrOffRoster() {
+        Player aliceOut = player("p1", "Alice", 1000, true, false);
+        Player bob = player("p2", "Bob", 1000, false, false);
+        Game game = gameWith(List.of(aliceOut, bob), GamePhase.SHOWDOWN, true, true);
+
+        assertThrows(IllegalStateException.class, () -> GameEligibility.resolveWinner(game, aliceOut));
+
+        Player outsider = player("p9", "Outsider", 5000, false, false);
+        assertThrows(IllegalStateException.class, () -> GameEligibility.resolveWinner(game, outsider));
+
+        Game emptyGame = Game.restoreBuilder().gameId("empty").players(List.of()).activePlayerIds(List.of())
+                .remainingDeck(List.of())
+                .handEvaluator(new HandEvaluatorService()).build();
+        assertThrows(IllegalStateException.class, () -> GameEligibility.resolveWinner(emptyGame, bob));
     }
 }

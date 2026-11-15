@@ -126,11 +126,13 @@ class GameCompletionHandlerTest {
     class TerminalSettlementTests {
 
         @Test
-        @DisplayName("handleGameEnd with missing game or null players no-ops safely")
-        void handleGameEnd_MissingOrEmptyGame_DoesNotThrowOrBroadcast() {
+        @DisplayName("handleGameEnd with missing game no-ops safely and empty roster throws IllegalStateException")
+        void handleGameEnd_MissingNoOpsAndEmptyRosterThrows() {
+            clearInvocations(messagingTemplate, taskScheduler);
             try (LockLease _ = roomCoordinator.acquire("nonexistent-id")) {
                 assertDoesNotThrow(() -> completion.handleGameEnd("nonexistent-id"));
             }
+            verifyNoInteractions(messagingTemplate, taskScheduler);
 
             Game emptyGame = createAndRegisterStartedGame(List.of(
                     new Player("Host", "host", 100),
@@ -140,9 +142,10 @@ class GameCompletionHandlerTest {
 
             clearInvocations(messagingTemplate, taskScheduler);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                assertDoesNotThrow(() -> completion.handleGameEnd(ROOM_ID));
+                assertThrows(IllegalStateException.class, () -> completion.handleGameEnd(ROOM_ID));
             }
-            verifyNoInteractions(messagingTemplate);
+            verifyNoInteractions(messagingTemplate, taskScheduler);
+            assertNull(emptyGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
         }
 
         @Test
@@ -221,6 +224,9 @@ class GameCompletionHandlerTest {
             assertEquals("Host", response.winner());
             assertTrue(response.isForfeit());
             assertSame(response, game.getGameEndResult());
+            assertEquals(BASE_EPOCH_MS + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
+                    game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            verify(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
         }
 
         @Test
@@ -434,35 +440,19 @@ class GameCompletionHandlerTest {
         }
 
         @Test
-        @DisplayName("getGameReview synthesizes fallback without 404 or mutating stateRevision when gameEndResult is null")
-        void getGameReview_WhenGameOverAndResultNull_SynthesizesWithoutMutatingState() {
+        @DisplayName("getGameReview throws IllegalStateException when game is over with no stored result")
+        void getGameReview_WhenGameOverAndResultNull_ThrowsIllegalStateException() {
             Game game = createAndRegisterStartedGame(List.of(
                     new Player("Host", "host", 1000),
                     new Player("Player2", "p2", 1000)));
             game.markGameOver();
             game.setGameEndResult(null);
-            long revisionBefore = game.getStateRevision();
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                GameEndResponse review = completion.getGameReview(ROOM_ID, "Host");
-                assertEquals("GAME_END", review.type());
-                assertNotNull(review.winner());
-                assertTrue(review.isForfeit(), "Pre-showdown end must synthesize isForfeit=true");
-                assertNotNull(review.finalState());
-                assertEquals(revisionBefore, game.getStateRevision(), "Read-only getGameReview must not bump stateRevision");
-                assertNull(game.getGameEndResult(), "Read-only getGameReview must not store gameEndResult");
+                assertThrows(IllegalStateException.class, () -> completion.getGameReview(ROOM_ID, "Host"));
 
                 game.conductShowdown();
-                GameEndResponse showdownReview = completion.getGameReview(ROOM_ID, "Host");
-                assertFalse(showdownReview.isForfeit(), "Settled SHOWDOWN must synthesize isForfeit=false");
-
-                // All remaining players marked out in settled SHOWDOWN -> falls back to first seated player
-                game.getPlayers().forEach(Player::setIsOut);
-                GameEndResponse allOutFallback = completion.getGameReview(ROOM_ID, "Host");
-                assertEquals("Host", allOutFallback.winner());
-                assertFalse(allOutFallback.isForfeit());
-                assertEquals(revisionBefore, game.getStateRevision());
-                assertNull(game.getGameEndResult());
+                assertThrows(IllegalStateException.class, () -> completion.getGameReview(ROOM_ID, "Host"));
             }
         }
 
