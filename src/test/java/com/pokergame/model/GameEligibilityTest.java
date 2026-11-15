@@ -165,6 +165,7 @@ class GameEligibilityTest {
         assertSame(allOutDc, GameEligibility.resolveWinnerOrFallback(allOutGame, null));
 
         Game emptyGame = Game.restoreBuilder().gameId("empty").players(List.of()).activePlayerIds(List.of())
+                .remainingDeck(List.of())
                 .handEvaluator(new HandEvaluatorService()).build();
         assertNull(GameEligibility.resolveWinnerOrFallback(emptyGame, null));
     }

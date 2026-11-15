@@ -113,6 +113,7 @@ public class PersistenceConfiguration {
      * @param roomService          helps look up game rooms
      * @param gameLifecycleService helps manage the state of active games
      * @param properties           settings for when to clean up old save files
+     * @param roomCoordinator      the per-room lock shared with the rest of the application
      * @return the background autosaving mechanism
      */
     @Bean
@@ -120,9 +121,8 @@ public class PersistenceConfiguration {
             ObjectProvider<RoomService> roomService,
             ObjectProvider<GameLifecycleService> gameLifecycleService,
             PersistenceProperties properties,
-            ObjectProvider<RoomCoordinator> roomCoordinatorProvider) {
-        RoomCoordinator coordinator = roomCoordinatorProvider.getIfAvailable(RoomCoordinator::new);
-        return new DurableMutationAspect(store.getIfAvailable(), snapshotMapper, roomService, gameLifecycleService, properties, coordinator);
+            RoomCoordinator roomCoordinator) {
+        return new DurableMutationAspect(store.getIfAvailable(), snapshotMapper, roomService, gameLifecycleService, properties, roomCoordinator);
     }
 
     /**
@@ -135,6 +135,8 @@ public class PersistenceConfiguration {
      * @param webSocketEventListener  handles player connections after a reload
      * @param applicationContext      tells the system when the server is fully ready
      * @param disconnectGracePeriodMs extra time given to players to reconnect after a server restart
+     * @param clock                   the application clock, used to check which saved deadlines have passed
+     * @param roomCoordinator         the per-room lock shared with the rest of the application
      * @return the process that recovers games
      */
     @Bean
@@ -146,10 +148,9 @@ public class PersistenceConfiguration {
             ApplicationContext applicationContext,
             @Value("${poker.room.disconnect-grace-period-ms:120000}") long disconnectGracePeriodMs,
             java.time.Clock clock,
-            ObjectProvider<RoomCoordinator> roomCoordinatorProvider) {
-        RoomCoordinator coordinator = roomCoordinatorProvider.getIfAvailable(RoomCoordinator::new);
+            RoomCoordinator roomCoordinator) {
         return new PersistenceRecovery(store, mapper, roomService, gameLifecycleService, webSocketEventListener,
-                applicationContext, disconnectGracePeriodMs, clock, coordinator);
+                applicationContext, disconnectGracePeriodMs, clock, roomCoordinator);
     }
 
     /**

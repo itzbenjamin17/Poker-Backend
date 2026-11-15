@@ -283,6 +283,31 @@ class PotCalculatorTest {
                         200, 0, contributions, contenders, allPlayers, contenders, GAME_ID));
     }
 
+    @Test
+    void computePotAllocations_ContestedLayerWithNoEligibleClaimant_ThrowsIllegalStateException() {
+        // Both contributors folded and nobody else can win, so the 100-chip layer has nowhere to go.
+        Player a = foldedPlayer("a", "A", 950);
+        Player b = foldedPlayer("b", "B", 950);
+        List<Player> allPlayers = List.of(a, b);
+        Map<String, Integer> contributions = Map.of("a", 50, "b", 50);
+
+        assertThrows(IllegalStateException.class, () ->
+                PotCalculator.computePotAllocationsAndUncalled(
+                        100, 0, contributions, allPlayers, allPlayers, List.of(), GAME_ID));
+    }
+
+    @Test
+    void computePotAllocations_CarryOverWithNoEligibleClaimant_ThrowsIllegalStateException() {
+        // The ledger is empty, so only the 30-chip carry-over is in the pot, and no player can claim it.
+        Player a = foldedPlayer("a", "A", 950);
+        Player b = foldedPlayer("b", "B", 950);
+        List<Player> allPlayers = List.of(a, b);
+
+        assertThrows(IllegalStateException.class, () ->
+                PotCalculator.computePotAllocationsAndUncalled(
+                        30, 30, Map.of(), allPlayers, allPlayers, List.of(), GAME_ID));
+    }
+
     // =========================================================================
     // 3. Pot Breakdown Queries (getPotBreakdown)
     // =========================================================================

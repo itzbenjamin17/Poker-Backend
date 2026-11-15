@@ -121,7 +121,9 @@ public class Game {
      * clamping {@code maxPlayers} and restoring collaborator state without running live hand setup.
      *
      * @param builder populated snapshot builder
-     * @throws BadRequestException if {@code gameId} or {@code players} are invalid
+     * @throws BadRequestException   if {@code gameId} or {@code players} are invalid
+     * @throws IllegalStateException if the snapshot has no deck, because a fresh deck would deal cards
+     *                               that players or the board already hold
      */
     Game(GameRestoreBuilder builder) {
         if (builder.getGameId() == null || builder.getGameId().trim().isEmpty()) {
@@ -155,7 +157,11 @@ public class Game {
         }
 
         List<Card> remainingDeck = builder.getRemainingDeck();
-        this.deck = remainingDeck != null ? Deck.restore(remainingDeck) : new Deck();
+        if (remainingDeck == null) {
+            logger.error("[Game][Restore] Snapshot for game {} has no deck", this.gameId);
+            throw new IllegalStateException("Saved game " + this.gameId + " has no deck");
+        }
+        this.deck = Deck.restore(remainingDeck);
         this.communityCards = builder.getCommunityCards() != null
                 ? new ArrayList<>(builder.getCommunityCards())
                 : new ArrayList<>();

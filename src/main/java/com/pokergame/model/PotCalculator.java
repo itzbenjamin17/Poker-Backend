@@ -60,6 +60,8 @@ final class PotCalculator {
      * @param eligibleHandContenders contenders eligible to win pots at settlement
      * @param gameId                 game identifier for diagnostics
      * @return computed pot allocations and uncalled chip amounts per player
+     * @throws IllegalStateException if the contribution ledger plus carry-over does not equal {@code pot},
+     *                               or if any chips are left without a pot or a refund owner
      */
     static PotComputationResult computePotAllocationsAndUncalled(
             int pot,
@@ -179,6 +181,10 @@ final class PotCalculator {
 
         logger.debug("Allocation totals for game {} | allocated={} | uncalled={} | unallocated={} | pot={}",
                 gameId, allocatedAmount, uncalledTotal, unallocatedAmount, pot);
+        if (unallocatedAmount != 0) {
+            throw new IllegalStateException("Pot allocation left " + unallocatedAmount
+                    + " chips without a pot or a refund owner for game " + gameId);
+        }
 
         if (logger.isDebugEnabled()) {
             logger.debug("Final allocations for game {}: {}", gameId, allocationSummary(allocations));

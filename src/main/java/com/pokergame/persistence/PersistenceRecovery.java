@@ -75,8 +75,8 @@ public final class PersistenceRecovery implements ApplicationRunner {
         this.webSocketEventListener = webSocketEventListener;
         this.applicationContext = applicationContext;
         this.disconnectGracePeriodMs = disconnectGracePeriodMs;
-        this.clock = clock != null ? clock : java.time.Clock.systemUTC();
-        this.roomCoordinator = roomCoordinator != null ? roomCoordinator : new RoomCoordinator();
+        this.clock = clock;
+        this.roomCoordinator = roomCoordinator;
     }
 
     /**

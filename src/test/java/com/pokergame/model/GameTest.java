@@ -1562,6 +1562,7 @@ class GameTest {
             Player p3 = restoredPlayer("p3", "Dave", 1000, false, false, false);
             Game foldedSuccessor = Game.restoreBuilder().gameId("succ-fold")
                     .players(List.of(p0, p1, p2Folded, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
+                    .remainingDeck(List.of())
                     .currentPlayerPosition(1).smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
             foldedSuccessor.removePlayer(p1);
             assertEquals("p3", foldedSuccessor.getCurrentPlayer().getPlayerId());
@@ -1569,12 +1570,14 @@ class GameTest {
             Player p2AllIn = restoredPlayer("p2", "Charlie", 0, false, false, true);
             Game allInSuccessor = Game.restoreBuilder().gameId("succ-allin")
                     .players(List.of(p0, p1, p2AllIn, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
+                    .remainingDeck(List.of())
                     .currentPlayerPosition(1).smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
             allInSuccessor.removePlayer(p1);
             assertEquals("p3", allInSuccessor.getCurrentPlayer().getPlayerId());
 
             Game tailWrap = Game.restoreBuilder().gameId("tail-wrap")
                     .players(List.of(p0, p1, p3)).activePlayerIds(List.of("p0", "p1", "p3"))
+                    .remainingDeck(List.of())
                     .currentPlayerPosition(2).smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
             tailWrap.removePlayer(p3);
             assertEquals("p0", tailWrap.getCurrentPlayer().getPlayerId());
@@ -1584,6 +1587,7 @@ class GameTest {
             Player fld = restoredPlayer("p2", "Charlie", 1000, false, true, false);
             Game allNonActionable = Game.restoreBuilder().gameId("non-actionable")
                     .players(List.of(ai, cur, fld)).activePlayerIds(List.of("p0", "p1", "p2"))
+                    .remainingDeck(List.of())
                     .currentPlayerPosition(1).smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
             allNonActionable.removePlayer(cur);
             assertEquals(2, allNonActionable.getActivePlayers().size());
@@ -1591,6 +1595,7 @@ class GameTest {
 
             Game singleAllIn = Game.restoreBuilder().gameId("single-allin")
                     .players(List.of(ai, cur)).activePlayerIds(List.of("p0", "p1"))
+                    .remainingDeck(List.of())
                     .currentPlayerPosition(1).smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
             singleAllIn.removePlayer(cur);
             assertEquals(1, singleAllIn.getActivePlayers().size());
@@ -1674,6 +1679,7 @@ class GameTest {
             Player c = new Player("C", "c", 100);
             Game anchored = Game.restoreBuilder().gameId("position-anchor")
                     .players(List.of(d, a, b, c)).activePlayerIds(List.of("d", "a", "b", "c"))
+                    .remainingDeck(List.of())
                     .pot(0).dealerPosition(0).smallBlindPosition(1).bigBlindPosition(2).currentPlayerPosition(3)
                     .currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
                     .handSeatOrder(List.of("d", "a", "b", "c")).dealerAnchorPlayerId("d")
@@ -1734,7 +1740,7 @@ class GameTest {
                             restoredPlayer("B", "b", 1000, 0, false),
                             restoredPlayer("C", "c", 1000, 0, false),
                             restoredPlayer("D", "d", 1000, 0, false)))
-                    .activePlayerIds(List.of("a", "b", "c", "d")).currentPlayerPosition(1)
+                    .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(List.of()).currentPlayerPosition(1)
                     .currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
                     .handSeatOrder(List.of("a", "b", "c", "d")).dealerAnchorPlayerId("a")
                     .handEvaluator(mockHandEvaluator).build();
@@ -1826,7 +1832,7 @@ class GameTest {
 
             Game restored = Game.restoreBuilder().gameId("game-restore-rev")
                     .players(List.of(new Player("Alice", "p1", 1000), new Player("Bob", "p2", 1000)))
-                    .activePlayerIds(List.of("p1", "p2")).smallBlind(10).bigBlind(20)
+                    .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of()).smallBlind(10).bigBlind(20)
                     .handEvaluator(mockHandEvaluator).handNumber(42L).stateRevision(199L)
                     .scheduledTaskDeadlines(Map.of()).scheduledTaskGenerations(Map.of()).build();
             assertEquals(42L, restored.getHandNumber());
@@ -1917,7 +1923,7 @@ class GameTest {
             Player r1 = new Player("Alice", "p1", 1000);
             Player r2 = new Player("Bob", "p2", 1000);
             Game repairMissing = Game.restoreBuilder().gameId("repair-missing").players(List.of(r1, r2))
-                    .activePlayerIds(List.of("p1", "p2")).smallBlind(10).bigBlind(20)
+                    .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of()).smallBlind(10).bigBlind(20)
                     .currentPhase(GamePhase.SHOWDOWN).readyGateState(ReadyGateState.COUNTING_DOWN)
                     .readyCountdownDeadlineEpochMs(null).handEvaluator(new HandEvaluatorService()).build();
             assertTrue(repairMissing.repairRecoveredReadyGate(60_000L));
@@ -1926,7 +1932,7 @@ class GameTest {
             assertEquals(60_000L, repairMissing.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
 
             Game repairReschedule = Game.restoreBuilder().gameId("repair-resched").players(List.of(r1, r2))
-                    .activePlayerIds(List.of("p1", "p2")).smallBlind(10).bigBlind(20)
+                    .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of()).smallBlind(10).bigBlind(20)
                     .currentPhase(GamePhase.SHOWDOWN).readyGateState(ReadyGateState.COUNTING_DOWN)
                     .readyCountdownDeadlineEpochMs(70_000L).handEvaluator(new HandEvaluatorService()).build();
             assertFalse(repairReschedule.repairRecoveredReadyGate(60_000L));

@@ -972,14 +972,13 @@ class GameRestoreBuilderTest {
         }
 
         @Test
-        @DisplayName("fallbacks_Deck_NullDeckDefaultsToFreshDeck")
-        void testFallbacks_NullDeckDefaultsToFreshDeck() {
-            Game game = defaultBuilder()
-                    .remainingDeck(null)
-                    .build();
+        @DisplayName("restore_NullDeck_ThrowsInsteadOfDealingAFreshDeck")
+        void testRestore_NullDeckThrows() {
+            GameRestoreBuilder builder = defaultBuilder()
+                    .remainingDeck(null);
 
-            // Fresh deck should have 52 cards
-            assertEquals(52, game.getRemainingDeckSnapshot().size());
+            // A fresh 52-card deck would duplicate cards already dealt to players and the board.
+            assertThrows(IllegalStateException.class, builder::build);
         }
 
         // =========================================================================
