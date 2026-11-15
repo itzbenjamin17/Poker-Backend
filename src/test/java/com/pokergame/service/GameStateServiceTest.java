@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.dto.response.ActionErrorResponse;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PlayerNotificationResponse;
@@ -10,6 +11,7 @@ import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.Rank;
+import com.pokergame.enums.ReadyCountdownStartOutcome;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.RejectedAction;
 import com.pokergame.enums.ResponseMessage;
@@ -593,6 +595,8 @@ class GameStateServiceTest {
                 new Card(Rank.THREE, Suit.CLUBS)));
         other.getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.CLUBS),
                 new Card(Rank.FIVE, Suit.CLUBS)));
+        winner.setHandRank(HandRank.ROYAL_FLUSH);
+        other.setHandRank(HandRank.ROYAL_FLUSH);
         Game contested = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
                 .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
                 .communityCards(board).pot(0).dealerAnchorPlayerId(testPlayers.get(0).getPlayerId())
@@ -609,6 +613,84 @@ class GameStateServiceTest {
 
         assertNotNull(event.finalState().players().stream().filter(player -> player.name().equals(winner.getName()))
                 .findFirst().orElseThrow().holeCards());
+    }
+
+    @Test
+    void recordGameEnd_ForfeitDuringReadyCountdownAfterContestedShowdown_RevealsShowdownWinnerHoleCards() {
+        Player p1 = new Player("Player1", "p1", 100);
+        Player p2 = new Player("Player2", "p2", 100);
+        Game game = new Game(GAME_ID, List.of(p1, p2), 6, 5, 10, new HandEvaluatorService());
+        game.dealHoleCards();
+        game.postBlinds();
+        Player firstActor = game.getCurrentPlayer();
+        game.processPlayerDecision(firstActor, new PlayerDecision(PlayerAction.CALL, 0, firstActor.getPlayerId()));
+        Player secondActor = game.getCurrentPlayer();
+        game.processPlayerDecision(secondActor, new PlayerDecision(PlayerAction.CHECK, 0, secondActor.getPlayerId()));
+        game.dealTurn();
+        game.dealRiver();
+
+        List<Player> showdownWinners = game.conductShowdown();
+        assertFalse(showdownWinners.isEmpty());
+        Player showdownWinner = showdownWinners.getFirst();
+        Player showdownLoser = showdownWinner.equals(p1) ? p2 : p1;
+        assertEquals(ReadyCountdownStartOutcome.OPENED,
+                game.openOrWaitReadyGate(FIXED_INSTANT.toEpochMilli() + 10_000L));
+        assertTrue(game.isReadyCountdownActive());
+
+        Player gameWinner = game.settleGameEnd(showdownWinner, Set.of(showdownLoser.getName()));
+        GameEndResponse endResponse = gameStateService.recordGameEnd(game, gameWinner, true);
+
+        assertTrue(endResponse.isForfeit());
+        PublicPlayerState winnerState = endResponse.finalState().players().stream()
+                .filter(p -> p.id().equals(showdownWinner.getPlayerId()))
+                .findFirst()
+                .orElseThrow();
+        PublicPlayerState loserState = endResponse.finalState().players().stream()
+                .filter(p -> p.id().equals(showdownLoser.getPlayerId()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(showdownWinner.getHoleCards(), winnerState.holeCards());
+        assertNull(loserState.holeCards());
+    }
+
+    @Test
+    void foldWin_NeverRevealsHoleCardsAcrossShowdownLiveOrFinalViews() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player p1 = new Player("Player1", "p1", 100);
+        Player p2 = new Player("Player2", "p2", 100);
+        Game game = new Game(GAME_ID, List.of(p1, p2), 6, 5, 10, new HandEvaluatorService());
+        game.dealHoleCards();
+        game.postBlinds();
+
+        Player foldingPlayer = game.getCurrentPlayer();
+        Player winner = foldingPlayer.equals(p1) ? p2 : p1;
+        game.processPlayerDecision(foldingPlayer, new PlayerDecision(PlayerAction.FOLD, 0, foldingPlayer.getPlayerId()));
+        assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+        assertTrue(game.isHandSettled());
+
+        gameStateService.broadcastShowdownResults(game);
+        ArgumentCaptor<Object> showdownCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), showdownCaptor.capture());
+        PublicGameStateResponse showdownView = assertInstanceOf(PublicGameStateResponse.class, showdownCaptor.getValue());
+        assertTrue(showdownView.players().stream().allMatch(p -> p.holeCards() == null),
+                "Showdown broadcast must not reveal hole cards on a fold win");
+
+        reset(messagingTemplate);
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        gameStateService.broadcastGameState(game);
+        ArgumentCaptor<Object> liveCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), liveCaptor.capture());
+        PublicGameStateResponse liveBroadcastView = assertInstanceOf(PublicGameStateResponse.class, liveCaptor.getValue());
+        assertTrue(liveBroadcastView.players().stream().allMatch(p -> p.holeCards() == null),
+                "Live broadcast must not reveal hole cards on a fold win");
+
+        PublicGameStateResponse liveSnapshotView = gameStateService.getPublicGameStateSnapshot(game);
+        assertTrue(liveSnapshotView.players().stream().allMatch(p -> p.holeCards() == null),
+                "Live snapshot must not reveal hole cards on a fold win");
+
+        GameEndResponse endResponse = gameStateService.recordGameEnd(game, winner, false);
+        assertTrue(endResponse.finalState().players().stream().allMatch(p -> p.holeCards() == null),
+                "Final game state must not reveal hole cards on a fold win");
     }
 
     @Test

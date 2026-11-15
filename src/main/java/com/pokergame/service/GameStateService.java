@@ -149,8 +149,7 @@ public class GameStateService {
         List<String> winnerNames = winningPlayers.stream().map(Player::getName).toList();
         Integer equalWinnerAward = computeEqualWinnerAward(winnerIds, contestedAwards);
 
-        boolean isActualShowdown = winningPlayers.stream()
-                .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != HandRank.NO_HAND);
+        boolean isActualShowdown = game.wasContestedShowdown();
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
 
@@ -374,7 +373,7 @@ public class GameStateService {
         requireNonNull(winner, "winner must not be null");
         String gameId = game.getGameId();
         String message = winner.getName() + " wins the game with " + winner.getChips() + " chips!";
-        PublicGameStateResponse finalState = buildCompletedGameState(game, winner, isForfeit);
+        PublicGameStateResponse finalState = buildCompletedGameState(game, winner);
         return new GameEndResponse(
                 ResponseMessage.GAME_END.getMessage(), gameId, winner.getName(),
                 winner.getChips(), isForfeit, message, finalState);
@@ -458,14 +457,9 @@ public class GameStateService {
                 null);
     }
 
-    private PublicGameStateResponse buildCompletedGameState(Game game, Player winner, boolean isForfeit) {
-        boolean handSettled = game.getLastSettlementResult() != null && game.getLastSettlementResult().settled();
-        boolean contestedShowdown = game.getCurrentPhase() == GamePhase.SHOWDOWN
-                && handSettled
-                && game.getActivePlayers().stream()
-                        .filter(Player::isInHand)
-                        .count() > 1;
-        boolean revealHoleCards = !isForfeit && contestedShowdown;
+    private PublicGameStateResponse buildCompletedGameState(Game game, Player winner) {
+        boolean handSettled = game.isHandSettled();
+        boolean revealHoleCards = game.wasContestedShowdown();
 
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
@@ -533,9 +527,7 @@ public class GameStateService {
         boolean handSettled = lastSettlement != null && lastSettlement.settled();
         Set<String> settledWinnerIds = handSettled ? lastSettlement.winnerIds() : Set.of();
         Map<String, Integer> settledAwards = handSettled ? lastSettlement.contestedAwards() : Map.of();
-        boolean revealHoleCards = handSettled && game.getPlayers().stream()
-                .filter(player -> settledWinnerIds.contains(player.getPlayerId()))
-                .anyMatch(player -> player.getHandRank() != null && player.getHandRank() != HandRank.NO_HAND);
+        boolean revealHoleCards = game.wasContestedShowdown();
 
         Player currentPlayer = !inShowdownOrCountdown && !autoAdvancing && !handSettled && !game.getActivePlayers().isEmpty()
                 ? game.getCurrentPlayer()

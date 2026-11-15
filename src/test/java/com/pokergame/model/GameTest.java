@@ -1668,6 +1668,44 @@ class GameTest {
             assertFalse(departedDealer.resetForNewHand());
             assertEquals(0, departedDealer.getCarryOverPot());
         }
+
+        @Test
+        void wasContestedShowdownReflectsSettledEvaluatedWinnersOnly() {
+            Game unsettled = createStandardGame(2, 100, new HandEvaluatorService());
+            unsettled.dealHoleCards();
+            unsettled.postBlinds();
+            assertFalse(unsettled.wasContestedShowdown());
+
+            Player foldingPlayer = unsettled.getCurrentPlayer();
+            unsettled.processPlayerDecision(foldingPlayer,
+                    new PlayerDecision(PlayerAction.FOLD, 0, foldingPlayer.getPlayerId()));
+            assertTrue(unsettled.isHandSettled());
+            assertFalse(unsettled.wasContestedShowdown());
+
+            Game contested = createStandardGame(2, 100, new HandEvaluatorService());
+            contested.dealHoleCards();
+            contested.postBlinds();
+            contested.dealFlop();
+            contested.dealTurn();
+            contested.dealRiver();
+            List<Player> winners = contested.conductShowdown();
+            assertTrue(contested.wasContestedShowdown());
+
+            Player winner = winners.getFirst();
+            Player loser = contested.getPlayers().stream()
+                    .filter(p -> !p.equals(winner))
+                    .findFirst()
+                    .orElseThrow();
+            contested.settleGameEnd(winner, Set.of(loser.getName()));
+            assertTrue(contested.wasContestedShowdown());
+
+            Game voidGame = createStandardGame(2, 100, mockHandEvaluator);
+            voidGame.getPlayers().getFirst().setHandRank(HandRank.ROYAL_FLUSH);
+            voidGame.getPlayers().forEach(p -> p.doAction(PlayerAction.FOLD, 0, voidGame.getPot()));
+            voidGame.conductShowdown();
+            assertTrue(voidGame.isHandSettled());
+            assertFalse(voidGame.wasContestedShowdown());
+        }
     }
 
     @Nested

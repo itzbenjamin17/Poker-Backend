@@ -4,6 +4,7 @@ import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ReadyCountdownStartOutcome;
 import com.pokergame.enums.ReadyCountdownTimeoutOutcome;
@@ -824,6 +825,22 @@ public class Game {
      */
     public boolean isHandSettled() {
         return lastSettlementResult != null && lastSettlementResult.settled();
+    }
+
+    /**
+     * Returns whether the current or most recent hand settled a contested showdown with evaluated
+     * hands rather than an uncontested fold win or void hand.
+     *
+     * @return {@code true} if the hand is settled and at least one settled winner has an evaluated hand rank
+     */
+    public boolean wasContestedShowdown() {
+        if (!isHandSettled()) {
+            return false;
+        }
+        Set<String> winnerIds = lastSettlementResult.winnerIds();
+        return players.stream()
+                .filter(player -> winnerIds.contains(player.getPlayerId()))
+                .anyMatch(player -> player.getHandRank() != null && player.getHandRank() != HandRank.NO_HAND);
     }
 
     public List<String> getHandSeatOrderSnapshot() {
