@@ -563,6 +563,9 @@ class RoomServiceTest {
             assertThatThrownBy(() -> roomService.checkAndCloseIfExpired(roomId))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("Current thread does not hold room lock");
+            assertThatThrownBy(() -> roomService.isLobbyExpired(room))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Current thread does not hold room lock");
         }
 
         @Test
@@ -965,7 +968,7 @@ class RoomServiceTest {
             assertThat(deadline).isNotNull();
 
             clock.setMillis(deadline + 10_000L);
-            assertThat(roomService.isLobbyExpired(roomBefore)).isTrue();
+            assertThat(withRoomLock(roomId, () -> roomService.isLobbyExpired(roomBefore))).isTrue();
 
             Room roomLookedUp = coordinatedGetRoom(roomId);
             assertThat(roomLookedUp).isNotNull();

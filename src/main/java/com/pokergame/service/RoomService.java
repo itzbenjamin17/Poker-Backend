@@ -456,6 +456,8 @@ public class RoomService {
 
     /**
      * Finds an active room by name using case-insensitive matching.
+     * Callers must not read mutable {@link Room} fields without acquiring the room lock
+     * ({@link RoomCoordinator#acquire(String) RoomCoordinator.acquire(room.getRoomId())}).
      *
      * @param roomName the room name to search for
      * @return the matching room, or {@code null} if not found
@@ -593,13 +595,17 @@ public class RoomService {
 
     /**
      * Returns whether {@code room} is an unstarted lobby whose inactivity deadline has passed.
+     * Caller must hold the room lock for {@code room.getRoomId()} when {@code room != null}.
      *
      * @param room the room candidate to check
      * @return {@code true} if the room is unstarted and its inactivity deadline has elapsed
      */
     public boolean isLobbyExpired(Room room) {
-        return room != null
-                && !room.isGameStarted()
+        if (room == null) {
+            return false;
+        }
+        roomCoordinator.assertHeldByCurrentThread(room.getRoomId());
+        return !room.isGameStarted()
                 && room.isInactivityExpired(clock.millis());
     }
 

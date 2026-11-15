@@ -14,7 +14,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -28,7 +27,8 @@ import java.util.UUID;
  * Rooms are created with fixed game parameters (blinds, buy-in, max players)
  * that
  * cannot be changed after creation. Each room can be password-protected for
- * private games.
+ * private games. Callers hold the room-ID coordination lease when reading or
+ * mutating a published room.
  * </p>
  */
 public class Room {
@@ -36,7 +36,7 @@ public class Room {
     public static final long GAME_INACTIVITY_ALLOWANCE_MS = 15 * 60_000L;
     private final String roomId;
     private final String roomName;
-    private volatile String hostName;
+    private String hostName;
     /**
      * Join-order and arrival timestamps for players in this room.
      * Guarded by the room-ID coordination lease after publication.
@@ -46,7 +46,7 @@ public class Room {
      * Session membership identities created per addPlayer and preserved across WAL snapshots.
      * Reads and writes require the room-ID coordination lease after publication.
      */
-    private final Map<String, String> playerMembershipIds = new ConcurrentHashMap<>();
+    private final Map<String, String> playerMembershipIds = new LinkedHashMap<>();
     private final Set<String> persistedMembershipPlayers = new HashSet<>();
     private static final PasswordEncoder DEFAULT_PASSWORD_ENCODER = new BCryptPasswordEncoder();
 
@@ -68,8 +68,8 @@ public class Room {
     private final String passwordHash;
     private final LocalDateTime createdAt;
     private boolean isGameStarted;
-    private volatile boolean isTerminal;
-    private volatile Long inactivityDeadlineEpochMs;
+    private boolean isTerminal;
+    private Long inactivityDeadlineEpochMs;
 
     /** Recognizes an existing BCrypt hash so restored room credentials are not hashed again. */
     private static boolean isBcryptHash(String value) {
@@ -306,7 +306,7 @@ public class Room {
      *
      * @return true if the room is full, false otherwise
      */
-    public synchronized boolean isFull() {
+    public boolean isFull() {
         return playersWithJoinTime.size() >= maxPlayers;
     }
 
@@ -318,7 +318,7 @@ public class Room {
      * @throws BadRequestException if the player is already in the room
      * @throws IllegalStateException if the room is full
      */
-    public synchronized String addPlayer(String playerName) {
+    public String addPlayer(String playerName) {
         if (playersWithJoinTime.containsKey(playerName)) {
             throw new BadRequestException(String.format("Cannot add %s to room as they are already in the room", playerName));
         }
@@ -336,7 +336,7 @@ public class Room {
      *
      * @param playerName the name of the player to remove
      */
-    public synchronized void removePlayer(String playerName) {
+    public void removePlayer(String playerName) {
         if (playersWithJoinTime.containsKey(playerName)) {
             playersWithJoinTime.remove(playerName);
             playerMembershipIds.remove(playerName);
@@ -355,7 +355,7 @@ public class Room {
      * @param playerName the name of the player to check
      * @return true if the player is in the room, false otherwise
      */
-    public synchronized boolean hasPlayer(String playerName) {
+    public boolean hasPlayer(String playerName) {
         return playersWithJoinTime.containsKey(playerName);
     }
 
@@ -365,7 +365,7 @@ public class Room {
      * @param playerName the name of the player
      * @return the join timestamp, or null if player not found
      */
-    public synchronized LocalDateTime getJoinedAt(String playerName) {
+    public LocalDateTime getJoinedAt(String playerName) {
         return playersWithJoinTime.get(playerName);
     }
 
@@ -425,7 +425,7 @@ public class Room {
      * @return formatted string describing the room with masked password status
      */
     @Override
-    public synchronized String toString() {
+    public String toString() {
         String protectedPass = hasPassword() ? "[PROTECTED]" : "none";
         return roomName + " (" + roomId + ")" + " by " + hostName + " with " + playersWithJoinTime.size()
                 + " players [password=" + protectedPass + "]";
@@ -495,7 +495,7 @@ public class Room {
      *
      * @return the host's name
      */
-    public synchronized String getHostName() {
+    public String getHostName() {
         return hostName;
     }
 
@@ -504,7 +504,7 @@ public class Room {
      *
      * @param hostName the new host's name
      */
-    public synchronized void setHostName(String hostName) {
+    public void setHostName(String hostName) {
         if (hostName == null || hostName.trim().isEmpty()) {
             throw new IllegalArgumentException("hostName must not be blank");
         }
@@ -516,7 +516,7 @@ public class Room {
      *
      * @return the player list
      */
-    public synchronized List<String> getPlayers() {
+    public List<String> getPlayers() {
         return new ArrayList<>(playersWithJoinTime.keySet());
     }
 
@@ -566,22 +566,22 @@ public class Room {
     }
 
     /**
-     * Captures join order and timestamps without exposing the synchronized live map
+     * Captures join order and timestamps without exposing the live map guarded by the room lock
      * to persistence serialization.
      *
      * @return independent ordered player-to-join-time snapshot
      */
-    public synchronized Map<String, LocalDateTime> getPlayersWithJoinTimeSnapshot() {
+    public Map<String, LocalDateTime> getPlayersWithJoinTimeSnapshot() {
         return new LinkedHashMap<>(playersWithJoinTime);
     }
 
     /**
-     * Captures player membership IDs without exposing the synchronized live map
+     * Captures player membership IDs without exposing the live map guarded by the room lock
      * to persistence serialization.
      *
      * @return independent ordered player-to-membership-ID snapshot
      */
-    public synchronized Map<String, String> getPlayerMembershipIdsSnapshot() {
+    public Map<String, String> getPlayerMembershipIdsSnapshot() {
         return new LinkedHashMap<>(playerMembershipIds);
     }
 
@@ -591,7 +591,7 @@ public class Room {
      * @param playerName the name of the player
      * @return true if restored from a persisted membership ID, false otherwise
      */
-    public synchronized boolean hasPersistedMembershipId(String playerName) {
+    public boolean hasPersistedMembershipId(String playerName) {
         return persistedMembershipPlayers.contains(playerName);
     }
 
@@ -601,7 +601,7 @@ public class Room {
      * @param playerName the name of the player
      * @param membershipId the membership ID to assign
      */
-    public synchronized void setMembershipId(String playerName, String membershipId) {
+    public void setMembershipId(String playerName, String membershipId) {
         if (hasPlayer(playerName) && membershipId != null && !membershipId.isBlank()) {
             playerMembershipIds.put(playerName, membershipId);
         }
@@ -621,7 +621,7 @@ public class Room {
      *
      * @return whether gameplay has started
      */
-    public synchronized boolean isGameStarted() {
+    public boolean isGameStarted() {
         return isGameStarted;
     }
 
@@ -630,7 +630,7 @@ public class Room {
      *
      * @param gameStarted whether gameplay has started
      */
-    public synchronized void setGameStarted(boolean gameStarted) {
+    public void setGameStarted(boolean gameStarted) {
         this.isGameStarted = gameStarted;
     }
 
@@ -668,7 +668,7 @@ public class Room {
      * @param playerName the name of the player
      * @return absence deadline epoch ms, or null if none set
      */
-    public synchronized Long getAbsenceDeadline(String playerName) {
+    public Long getAbsenceDeadline(String playerName) {
         return playerAbsenceDeadlines.get(playerName);
     }
 
@@ -678,7 +678,7 @@ public class Room {
      * @param playerName the name of the player
      * @param deadlineEpochMs the absence deadline epoch ms, or null to clear
      */
-    public synchronized void setAbsenceDeadline(String playerName, Long deadlineEpochMs) {
+    public void setAbsenceDeadline(String playerName, Long deadlineEpochMs) {
         if (deadlineEpochMs == null) {
             playerAbsenceDeadlines.remove(playerName);
         } else {
@@ -692,7 +692,7 @@ public class Room {
      * @param playerName the name of the player
      * @return true if connected, false otherwise
      */
-    public synchronized boolean isPlayerConnected(String playerName) {
+    public boolean isPlayerConnected(String playerName) {
         return connectedPlayers.contains(playerName);
     }
 
@@ -703,7 +703,7 @@ public class Room {
      * @param playerName the name of the player
      * @param connected true if connected, false if disconnected/absent
      */
-    public synchronized void setPlayerConnected(String playerName, boolean connected) {
+    public void setPlayerConnected(String playerName, boolean connected) {
         if (connected) {
             connectedPlayers.add(playerName);
             playerAbsenceDeadlines.remove(playerName);

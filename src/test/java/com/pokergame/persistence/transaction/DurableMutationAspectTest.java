@@ -716,6 +716,50 @@ class DurableMutationAspectTest {
     }
 
     @Test
+    void retryPendingSavesHoldsRoomLockWhenRecordingStorageFailure() throws Throwable {
+        String roomId = "room-retry-failure-lock";
+        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), new HandEvaluatorService());
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = spy(new EncryptedWalStore(tempDir, keyring, (point, id) -> {
+            if (point == WalFaultPoint.BEFORE_COMMIT_WRITE) {
+                throw new PersistenceException("injected commit outage");
+            }
+        }));
+        Room existingRoom = new Room(roomId, "Retry Lock Room", "Alice", 6, 10, 20, 1000, null);
+        existingRoom.addPlayer("Alice");
+        when(roomServiceProvider.getObject()).thenReturn(roomService);
+        when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
+        when(roomService.getRoom(roomId)).thenReturn(existingRoom);
+        when(roomService.getCurrentHost(roomId)).thenReturn("Alice");
+        when(gameLifecycleService.getGame(roomId)).thenReturn(null);
+
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, realMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
+        ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> "ok");
+
+        assertEquals("ok", aspect.persist(joinPoint, validMutation()));
+        assertEquals(1, store.unsavedRoomCount());
+
+        AtomicBoolean lockHeldOnRecordFailure = new AtomicBoolean(false);
+        doThrow(new PersistenceException("injected retry checkpoint outage"))
+                .when(store).checkpoint(eq(roomId), any());
+        doAnswer(invocation -> {
+            lockHeldOnRecordFailure.set(roomCoordinator.isHeldByCurrentThread(roomId));
+            return invocation.callRealMethod();
+        }).when(store).recordWriteFailure(eq(roomId), any());
+
+        aspect.retryPendingSaves();
+
+        assertTrue(lockHeldOnRecordFailure.get(),
+                "Room lock must be held while retryPendingSaves records storage failure");
+        verify(store, times(3)).recordWriteFailure(eq(roomId), any());
+        assertFalse(roomCoordinator.isHeldByCurrentThread(roomId),
+                "Room lock must be released after retryPendingSaves completes");
+    }
+
+    @Test
     void missingRoomRejectedMutationDuringPrepareOutageDoesNotDegradeStore() throws Throwable {
         String roomId = "room-missing-prepare-outage";
         AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(

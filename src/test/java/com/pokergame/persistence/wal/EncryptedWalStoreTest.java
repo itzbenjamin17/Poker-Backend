@@ -15,6 +15,11 @@ import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -499,6 +504,82 @@ class EncryptedWalStoreTest {
         // Verify store remains healthy
         assertTrue(store.isHealthy(), "Store should be healthy after recoverAll isolates corrupted WAL");
         assertNull(store.lastError(), "Store lastError should be null");
+    }
+
+    /**
+     * Protects the contract that quarantining one room does not clear lastError() while another
+     * room still has a write failure or store-wide recovery has failed.
+     */
+    @Test
+    void quarantineDoesNotClearLastErrorWhenAnotherRoomStillHasWriteFailureOrRecoveryFailed() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 48);
+        EncryptedWalStore store = new EncryptedWalStore(directory.resolve("multi-fail"), keys);
+
+        store.recordWriteFailure("room-still-failed", new PersistenceException("disk full"));
+        store.recordWriteFailure("room-quarantined", new PersistenceException("corrupt wal"));
+
+        store.quarantine("room-quarantined", "quarantined");
+
+        assertFalse(store.isHealthy());
+        assertEquals(1, store.unsavedRoomCount());
+        assertNotNull(store.lastError(), "lastError() must remain non-null while another room has a write failure");
+
+        Path keyDir = directory.resolve("recovery-fail");
+        EncryptedWalStore writer = new EncryptedWalStore(keyDir, keyring("old", (byte) 49));
+        writer.commit(writer.prepare("room-missing-key"), "state".getBytes(StandardCharsets.UTF_8));
+
+        EncryptedWalStore missingKeyStore = new EncryptedWalStore(keyDir, keyring("current", (byte) 50));
+        assertThrows(MissingPersistenceKeyException.class, missingKeyStore::recoverAll);
+        assertFalse(missingKeyStore.isHealthy());
+        assertNotNull(missingKeyStore.lastError());
+
+        missingKeyStore.quarantine("room-missing-key", "quarantine after missing key");
+        assertFalse(missingKeyStore.isHealthy());
+        assertNotNull(missingKeyStore.lastError(), "lastError() must remain non-null when recoveryFailed is true");
+    }
+
+    /**
+     * Protects the contract that independent rooms can prepare, commit, checkpoint, and recover
+     * concurrently without cross-room interference when each room is driven under its own lock.
+     */
+    @Test
+    void concurrentDistinctRoomsPersistAndRecoverIndependently() throws Exception {
+        EncryptedWalStore store = new EncryptedWalStore(directory, keyring("current", (byte) 47));
+        int roomCount = 6;
+        CountDownLatch ready = new CountDownLatch(roomCount);
+        CountDownLatch start = new CountDownLatch(1);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(roomCount)) {
+            List<Future<?>> futures = new java.util.ArrayList<>();
+            for (int i = 0; i < roomCount; i++) {
+                String roomId = "concurrent-room-" + i;
+                futures.add(executor.submit(() -> {
+                    ready.countDown();
+                    assertTrue(start.await(5, TimeUnit.SECONDS));
+                    byte[] first = (roomId + "-v1").getBytes(StandardCharsets.UTF_8);
+                    store.commit(store.prepare(roomId), first);
+                    byte[] second = (roomId + "-v2").getBytes(StandardCharsets.UTF_8);
+                    store.checkpoint(roomId, second);
+                    byte[] third = (roomId + "-v3").getBytes(StandardCharsets.UTF_8);
+                    store.commit(store.prepare(roomId), third);
+                    return null;
+                }));
+            }
+            assertTrue(ready.await(5, TimeUnit.SECONDS));
+            start.countDown();
+            for (Future<?> future : futures) {
+                future.get(10, TimeUnit.SECONDS);
+            }
+        }
+
+        EncryptedWalStore recovered = new EncryptedWalStore(directory, keyring("current", (byte) 47));
+        Map<String, byte[]> all = recovered.recoverAll();
+        assertEquals(roomCount, all.size());
+        for (int i = 0; i < roomCount; i++) {
+            String roomId = "concurrent-room-" + i;
+            assertEquals(roomId + "-v3", new String(all.get(roomId), StandardCharsets.UTF_8));
+        }
+        assertTrue(recovered.isHealthy());
     }
 
     /**

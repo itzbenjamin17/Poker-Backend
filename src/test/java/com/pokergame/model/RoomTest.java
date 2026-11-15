@@ -15,6 +15,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -723,10 +724,31 @@ class RoomTest {
     }
 
     @Test
-    @DisplayName("Concurrent addPlayer calls strictly enforce capacity invariant")
+    @DisplayName("getPlayerMembershipIdsSnapshot returns an independent copy")
+    void playerMembershipIdsSnapshot_ReturnsIndependentCopy() {
+        room.addPlayer("Alice");
+        room.addPlayer("Bob");
+        String aliceId = room.getMembershipId("Alice");
+        String bobId = room.getMembershipId("Bob");
+
+        Map<String, String> snapshot = room.getPlayerMembershipIdsSnapshot();
+        assertEquals(2, snapshot.size());
+        assertEquals(aliceId, snapshot.get("Alice"));
+        assertEquals(bobId, snapshot.get("Bob"));
+
+        room.addPlayer("Charlie");
+        room.removePlayer("Alice");
+        assertEquals(2, snapshot.size());
+        assertEquals(aliceId, snapshot.get("Alice"));
+        assertFalse(snapshot.containsKey("Charlie"));
+    }
+
+    @Test
+    @DisplayName("addPlayer calls guarded by a room lock strictly enforce capacity invariant")
     void addPlayer_ConcurrentJoins_StrictlyEnforcesMaxPlayers() throws InterruptedException {
         int capacity = 4;
         Room concurrentRoom = new Room("concurrent-room", "Concurrent Room", "Host", capacity, 5, 10, 500, null);
+        ReentrantLock roomLock = new ReentrantLock();
         int totalThreads = 12;
         CountDownLatch readyLatch = new CountDownLatch(totalThreads);
         CountDownLatch startLatch = new CountDownLatch(1);
@@ -740,8 +762,13 @@ class RoomTest {
                     readyLatch.countDown();
                     try {
                         startLatch.await();
-                        concurrentRoom.addPlayer(playerName);
-                        successCount.incrementAndGet();
+                        roomLock.lock();
+                        try {
+                            concurrentRoom.addPlayer(playerName);
+                            successCount.incrementAndGet();
+                        } finally {
+                            roomLock.unlock();
+                        }
                     } catch (IllegalStateException e) {
                         if ("Room is full".equals(e.getMessage())) {
                             fullCount.incrementAndGet();

@@ -26,7 +26,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.ReentrantLock;
 import com.pokergame.persistence.config.PersistenceException;
 import java.nio.file.AccessDeniedException;
 import java.util.Locale;
@@ -45,6 +44,9 @@ import org.slf4j.LoggerFactory;
  * A failed write disables ordinary appends until a current full checkpoint repairs
  * the affected WAL. Services can continue in memory while recovery protection is degraded.
  * </p>
+ * <p>
+ * Callers hold the room lock for per-room operations (or run during single-threaded startup recovery).
+ * </p>
  */
 public final class EncryptedWalStore {
     private static final Logger logger = LoggerFactory.getLogger(EncryptedWalStore.class);
@@ -58,7 +60,6 @@ public final class EncryptedWalStore {
     private final EncryptionKeyring keyring;
     private final WalFaultInjector faultInjector;
     private final SecureRandom secureRandom = new SecureRandom();
-    private final ConcurrentHashMap<String, ReentrantLock> roomLocks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> nextSequences = new ConcurrentHashMap<>();
     private final Set<String> failedRooms = ConcurrentHashMap.newKeySet();
     private final Set<String> checkpointRooms = ConcurrentHashMap.newKeySet();
@@ -100,8 +101,9 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Writes a "prepare" marker to the log before we update the game's state. 
+     * Writes a "prepare" marker to the log before we update the game's state.
      * If the server crashes before we can write the final "commit", we'll just ignore this prepare when we restart.
+     * Caller must hold the room lock for {@code roomId}.
      *
      * @param roomId the room we are updating
      * @return an ID needed to save the final game state
@@ -113,8 +115,6 @@ public final class EncryptedWalStore {
         if (requiresCheckpoint(roomId)) {
             throw new PersistenceException("WAL needs a full checkpoint before appending");
         }
-        ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
-        lock.lock();
         try {
             long sequence = nextSequence(roomId);
             UUID transactionId = UUID.randomUUID();
@@ -124,14 +124,13 @@ public final class EncryptedWalStore {
         } catch (RuntimeException e) {
             recordWriteFailure(roomId, e);
             throw e;
-        } finally {
-            lock.unlock();
         }
     }
 
     /**
      * Writes the final game state to the log. This only works if it exactly matches the "prepare" marker we just made.
      * This rule stops old, delayed saves from accidentally overwriting newer saves.
+     * Caller must hold the room lock for {@code transaction.roomId()}.
      *
      * @param transaction the ID from the "prepare" step
      * @param payload     the game state data to save
@@ -139,8 +138,6 @@ public final class EncryptedWalStore {
      */
     public void commit(WalTransaction transaction, byte[] payload) {
         requireHealthy();
-        ReentrantLock lock = roomLocks.computeIfAbsent(transaction.roomId(), ignored -> new ReentrantLock());
-        lock.lock();
         try {
             long expected = transaction.prepareSequence() + 1;
             long sequence = nextSequence(transaction.roomId());
@@ -152,14 +149,13 @@ public final class EncryptedWalStore {
         } catch (RuntimeException e) {
             recordWriteFailure(transaction.roomId(), e);
             throw e;
-        } finally {
-            lock.unlock();
         }
     }
 
     /**
      * Reads the file to find the latest valid game state.
      * It's okay if the very last save got cut off during a crash, but any other file issues will cause this to fail safely.
+     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
      *
      * @param roomId the room to restore
      * @return the latest saved game data, or empty if there's no saved data
@@ -233,6 +229,7 @@ public final class EncryptedWalStore {
     /**
      * Cleans up a room's save file by deleting all the old history and just keeping the newest game state.
      * This is done safely so a crash won't lose data. It also encrypts the file with the newest key.
+     * Caller must hold the room lock for {@code roomId}.
      *
      * @param roomId        the room to clean up
      * @param latestPayload the latest game data to keep
@@ -246,14 +243,13 @@ public final class EncryptedWalStore {
     /**
      * Replaces an uncertain WAL with a fully flushed current state, including when
      * ordinary writes are disabled. Only this room's failure is cleared on success.
+     * Caller must hold the room lock for {@code roomId}.
      *
      * @param roomId room whose current state is being saved
      * @param latestPayload complete accepted state image or deletion tombstone
      */
     public void checkpoint(String roomId, byte[] latestPayload) {
         validateRoomId(roomId);
-        ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
-        lock.lock();
         long startMs = System.currentTimeMillis();
         long bytesBefore = walSize(roomId);
         try {
@@ -278,22 +274,19 @@ public final class EncryptedWalStore {
             deleteCompactingFileQuietly(roomId);
             recordWriteFailure(roomId, e);
             throw e;
-        } finally {
-            lock.unlock();
         }
     }
 
     /**
      * Deletes a room's save file. We only do this after the game is fully over.
      * Doing it in this order ensures a crash won't bring a dead room back to life.
+     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
      *
      * @param roomId the room to delete
      * @throws PersistenceException if we fail to delete the file
      */
     public void delete(String roomId) {
         requireHealthy();
-        ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
-        lock.lock();
         try {
             faultInjector.check(WalFaultPoint.BEFORE_DELETE, roomId);
             Files.deleteIfExists(walPath(roomId));
@@ -308,8 +301,6 @@ public final class EncryptedWalStore {
         } catch (RuntimeException e) {
             recordWriteFailure(roomId, e);
             throw e;
-        } finally {
-            lock.unlock();
         }
     }
 
@@ -317,6 +308,7 @@ public final class EncryptedWalStore {
      * Quarantines a corrupted WAL file for a specific room by moving it out of active recovery.
      * Internal tracking for the room is cleaned up so that the failure of this single room
      * does not prevent other rooms from operating or recovering.
+     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
      *
      * @param roomId the room whose corrupted WAL should be quarantined
      * @param reason diagnostic explanation for the quarantine
@@ -325,40 +317,32 @@ public final class EncryptedWalStore {
      */
     public Path quarantine(String roomId, String reason) {
         validateRoomId(roomId);
-        ReentrantLock lock = roomLocks.computeIfAbsent(roomId, ignored -> new ReentrantLock());
-        lock.lock();
-        try {
-            Path wal = walPath(roomId);
-            Path quarantinePath = directory.resolve(roomId + ".wal.corrupted");
-            deleteCompactingFileQuietly(roomId);
-            if (Files.exists(wal)) {
+        Path wal = walPath(roomId);
+        Path quarantinePath = directory.resolve(roomId + ".wal.corrupted");
+        deleteCompactingFileQuietly(roomId);
+        if (Files.exists(wal)) {
+            try {
                 try {
-                    try {
-                        Files.move(wal, quarantinePath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                    } catch (AtomicMoveNotSupportedException e) {
-                        Files.move(wal, quarantinePath, StandardCopyOption.REPLACE_EXISTING);
-                    }
-                    forceDirectory();
-                } catch (IOException e) {
-                    logger.error("Failed to move corrupted WAL for room {}: {}", roomId, e.getMessage(), e);
-                    throw new PersistenceException("Cannot quarantine corrupted WAL for room " + roomId, e);
+                    Files.move(wal, quarantinePath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException e) {
+                    Files.move(wal, quarantinePath, StandardCopyOption.REPLACE_EXISTING);
                 }
+                forceDirectory();
+            } catch (IOException e) {
+                logger.error("Failed to move corrupted WAL for room {}: {}", roomId, e.getMessage(), e);
+                throw new PersistenceException("Cannot quarantine corrupted WAL for room " + roomId, e);
             }
-            nextSequences.remove(roomId);
-            checkpointRooms.remove(roomId);
-            failedRooms.remove(roomId);
-            if (failedRooms.isEmpty()) {
-                lastError = null;
-            }
-            logger.error("Quarantined corrupted WAL file for room {}: {}", roomId, reason);
-            return quarantinePath;
-        } finally {
-            lock.unlock();
         }
+        nextSequences.remove(roomId);
+        checkpointRooms.remove(roomId);
+        failedRooms.remove(roomId);
+        logger.error("Quarantined corrupted WAL file for room {}: {}", roomId, reason);
+        return quarantinePath;
     }
 
     /**
      * Convenience alias for {@link #quarantine(String, String)}.
+     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
      *
      * @param roomId the room whose corrupted WAL should be quarantined
      * @param reason diagnostic explanation for the quarantine
@@ -377,7 +361,13 @@ public final class EncryptedWalStore {
         return !recoveryFailed.get() && failedRooms.isEmpty();
     }
 
-    /** Returns whether a full image must replace this room's WAL before more appends. */
+    /**
+     * Returns whether a full image must replace this room's WAL before more appends.
+     * Caller must hold the room lock for {@code roomId}.
+     *
+     * @param roomId the room to check
+     * @return {@code true} if a full checkpoint is required before appending
+     */
     public boolean requiresCheckpoint(String roomId) {
         return checkpointRooms.contains(roomId);
     }
@@ -411,6 +401,7 @@ public final class EncryptedWalStore {
 
     /**
      * Gets the size of a save file so we know when to clean it up.
+     * Caller must hold the room lock for {@code roomId}.
      *
      * @param roomId the room to check
      * @return the file size in bytes, or a huge number if we can't read it
@@ -713,6 +704,7 @@ public final class EncryptedWalStore {
     /**
      * Records a failed save without allowing a different room's successful retry to
      * clear it. Full checkpoint replacement is required before ordinary appends resume.
+     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
      *
      * @param roomId room whose current state has not been confirmed saved
      * @param failure what went wrong

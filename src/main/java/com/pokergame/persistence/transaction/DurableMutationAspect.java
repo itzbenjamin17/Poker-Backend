@@ -177,15 +177,17 @@ public final class DurableMutationAspect {
             LockLease lease = roomCoordinator.tryAcquire(roomId);
             if (lease == null) continue;
             try (lease) {
-                PendingSave pending = pendingSaves.get(roomId);
-                if (pending == null) continue;
-                if (pending.image() == null) {
-                    pending = captureState(roomId);
-                    pendingSaves.put(roomId, pending);
+                try {
+                    PendingSave pending = pendingSaves.get(roomId);
+                    if (pending == null) continue;
+                    if (pending.image() == null) {
+                        pending = captureState(roomId);
+                        pendingSaves.put(roomId, pending);
+                    }
+                    saveState(roomId, pending, null);
+                } catch (RuntimeException failure) {
+                    recordStorageFailure(roomId, failure);
                 }
-                saveState(roomId, pending, null);
-            } catch (RuntimeException failure) {
-                recordStorageFailure(roomId, failure);
             }
         }
     }
