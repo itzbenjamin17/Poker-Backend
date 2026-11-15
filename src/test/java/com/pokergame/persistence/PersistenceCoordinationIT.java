@@ -611,6 +611,42 @@ class PersistenceCoordinationIT {
     }
 
     @Test
+    @DisplayName("Per-room write failure isolates affected room while another room persists and deletes normally")
+    void perRoomWriteFailureIsolatesFailedRoomWhileOtherRoomPersistsAndDeletes() {
+        String failedRoomId = roomFixtures.createAndConnectRoom("Failed Isolation Room", "HostA", "Alice");
+        String healthyRoomId = roomFixtures.createAndConnectRoom("Healthy Isolation Room", "HostB", "Bob");
+
+        FAULT_INJECTOR.set((point, id) -> {
+            if (failedRoomId.equals(id)
+                    && (point == WalFaultPoint.BEFORE_COMMIT_WRITE || point == WalFaultPoint.BEFORE_FLUSH)) {
+                throw new PersistenceException("Simulated room-scoped write outage");
+            }
+        });
+
+        roomService.joinRoom(failedRoomId, new JoinRoomRequest("Failed Isolation Room", "Charlie", null));
+        assertThat(walStore.isHealthy()).isFalse();
+        assertThat(walStore.isHealthy(failedRoomId)).isFalse();
+        assertThat(walStore.isHealthy(healthyRoomId)).isTrue();
+        assertThat(walStore.unsavedRoomCount()).isEqualTo(1);
+
+        // Healthy room can still persist mutations and delete its WAL while failedRoomId remains degraded.
+        roomService.joinRoom(healthyRoomId, new JoinRoomRequest("Healthy Isolation Room", "Dana", null));
+        RecoveredAggregate healthySnapshot = snapshotMapper.deserialize(walStore.recoverLatest(healthyRoomId).orElseThrow());
+        assertThat(healthySnapshot.room().getPlayers()).containsExactlyInAnyOrder("HostB", "Bob", "Dana");
+        assertThat(walStore.requiresCheckpoint(healthyRoomId)).isFalse();
+
+        roomService.destroyRoom(healthyRoomId);
+        assertThat(walStore.recoverLatest(healthyRoomId)).isEmpty();
+        assertThat(walStore.unsavedRoomCount()).isEqualTo(1);
+        assertThat(walStore.isHealthy(failedRoomId)).isFalse();
+
+        FAULT_INJECTOR.set(WalFaultInjector.NONE);
+        awaitPendingSavesFlushed();
+        RecoveredAggregate recoveredFailed = snapshotMapper.deserialize(walStore.recoverLatest(failedRoomId).orElseThrow());
+        assertThat(recoveredFailed.room().getPlayers()).containsExactlyInAnyOrder("HostA", "Alice", "Charlie");
+    }
+
+    @Test
     @DisplayName("Committed terminal cleanup intent removes room, game, and WAL during recovery once expired")
     void committedCleanupIntentSurvivesRecoveryAndRemovesAggregates() {
         String roomId = roomFixtures.createAndConnectRoom("Cleanup Recovery Room", "Host", "Alice");

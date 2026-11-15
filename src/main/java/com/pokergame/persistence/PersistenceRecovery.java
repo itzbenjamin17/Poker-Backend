@@ -130,11 +130,12 @@ public final class PersistenceRecovery implements ApplicationRunner {
             
             // If the room was marked for deletion before the crash, permanently delete it now
             if (aggregate.deleted()) {
-                logger.info("Deleted tombstone room {}", roomId);
                 try (LockLease _ = roomCoordinator.acquire(roomId)) {
-                    store.delete(roomId);
+                    if (tryDeleteWal(roomId, "tombstone")) {
+                        logger.info("Deleted tombstone room {}", roomId);
+                        roomsDeleted++;
+                    }
                 }
-                roomsDeleted++;
                 continue;
             }
             
@@ -151,7 +152,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
         }
 
         // Calculate a new grace period deadline from the current time
-        long freshDeadline = System.currentTimeMillis() + disconnectGracePeriodMs;
+        long freshDeadline = clock.millis() + disconnectGracePeriodMs;
         Map<RecoveredPlayerKey, Long> recoveredDeadlines = new HashMap<>();
 
         for (RecoveredAggregate aggregate : recoveredAggregates) {
@@ -164,16 +165,18 @@ public final class PersistenceRecovery implements ApplicationRunner {
                         if (inactivityDeadline != null && clock.millis() >= inactivityDeadline) {
                             logger.info("Lobby {} expired during restart downtime (deadline: {}, now: {}); deleting",
                                     roomId, inactivityDeadline, clock.millis());
-                            store.delete(roomId);
-                            roomsDeleted++;
+                            if (tryDeleteWal(roomId, "expired lobby")) {
+                                roomsDeleted++;
+                            }
                             continue;
                         }
                     } else {
                         if (game.isGameOver() && game.isCleanupExpired(clock.millis())) {
                             logger.info("Game {} cleanup deadline expired during restart downtime (now: {}); deleting",
                                     roomId, clock.millis());
-                            store.delete(roomId);
-                            roomsDeleted++;
+                            if (tryDeleteWal(roomId, "expired game cleanup")) {
+                                roomsDeleted++;
+                            }
                             continue;
                         }
 
@@ -255,6 +258,17 @@ public final class PersistenceRecovery implements ApplicationRunner {
      */
     public boolean isComplete() {
         return complete;
+    }
+
+    private boolean tryDeleteWal(String roomId, String reason) {
+        try {
+            store.delete(roomId);
+            return true;
+        } catch (Exception e) {
+            logger.warn("Failed to delete WAL for {} room {} during recovery; skipping", reason, roomId, e);
+            store.clearRoomTracking(roomId);
+            return false;
+        }
     }
 
     private record RecoveredPlayerKey(String roomId, String playerName) { }

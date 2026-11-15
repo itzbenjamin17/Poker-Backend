@@ -789,6 +789,65 @@ class DurableMutationAspectTest {
         verify(roomService, never()).destroyRoom(roomId);
     }
 
+    @Test
+    @DisplayName("Room B uses ordinary append and deletes normally even when room A has a write failure")
+    void otherRoomUsesOrdinaryAppendAndDeletesNormallyWhenAnotherRoomHasWriteFailure() throws Throwable {
+        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), new HandEvaluatorService());
+        AtomicReference<String> failRoom = new AtomicReference<>();
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = spy(new EncryptedWalStore(tempDir, keyring, (point, roomId) -> {
+            if (roomId.equals(failRoom.get()) && point == WalFaultPoint.BEFORE_COMMIT_WRITE) {
+                throw new PersistenceException("injected outage for " + roomId);
+            }
+        }));
+
+        Room roomA = new Room("room-A", "Room A", "Alice", 6, 10, 20, 1000, null);
+        roomA.addPlayer("Alice");
+        Room roomB = new Room("room-B", "Room B", "Bob", 6, 10, 20, 1000, null);
+        roomB.addPlayer("Bob");
+        AtomicBoolean roomBDeleted = new AtomicBoolean(false);
+
+        when(roomServiceProvider.getObject()).thenReturn(roomService);
+        when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
+        when(roomService.getRoom("room-A")).thenReturn(roomA);
+        when(roomService.getCurrentHost("room-A")).thenReturn("Alice");
+        when(roomService.getRoom("room-B")).thenAnswer(inv -> roomBDeleted.get() ? null : roomB);
+        lenient().when(roomService.getCurrentHost("room-B")).thenReturn("Bob");
+        when(gameLifecycleService.getGame(anyString())).thenReturn(null);
+
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, realMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
+
+        // Create initial WAL files for both rooms
+        aspect.persist(mutationPoint("room-A", () -> "init-a"), validMutation());
+        aspect.persist(mutationPoint("room-B", () -> "init-b"), validMutation());
+        clearInvocations(store);
+
+        // Room A fails a commit write, degrading global store health
+        failRoom.set("room-A");
+        aspect.persist(mutationPoint("room-A", () -> "accepted-a"), validMutation());
+        failRoom.set(null);
+        assertFalse(store.isHealthy());
+        assertEquals(1, store.unsavedRoomCount());
+
+        // Room B still uses prepare + commit (ordinary append), NOT a forced full checkpoint
+        aspect.persist(mutationPoint("room-B", () -> "accepted-b"), validMutation());
+        verify(store).prepare("room-B");
+        verify(store).commit(argThat(tx -> "room-B".equals(tx.roomId())), any());
+        verify(store, never()).checkpoint(eq("room-B"), any());
+
+        // Deleting room B still executes store.delete("room-B") instead of skipping deletion
+        aspect.persist(mutationPoint("room-B", () -> {
+            roomBDeleted.set(true);
+            return null;
+        }), validMutation());
+        verify(store).delete("room-B");
+        assertTrue(store.recoverLatest("room-B").isEmpty());
+        assertEquals(1, store.unsavedRoomCount());
+    }
+
     /**
      * RoomService.restoreRoom reconciles inconsistent host mappings
      * and preserves legitimate player state under lock.

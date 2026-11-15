@@ -41,8 +41,9 @@ import org.slf4j.LoggerFactory;
  * room, so nobody can copy a save file from one room to another.
  * </p>
  * <p>
- * A failed write disables ordinary appends until a current full checkpoint repairs
- * the affected WAL. Services can continue in memory while recovery protection is degraded.
+ * A failed write disables ordinary appends for that room until a current full checkpoint repairs
+ * or deletes the affected WAL; unaffected rooms continue operating normally. Services can continue
+ * in memory while recovery protection for the affected room is degraded.
  * </p>
  * <p>
  * Callers hold the room lock for per-room operations (or run during single-threaded startup recovery).
@@ -110,8 +111,8 @@ public final class EncryptedWalStore {
      * @throws PersistenceException if we can't save to the file or there's an error
      */
     public WalTransaction prepare(String roomId) {
-        requireHealthy();
         validateRoomId(roomId);
+        requireHealthy(roomId);
         if (requiresCheckpoint(roomId)) {
             throw new PersistenceException("WAL needs a full checkpoint before appending");
         }
@@ -137,7 +138,7 @@ public final class EncryptedWalStore {
      * @throws PersistenceException if we have trouble writing or encrypting the data
      */
     public void commit(WalTransaction transaction, byte[] payload) {
-        requireHealthy();
+        requireHealthy(transaction.roomId());
         try {
             long expected = transaction.prepareSequence() + 1;
             long sequence = nextSequence(transaction.roomId());
@@ -190,7 +191,9 @@ public final class EncryptedWalStore {
      *                              ({@code <roomId>.wal.corrupted}) so remaining rooms can recover
      */
     public Map<String, byte[]> recoverAll() {
-        requireHealthy();
+        if (!isHealthy()) {
+            throw new PersistenceException("Persistence needs a full checkpoint before further appends");
+        }
         cleanOrphanedCompactingFiles();
         Map<String, byte[]> recovered = new HashMap<>();
         try (var paths = Files.list(directory)) {
@@ -214,7 +217,13 @@ public final class EncryptedWalStore {
                     recovered.put(roomId, latest.get());
                 } else {
                     logger.info("Cleaning up uncommitted WAL file for room {}", roomId);
-                    delete(roomId);
+                    try {
+                        delete(roomId);
+                    } catch (RuntimeException e) {
+                        logger.warn("Failed to delete uncommitted WAL file for room {} during recovery; skipping",
+                                roomId, e);
+                        clearRoomTracking(roomId);
+                    }
                 }
             }
             return Map.copyOf(recovered);
@@ -236,7 +245,8 @@ public final class EncryptedWalStore {
      * @throws PersistenceException if we can't safely swap out the old file
      */
     public void compact(String roomId, byte[] latestPayload) {
-        requireHealthy();
+        validateRoomId(roomId);
+        requireHealthy(roomId);
         checkpoint(roomId, latestPayload);
     }
 
@@ -280,19 +290,24 @@ public final class EncryptedWalStore {
     /**
      * Deletes a room's save file. We only do this after the game is fully over.
      * Doing it in this order ensures a crash won't bring a dead room back to life.
+     * Allowed even when this or another room has an outstanding write failure, and clears
+     * failure and checkpoint tracking for {@code roomId} on success.
      * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
      *
      * @param roomId the room to delete
-     * @throws PersistenceException if we fail to delete the file
+     * @throws PersistenceException if we fail to delete the file or startup recovery failed
      */
     public void delete(String roomId) {
-        requireHealthy();
+        validateRoomId(roomId);
+        if (recoveryFailed.get()) {
+            throw new PersistenceException("Persistence recovery failed");
+        }
         try {
             faultInjector.check(WalFaultPoint.BEFORE_DELETE, roomId);
             Files.deleteIfExists(walPath(roomId));
             Files.deleteIfExists(directory.resolve(roomId + ".wal.compacting"));
             forceDirectory();
-            nextSequences.remove(roomId);
+            clearRoomTracking(roomId);
             logger.debug("WAL deleted room={}", roomId);
         } catch (IOException e) {
             PersistenceException failure = new PersistenceException("Cannot delete WAL for room " + roomId, e);
@@ -333,11 +348,24 @@ public final class EncryptedWalStore {
                 throw new PersistenceException("Cannot quarantine corrupted WAL for room " + roomId, e);
             }
         }
+        clearRoomTracking(roomId);
+        logger.error("Quarantined corrupted WAL file for room {}: {}", roomId, reason);
+        return quarantinePath;
+    }
+
+    /**
+     * Clears in-memory sequence, checkpoint, and failure tracking for a room that is not
+     * kept in active memory (for example after quarantine, deletion, or skipping an un-restored room
+     * whose WAL delete failed during startup recovery).
+     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
+     *
+     * @param roomId the room whose tracking should be removed
+     */
+    public void clearRoomTracking(String roomId) {
+        validateRoomId(roomId);
         nextSequences.remove(roomId);
         checkpointRooms.remove(roomId);
         failedRooms.remove(roomId);
-        logger.error("Quarantined corrupted WAL file for room {}: {}", roomId, reason);
-        return quarantinePath;
     }
 
     /**
@@ -353,12 +381,25 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Checks if the storage system is working properly.
+     * Reports overall store health for the persistence health indicator.
+     * Returns {@code true} only when startup recovery succeeded and no room has an outstanding write failure.
      *
-     * @return true if there are no errors, false if something broke
+     * @return {@code true} if startup recovery succeeded and no room has an outstanding write failure
      */
     public boolean isHealthy() {
         return !recoveryFailed.get() && failedRooms.isEmpty();
+    }
+
+    /**
+     * Checks whether persistence is healthy for a specific room.
+     * Returns {@code true} when startup recovery succeeded and {@code roomId} has no outstanding write failure,
+     * independent of write failures in other rooms.
+     *
+     * @param roomId the room to check
+     * @return {@code true} if ordinary persistence operations for {@code roomId} can proceed
+     */
+    public boolean isHealthy(String roomId) {
+        return !recoveryFailed.get() && roomId != null && !failedRooms.contains(roomId);
     }
 
     /**
@@ -694,9 +735,9 @@ public final class EncryptedWalStore {
         }
     }
 
-    /** Rejects ordinary appends until failed rooms have confirmed full checkpoints. */
-    private void requireHealthy() {
-        if (!isHealthy()) {
+    /** Rejects ordinary appends for a room until startup is healthy and the room has no outstanding write failure. */
+    private void requireHealthy(String roomId) {
+        if (!isHealthy(roomId)) {
             throw new PersistenceException("Persistence needs a full checkpoint before further appends");
         }
     }

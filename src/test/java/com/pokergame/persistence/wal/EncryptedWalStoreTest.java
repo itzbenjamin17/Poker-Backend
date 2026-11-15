@@ -164,10 +164,10 @@ class EncryptedWalStoreTest {
     }
 
     /**
-     * Protects the contract that commit failure marks store unhealthy and rejects later mutations.
+     * Protects the contract that commit failure marks only the failed room unhealthy while other rooms can still append.
      */
     @Test
-    void commitFailureMarksStoreUnhealthyAndRejectsLaterMutations() {
+    void commitFailureMarksFailedRoomUnhealthyWhileOtherRoomsCanStillAppend() {
         AtomicReference<WalFaultPoint> failure = new AtomicReference<>();
         EncryptedWalStore store = new EncryptedWalStore(directory, keyring("current", (byte) 6),
                 (point, roomId) -> {
@@ -179,8 +179,16 @@ class EncryptedWalStoreTest {
         assertThrows(PersistenceException.class,
                 () -> store.commit(transaction, "lost".getBytes(StandardCharsets.UTF_8)));
         assertFalse(store.isHealthy());
+        assertFalse(store.isHealthy("room-fail"));
+        assertTrue(store.isHealthy("other-room"));
         failure.set(null);
-        assertThrows(PersistenceException.class, () -> store.prepare("other-room"));
+        assertThrows(PersistenceException.class, () -> store.prepare("room-fail"));
+        assertThrows(PersistenceException.class, () -> store.compact("room-fail", "lost".getBytes(StandardCharsets.UTF_8)));
+
+        WalTransaction otherTx = store.prepare("other-room");
+        byte[] otherPayload = "other-room-ok".getBytes(StandardCharsets.UTF_8);
+        store.commit(otherTx, otherPayload);
+        assertArrayEquals(otherPayload, store.recoverLatest("other-room").orElseThrow());
     }
 
     /**
@@ -362,9 +370,11 @@ class EncryptedWalStoreTest {
         // 3. Attempting to recover room-corrupt fails with PersistenceException
         assertThrows(PersistenceException.class, () -> store.recoverLatest("room-corrupt"));
         assertFalse(store.isHealthy(), "Store should be degraded while room-corrupt is in failedRooms");
+        assertThrows(PersistenceException.class, () -> store.prepare("room-corrupt"));
 
-        // Attempting to append to healthy room fails while persistence is degraded
-        assertThrows(PersistenceException.class, () -> store.prepare("room-healthy"));
+        // Healthy room can still append even while room-corrupt is degraded
+        WalTransaction txHealthyBeforeQuarantine = store.prepare("room-healthy");
+        store.commit(txHealthyBeforeQuarantine, "healthy-during-degradation".getBytes(StandardCharsets.UTF_8));
 
         // 4. Quarantine the corrupted room
         Path expectedQuarantinePath = directory.resolve("room-corrupt.wal.corrupted");
@@ -580,6 +590,82 @@ class EncryptedWalStoreTest {
             assertEquals(roomId + "-v3", new String(all.get(roomId), StandardCharsets.UTF_8));
         }
         assertTrue(recovered.isHealthy());
+    }
+
+    /**
+     * Protects the contract that delete works even when the target room or another room is in failedRooms,
+     * and clears failed/checkpoint tracking for the deleted room on success.
+     */
+    @Test
+    void deleteSucceedsForFailedRoomOrWhileAnotherRoomIsFailedAndClearsTracking() {
+        AtomicReference<String> failRoom = new AtomicReference<>();
+        EncryptedWalStore store = new EncryptedWalStore(directory, keyring("current", (byte) 51),
+                (point, roomId) -> {
+                    if (roomId.equals(failRoom.get()) && point == WalFaultPoint.BEFORE_COMMIT_WRITE) {
+                        throw new PersistenceException("injected commit outage");
+                    }
+                });
+
+        store.commit(store.prepare("room-a"), "a-v1".getBytes(StandardCharsets.UTF_8));
+        store.commit(store.prepare("room-b"), "b-v1".getBytes(StandardCharsets.UTF_8));
+
+        WalTransaction failedTx = store.prepare("room-a");
+        failRoom.set("room-a");
+        assertThrows(PersistenceException.class,
+                () -> store.commit(failedTx, "a-v2".getBytes(StandardCharsets.UTF_8)));
+        failRoom.set(null);
+
+        assertFalse(store.isHealthy());
+        assertFalse(store.isHealthy("room-a"));
+        assertTrue(store.isHealthy("room-b"));
+        assertEquals(1, store.unsavedRoomCount());
+        assertTrue(store.requiresCheckpoint("room-a"));
+
+        // Deleting a different healthy room succeeds while room-a remains failed
+        store.delete("room-b");
+        assertTrue(store.recoverLatest("room-b").isEmpty());
+        assertEquals(1, store.unsavedRoomCount());
+        assertFalse(store.isHealthy());
+
+        // Deleting the failed room itself succeeds and clears its failed/checkpoint tracking
+        store.delete("room-a");
+        assertTrue(store.recoverLatest("room-a").isEmpty());
+        assertFalse(store.requiresCheckpoint("room-a"));
+        assertTrue(store.isHealthy("room-a"));
+        assertEquals(0, store.unsavedRoomCount());
+        assertTrue(store.isHealthy());
+        assertNull(store.lastError());
+    }
+
+    /**
+     * Protects the contract that a transient delete failure on an uncommitted PREPARE-only WAL
+     * during recoverAll() logs and clears tracking without quarantining or aborting startup.
+     */
+    @Test
+    void recoverAllContinuesWithoutQuarantiningOrWedgingWhenUncommittedWalDeleteFails() {
+        EncryptionKeyring keys = keyring("current", (byte) 52);
+        EncryptedWalStore writer = new EncryptedWalStore(directory, keys);
+        writer.prepare("room-uncommitted");
+        byte[] validPayload = "valid-state".getBytes(StandardCharsets.UTF_8);
+        writer.commit(writer.prepare("room-valid"), validPayload);
+
+        EncryptedWalStore recovering = new EncryptedWalStore(directory, keys, (point, roomId) -> {
+            if (point == WalFaultPoint.BEFORE_DELETE && "room-uncommitted".equals(roomId)) {
+                throw new PersistenceException("injected delete failure");
+            }
+        });
+
+        Map<String, byte[]> recovered = assertDoesNotThrow(recovering::recoverAll);
+
+        assertEquals(1, recovered.size());
+        assertArrayEquals(validPayload, recovered.get("room-valid"));
+        assertTrue(recovering.isHealthy());
+        assertTrue(recovering.isHealthy("room-uncommitted"));
+        assertEquals(0, recovering.unsavedRoomCount());
+        assertFalse(recovering.requiresCheckpoint("room-uncommitted"));
+        assertNull(recovering.lastError());
+        assertTrue(Files.exists(directory.resolve("room-uncommitted.wal")));
+        assertFalse(Files.exists(directory.resolve("room-uncommitted.wal.corrupted")));
     }
 
     /**

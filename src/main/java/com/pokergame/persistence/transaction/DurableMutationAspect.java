@@ -127,7 +127,7 @@ public final class DurableMutationAspect {
                 boolean hasPreExistingRoom = beforeMutation != null && beforeMutation.image() != null;
                 boolean prepareFailed = false;
                 WalTransaction transaction = null;
-                if (hasPreExistingRoom && store.isHealthy() && !store.requiresCheckpoint(roomId)) {
+                if (hasPreExistingRoom && store.isHealthy(roomId) && !store.requiresCheckpoint(roomId)) {
                     try {
                         transaction = store.prepare(roomId);
                     } catch (RuntimeException failure) {
@@ -204,7 +204,7 @@ public final class DurableMutationAspect {
     }
 
     private void saveState(String roomId, PendingSave pending, WalTransaction transaction) {
-        boolean checkpoint = transaction == null || !store.isHealthy() || store.requiresCheckpoint(roomId);
+        boolean checkpoint = transaction == null || !store.isHealthy(roomId) || store.requiresCheckpoint(roomId);
         if (checkpoint) {
             store.checkpoint(roomId, pending.image());
             recordsSinceCompaction.remove(roomId);
@@ -212,7 +212,7 @@ public final class DurableMutationAspect {
             store.commit(transaction, pending.image());
         }
         if (pending.deleted()) {
-            if (!store.isHealthy()) return;
+            if (!store.isHealthy(roomId)) return;
             store.delete(roomId);
             recordsSinceCompaction.remove(roomId);
         } else if (!checkpoint && shouldCompact(roomId)) {
@@ -348,7 +348,7 @@ public final class DurableMutationAspect {
             RoomService rooms = roomService.getObject();
             if (rooms == null || rooms.getRoom(roomId) == null) {
                 recordsSinceCompaction.remove(roomId);
-                if (prepared && store.isHealthy() && store.recoverLatest(roomId).isEmpty()) {
+                if (prepared && store.isHealthy(roomId) && store.recoverLatest(roomId).isEmpty()) {
                     store.delete(roomId);
                 }
             }
