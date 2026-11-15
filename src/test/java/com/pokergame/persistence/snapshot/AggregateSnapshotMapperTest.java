@@ -28,7 +28,6 @@ import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
 import com.pokergame.enums.Rank;
-import com.pokergame.service.HandEvaluatorService;
 import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.GameStateService;
 import com.pokergame.util.LockLease;
@@ -82,20 +81,19 @@ class AggregateSnapshotMapperTest {
      */
     @Test
     void activeGameRoundTripPreservesExactNextCardsAndAuthoritativeState() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room("room-1", "Night Game", "Alice", 6, 5, 10, 1000, "secret");
         room.addPlayer("Alice");
         room.addPlayer("Bob");
         room.setGameStarted(true);
         Game game = new Game("room-1", List.of(
                 new Player("Alice", "alice-id", 1000),
-                new Player("Bob", "bob-id", 1000)), 6, 5, 10, evaluator);
+                new Player("Bob", "bob-id", 1000)), 6, 5, 10);
         assertFalse(game.resetForNewHand());
         game.dealHoleCards();
         game.postBlinds();
 
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
         RecoveredAggregate recovered = mapper.deserialize(mapper.serialize(room, "Bob", game));
 
         assertEquals(room.getRoomName(), recovered.room().getRoomName());
@@ -123,7 +121,7 @@ class AggregateSnapshotMapperTest {
         room.setInactivityDeadlineEpochMs(deadline);
         Game game = new Game("room-1", List.of(
                 new Player("Alice", "alice-id", 1000),
-                new Player("Bob", "bob-id", 1000)), 6, 5, 10, new HandEvaluatorService());
+                new Player("Bob", "bob-id", 1000)), 6, 5, 10);
         AggregateSnapshotMapper mapper = newMapper();
 
         RecoveredAggregate restored = mapper.restoreStateImage(mapper.captureStateImage(room, "Alice", game));
@@ -138,7 +136,6 @@ class AggregateSnapshotMapperTest {
 
     @Test
     void settlementAndTerminalRoundTripPreservesState() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room("room-2", "Recovery", "Alice", 4, 5, 10, 1000, "secret");
         room.addPlayer("Alice");
         room.addPlayer("Bob");
@@ -156,14 +153,14 @@ class AggregateSnapshotMapperTest {
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 123L))
                 .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 9L))
                 .handNumber(7).readyGateState(ReadyGateState.WAITING_FOR_PLAYERS).forfeitPending(true).stateRevision(19)
-                .handEvaluator(evaluator).build();
+                .build();
         game.markGameOver();
         game.settleGameEnd(players.getFirst(), Set.of());
         assertEquals(1033, players.getFirst().getChips());
         assertEquals(0, game.getPot());
         assertTrue(game.isFinalPotSettled());
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
 
         byte[] snapshot = mapper.serialize(room, "Alice", game);
         Game restored = mapper.deserialize(snapshot).game();
@@ -199,7 +196,6 @@ class AggregateSnapshotMapperTest {
 
     @Test
     void retainedTerminalResultRoundTrip() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room("room-terminal", "Final Table", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
         room.addPlayer("Bob");
@@ -244,10 +240,10 @@ class AggregateSnapshotMapperTest {
                 .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 1L))
                 .handNumber(1).readyGateState(ReadyGateState.CLOSED).forfeitPending(false).stateRevision(42)
                 .retainedTerminalResult(terminalResult)
-                .handEvaluator(evaluator).build();
+                .build();
 
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
 
         byte[] snapshot = mapper.serialize(room, "Alice", game);
         String json = new String(snapshot, StandardCharsets.UTF_8);
@@ -277,7 +273,6 @@ class AggregateSnapshotMapperTest {
 
     @Test
     void midStreetRoundTripPreservesRaiseMinimumAndReopeningLegality() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room("room-3", "Betting", "A", 6, 5, 10, 1000, null);
         room.addPlayer("A"); room.addPlayer("B"); room.addPlayer("Short1"); room.addPlayer("Short2");
         room.setGameStarted(true);
@@ -293,9 +288,9 @@ class AggregateSnapshotMapperTest {
                 .lastActedWagerByPlayer(Map.of("a", 100)).handSeatOrder(List.of("a", "b", "s1", "s2"))
                 .dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                 .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of("a"))
-                .scheduledTaskDeadlines(Map.of()).handEvaluator(evaluator).build();
+                .scheduledTaskDeadlines(Map.of()).build();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
 
         Game restored = mapper.deserialize(mapper.serialize(room, "A", game)).game();
         Player initialA = restored.getPlayers().getFirst();
@@ -316,7 +311,6 @@ class AggregateSnapshotMapperTest {
 
     @Test
     void activeGameSnapshotPreservesRoomMembershipSeparatelyFromRetainedGameRows() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room("room-divergent", "Divergent", "DepartedHost", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
         room.addPlayer("BustedSpectator");
@@ -329,10 +323,10 @@ class AggregateSnapshotMapperTest {
                 Player.restoreBuilder().name("DepartedHost").playerId("departed-host-id").chips(0).out(true)
                         .holeCards(List.of()).bestHand(List.of()).build(),
                 new Player("BustedSpectator", "spectator-id", 0));
-        Game game = new Game("room-divergent", gamePlayers, 6, 5, 10, evaluator);
+        Game game = new Game("room-divergent", gamePlayers, 6, 5, 10);
 
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
         byte[] snapshot = mapper.serialize(room, null, game);
 
         RecoveredAggregate recovered = mapper.deserialize(snapshot);
@@ -400,9 +394,8 @@ class AggregateSnapshotMapperTest {
     @Test
     @DisplayName("captureStateImage copies state into an immutable snapshot detached from live mutations")
     void captureStateImage_DetachesSnapshotFromLiveMutation() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
 
         Room room = new Room("room-order", "Order Room", "Alice", 6, 10, 20, 1000, null);
         room.addPlayer("Alice");
@@ -410,7 +403,7 @@ class AggregateSnapshotMapperTest {
 
         Player p1 = new Player("Alice", "p1", 1000);
         Player p2 = new Player("Bob", "p2", 1000);
-        Game game = new Game("room-order", List.of(p1, p2), 6, 10, 20, evaluator);
+        Game game = new Game("room-order", List.of(p1, p2), 6, 10, 20);
 
         // Capture and serialize state image before mutating live game
         AggregateStateImage stateImage = mapper.captureStateImage(room, "Alice", game);
@@ -431,9 +424,8 @@ class AggregateSnapshotMapperTest {
     /** A restart image captured during a chip transfer must include both sides of the transfer. */
     @Test
     void concurrentStateImageCaptureAndMutation_RestoresCoherentState() throws Exception {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
 
         String roomId = "concurrent-capture";
         Room room = new Room(roomId, "Concurrent Capture Room", "Alice", 6, 10, 20, 1000, null);
@@ -441,7 +433,7 @@ class AggregateSnapshotMapperTest {
         room.addPlayer("Bob");
         Player alice = new Player("Alice", "p1", 1000);
         Player bob = new Player("Bob", "p2", 1000);
-        Game game = new Game(roomId, List.of(alice, bob), 6, 10, 20, evaluator);
+        Game game = new Game(roomId, List.of(alice, bob), 6, 10, 20);
         game.dealHoleCards();
         game.postBlinds();
         RoomCoordinator coordinator = new RoomCoordinator();
@@ -474,9 +466,8 @@ class AggregateSnapshotMapperTest {
     @Test
     @DisplayName("toState handles null game, null player, and null player elements safely")
     void toState_NullAndEdgeCases_HandledSafely() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
 
         assertNull(mapper.toState((Game) null));
         assertNull(mapper.toState((Player) null));
@@ -493,9 +484,8 @@ class AggregateSnapshotMapperTest {
     @Test
     @DisplayName("Snapshot serializes passwordHash and never cleartext, and deserialization restores passwordHash")
     void passwordSecurity_SnapshotSerializesPasswordHashAndNeverPlaintext() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
 
         String rawSecret = "VerySecretPassphrase123!";
         Room room = new Room("pw-room", "Protected Room", "Host", 4, 10, 20, 500, rawSecret);
@@ -526,9 +516,8 @@ class AggregateSnapshotMapperTest {
     @Test
     @DisplayName("Public room snapshot serializes null password and deserialization restores room with no password")
     void passwordSecurity_PublicRoomSnapshotSerializesNullPassword() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
 
         Room publicRoom = new Room("pub-room", "Public Room", "Host", 4, 10, 20, 500, null);
         publicRoom.addPlayer("Host");
@@ -547,9 +536,8 @@ class AggregateSnapshotMapperTest {
     @Test
     @DisplayName("Snapshot and restoreRoom preserve playerMembershipIds so original JWT membership remains valid")
     void snapshotAndRestoreRoom_PreservesPlayerMembershipIds() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
 
         Room room = new Room("mem-room", "Membership Room", "Alice", 4, 10, 20, 500, null);
         String aliceMemId = room.addPlayer("Alice");
@@ -604,7 +592,7 @@ class AggregateSnapshotMapperTest {
     private static final String TERMINAL_ROOM_ID = "room-terminal";
 
     private static AggregateSnapshotMapper newMapper() {
-        return new AggregateSnapshotMapper(JSON, new HandEvaluatorService());
+        return new AggregateSnapshotMapper(JSON);
     }
 
     /**
@@ -632,7 +620,6 @@ class AggregateSnapshotMapperTest {
     @Test
     @DisplayName("The mapper's serialized output carries the same field names as the independent fixture")
     void captureStateImage_FieldNames_MatchIndependentFixture() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room(TERMINAL_ROOM_ID, "Final Table", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
         room.addPlayer("Bob");
@@ -677,10 +664,10 @@ class AggregateSnapshotMapperTest {
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
                 .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 1L))
                 .handNumber(1).readyGateState(ReadyGateState.CLOSED).forfeitPending(false).stateRevision(42)
-                .retainedTerminalResult(terminalResult).handEvaluator(evaluator).build();
+                .retainedTerminalResult(terminalResult).build();
 
         ObjectNode serialized = JSON.valueToTree(
-                new AggregateSnapshotMapper(JSON, evaluator).captureStateImage(room, "Alice", game));
+                new AggregateSnapshotMapper(JSON).captureStateImage(room, "Alice", game));
 
         assertEquals(fieldNameShape(validTerminalSnapshotTree()), fieldNameShape(serialized),
                 "Mapper writer field names drifted from the independent terminal-snapshot fixture");
@@ -742,14 +729,13 @@ class AggregateSnapshotMapperTest {
 
     @Test
     void abandonedGameRoundTripPreservesOutcomeWithoutWinner() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room("room-abandoned", "Night Game", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
         room.addPlayer("Bob");
         room.setGameStarted(true);
         Game game = new Game(room.getRoomId(), List.of(
                 new Player("Alice", "alice-id", 1000),
-                new Player("Bob", "bob-id", 1000)), 6, 5, 10, evaluator);
+                new Player("Bob", "bob-id", 1000)), 6, 5, 10);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -761,7 +747,7 @@ class AggregateSnapshotMapperTest {
                 Clock.systemUTC());
         GameEndResponse result = projections.buildAbandonmentResponse(game);
         game.setGameEndResult(result);
-        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(JSON, evaluator);
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(JSON);
 
         GameEndResponse restored = mapper.deserialize(mapper.serialize(room, "Alice", game))
                 .game().getGameEndResult();
@@ -965,14 +951,12 @@ class AggregateSnapshotMapperTest {
 
 
         private static final String ROOM_ID = "empirical-room-m2";
-        private HandEvaluatorService handEvaluator;
         private AggregateSnapshotMapper snapshotMapper;
 
         @BeforeEach
         void setUp() {
-            handEvaluator = new HandEvaluatorService();
             JsonMapper jsonMapper = JsonMapper.builder().findAndAddModules().build();
-            snapshotMapper = new AggregateSnapshotMapper(jsonMapper, handEvaluator);
+            snapshotMapper = new AggregateSnapshotMapper(jsonMapper);
         }
 
         private Player createPlayer(String id, String name, int chips) {
@@ -1001,7 +985,7 @@ class AggregateSnapshotMapperTest {
             List<Player> players = List.of(p1, p2, p3);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 6, 10, 20, handEvaluator);
+            Game game = new Game(ROOM_ID, players, 6, 10, 20);
             assertFalse(game.resetForNewHand());
             game.dealHoleCards();
             game.postBlinds();
@@ -1059,7 +1043,7 @@ class AggregateSnapshotMapperTest {
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 6, 10, 20, handEvaluator);
+            Game game = new Game(ROOM_ID, players, 6, 10, 20);
             assertFalse(game.resetForNewHand());
             game.dealHoleCards();
             game.postBlinds();
@@ -1101,7 +1085,7 @@ class AggregateSnapshotMapperTest {
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 6, 10, 20, handEvaluator);
+            Game game = new Game(ROOM_ID, players, 6, 10, 20);
             assertFalse(game.resetForNewHand());
             game.dealHoleCards();
             game.postBlinds();
@@ -1143,7 +1127,7 @@ class AggregateSnapshotMapperTest {
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 6, 10, 20, handEvaluator);
+            Game game = new Game(ROOM_ID, players, 6, 10, 20);
             assertFalse(game.resetForNewHand());
             game.dealHoleCards();
             game.postBlinds();
@@ -1186,7 +1170,7 @@ class AggregateSnapshotMapperTest {
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 6, 10, 20, handEvaluator);
+            Game game = new Game(ROOM_ID, players, 6, 10, 20);
             assertFalse(game.resetForNewHand());
             game.dealHoleCards();
             game.postBlinds();
@@ -1251,7 +1235,7 @@ class AggregateSnapshotMapperTest {
                     .readyCountdownActive(true)
                     .readyCountdownDeadlineEpochMs(deadline)
                     .readyGateState(ReadyGateState.COUNTING_DOWN)
-                    .handEvaluator(handEvaluator)
+                    
                     .build();
 
             assertEquals(ReadyGateState.COUNTING_DOWN, game.getReadyGateState());
@@ -1285,7 +1269,7 @@ class AggregateSnapshotMapperTest {
                     .readyCountdownActive(false)
                     .readyCountdownDeadlineEpochMs(null)
                     .readyGateState(ReadyGateState.WAITING_FOR_PLAYERS)
-                    .handEvaluator(handEvaluator)
+                    
                     .build();
 
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, game.getReadyGateState());
@@ -1319,7 +1303,7 @@ class AggregateSnapshotMapperTest {
                     .readyCountdownActive(false)
                     .readyCountdownDeadlineEpochMs(null)
                     .readyGateState(ReadyGateState.CLOSED)
-                    .handEvaluator(handEvaluator)
+                    
                     .build();
 
             assertEquals(ReadyGateState.CLOSED, game.getReadyGateState());
@@ -1349,7 +1333,7 @@ class AggregateSnapshotMapperTest {
                     .bigBlind(20)
                     .readyCountdownActive(true)
                     .readyGateState(null)
-                    .handEvaluator(handEvaluator)
+                    
                     .build();
             assertEquals(ReadyGateState.COUNTING_DOWN, activeCountdownGame.getReadyGateState());
 
@@ -1363,7 +1347,7 @@ class AggregateSnapshotMapperTest {
                     .bigBlind(20)
                     .readyCountdownActive(false)
                     .readyGateState(null)
-                    .handEvaluator(handEvaluator)
+                    
                     .build();
             assertEquals(ReadyGateState.CLOSED, inactiveCountdownGame.getReadyGateState());
         }
@@ -1400,7 +1384,7 @@ class AggregateSnapshotMapperTest {
                     .scheduledTaskGenerations(generations)
                     .stateRevision(42L)
                     .handNumber(5L)
-                    .handEvaluator(handEvaluator)
+                    
                     .build();
 
             assertEquals(42L, game.getStateRevision());
@@ -1420,13 +1404,12 @@ class AggregateSnapshotMapperTest {
 
     @Test
     void queuedSnapshotSeesCompleteMutationAndPriorSnapshotRemainsUnchanged() throws Exception {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
         Player alice = new Player("Alice", "p1", 1000);
         Player bob = new Player("Bob", "p2", 1000);
         Player departing = new Player("Charlie", "p3", 1000);
-        Game game = new Game("snapshot-room", List.of(alice, bob, departing), 6, 10, 20, evaluator);
+        Game game = new Game("snapshot-room", List.of(alice, bob, departing), 6, 10, 20);
         AggregateStateImage.GameState before = mapper.toState(game);
         RoomCoordinator coordinator = new RoomCoordinator();
 
@@ -1465,9 +1448,8 @@ class AggregateSnapshotMapperTest {
 
     @Test
     void repeatedSeatingGetterCallsDoNotMutateSnapshotStateImage() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
         Room room = new Room("room-pure-getters", "Pure Getters", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
         room.addPlayer("Bob");
@@ -1491,7 +1473,7 @@ class AggregateSnapshotMapperTest {
                 .bigBlindPlayerId(null)
                 .currentPlayerId("p2")
                 .currentPhase(GamePhase.PRE_FLOP)
-                .handEvaluator(evaluator)
+                
                 .build();
 
         AggregateStateImage beforeImage = mapper.captureStateImage(room, "Alice", game);

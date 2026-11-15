@@ -1,28 +1,20 @@
-package com.pokergame.service;
+package com.pokergame.model;
 
-import com.pokergame.model.Card;
 import java.util.*;
 import java.util.stream.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
 
-import org.springframework.stereotype.Service;
-
 import static java.util.Objects.requireNonNull;
 
 /**
- * Service for evaluating poker hands and determining hand rankings.
+ * Evaluates poker hands and determines hand rankings.
  * Handles generation of card combinations, hand evaluation, and comparison
  * of hands with the same rank to determine winners.
  */
-@Service
-public class HandEvaluatorService {
-    private static final Logger logger = LoggerFactory.getLogger(HandEvaluatorService.class);
+public class HandEvaluator {
 
     /**
      * Determines the best possible 5-card poker hand from the community cards and a player's hole
@@ -61,10 +53,6 @@ public class HandEvaluatorService {
                     bestHand = new ArrayList<>(sortedCombination);
                 }
             }
-        }
-
-        if (logger.isDebugEnabled()) {
-            logger.debug("Evaluated best hand: rank={} cards={}", bestRank, bestHand);
         }
 
         return new HandEvaluationResult(bestHand, bestRank);
@@ -115,7 +103,7 @@ public class HandEvaluatorService {
      * @return {@code true} if {@code sortedCombination} beats {@code bestHand}
      */
     public boolean isBetterHandOfSameRank(List<Card> sortedCombination, List<Card> bestHand, HandRank rank) {
-        boolean better = switch (rank) {
+        return switch (rank) {
             case FOUR_OF_A_KIND -> compareFourOfAKind(sortedCombination, bestHand);
             case FULL_HOUSE -> compareFullHouse(sortedCombination, bestHand);
             case FLUSH -> compareFlush(sortedCombination, bestHand);
@@ -126,10 +114,6 @@ public class HandEvaluatorService {
             case HIGH_CARD -> compareHighCard(sortedCombination, bestHand);
             default -> false;
         };
-        if (logger.isTraceEnabled()) {
-            logger.trace("Compared hands of rank {}: candidate isBetter={}", rank, better);
-        }
-        return better;
     }
 
     private List<List<Card>> generateCombinations(List<Card> cards, int numOfCards) {
@@ -187,29 +171,16 @@ public class HandEvaluatorService {
 
         // Compare pair values first
         if (pair1.getFirst().getValue() != pair2.getFirst().getValue()) {
-            boolean better = pair1.getFirst().getValue() > pair2.getFirst().getValue();
-            if (logger.isTraceEnabled()) {
-                logger.trace("One pair comparison: pair {} vs {} -> better={}",
-                        pair1.getFirst().getValue(), pair2.getFirst().getValue(), better);
-            }
-            return better;
+            return pair1.getFirst().getValue() > pair2.getFirst().getValue();
         }
 
         // Compare kickers
         for (int i = 0; i < kickers1.size(); i++) {
             if (kickers1.get(i).getValue() != kickers2.get(i).getValue()) {
-                boolean better = kickers1.get(i).getValue() > kickers2.get(i).getValue();
-                if (logger.isTraceEnabled()) {
-                    logger.trace("One pair kicker comparison: kicker {} beat {} -> better={}",
-                            kickers1.get(i).getValue(), kickers2.get(i).getValue(), better);
-                }
-                return better;
+                return kickers1.get(i).getValue() > kickers2.get(i).getValue();
             }
         }
 
-        if (logger.isTraceEnabled()) {
-            logger.trace("One pair comparison: tie");
-        }
         return false; // Identical hands
     }
 
@@ -244,35 +215,16 @@ public class HandEvaluatorService {
 
         // Compare higher pair first
         if (pairs1.get(0).getFirst().getValue() != pairs2.get(0).getFirst().getValue()) {
-            boolean better = pairs1.getFirst().getFirst().getValue() > pairs2.getFirst().getFirst().getValue();
-            if (logger.isTraceEnabled()) {
-                logger.trace("Two pair high pair comparison: {} vs {} -> better={}",
-                        pairs1.getFirst().getFirst().getValue(), pairs2.getFirst().getFirst().getValue(), better);
-            }
-            return better;
+            return pairs1.getFirst().getFirst().getValue() > pairs2.getFirst().getFirst().getValue();
         }
 
         // Compare lower pair
         if (pairs1.get(1).getFirst().getValue() != pairs2.get(1).getFirst().getValue()) {
-            boolean better = pairs1.get(1).getFirst().getValue() > pairs2.get(1).getFirst().getValue();
-            if (logger.isTraceEnabled()) {
-                logger.trace("Two pair low pair comparison: {} vs {} -> better={}",
-                        pairs1.get(1).getFirst().getValue(), pairs2.get(1).getFirst().getValue(), better);
-            }
-            return better;
+            return pairs1.get(1).getFirst().getValue() > pairs2.get(1).getFirst().getValue();
         }
 
         // Compare kicker
-        boolean better = kicker1.getValue() > kicker2.getValue();
-        if (logger.isTraceEnabled()) {
-            if (kicker1.getValue() != kicker2.getValue()) {
-                logger.trace("Two pair kicker comparison: kicker {} beat {} -> better={}",
-                        kicker1.getValue(), kicker2.getValue(), better);
-            } else {
-                logger.trace("Two pair comparison: tie");
-            }
-        }
-        return better;
+        return kicker1.getValue() > kicker2.getValue();
     }
 
     private boolean compareThreeOfAKind(List<Card> sortedCombination, List<Card> bestHand) {
@@ -306,29 +258,16 @@ public class HandEvaluatorService {
 
         // Compare three-of-a-kind values first
         if (threeOfKind1.getFirst().getValue() != threeOfKind2.getFirst().getValue()) {
-            boolean better = threeOfKind1.getFirst().getValue() > threeOfKind2.getFirst().getValue();
-            if (logger.isTraceEnabled()) {
-                logger.trace("Three of a kind triplet comparison: {} vs {} -> better={}",
-                        threeOfKind1.getFirst().getValue(), threeOfKind2.getFirst().getValue(), better);
-            }
-            return better;
+            return threeOfKind1.getFirst().getValue() > threeOfKind2.getFirst().getValue();
         }
 
         // Compare kickers
         for (int i = 0; i < kickers1.size(); i++) {
             if (kickers1.get(i).getValue() != kickers2.get(i).getValue()) {
-                boolean better = kickers1.get(i).getValue() > kickers2.get(i).getValue();
-                if (logger.isTraceEnabled()) {
-                    logger.trace("Three of a kind kicker comparison: kicker {} beat {} -> better={}",
-                            kickers1.get(i).getValue(), kickers2.get(i).getValue(), better);
-                }
-                return better;
+                return kickers1.get(i).getValue() > kickers2.get(i).getValue();
             }
         }
 
-        if (logger.isTraceEnabled()) {
-            logger.trace("Three of a kind comparison: tie");
-        }
         return false; // Identical hands
     }
 
@@ -348,16 +287,7 @@ public class HandEvaluatorService {
             highCard2 = 5;
         }
 
-        boolean better = highCard1 > highCard2;
-        if (logger.isTraceEnabled()) {
-            if (highCard1 != highCard2) {
-                logger.trace("Straight comparison: high card {} vs {} -> better={}",
-                        highCard1, highCard2, better);
-            } else {
-                logger.trace("Straight comparison: tie");
-            }
-        }
-        return better;
+        return highCard1 > highCard2;
     }
 
     private boolean compareFlush(List<Card> sortedCombination, List<Card> bestHand) {
@@ -366,18 +296,10 @@ public class HandEvaluatorService {
 
         for (int i = 0; i < 5; i++) {
             if (sorted1.get(i).getValue() != sorted2.get(i).getValue()) {
-                boolean better = sorted1.get(i).getValue() > sorted2.get(i).getValue();
-                if (logger.isTraceEnabled()) {
-                    logger.trace("Flush comparison: card {} vs {} at index {} -> better={}",
-                            sorted1.get(i).getValue(), sorted2.get(i).getValue(), i, better);
-                }
-                return better;
+                return sorted1.get(i).getValue() > sorted2.get(i).getValue();
             }
         }
 
-        if (logger.isTraceEnabled()) {
-            logger.trace("Flush comparison: tie");
-        }
         return false;
     }
 
@@ -393,18 +315,10 @@ public class HandEvaluatorService {
             int bestValue = second.get(i).getValue();
 
             if (currentValue != bestValue) {
-                boolean better = currentValue > bestValue;
-                if (logger.isTraceEnabled()) {
-                    logger.trace("High card comparison: card {} vs {} at index {} -> better={}",
-                            currentValue, bestValue, i, better);
-                }
-                return better;
+                return currentValue > bestValue;
             }
         }
 
-        if (logger.isTraceEnabled()) {
-            logger.trace("High card comparison: tie");
-        }
         return false;
     }
 
@@ -440,25 +354,11 @@ public class HandEvaluatorService {
         int threeValue2 = threeOfKind2.getFirst().getValue();
 
         if (threeValue1 != threeValue2) {
-            boolean better = threeValue1 > threeValue2;
-            if (logger.isTraceEnabled()) {
-                logger.trace("Full house triplet comparison: {} vs {} -> better={}",
-                        threeValue1, threeValue2, better);
-            }
-            return better;
+            return threeValue1 > threeValue2;
         }
 
         // Compare pair values
-        boolean better = pair1.getFirst().getValue() > pair2.getFirst().getValue();
-        if (logger.isTraceEnabled()) {
-            if (pair1.getFirst().getValue() != pair2.getFirst().getValue()) {
-                logger.trace("Full house pair comparison: {} vs {} -> better={}",
-                        pair1.getFirst().getValue(), pair2.getFirst().getValue(), better);
-            } else {
-                logger.trace("Full house comparison: tie");
-            }
-        }
-        return better;
+        return pair1.getFirst().getValue() > pair2.getFirst().getValue();
     }
 
     private boolean compareFourOfAKind(List<Card> sortedCombination, List<Card> bestHand) {
@@ -468,28 +368,14 @@ public class HandEvaluatorService {
 
         // Compare four-of-a-kind first
         if (quadValue1 != quadValue2) {
-            boolean better = quadValue1 > quadValue2;
-            if (logger.isTraceEnabled()) {
-                logger.trace("Four of a kind quad comparison: {} vs {} -> better={}",
-                        quadValue1, quadValue2, better);
-            }
-            return better;
+            return quadValue1 > quadValue2;
         }
 
         // If four-of-a-kind values are equal, compare kickers
         int kicker1 = getKickerValue(sortedCombination);
         int kicker2 = getKickerValue(bestHand);
 
-        boolean better = kicker1 > kicker2;
-        if (logger.isTraceEnabled()) {
-            if (kicker1 != kicker2) {
-                logger.trace("Four of a kind kicker comparison: kicker {} beat {} -> better={}",
-                        kicker1, kicker2, better);
-            } else {
-                logger.trace("Four of a kind comparison: tie");
-            }
-        }
-        return better;
+        return kicker1 > kicker2;
     }
 
     private int getFourOfAKindValue(List<Card> hand) {

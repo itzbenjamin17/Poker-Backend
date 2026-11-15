@@ -43,7 +43,6 @@ import com.pokergame.persistence.wal.WalFaultPoint;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.AggregateStateImage;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
-import com.pokergame.service.HandEvaluatorService;
 import com.pokergame.util.RoomCoordinator;
 import org.junit.jupiter.api.DisplayName;
 import com.pokergame.model.Game;
@@ -351,8 +350,7 @@ class DurableMutationAspectTest {
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         AggregateSnapshotMapper realMapper = spy(new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(),
-                new HandEvaluatorService()));
+                JsonMapper.builder().findAndAddModules().build()));
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, realMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
@@ -361,7 +359,7 @@ class DurableMutationAspectTest {
         room.addPlayer("Guest");
         Game game = spy(new Game("room-capture",
                 List.of(new Player("Host", "p1", 1000), new Player("Guest", "p2", 1000)),
-                6, 10, 20, new HandEvaluatorService()));
+                6, 10, 20));
 
         when(roomService.getRoom("room-capture")).thenReturn(room);
         when(gameLifecycleService.getGame("room-capture")).thenReturn(game);
@@ -433,7 +431,7 @@ class DurableMutationAspectTest {
 
         Player alice = new Player("Alice", "p1", 1000);
         Player bob = new Player("Bob", "p2", 1000);
-        Game originalGame = new Game(roomId, List.of(alice, bob), 6, 10, 20, new HandEvaluatorService());
+        Game originalGame = new Game(roomId, List.of(alice, bob), 6, 10, 20);
 
         byte[] committedPayload = new byte[]{42, 43, 44};
         withRoomLock(roomCoordinator, roomId, () -> {
@@ -546,7 +544,7 @@ class DurableMutationAspectTest {
         room.addPlayer("Guest");
         Player host = new Player("Host", "p1", 1000);
         Player guest = new Player("Guest", "p2", 1000);
-        Game game = new Game("room-pending-rollback", List.of(host, guest), 6, 10, 20, new HandEvaluatorService());
+        Game game = new Game("room-pending-rollback", List.of(host, guest), 6, 10, 20);
 
         when(roomService.getRoom("room-pending-rollback")).thenReturn(room);
         when(gameLifecycleService.getGame("room-pending-rollback")).thenReturn(game);
@@ -659,7 +657,7 @@ class DurableMutationAspectTest {
     void failedDeletionSaveRetainsAndRetriesDeletionTombstone() throws Throwable {
         String roomId = "room-deletion-retry";
         AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), new HandEvaluatorService());
+                JsonMapper.builder().findAndAddModules().build());
         AtomicBoolean failCommit = new AtomicBoolean(true);
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
@@ -690,7 +688,7 @@ class DurableMutationAspectTest {
     void prepareFailureBeforeRejectedMutationQueuesRetryForExistingRoom() throws Throwable {
         String roomId = "room-prepare-rejected-retry";
         AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), new HandEvaluatorService());
+                JsonMapper.builder().findAndAddModules().build());
         AtomicBoolean failPrepare = new AtomicBoolean(true);
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
@@ -730,7 +728,7 @@ class DurableMutationAspectTest {
     void retryPendingSavesHoldsRoomLockWhenRecordingStorageFailure() throws Throwable {
         String roomId = "room-retry-failure-lock";
         AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), new HandEvaluatorService());
+                JsonMapper.builder().findAndAddModules().build());
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = spy(new EncryptedWalStore(tempDir, keyring, (point, id) -> {
@@ -774,7 +772,7 @@ class DurableMutationAspectTest {
     void missingRoomRejectedMutationDuringPrepareOutageDoesNotDegradeStore() throws Throwable {
         String roomId = "room-missing-prepare-outage";
         AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), new HandEvaluatorService());
+                JsonMapper.builder().findAndAddModules().build());
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, (point, id) -> {
@@ -804,7 +802,7 @@ class DurableMutationAspectTest {
     @DisplayName("Room B uses ordinary append and deletes normally even when room A has a write failure")
     void otherRoomUsesOrdinaryAppendAndDeletesNormallyWhenAnotherRoomHasWriteFailure() throws Throwable {
         AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), new HandEvaluatorService());
+                JsonMapper.builder().findAndAddModules().build());
         AtomicReference<String> failRoom = new AtomicReference<>();
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));

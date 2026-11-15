@@ -9,9 +9,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 
@@ -20,11 +17,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Tag("unit")
 @DisplayName("Active game registry")
-@ExtendWith(MockitoExtension.class)
 class ActiveGameRegistryTest {
-
-    @Mock
-    private HandEvaluatorService handEvaluator;
 
     private RoomCoordinator roomCoordinator;
     private ActiveGameRegistry registry;
@@ -38,7 +31,7 @@ class ActiveGameRegistryTest {
     private Game createGame(String gameId) {
         return new Game(gameId, List.of(
                 new Player("Alice", "p1", 1000),
-                new Player("Bob", "p2", 1000)), 6, 5, 10, handEvaluator);
+                new Player("Bob", "p2", 1000)), 6, 5, 10);
     }
 
     @Test

@@ -5,10 +5,11 @@ import com.pokergame.util.RoomCoordinator;
 import com.pokergame.config.LifecycleTimingProperties;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.GamePhase;
-import com.pokergame.enums.HandRank;
+import com.pokergame.enums.Rank;
 import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.enums.Suit;
+import com.pokergame.model.Card;
 import com.pokergame.model.Game;
-import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
@@ -58,9 +59,6 @@ class HandProgressionServiceTest {
     private RoomService roomService;
 
     @Mock
-    private HandEvaluatorService handEvaluator;
-
-    @Mock
     private SimpMessagingTemplate messagingTemplate;
 
     @Mock
@@ -87,8 +85,6 @@ class HandProgressionServiceTest {
                 activeGames, roomService, gameStateService, timerRegistry, taskScheduler,
                 fixedClock, new LifecycleTimingProperties(30_000L, 4_000L, 10_000L));
 
-        lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
-                .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
         lenient().when(springScheduler.schedule(any(Runnable.class), any(Instant.class)))
                 .thenAnswer(_ -> mock(ScheduledFuture.class));
 
@@ -109,7 +105,7 @@ class HandProgressionServiceTest {
     }
 
     private Game createGame(List<Player> players) {
-        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10);
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             activeGames.replace(game);
         }
@@ -177,6 +173,9 @@ class HandProgressionServiceTest {
                 game.setForfeitPending(false);
 
                 // Game over without settled final pot -> settles via completion handler
+                game.dealFlop();
+                game.dealTurn();
+                game.dealRiver();
                 game.markGameOver();
                 assertFalse(progression.startNewHand(GAME_ID));
                 assertTrue(game.isFinalPotSettled());
@@ -316,6 +315,9 @@ class HandProgressionServiceTest {
         void advanceAutoAdvanceStep_SkipsShowdownAndSettledGames() {
             HandProgressionService progression = createProgression(4_000L);
             Game game = createStartedGame();
+            game.dealFlop();
+            game.dealTurn();
+            game.dealRiver();
             game.conductShowdown();
             HandSettlementResult settled = game.getLastSettlementResult();
             clearInvocations(gameStateService);
@@ -373,11 +375,16 @@ class HandProgressionServiceTest {
                 riverTournamentOver.dealTurn();
                 riverTournamentOver.dealRiver();
                 Player winner = riverTournamentOver.getPlayers().get(0);
-                lenient().when(handEvaluator.getBestHand(anyList(), anyList())).thenAnswer(inv -> {
-                    List<com.pokergame.model.Card> cards = inv.getArgument(1);
-                    HandRank rank = cards.equals(winner.getHoleCards()) ? HandRank.ROYAL_FLUSH : HandRank.HIGH_CARD;
-                    return new HandEvaluationResult(List.of(), rank);
-                });
+                Player loser = riverTournamentOver.getPlayers().get(1);
+                riverTournamentOver.getCommunityCards().clear();
+                riverTournamentOver.getCommunityCards().addAll(List.of(
+                        new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
+                        new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.DIAMONDS),
+                        new Card(Rank.THREE, Suit.CLUBS)));
+                winner.getHoleCards().clear();
+                winner.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+                loser.getHoleCards().clear();
+                loser.getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
                 assertFalse(delayedProgression.applyAutoAdvanceTimeout(GAME_ID, riverTournamentOver));
             }
             assertTrue(riverTournamentOver.isGameDecided());
@@ -390,6 +397,9 @@ class HandProgressionServiceTest {
         void applyAutoAdvanceTimeout_InShowdown_ClearsTaskAndStops() {
             HandProgressionService progression = createProgression(4_000L);
             Game game = createStartedGame();
+            game.dealFlop();
+            game.dealTurn();
+            game.dealRiver();
             game.conductShowdown();
             game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, FIXED_NOW.toEpochMilli() + 4_000L);
             clearInvocations(gameStateService, springScheduler);

@@ -29,7 +29,6 @@ import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
-import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
@@ -83,9 +82,6 @@ class GameLifecycleServiceTest {
     private RoomService roomService;
 
     @Mock
-    private HandEvaluatorService handEvaluator;
-
-    @Mock
     private GameStateService gameStateService;
 
     @Mock
@@ -110,8 +106,6 @@ class GameLifecycleServiceTest {
         testRoom.addPlayer("Host");
         testRoom.addPlayer("Player2");
 
-        lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
-                .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
         lenient().when(taskScheduler.schedule(any(Runnable.class), any(Instant.class)))
                 .thenAnswer(_ -> mock(ScheduledFuture.class));
 
@@ -141,7 +135,7 @@ class GameLifecycleServiceTest {
                 roomService, gameStateService, completionHandler, handProgression,
                 readinessCoordinator, timerRegistry, activeGames, mutableClock);
         gameLifecycleService = new GameLifecycleService(
-                roomService, handEvaluator, gameStateService, activeGames, timerRegistry, scheduler,
+                roomService, gameStateService, activeGames, timerRegistry, scheduler,
                 completionHandler, handProgression, readinessCoordinator, departureHandler,
                 roomCoordinator, mutableClock, timings);
         lifecycleRef.set(gameLifecycleService);
@@ -212,9 +206,16 @@ class GameLifecycleServiceTest {
         return withRoomLock(ROOM_ID, () -> {
             gameLifecycleService.createGameFromRoom(ROOM_ID);
             Game game = gameLifecycleService.getGame(ROOM_ID);
-            game.conductShowdown();
+            dealBoardAndShowdown(game);
             return game;
         });
+    }
+
+    private static void dealBoardAndShowdown(Game game) {
+        game.dealFlop();
+        game.dealTurn();
+        game.dealRiver();
+        game.conductShowdown();
     }
 
     private Game gameWithReadyCountdown() {
@@ -392,7 +393,7 @@ class GameLifecycleServiceTest {
             withRoomLock(headsUp.getRoomId(), () ->
                     gameLifecycleService.createGameFromRoom(headsUp.getRoomId()));
             Game runout = getGameLocked(headsUp.getRoomId());
-            runout.conductShowdown();
+            dealBoardAndShowdown(runout);
             runout.getPlayers().forEach(player -> setPlayerChips(player, 5));
             long nextHandDeadline = BASE_EPOCH_MS + 1_000L;
             runout.scheduleTask(ScheduledGameTask.NEW_HAND, nextHandDeadline);
@@ -416,7 +417,7 @@ class GameLifecycleServiceTest {
             withRoomLock(threeHanded.getRoomId(), () ->
                     gameLifecycleService.createGameFromRoom(threeHanded.getRoomId()));
             Game callHand = getGameLocked(threeHanded.getRoomId());
-            callHand.conductShowdown();
+            dealBoardAndShowdown(callHand);
             int playerCount = callHand.getActivePlayers().size();
             int currentDealerIndex = -1;
             for (int i = 0; i < playerCount; i++) {
@@ -460,7 +461,7 @@ class GameLifecycleServiceTest {
             when(roomService.getRoom(roomId)).thenReturn(room);
             withRoomLock(roomId, () -> gameLifecycleService.createGameFromRoom(roomId));
             Game game = getGameLocked(roomId);
-            game.conductShowdown();
+            dealBoardAndShowdown(game);
             game.getPlayers().forEach(player -> setPlayerChips(player, 100));
             HandSettlementResult settled = game.getLastSettlementResult();
             withRoomLock(roomId, () -> {
@@ -710,8 +711,8 @@ class GameLifecycleServiceTest {
 
             Game game = new Game(ROOM_ID,
                     List.of(new Player("Host", "h", 100), new Player("Player2", "p2", 100)),
-                    6, 5, 10, handEvaluator);
-            game.conductShowdown();
+                    6, 5, 10);
+            dealBoardAndShowdown(game);
             game.openOrWaitReadyGate(BASE_EPOCH_MS + 10_000L);
             // Force recovered ready countdown missing deadline and verify resume repairs and schedules it
             game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
@@ -750,9 +751,7 @@ class GameLifecycleServiceTest {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
-            when(handEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
-            game.conductShowdown();
+            dealBoardAndShowdown(game);
             long deadline = BASE_EPOCH_MS + 4_000L;
             game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, deadline);
             long gen = game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
@@ -811,7 +810,7 @@ class GameLifecycleServiceTest {
             Runnable initialCallback = callbacks.getFirst();
 
             Game game = getGameLocked(ROOM_ID);
-            game.conductShowdown();
+            dealBoardAndShowdown(game);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
                     ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
 

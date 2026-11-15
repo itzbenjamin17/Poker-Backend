@@ -3,7 +3,6 @@ package com.pokergame.model;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
-import com.pokergame.service.HandEvaluatorService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -64,7 +63,6 @@ class GameEligibilityTest {
                 .lastSettlementResult(settled ? new HandSettlementResult(Map.of("p1", 100), Map.of(), Set.of("p1"), 0, true) : null)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(new HandEvaluatorService())
                 .build();
     }
 
@@ -171,7 +169,7 @@ class GameEligibilityTest {
 
         Game emptyGame = Game.restoreBuilder().gameId("empty").players(List.of()).activePlayerIds(List.of())
                 .remainingDeck(List.of())
-                .handEvaluator(new HandEvaluatorService()).build();
+                .build();
         assertThrows(IllegalStateException.class, () -> GameEligibility.resolveWinner(emptyGame, null));
     }
 
@@ -189,7 +187,7 @@ class GameEligibilityTest {
 
         Game emptyGame = Game.restoreBuilder().gameId("empty").players(List.of()).activePlayerIds(List.of())
                 .remainingDeck(List.of())
-                .handEvaluator(new HandEvaluatorService()).build();
+                .build();
         assertThrows(IllegalStateException.class, () -> GameEligibility.resolveWinner(emptyGame, bob));
     }
 }

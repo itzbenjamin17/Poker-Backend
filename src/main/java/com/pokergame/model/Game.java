@@ -13,7 +13,6 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.PotCalculator.PotComputationResult;
-import com.pokergame.service.HandEvaluatorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,7 +34,6 @@ public class Game {
     private final int maxPlayers;
     private final int smallBlind;
     private final int bigBlind;
-    private final HandEvaluatorService handEvaluator;
     private final List<Player> players;
     private final List<Player> activePlayers;
     private final List<Card> communityCards;
@@ -64,7 +62,6 @@ public class Game {
      * @param maxPlayers    table capacity configured on the room (between 2 and 10)
      * @param smallBlind    small blind amount
      * @param bigBlind      big blind amount
-     * @param handEvaluator service used to evaluate five-card poker hands
      * @throws IllegalStateException if {@code gameId}, {@code maxPlayers}, or {@code players} is invalid
      */
     public Game(
@@ -72,8 +69,7 @@ public class Game {
             List<Player> players,
             int maxPlayers,
             int smallBlind,
-            int bigBlind,
-            HandEvaluatorService handEvaluator) {
+            int bigBlind) {
         if (gameId == null || gameId.trim().isEmpty()) {
             throw new IllegalStateException("Game ID cannot be null or empty");
         }
@@ -91,7 +87,6 @@ public class Game {
         this.maxPlayers = maxPlayers;
         this.smallBlind = smallBlind;
         this.bigBlind = bigBlind;
-        this.handEvaluator = handEvaluator;
         this.players = new ArrayList<>(players);
         this.activePlayers = new ArrayList<>(players);
         this.deck = new Deck();
@@ -163,7 +158,6 @@ public class Game {
         this.gameOver = builder.isGameOver();
         this.smallBlind = builder.getSmallBlind();
         this.bigBlind = builder.getBigBlind();
-        this.handEvaluator = builder.getHandEvaluator();
         this.handContributions = builder.getHandContributions() != null
                 ? new HashMap<>(builder.getHandContributions())
                 : new HashMap<>();
@@ -458,7 +452,7 @@ public class Game {
 
         if (showdownPlayers.size() > 1) {
             logger.debug("Evaluating hands for {} players", showdownPlayers.size());
-            ShowdownResolver.evaluateHands(handEvaluator, communityCards, showdownPlayers);
+            ShowdownResolver.evaluateHands(communityCards, showdownPlayers);
         }
 
         if (logger.isDebugEnabled()) {
@@ -1053,7 +1047,7 @@ public class Game {
         PotComputationResult computation = PotCalculator.computePotAllocationsAndUncalled(
                 pot, carryOverPot, handContributions, activePlayers, players, showdownPlayers, gameId);
         ShowdownResolver.Distribution distribution =
-                ShowdownResolver.distribute(gameId, handEvaluator, computation, players,
+                ShowdownResolver.distribute(gameId, computation, players,
                         seating.getHandSeatOrderSnapshot(), seating.getDealerPlayerId());
         pot = distribution.remainder();
         lastSettlementResult = distribution.settlement();

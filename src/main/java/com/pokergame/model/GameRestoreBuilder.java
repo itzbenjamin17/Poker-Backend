@@ -4,7 +4,6 @@ import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
-import com.pokergame.service.HandEvaluatorService;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -52,7 +51,6 @@ public class GameRestoreBuilder {
     private Set<String> actedPlayersInRound;
     private Map<ScheduledGameTask, Long> scheduledTaskDeadlines;
     private Map<ScheduledGameTask, Long> scheduledTaskGenerations;
-    private HandEvaluatorService handEvaluator;
 
     /**
      * Package-private constructor so callers outside com.pokergame.model
@@ -231,11 +229,6 @@ public class GameRestoreBuilder {
         return this;
     }
 
-    public GameRestoreBuilder handEvaluator(HandEvaluatorService handEvaluator) {
-        this.handEvaluator = handEvaluator;
-        return this;
-    }
-
     public Game build() {
         return new Game(this);
     }
@@ -374,9 +367,5 @@ public class GameRestoreBuilder {
 
     Map<ScheduledGameTask, Long> getScheduledTaskGenerations() {
         return scheduledTaskGenerations;
-    }
-
-    HandEvaluatorService getHandEvaluator() {
-        return handEvaluator;
     }
 }

@@ -7,7 +7,6 @@ import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
-import com.pokergame.service.HandEvaluatorService;
 import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
@@ -267,15 +266,14 @@ class PersistenceRecoveryTest {
                 Map.of("current", new SecretKeySpec(new byte[32], "AES")));
         RoomCoordinator coordinator = new RoomCoordinator();
         EncryptedWalStore realStore = new EncryptedWalStore(directory, keys, coordinator);
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
 
         Room active = roomForRecovery("valid-game", "Alice");
         active.addPlayer("Bob");
         active.setGameStarted(true);
         Game game = new Game(active.getRoomId(),
-                List.of(new Player("Alice", "p1", 950), new Player("Bob", "p2", 950)), 6, 10, 20, evaluator);
+                List.of(new Player("Alice", "p1", 950), new Player("Bob", "p2", 950)), 6, 10, 20);
         Room waiting = roomForRecovery("valid-room", "Eve");
         Room unrestorable = roomForRecovery("unrestorable", "Dave");
         for (Room room : List.of(active, waiting, unrestorable)) {
@@ -326,9 +324,8 @@ class PersistenceRecoveryTest {
                 Map.of("current", new SecretKeySpec(new byte[32], "AES")));
         RoomCoordinator coordinator = new RoomCoordinator();
         EncryptedWalStore realStore = new EncryptedWalStore(directory, keys, coordinator);
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         JsonMapper jsonMapper = JsonMapper.builder().findAndAddModules().build();
-        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(jsonMapper, evaluator);
+        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(jsonMapper);
 
         Room validRoom = roomForRecovery("valid-room", "Alice");
         Room unknownKeyRoom = roomForRecovery("unknown-key-room", "Bob");
@@ -367,9 +364,8 @@ class PersistenceRecoveryTest {
                 Map.of("current", new SecretKeySpec(new byte[32], "AES")));
         RoomCoordinator coordinator = new RoomCoordinator();
         EncryptedWalStore realStore = new EncryptedWalStore(directory, keys, coordinator);
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         JsonMapper jsonMapper = JsonMapper.builder().findAndAddModules().build();
-        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(jsonMapper, evaluator);
+        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(jsonMapper);
 
         Room validRoom = roomForRecovery("valid-room", "Alice");
         Room missingKeyRoom = roomForRecovery("missing-key-room", "Bob");
@@ -857,9 +853,8 @@ class PersistenceRecoveryTest {
                 throw new PersistenceException("injected delete failure for " + roomId);
             }
         }, coordinator);
-        HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
+                JsonMapper.builder().findAndAddModules().build());
 
         long now = 1_900_000_000_000L;
         Clock fixedClock = Clock.fixed(java.time.Instant.ofEpochMilli(now), java.time.ZoneOffset.UTC);

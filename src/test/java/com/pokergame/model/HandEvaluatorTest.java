@@ -1,4 +1,4 @@
-package com.pokergame.service;
+package com.pokergame.model;
 
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.Rank;
@@ -15,20 +15,20 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.ArrayList;
 
 /**
- * Unit tests for the HandEvaluatorService class.
+ * Unit tests for the HandEvaluator class.
  */
 @Tag("unit")
-@DisplayName("Hand evaluator service")
-class HandEvaluatorServiceTest {
+@DisplayName("Hand evaluator")
+class HandEvaluatorTest {
 
-        private HandEvaluatorService service;
+        private HandEvaluator service;
 
         /**
          * Initializes the test fixtures before each scenario.
          */
         @BeforeEach
         void setUp() {
-                service = new HandEvaluatorService();
+                service = new HandEvaluator();
         }
 
         @Test

@@ -7,7 +7,6 @@ import com.pokergame.model.Card;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.service.HandEvaluatorService;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -32,21 +31,18 @@ import com.pokergame.model.HandSettlementResult;
 @Component
 public final class AggregateSnapshotMapper {
     private final ObjectMapper objectMapper;
-    private final HandEvaluatorService handEvaluator;
 
     /**
-     * Creates the mapper with the JSON and hand-evaluation services used by the application.
+     * Creates the mapper with the JSON mapper used by the application.
      *
-     * @param objectMapper  mapper configured for the application's records
-     * @param handEvaluator hand evaluator that restored games will use
+     * @param objectMapper mapper configured for the application's records
      */
-    public AggregateSnapshotMapper(ObjectMapper objectMapper, HandEvaluatorService handEvaluator) {
+    public AggregateSnapshotMapper(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper.rebuild()
                 .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                 .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
                 .disable(DeserializationFeature.FAIL_ON_NULL_CREATOR_PROPERTIES)
                 .build();
-        this.handEvaluator = handEvaluator;
     }
 
     /**
@@ -337,7 +333,6 @@ public final class AggregateSnapshotMapper {
                 .forfeitPending(state.forfeitPending())
                 .stateRevision(state.stateRevision())
                 .retainedTerminalResult(fromTerminalResultState(state.retainedTerminalResult()))
-                .handEvaluator(handEvaluator) // Reattach the service needed for evaluating hands
                 .build();
     }
 

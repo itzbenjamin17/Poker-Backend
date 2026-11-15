@@ -38,7 +38,6 @@ import org.springframework.stereotype.Service;
 public class GameLifecycleService {
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
     private final RoomService roomService;
-    private final HandEvaluatorService handEvaluator;
     private final GameStateService gameStateService;
     private final ActiveGameRegistry activeGames;
     private final GameTimerRegistry runtimeTimers;
@@ -53,7 +52,6 @@ public class GameLifecycleService {
 
     GameLifecycleService(
             RoomService roomService,
-            HandEvaluatorService handEvaluator,
             GameStateService gameStateService,
             ActiveGameRegistry activeGames,
             GameTimerRegistry runtimeTimers,
@@ -66,7 +64,6 @@ public class GameLifecycleService {
             Clock clock,
             LifecycleTimingProperties timings) {
         this.roomService = roomService;
-        this.handEvaluator = handEvaluator;
         this.gameStateService = gameStateService;
         this.activeGames = activeGames;
         this.runtimeTimers = runtimeTimers;
@@ -142,7 +139,7 @@ public class GameLifecycleService {
         }
 
         Game game = new Game(
-                roomId, players, room.getMaxPlayers(), room.getSmallBlind(), room.getBigBlind(), handEvaluator);
+                roomId, players, room.getMaxPlayers(), room.getSmallBlind(), room.getBigBlind());
         activeGames.register(game);
 
         room.setGameStarted(true);

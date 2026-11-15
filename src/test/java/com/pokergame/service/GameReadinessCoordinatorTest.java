@@ -4,14 +4,12 @@ import com.pokergame.util.RoomCoordinator;
 
 import com.pokergame.config.LifecycleTimingProperties;
 import com.pokergame.enums.GamePhase;
-import com.pokergame.enums.HandRank;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
-import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.testutil.MutableClock;
@@ -56,9 +54,6 @@ class GameReadinessCoordinatorTest {
     private RoomService roomService;
 
     @Mock
-    private HandEvaluatorService handEvaluator;
-
-    @Mock
     private GameStateService gameStateService;
 
     @Mock
@@ -91,8 +86,6 @@ class GameReadinessCoordinatorTest {
                 activeGames, roomService, gameStateService, timerRegistry, taskScheduler,
                 completionHandler, handProgression, mutableClock, timings);
 
-        lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
-                .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
         lenient().when(springScheduler.schedule(any(Runnable.class), any(Instant.class)))
                 .thenAnswer(_ -> mock(ScheduledFuture.class));
 
@@ -104,10 +97,13 @@ class GameReadinessCoordinatorTest {
     }
 
     private Game createShowdownGame(List<Player> players) {
-        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10);
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             activeGames.replace(game);
             handProgression.startNewHand(GAME_ID);
+            game.dealFlop();
+            game.dealTurn();
+            game.dealRiver();
             game.conductShowdown();
         }
         return game;

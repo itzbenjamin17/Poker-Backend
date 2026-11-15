@@ -14,17 +14,13 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.service.HandEvaluatorService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -43,10 +39,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for the {@link Game} aggregate root across lifecycle, betting, showdown settlement,
@@ -54,11 +46,12 @@ import static org.mockito.Mockito.when;
  */
 @Tag("unit")
 @DisplayName("Game model")
-@ExtendWith(MockitoExtension.class)
 class GameTest {
 
-    @Mock
-    private HandEvaluatorService mockHandEvaluator;
+    private static final List<Card> ROYAL_FLUSH_BOARD = List.of(
+            new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
+            new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.KING, Suit.SPADES),
+            new Card(Rank.ACE, Suit.SPADES));
 
     private List<Player> players;
     private Game game;
@@ -70,25 +63,24 @@ class GameTest {
         players.add(new Player("Player2", "p2", 1000));
         players.add(new Player("Player3", "p3", 1000));
 
-        game = createGame("game123", players, 10, 20, mockHandEvaluator);
+        game = createGame("game123", players, 10, 20);
     }
 
     private static Game createGame(
             String gameId,
             List<Player> tablePlayers,
             int smallBlind,
-            int bigBlind,
-            HandEvaluatorService evaluator) {
+            int bigBlind) {
         int maxPlayers = tablePlayers == null ? 2 : Math.max(2, tablePlayers.size());
-        return new Game(gameId, tablePlayers, maxPlayers, smallBlind, bigBlind, evaluator);
+        return new Game(gameId, tablePlayers, maxPlayers, smallBlind, bigBlind);
     }
 
-    private static Game createStandardGame(int numPlayers, int chips, HandEvaluatorService evaluator) {
+    private static Game createStandardGame(int numPlayers, int chips) {
         List<Player> list = new ArrayList<>();
         for (int i = 0; i < numPlayers; i++) {
             list.add(new Player("Player_" + i, "p" + i, chips));
         }
-        return createGame("game-" + UUID.randomUUID(), list, 10, 20, evaluator);
+        return createGame("game-" + UUID.randomUUID(), list, 10, 20);
     }
 
     private static Player restoredPlayer(String name, String id, int chips, int currentBet, boolean allIn) {
@@ -159,7 +151,7 @@ class GameTest {
                 .everyoneHasHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(mockHandEvaluator)
+                
                 .build();
     }
 
@@ -207,7 +199,7 @@ class GameTest {
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(mockHandEvaluator)
+                
                 .build();
     }
 
@@ -228,35 +220,35 @@ class GameTest {
         @Test
         void testGameCreationValidationRejectsInvalidInputs() {
             IllegalStateException nullId = assertThrows(IllegalStateException.class,
-                    () -> new Game(null, players, 3, 10, 20, mockHandEvaluator));
+                    () -> new Game(null, players, 3, 10, 20));
             assertEquals("Game ID cannot be null or empty", nullId.getMessage());
 
             IllegalStateException blankId = assertThrows(IllegalStateException.class,
-                    () -> new Game("   ", players, 3, 10, 20, mockHandEvaluator));
+                    () -> new Game("   ", players, 3, 10, 20));
             assertEquals("Game ID cannot be null or empty", blankId.getMessage());
 
             List<Player> onePlayer = List.of(new Player("Solo", "p1", 1000));
             IllegalStateException tooFew = assertThrows(IllegalStateException.class,
-                    () -> new Game("game123", onePlayer, 2, 10, 20, mockHandEvaluator));
+                    () -> new Game("game123", onePlayer, 2, 10, 20));
             assertEquals("At least 2 players are required to start a game", tooFew.getMessage());
 
             IllegalStateException nullList = assertThrows(IllegalStateException.class,
-                    () -> new Game("game123", null, 2, 10, 20, mockHandEvaluator));
+                    () -> new Game("game123", null, 2, 10, 20));
             assertEquals("At least 2 players are required to start a game", nullList.getMessage());
 
             List<Player> playersWithNull = new ArrayList<>();
             playersWithNull.add(new Player("Player1", "p1", 1000));
             playersWithNull.add(null);
             IllegalStateException nullElement = assertThrows(IllegalStateException.class,
-                    () -> new Game("game123", playersWithNull, 2, 10, 20, mockHandEvaluator));
+                    () -> new Game("game123", playersWithNull, 2, 10, 20));
             assertEquals("Invalid players list. Please try again.", nullElement.getMessage());
 
             IllegalStateException lowMax = assertThrows(IllegalStateException.class,
-                    () -> new Game("game123", players, 1, 10, 20, mockHandEvaluator));
+                    () -> new Game("game123", players, 1, 10, 20));
             assertEquals("Max players must be between 2 and 10.", lowMax.getMessage());
 
             IllegalStateException highMax = assertThrows(IllegalStateException.class,
-                    () -> new Game("game123", players, 11, 10, 20, mockHandEvaluator));
+                    () -> new Game("game123", players, 11, 10, 20));
             assertEquals("Max players must be between 2 and 10.", highMax.getMessage());
         }
 
@@ -294,7 +286,7 @@ class GameTest {
             Game shortSbGame = createGame("short-sb-game", List.of(
                     new Player("Player1", "p1", 1000),
                     new Player("ShortSB", "p2", 5),
-                    new Player("BigBlind", "p3", 1000)), 10, 20, mockHandEvaluator);
+                    new Player("BigBlind", "p3", 1000)), 10, 20);
             shortSbGame.postBlinds();
             assertTrue(shortSbGame.getActivePlayers().get(1).getIsAllIn());
             assertEquals(0, shortSbGame.getActivePlayers().get(1).getChips());
@@ -306,7 +298,7 @@ class GameTest {
             Game shortBbGame = createGame("short-bb-game", List.of(
                     new Player("Player1", "p1", 1000),
                     new Player("SmallBlind", "p2", 1000),
-                    new Player("ShortBB", "p3", 15)), 10, 20, mockHandEvaluator);
+                    new Player("ShortBB", "p3", 15)), 10, 20);
             shortBbGame.postBlinds();
             assertEquals(10, shortBbGame.getActivePlayers().get(1).getCurrentBet());
             assertEquals(990, shortBbGame.getActivePlayers().get(1).getChips());
@@ -319,7 +311,7 @@ class GameTest {
             Game bothShortGame = createGame("both-short-game", List.of(
                     new Player("Player1", "p1", 1000),
                     new Player("ShortSB", "p2", 7),
-                    new Player("ShortBB", "p3", 15)), 10, 20, mockHandEvaluator);
+                    new Player("ShortBB", "p3", 15)), 10, 20);
             bothShortGame.postBlinds();
             assertTrue(bothShortGame.getActivePlayers().get(1).getIsAllIn());
             assertTrue(bothShortGame.getActivePlayers().get(2).getIsAllIn());
@@ -350,9 +342,6 @@ class GameTest {
             assertEquals(5, game.getCommunityCards().size());
             assertEquals(GamePhase.RIVER, game.getCurrentPhase());
 
-            List<Card> hand = List.of(new Card(Rank.ACE, Suit.SPADES));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(hand, HandRank.HIGH_CARD));
             game.conductShowdown();
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
         }
@@ -530,7 +519,7 @@ class GameTest {
                     .everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(acted)
                     .scheduledTaskDeadlines(tasks)
-                    .handEvaluator(mockHandEvaluator)
+                    
                     .build();
 
             assertEquals("restored-game", restored.getGameId());
@@ -562,7 +551,7 @@ class GameTest {
             assertEquals(0, game.getPot());
             assertEquals(0, player.getCurrentBet());
 
-            Game activeBetGame = createStandardGame(3, 1000, mockHandEvaluator);
+            Game activeBetGame = createStandardGame(3, 1000);
             activeBetGame.postBlinds();
             Player actor = activeBetGame.getCurrentPlayer();
             UnauthorisedActionException exception = assertThrows(UnauthorisedActionException.class, () ->
@@ -579,7 +568,7 @@ class GameTest {
             assertEquals(950, player.getChips());
             assertEquals(50, game.getCurrentHighestBet());
 
-            Game activeBetGame = createStandardGame(3, 1000, mockHandEvaluator);
+            Game activeBetGame = createStandardGame(3, 1000);
             activeBetGame.postBlinds();
             Player actor = activeBetGame.getCurrentPlayer();
             UnauthorisedActionException exception = assertThrows(UnauthorisedActionException.class, () ->
@@ -596,7 +585,7 @@ class GameTest {
             assertEquals(20, caller.getCurrentBet());
             assertEquals(980, caller.getChips());
 
-            Game raiseGame = createStandardGame(3, 1000, mockHandEvaluator);
+            Game raiseGame = createStandardGame(3, 1000);
             raiseGame.postBlinds();
             Player raiser = raiseGame.getActivePlayers().getFirst();
             raiseGame.processPlayerDecision(raiser, new PlayerDecision(PlayerAction.RAISE, 50, raiser.getPlayerId()));
@@ -605,7 +594,7 @@ class GameTest {
             assertEquals(950, raiser.getChips());
             assertEquals(50, raiseGame.getCurrentHighestBet());
 
-            Game allInGame = createStandardGame(3, 1000, mockHandEvaluator);
+            Game allInGame = createStandardGame(3, 1000);
             Player shover = allInGame.getCurrentPlayer();
             allInGame.processPlayerDecision(shover, new PlayerDecision(PlayerAction.ALL_IN, 0, shover.getPlayerId()));
             assertEquals(1000, allInGame.getPot());
@@ -613,7 +602,7 @@ class GameTest {
             assertEquals(0, shover.getChips());
             assertTrue(shover.getIsAllIn());
 
-            Game invalidRaiseGame = createStandardGame(3, 1000, mockHandEvaluator);
+            Game invalidRaiseGame = createStandardGame(3, 1000);
             invalidRaiseGame.postBlinds();
             Player badRaiser = invalidRaiseGame.getActivePlayers().getFirst();
             badRaiser.doAction(PlayerAction.BET, 10, 0);
@@ -766,7 +755,7 @@ class GameTest {
                     .everyoneHasHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator)
+                    
                     .build();
             assertEquals(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, matchedGame.advanceAfterBlinds().type());
 
@@ -793,7 +782,7 @@ class GameTest {
                     .everyoneHasHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator)
+                    
                     .build();
             assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, owingGame.advanceAfterBlinds().type());
         }
@@ -826,7 +815,7 @@ class GameTest {
                     .everyoneHasHadInitialTurn(false)
                     .actedPlayersInRound(Set.of("a", "f"))
                     .scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator)
+                    
                     .build();
 
             hand.removePlayer(leaving);
@@ -869,11 +858,7 @@ class GameTest {
                     .everyoneHasHadInitialTurn(false)
                     .actedPlayersInRound(Set.of("allIn"))
                     .scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator)
                     .build();
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
-            when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
 
             TurnOutcome outcome = hand.processPlayerDecision(caller, new PlayerDecision(PlayerAction.CALL, 0, "caller"));
 
@@ -889,7 +874,7 @@ class GameTest {
                     game.processPlayerDecision(current, new PlayerDecision(PlayerAction.BET, 10, current.getPlayerId())));
             assertTrue(smallBet.getMessage().contains("Bet amount must be at least the big blind"));
 
-            Game smallRaiseGame = createStandardGame(3, 1000, mockHandEvaluator);
+            Game smallRaiseGame = createStandardGame(3, 1000);
             smallRaiseGame.postBlinds();
             Player raiser = smallRaiseGame.getActivePlayers().getFirst();
             BadRequestException smallRaise = assertThrows(BadRequestException.class, () ->
@@ -901,7 +886,7 @@ class GameTest {
             Game shortBetGame = createGame("short-bet-allin", List.of(
                     new Player("P1", "p1", 15),
                     new Player("P2", "p2", 1000),
-                    new Player("P3", "p3", 1000)), 10, 20, mockHandEvaluator);
+                    new Player("P3", "p3", 1000)), 10, 20);
             Player shortBetActor = shortBetGame.getCurrentPlayer();
             assertDoesNotThrow(() -> shortBetGame.processPlayerDecision(
                     shortBetActor, new PlayerDecision(PlayerAction.BET, 15, shortBetActor.getPlayerId())));
@@ -911,7 +896,7 @@ class GameTest {
             Game shortRaiseGame = createGame("short-raise-allin", List.of(
                     new Player("P1", "p1", 25),
                     new Player("P2", "p2", 1000),
-                    new Player("P3", "p3", 1000)), 10, 20, mockHandEvaluator);
+                    new Player("P3", "p3", 1000)), 10, 20);
             shortRaiseGame.postBlinds();
             Player shortRaiser = shortRaiseGame.getActivePlayers().getFirst();
             assertDoesNotThrow(() -> shortRaiseGame.processPlayerDecision(
@@ -922,7 +907,7 @@ class GameTest {
             Game sidePotGame = createGame("all-in-raise-game", List.of(
                     new Player("Deep1", "deep1", 1000),
                     new Player("Short", "short", 50),
-                    new Player("Deep2", "deep2", 1000)), 5, 10, mockHandEvaluator);
+                    new Player("Deep2", "deep2", 1000)), 5, 10);
             sidePotGame.resetForNewHand();
             sidePotGame.dealHoleCards();
             sidePotGame.postBlinds();
@@ -940,7 +925,7 @@ class GameTest {
             Game shortCallGame = createGame("short-call-game", List.of(
                     new Player("P1", "p1", 1000),
                     new Player("Short", "p2", 5),
-                    new Player("P3", "p3", 1000)), 5, 10, mockHandEvaluator);
+                    new Player("P3", "p3", 1000)), 5, 10);
             shortCallGame.resetForNewHand();
             shortCallGame.dealHoleCards();
             shortCallGame.postBlinds();
@@ -959,7 +944,6 @@ class GameTest {
 
         @Test
         void challenge_GameShowdown_OddChipCarryOver_LifecycleContinuity() {
-            HandEvaluatorService evaluator = new HandEvaluatorService();
             Player p1 = restoredPlayer("P1", "p1", 0, 33, true);
             Player p2 = restoredPlayer("P2", "p2", 0, 33, true);
             Player p3 = restoredPlayer("P3", "p3", 0, 34, true);
@@ -973,7 +957,7 @@ class GameTest {
                     .handContributions(Map.of("p1", 33, "p2", 33, "p3", 34))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(evaluator).build();
+                    .build();
 
             assertEquals(1, gameUncalled.getUncalledAmount());
             assertEquals(List.of(99), gameUncalled.getPotBreakdown());
@@ -987,7 +971,7 @@ class GameTest {
                     .handContributions(Map.of("p1", 33, "p2", 34, "p3", 34))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(evaluator).build();
+                    .build();
 
             assertEquals(0, oddGame.getUncalledAmount());
             assertEquals(List.of(99, 2), oddGame.getPotBreakdown());
@@ -995,11 +979,6 @@ class GameTest {
 
         @Test
         void foldedContributionBoundariesDoNotCreateOddChipsAcrossSameEligiblePot() {
-            List<Card> highCard = List.of(new Card(Rank.ACE, Suit.SPADES));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(highCard, HandRank.HIGH_CARD));
-            when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
-
             Player a = restoredPlayer("A", "a", 900, 100, false);
             Player b = restoredPlayer("B", "b", 900, 100, false);
             Player f1 = Player.restoreBuilder().name("F1").playerId("f1").chips(995).holeCards(List.of())
@@ -1014,13 +993,13 @@ class GameTest {
 
             Game ordinary = Game.restoreBuilder().gameId("coalesce-ordinary-pots")
                     .players(List.of(a, b, f1, f2, f3)).activePlayerIds(List.of("a", "b", "f1", "f2", "f3"))
-                    .remainingDeck(List.of()).communityCards(List.of()).pot(230).dealerAnchorPlayerId("a")
+                    .remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD).pot(230).dealerAnchorPlayerId("a")
                     .smallBlindPlayerId("a").bigBlindPlayerId("b").currentPlayerId("a").currentHighestBet(100)
                     .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 100, "b", 100, "f1", 5, "f2", 10, "f3", 15))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
 
             ordinary.conductShowdown();
 
@@ -1032,23 +1011,25 @@ class GameTest {
         @Test
         void deadUpperLayersJoinNearestEligibleLowerAllocation() {
             Player a = restoredPlayer("A", "a", 0, 0, false);
+            a.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
             Player b = restoredPlayer("B", "b", 0, 0, false);
+            b.getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.DIAMONDS), new Card(Rank.SEVEN, Suit.HEARTS)));
             Player c = restoredPlayer("c", "C", 0, false, true, false);
             Player d = restoredPlayer("d", "D", 0, false, true, false);
 
             Game deadUpper = Game.restoreBuilder().gameId("dead-upper-layer").players(List.of(a, b, c, d))
                     .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(List.of())
-                    .communityCards(List.of()).pot(550).dealerAnchorPlayerId("a").smallBlindPlayerId("b")
+                    .communityCards(List.of(
+                            new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
+                            new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.CLUBS),
+                            new Card(Rank.THREE, Suit.DIAMONDS)))
+                    .pot(550).dealerAnchorPlayerId("a").smallBlindPlayerId("b")
                     .bigBlindPlayerId("c").currentPlayerId("a").currentHighestBet(200)
                     .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 50, "b", 100, "c", 200, "d", 200))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
-
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.ROYAL_FLUSH))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.KING, Suit.SPADES)), HandRank.ONE_PAIR));
+                    .build();
 
             assertEquals(List.of(a, b), deadUpper.conductShowdown());
             assertEquals(200, a.getChips());
@@ -1061,20 +1042,21 @@ class GameTest {
         @Test
         void departedContributionStillDefinesSidePotAndCannotReceiveRefund() {
             Player shortPlayer = new Player("Short", "s", 0);
+            shortPlayer.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
             Player midPlayer = new Player("Mid", "m", 150);
+            midPlayer.getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.DIAMONDS), new Card(Rank.SEVEN, Suit.HEARTS)));
             Game departedGame = Game.restoreBuilder().gameId("departed-contributor").players(List.of(shortPlayer, midPlayer))
-                    .activePlayerIds(List.of("s", "m")).remainingDeck(List.of()).communityCards(List.of())
+                    .activePlayerIds(List.of("s", "m")).remainingDeck(List.of()).communityCards(List.of(
+                            new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
+                            new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.CLUBS),
+                            new Card(Rank.THREE, Suit.DIAMONDS)))
                     .pot(350).dealerAnchorPlayerId("s").smallBlindPlayerId("s").bigBlindPlayerId("m")
                     .currentPlayerId("s").currentHighestBet(150).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("s", 50, "m", 150, "departed", 150))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
-
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.ROYAL_FLUSH))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.KING, Suit.SPADES)), HandRank.ONE_PAIR));
+                    .build();
 
             departedGame.conductShowdown();
 
@@ -1104,7 +1086,7 @@ class GameTest {
                     .handContributions(Map.of("b", 10, "c", 20)).preHandCarryOver(0)
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
 
             deadBlindGame.conductShowdown();
 
@@ -1118,7 +1100,7 @@ class GameTest {
             Game shoveGame = createGame("uncalled-breakdown", List.of(
                     new Player("AllIn", "a1", 480),
                     new Player("SmallBlind", "s1", 1000),
-                    new Player("BigBlind", "b1", 1000)), 10, 20, mockHandEvaluator);
+                    new Player("BigBlind", "b1", 1000)), 10, 20);
             shoveGame.postBlinds();
             Player allInPlayer = shoveGame.getCurrentPlayer();
             shoveGame.processPlayerDecision(allInPlayer, new PlayerDecision(PlayerAction.ALL_IN, 0, allInPlayer.getPlayerId()));
@@ -1136,7 +1118,7 @@ class GameTest {
                     .handContributions(Map.of("short", 50, "bettor", 250, "owing", 50))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             assertEquals(List.of(150, 200), live.getPotBreakdown());
             assertEquals(0, live.getUncalledAmount());
 
@@ -1160,34 +1142,35 @@ class GameTest {
             assertEquals(1000, game.getPlayers().get(2).getChips());
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
 
-            Game multiGame = createStandardGame(3, 1000, mockHandEvaluator);
-            List<Card> royalFlush = List.of(
-                    new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES),
-                    new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
-                    new Card(Rank.TEN, Suit.SPADES));
-            List<Card> pair = List.of(
-                    new Card(Rank.ACE, Suit.HEARTS), new Card(Rank.ACE, Suit.DIAMONDS),
-                    new Card(Rank.KING, Suit.CLUBS), new Card(Rank.QUEEN, Suit.HEARTS),
-                    new Card(Rank.JACK, Suit.HEARTS));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(royalFlush, HandRank.ROYAL_FLUSH))
-                    .thenReturn(new HandEvaluationResult(pair, HandRank.ONE_PAIR))
-                    .thenReturn(new HandEvaluationResult(pair, HandRank.ONE_PAIR));
+            Game multiGame = createStandardGame(3, 1000);
+            multiGame.getActivePlayers().get(0).getHoleCards().addAll(List.of(
+                    new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+            multiGame.getActivePlayers().get(1).getHoleCards().addAll(List.of(
+                    new Card(Rank.TWO, Suit.DIAMONDS), new Card(Rank.SEVEN, Suit.HEARTS)));
+            multiGame.getActivePlayers().get(2).getHoleCards().addAll(List.of(
+                    new Card(Rank.THREE, Suit.HEARTS), new Card(Rank.EIGHT, Suit.CLUBS)));
 
             multiGame.processPlayerDecision(multiGame.getActivePlayers().getFirst(), new PlayerDecision(PlayerAction.BET, 100, "p0"));
             multiGame.processPlayerDecision(multiGame.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 100, "p1"));
             multiGame.processPlayerDecision(multiGame.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 100, "p2"));
+            multiGame.getCommunityCards().clear();
+            multiGame.getCommunityCards().addAll(List.of(
+                    new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
+                    new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.CLUBS),
+                    new Card(Rank.THREE, Suit.DIAMONDS)));
 
             List<Player> winners = multiGame.conductShowdown();
             assertEquals(1, winners.size());
-            verify(mockHandEvaluator, times(3)).getBestHand(any(), any());
+            assertEquals(HandRank.ROYAL_FLUSH, winners.getFirst().getHandRank());
+            assertEquals(HandRank.ONE_PAIR, multiGame.getActivePlayers().get(1).getHandRank());
+            assertEquals(HandRank.ONE_PAIR, multiGame.getActivePlayers().get(2).getHandRank());
         }
 
         @Test
         void testConductShowdownRegressionJoshVsBenjaminWithRealEvaluation() {
             Game headsUpGame = createGame("regression-josh-benjamin", List.of(
                     new Player("josh", "j1", 1000),
-                    new Player("Benjamin", "b1", 1000)), 10, 20, new HandEvaluatorService());
+                    new Player("Benjamin", "b1", 1000)), 10, 20);
             Player josh = headsUpGame.getActivePlayers().getFirst();
             Player benjamin = headsUpGame.getActivePlayers().get(1);
 
@@ -1208,19 +1191,12 @@ class GameTest {
 
         @Test
         void testOddChipsAwardedClockwiseAcrossRotatedDealerHands() {
-            List<Card> highCard = List.of(
-                    new Card(Rank.TWO, Suit.SPADES), new Card(Rank.FIVE, Suit.HEARTS),
-                    new Card(Rank.SEVEN, Suit.DIAMONDS), new Card(Rank.NINE, Suit.CLUBS),
-                    new Card(Rank.JACK, Suit.SPADES));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(highCard, HandRank.HIGH_CARD));
-            when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
-
             // Hand 1: dealer is p1; p2 is clockwise left of p1 and receives the odd chip.
             game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 51, "p1"));
             game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 51, "p2"));
             game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 51, "p3"));
             game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0, game.getPot());
+            game.getCommunityCards().addAll(ROYAL_FLUSH_BOARD);
             game.conductShowdown();
 
             assertEquals(1025, game.getPlayers().get(0).getChips());
@@ -1239,6 +1215,7 @@ class GameTest {
             game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 51, "p2"));
             game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 51, "p3"));
             game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0, game.getPot());
+            game.getCommunityCards().addAll(ROYAL_FLUSH_BOARD);
             game.conductShowdown();
 
             assertEquals(1051, game.getPlayers().get(0).getChips());
@@ -1250,23 +1227,25 @@ class GameTest {
 
         @Test
         void testConductShowdown_SidePotsSplitRemainderAndRefunds() {
+            List<Card> flushStraightBoard = List.of(
+                    new Card(Rank.FOUR, Suit.SPADES), new Card(Rank.FIVE, Suit.SPADES),
+                    new Card(Rank.SIX, Suit.SPADES), new Card(Rank.SEVEN, Suit.DIAMONDS),
+                    new Card(Rank.TWO, Suit.CLUBS));
+
             Game basic = createGame("side-pot-basic", List.of(
                     new Player("Short", "s1", 50), new Player("Mid", "m1", 300), new Player("Deep", "d1", 300)),
-                    10, 20, mockHandEvaluator);
+                    10, 20);
             Player s = basic.getPlayers().get(0);
             Player m = basic.getPlayers().get(1);
             Player d = basic.getPlayers().get(2);
             basic.processPlayerDecision(m, new PlayerDecision(PlayerAction.BET, 150, m.getPlayerId()));
             basic.processPlayerDecision(s, new PlayerDecision(PlayerAction.CALL, 0, s.getPlayerId()));
             basic.processPlayerDecision(d, new PlayerDecision(PlayerAction.CALL, 0, d.getPlayerId()));
-
-            List<Card> flushCards = List.of(new Card(Rank.ACE, Suit.SPADES));
-            List<Card> straightCards = List.of(new Card(Rank.ACE, Suit.HEARTS));
-            List<Card> pairCards = List.of(new Card(Rank.TEN, Suit.CLUBS));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(flushCards, HandRank.FLUSH))
-                    .thenReturn(new HandEvaluationResult(straightCards, HandRank.STRAIGHT))
-                    .thenReturn(new HandEvaluationResult(pairCards, HandRank.ONE_PAIR));
+            basic.getCommunityCards().clear();
+            basic.getCommunityCards().addAll(flushStraightBoard);
+            s.getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
+            m.getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
+            d.getHoleCards().addAll(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
             basic.conductShowdown();
             assertEquals(150, s.getChips());
             assertEquals(350, m.getChips());
@@ -1275,15 +1254,15 @@ class GameTest {
 
             Game splitSide = createGame("side-pot-split", List.of(
                     new Player("Short", "s1", 50), new Player("Mid", "m1", 300), new Player("Deep", "d1", 300)),
-                    10, 20, mockHandEvaluator);
+                    10, 20);
             splitSide.processPlayerDecision(splitSide.getPlayers().get(1), new PlayerDecision(PlayerAction.BET, 150, "m1"));
             splitSide.processPlayerDecision(splitSide.getPlayers().get(0), new PlayerDecision(PlayerAction.CALL, 0, "s1"));
             splitSide.processPlayerDecision(splitSide.getPlayers().get(2), new PlayerDecision(PlayerAction.CALL, 0, "d1"));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(flushCards, HandRank.FLUSH))
-                    .thenReturn(new HandEvaluationResult(straightCards, HandRank.STRAIGHT))
-                    .thenReturn(new HandEvaluationResult(straightCards, HandRank.STRAIGHT));
-            when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
+            splitSide.getCommunityCards().clear();
+            splitSide.getCommunityCards().addAll(flushStraightBoard);
+            splitSide.getPlayers().get(0).getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
+            splitSide.getPlayers().get(1).getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
+            splitSide.getPlayers().get(2).getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.CLUBS), new Card(Rank.NINE, Suit.DIAMONDS)));
             splitSide.conductShowdown();
             assertEquals(150, splitSide.getPlayers().get(0).getChips());
             assertEquals(250, splitSide.getPlayers().get(1).getChips());
@@ -1291,16 +1270,17 @@ class GameTest {
 
             Game multi = createGame("side-pot-multi", List.of(
                     new Player("A", "a1", 50), new Player("B", "b1", 100),
-                    new Player("C", "c1", 300), new Player("D", "d1", 300)), 10, 20, mockHandEvaluator);
+                    new Player("C", "c1", 300), new Player("D", "d1", 300)), 10, 20);
             multi.processPlayerDecision(multi.getPlayers().get(2), new PlayerDecision(PlayerAction.BET, 200, "c1"));
             multi.processPlayerDecision(multi.getPlayers().get(3), new PlayerDecision(PlayerAction.CALL, 0, "d1"));
             multi.processPlayerDecision(multi.getPlayers().get(1), new PlayerDecision(PlayerAction.CALL, 0, "b1"));
             multi.processPlayerDecision(multi.getPlayers().get(0), new PlayerDecision(PlayerAction.CALL, 0, "a1"));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(flushCards, HandRank.FLUSH))
-                    .thenReturn(new HandEvaluationResult(straightCards, HandRank.STRAIGHT))
-                    .thenReturn(new HandEvaluationResult(pairCards, HandRank.THREE_OF_A_KIND))
-                    .thenReturn(new HandEvaluationResult(pairCards, HandRank.ONE_PAIR));
+            multi.getCommunityCards().clear();
+            multi.getCommunityCards().addAll(flushStraightBoard);
+            multi.getPlayers().get(0).getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
+            multi.getPlayers().get(1).getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
+            multi.getPlayers().get(2).getHoleCards().addAll(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.SEVEN, Suit.CLUBS)));
+            multi.getPlayers().get(3).getHoleCards().addAll(List.of(new Card(Rank.SIX, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
             multi.conductShowdown();
             assertEquals(200, multi.getPlayers().get(0).getChips());
             assertEquals(150, multi.getPlayers().get(1).getChips());
@@ -1309,14 +1289,15 @@ class GameTest {
 
             Game foldedEdge = createGame("side-pot-folded-edge", List.of(
                     new Player("Short", "s1", 50), new Player("Mid", "m1", 300), new Player("Folder", "f1", 300)),
-                    10, 20, mockHandEvaluator);
+                    10, 20);
             foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(1), new PlayerDecision(PlayerAction.BET, 150, "m1"));
             foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(0), new PlayerDecision(PlayerAction.CALL, 0, "s1"));
             foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(2), new PlayerDecision(PlayerAction.CALL, 0, "f1"));
             foldedEdge.getPlayers().get(2).doAction(PlayerAction.FOLD, 0, 0);
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(flushCards, HandRank.FLUSH))
-                    .thenReturn(new HandEvaluationResult(pairCards, HandRank.ONE_PAIR));
+            foldedEdge.getCommunityCards().clear();
+            foldedEdge.getCommunityCards().addAll(flushStraightBoard);
+            foldedEdge.getPlayers().get(0).getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
+            foldedEdge.getPlayers().get(1).getHoleCards().addAll(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
             foldedEdge.conductShowdown();
             assertEquals(150, foldedEdge.getPlayers().get(0).getChips());
             assertEquals(350, foldedEdge.getPlayers().get(1).getChips());
@@ -1324,17 +1305,17 @@ class GameTest {
 
             Game splitRemainder = createGame("side-pot-remainder-edge", List.of(
                     new Player("A", "a1", 50), new Player("B", "b1", 101),
-                    new Player("C", "c1", 101), new Player("D", "d1", 101)), 10, 20, mockHandEvaluator);
+                    new Player("C", "c1", 101), new Player("D", "d1", 101)), 10, 20);
             splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(1), new PlayerDecision(PlayerAction.BET, 101, "b1"));
             splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(2), new PlayerDecision(PlayerAction.CALL, 0, "c1"));
             splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(3), new PlayerDecision(PlayerAction.CALL, 0, "d1"));
             splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(0), new PlayerDecision(PlayerAction.CALL, 0, "a1"));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(flushCards, HandRank.FLUSH))
-                    .thenReturn(new HandEvaluationResult(straightCards, HandRank.STRAIGHT))
-                    .thenReturn(new HandEvaluationResult(straightCards, HandRank.STRAIGHT))
-                    .thenReturn(new HandEvaluationResult(pairCards, HandRank.ONE_PAIR));
-            when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
+            splitRemainder.getCommunityCards().clear();
+            splitRemainder.getCommunityCards().addAll(flushStraightBoard);
+            splitRemainder.getPlayers().get(0).getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
+            splitRemainder.getPlayers().get(1).getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
+            splitRemainder.getPlayers().get(2).getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.CLUBS), new Card(Rank.NINE, Suit.DIAMONDS)));
+            splitRemainder.getPlayers().get(3).getHoleCards().addAll(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
             splitRemainder.conductShowdown();
             assertEquals(200, splitRemainder.getPlayers().get(0).getChips());
             assertEquals(77, splitRemainder.getPlayers().get(1).getChips());
@@ -1345,14 +1326,18 @@ class GameTest {
             Game uncalledRefund = createGame("uncalled-refund", List.of(
                     new Player("AllIn", "a1", 480),
                     new Player("SmallBlind", "s1", 1000),
-                    new Player("BigBlind", "b1", 1000)), 10, 20, mockHandEvaluator);
+                    new Player("BigBlind", "b1", 1000)), 10, 20);
             uncalledRefund.postBlinds();
             Player shover = uncalledRefund.getCurrentPlayer();
             uncalledRefund.processPlayerDecision(shover, new PlayerDecision(PlayerAction.ALL_IN, 0, shover.getPlayerId()));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(pairCards, HandRank.HIGH_CARD))
-                    .thenReturn(new HandEvaluationResult(flushCards, HandRank.ROYAL_FLUSH))
-                    .thenReturn(new HandEvaluationResult(straightCards, HandRank.ONE_PAIR));
+            uncalledRefund.getCommunityCards().clear();
+            uncalledRefund.getCommunityCards().addAll(List.of(
+                    new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
+                    new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.DIAMONDS),
+                    new Card(Rank.THREE, Suit.CLUBS)));
+            shover.getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
+            uncalledRefund.getActivePlayers().get(1).getHoleCards().addAll(List.of(new Card(Rank.KING, Suit.SPADES), new Card(Rank.ACE, Suit.SPADES)));
+            uncalledRefund.getActivePlayers().get(2).getHoleCards().addAll(List.of(new Card(Rank.THREE, Suit.HEARTS), new Card(Rank.KING, Suit.HEARTS)));
             uncalledRefund.conductShowdown();
             assertEquals(460, shover.getChips());
             assertEquals(1020, uncalledRefund.getActivePlayers().get(1).getChips());
@@ -1429,26 +1414,22 @@ class GameTest {
                     .handContributions(Map.of("ace", 50, "king", 50)).preHandCarryOver(0)
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(new HandEvaluatorService()).build();
+                    .build();
             assertEquals(List.of(ace), realGame.conductShowdown());
             assertEquals(1050, ace.getChips());
             assertEquals(950, king.getChips());
             assertEquals(Map.of("ace", 100), realGame.getLastSettlementResult().contestedAwards());
 
-            List<Card> evaluated = List.of(new Card(Rank.ACE, Suit.SPADES));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(evaluated, HandRank.HIGH_CARD));
-            when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
             Player coA = restoredPlayer("A", "a", 50, 0, true);
             Player coB = restoredPlayer("B", "b", 50, 0, true);
             Game carryGame = Game.restoreBuilder().gameId("carry-over-remainder").players(List.of(coA, coB))
-                    .activePlayerIds(List.of("a", "b")).remainingDeck(List.of()).communityCards(List.of())
+                    .activePlayerIds(List.of("a", "b")).remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD)
                     .pot(101).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                     .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50, "b", 50))
                     .preHandCarryOver(1).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             carryGame.conductShowdown();
             assertEquals(100, coA.getChips());
             assertEquals(101, coB.getChips());
@@ -1462,14 +1443,19 @@ class GameTest {
         void conductShowdownIsIdempotentZeroContenderVoidTerminalResetAndChipConservation() {
             Player p1 = new Player("Pieter", "p1", 1000);
             Player p2 = new Player("BoshMan", "p2", 1000);
-            Game idemp = createGame("double-showdown-game", List.of(p1, p2), 10, 20, mockHandEvaluator);
+            Game idemp = createGame("double-showdown-game", List.of(p1, p2), 10, 20);
             idemp.dealHoleCards();
             idemp.postBlinds();
             idemp.processPlayerDecision(p1, new PlayerDecision(PlayerAction.ALL_IN, 0, "p1"));
             idemp.processPlayerDecision(p2, new PlayerDecision(PlayerAction.CALL, 0, "p2"));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.ONE_PAIR))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.KING, Suit.SPADES)), HandRank.HIGH_CARD));
+            idemp.getCommunityCards().addAll(List.of(
+                    new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
+                    new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.CLUBS),
+                    new Card(Rank.THREE, Suit.DIAMONDS)));
+            p1.getHoleCards().clear();
+            p1.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+            p2.getHoleCards().clear();
+            p2.getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
 
             List<Player> firstWinners = idemp.conductShowdown();
             assertEquals(1, firstWinners.size());
@@ -1480,7 +1466,7 @@ class GameTest {
                     idemp.conductShowdown().stream().map(Player::getPlayerId).toList());
             assertEquals(2000, p1.getChips());
 
-            Game voidGame = createStandardGame(2, 100, mockHandEvaluator);
+            Game voidGame = createStandardGame(2, 100);
             voidGame.processPlayerDecision(voidGame.getPlayers().get(0), new PlayerDecision(PlayerAction.BET, 50, "p0"));
             voidGame.processPlayerDecision(voidGame.getPlayers().get(1), new PlayerDecision(PlayerAction.CALL, 50, "p1"));
             voidGame.getPlayers().forEach(pl -> pl.doAction(PlayerAction.FOLD, 0, voidGame.getPot()));
@@ -1497,7 +1483,7 @@ class GameTest {
                     .gameOver(true).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             assertTrue(unsettled.resetForNewHand());
             assertEquals(0, unsettled.getCarryOverPot());
             assertEquals(Map.of("a", 50), unsettled.getHandContributionsSnapshot());
@@ -1505,7 +1491,7 @@ class GameTest {
 
             Game terminalBlind = createGame("terminal-blind-pot", List.of(
                     new Player("Small", "small", 1000), new Player("Big", "big", 1000)),
-                    10, 20, new HandEvaluatorService());
+                    10, 20);
             terminalBlind.postBlinds();
             Player small = terminalBlind.getPlayers().get(0);
             Player big = terminalBlind.getPlayers().get(1);
@@ -1528,22 +1514,22 @@ class GameTest {
                     .preHandCarryOver(1).lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, true))
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             Player oddWinner = oddCarry.settleGameEnd(null, Set.of());
             oddCarry.settleGameEnd(oddWinner, Set.of());
             assertEquals(101, oddWinner.getChips());
             assertEquals(0, oddCarry.getPot());
             assertEquals(1, oddCarry.getLastSettlementResult().remainder());
 
-            Game conserve = createStandardGame(3, 1000, mockHandEvaluator);
+            Game conserve = createStandardGame(3, 1000);
             conserve.dealHoleCards();
             conserve.postBlinds();
             conserve.processPlayerDecision(conserve.getPlayers().get(0), new PlayerDecision(PlayerAction.ALL_IN, 0, "p0"));
             conserve.processPlayerDecision(conserve.getPlayers().get(1), new PlayerDecision(PlayerAction.ALL_IN, 0, "p1"));
             conserve.processPlayerDecision(conserve.getPlayers().get(2), new PlayerDecision(PlayerAction.FOLD, 0, "p2"));
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.ONE_PAIR))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.KING, Suit.SPADES)), HandRank.HIGH_CARD));
+            conserve.dealFlop();
+            conserve.dealTurn();
+            conserve.dealRiver();
             conserve.conductShowdown();
             assertEquals(3000, conserve.getPlayers().stream().mapToInt(Player::getChips).sum() + conserve.getPot());
             conserve.conductShowdown();
@@ -1552,10 +1538,6 @@ class GameTest {
 
         @Test
         void oddChipsGoClockwiseFromDealerWithZeroCarryOver() {
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.FLUSH));
-            when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
-
             // Three-way split of 101 chips (2 odd chips): seat order [p0, p1, p2, p3], dealer = p1.
             // Clockwise from dealer p1: p2, p3 (folded), p0, p1 (dealer last) -> p2 and p0 get +1 each.
             Player p0 = restoredPlayer("P0", "p0", 70, 0, true);
@@ -1564,14 +1546,14 @@ class GameTest {
             Player p3 = restoredPlayer("p3", "P3", 89, false, true, false);
             Game threeWay = Game.restoreBuilder().gameId("three-way-odd-chips")
                     .players(List.of(p0, p1, p2, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
-                    .remainingDeck(List.of()).communityCards(List.of()).pot(101)
+                    .remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD).pot(101)
                     .dealerAnchorPlayerId("p1").smallBlindPlayerId("p2").bigBlindPlayerId("p3")
                     .currentPlayerId("p0").currentHighestBet(30).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p0", 30, "p1", 30, "p2", 30, "p3", 11))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             int totalBeforeThreeWay = threeWay.getPlayers().stream().mapToInt(Player::getChips).sum() + threeWay.getPot();
 
             threeWay.conductShowdown();
@@ -1592,14 +1574,14 @@ class GameTest {
             Player huB = restoredPlayer("B", "b", 50, 0, true);
             Game headsUp = Game.restoreBuilder().gameId("heads-up-odd-chip")
                     .players(List.of(huA, huB)).activePlayerIds(List.of("a", "b"))
-                    .remainingDeck(List.of()).communityCards(List.of()).pot(101)
+                    .remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD).pot(101)
                     .dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                     .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 50, "b", 50)).preHandCarryOver(1)
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             int totalBeforeHeadsUp = headsUp.getPlayers().stream().mapToInt(Player::getChips).sum() + headsUp.getPot();
 
             headsUp.conductShowdown();
@@ -1616,22 +1598,25 @@ class GameTest {
             // Side pot with its own leftover chip (101) and rotated dealer 's2' -> 's1' is clockwise left of 's2' and gets +1.
             Player s0 = restoredPlayer("s0", "S0", 69, false, true, false);
             Player s1 = restoredPlayer("S1", "s1", 50, 0, true);
+            s1.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.DIAMONDS), new Card(Rank.FOUR, Suit.DIAMONDS)));
             Player s2 = restoredPlayer("S2", "s2", 50, 0, true);
+            s2.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.HEARTS), new Card(Rank.FOUR, Suit.HEARTS)));
             Player s3 = restoredPlayer("S3", "s3", 0, 0, true);
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.KING, Suit.SPADES)), HandRank.FLUSH))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.KING, Suit.HEARTS)), HandRank.FLUSH))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.ROYAL_FLUSH));
+            s3.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
             Game sidePotOdd = Game.restoreBuilder().gameId("side-pot-odd-chip")
                     .players(List.of(s0, s1, s2, s3)).activePlayerIds(List.of("s0", "s1", "s2", "s3"))
-                    .remainingDeck(List.of()).communityCards(List.of()).pot(141)
+                    .remainingDeck(List.of()).communityCards(List.of(
+                            new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
+                            new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.KING, Suit.CLUBS),
+                            new Card(Rank.TWO, Suit.CLUBS)))
+                    .pot(141)
                     .dealerAnchorPlayerId("s2").smallBlindPlayerId("s3").bigBlindPlayerId("s0")
                     .currentPlayerId("s1").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("s0", 31, "s1", 50, "s2", 50, "s3", 10))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             int totalBeforeSidePot = sidePotOdd.getPlayers().stream().mapToInt(Player::getChips).sum() + sidePotOdd.getPot();
 
             sidePotOdd.conductShowdown();
@@ -1652,19 +1637,17 @@ class GameTest {
             Player d0 = restoredPlayer("D0", "d0", 50, 0, true);
             Player d1 = restoredPlayer("D1", "d1", 50, 0, true);
             Player d2 = restoredPlayer("D2", "d2", 50, 0, true);
-            when(mockHandEvaluator.getBestHand(any(), any()))
-                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.FLUSH));
             Game departedDealer = Game.restoreBuilder().gameId("departed-dealer-odd-chip")
                     .players(List.of(d0, d1, d2)).activePlayerIds(List.of("d0", "d1", "d2"))
                     .handSeatOrder(List.of("d0", "d1", "d2"))
-                    .remainingDeck(List.of()).communityCards(List.of()).pot(101)
+                    .remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD).pot(101)
                     .dealerAnchorPlayerId("d1").smallBlindPlayerId("d2").bigBlindPlayerId("d0")
                     .currentPlayerId("d2").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("d0", 50, "d2", 50)).preHandCarryOver(1)
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             departedDealer.removePlayer(d1);
             int totalBeforeDeparted = departedDealer.getPlayers().stream().mapToInt(Player::getChips).sum() + departedDealer.getPot();
 
@@ -1682,7 +1665,7 @@ class GameTest {
 
         @Test
         void wasContestedShowdownReflectsSettledEvaluatedWinnersOnly() {
-            Game unsettled = createStandardGame(2, 100, new HandEvaluatorService());
+            Game unsettled = createStandardGame(2, 100);
             unsettled.dealHoleCards();
             unsettled.postBlinds();
             assertFalse(unsettled.wasContestedShowdown());
@@ -1693,7 +1676,7 @@ class GameTest {
             assertTrue(unsettled.isHandSettled());
             assertFalse(unsettled.wasContestedShowdown());
 
-            Game contested = createStandardGame(2, 100, new HandEvaluatorService());
+            Game contested = createStandardGame(2, 100);
             contested.dealHoleCards();
             contested.postBlinds();
             contested.dealFlop();
@@ -1710,7 +1693,7 @@ class GameTest {
             contested.settleGameEnd(winner, Set.of(loser.getName()));
             assertTrue(contested.wasContestedShowdown());
 
-            Game voidGame = createStandardGame(2, 100, mockHandEvaluator);
+            Game voidGame = createStandardGame(2, 100);
             voidGame.getPlayers().getFirst().setHandRank(HandRank.ROYAL_FLUSH);
             voidGame.getPlayers().forEach(p -> p.doAction(PlayerAction.FOLD, 0, voidGame.getPot()));
             voidGame.conductShowdown();
@@ -1724,7 +1707,7 @@ class GameTest {
 
         @Test
         void keyPositionRemovalsPreserveOrAdvanceTurnAccurately() {
-            Game dealerRemoval = createStandardGame(5, 1000, new HandEvaluatorService());
+            Game dealerRemoval = createStandardGame(5, 1000);
             Player dealer = dealerRemoval.getActivePlayers().get(0);
             assertEquals("p3", dealerRemoval.getCurrentPlayer().getPlayerId());
             dealerRemoval.removePlayer(dealer);
@@ -1733,21 +1716,21 @@ class GameTest {
             dealerRemoval.resetForNewHand();
             assertEquals("p1", dealerRemoval.getDealerPlayerId());
 
-            Game sbRemoval = createStandardGame(4, 1000, new HandEvaluatorService());
+            Game sbRemoval = createStandardGame(4, 1000);
             Player sbPlayer = sbRemoval.getActivePlayers().stream()
                     .filter(p -> p.getPlayerId().equals(sbRemoval.getSmallBlindPlayerId()))
                     .findFirst().orElseThrow();
             sbRemoval.removePlayer(sbPlayer);
             assertEquals("p3", sbRemoval.getCurrentPlayer().getPlayerId());
 
-            Game bbRemoval = createStandardGame(4, 1000, new HandEvaluatorService());
+            Game bbRemoval = createStandardGame(4, 1000);
             Player bbPlayer = bbRemoval.getActivePlayers().stream()
                     .filter(p -> p.getPlayerId().equals(bbRemoval.getBigBlindPlayerId()))
                     .findFirst().orElseThrow();
             bbRemoval.removePlayer(bbPlayer);
             assertEquals("p3", bbRemoval.getCurrentPlayer().getPlayerId());
 
-            Game curRemoval = createStandardGame(4, 1000, new HandEvaluatorService());
+            Game curRemoval = createStandardGame(4, 1000);
             Player curPlayer = curRemoval.getCurrentPlayer();
             curRemoval.removePlayer(curPlayer);
             assertEquals("p0", curRemoval.getCurrentPlayer().getPlayerId());
@@ -1755,7 +1738,7 @@ class GameTest {
 
         @Test
         void midHandBlindDeparturesPreserveBlindIdsAndTailDepartureSkipsWrappedOutPlayer() {
-            Game sbGame = createStandardGame(4, 1000, new HandEvaluatorService());
+            Game sbGame = createStandardGame(4, 1000);
             sbGame.postBlinds();
             String sbId = sbGame.getSmallBlindPlayerId();
             String bbId = sbGame.getBigBlindPlayerId();
@@ -1765,7 +1748,7 @@ class GameTest {
             assertEquals(bbId, sbGame.getBigBlindPlayerId());
             assertEquals(actorId, sbGame.getCurrentPlayer().getPlayerId());
 
-            Game bbGame = createStandardGame(4, 1000, new HandEvaluatorService());
+            Game bbGame = createStandardGame(4, 1000);
             bbGame.postBlinds();
             String bbGameSbId = bbGame.getSmallBlindPlayerId();
             String bbGameBbId = bbGame.getBigBlindPlayerId();
@@ -1775,7 +1758,7 @@ class GameTest {
             assertEquals(bbGameBbId, bbGame.getBigBlindPlayerId());
             assertEquals(bbGameActorId, bbGame.getCurrentPlayer().getPlayerId());
 
-            Game wrappedOut = createStandardGame(4, 1000, new HandEvaluatorService());
+            Game wrappedOut = createStandardGame(4, 1000);
             wrappedOut.postBlinds();
             wrappedOut.getActivePlayers().get(0).setIsOut();
             Player tailActor = wrappedOut.getCurrentPlayer();
@@ -1793,7 +1776,7 @@ class GameTest {
             Game foldedSuccessor = Game.restoreBuilder().gameId("succ-fold")
                     .players(List.of(p0, p1, p2Folded, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
                     .remainingDeck(List.of())
-                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
+                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).build();
             foldedSuccessor.removePlayer(p1);
             assertEquals("p3", foldedSuccessor.getCurrentPlayer().getPlayerId());
 
@@ -1801,14 +1784,14 @@ class GameTest {
             Game allInSuccessor = Game.restoreBuilder().gameId("succ-allin")
                     .players(List.of(p0, p1, p2AllIn, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
                     .remainingDeck(List.of())
-                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
+                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).build();
             allInSuccessor.removePlayer(p1);
             assertEquals("p3", allInSuccessor.getCurrentPlayer().getPlayerId());
 
             Game tailWrap = Game.restoreBuilder().gameId("tail-wrap")
                     .players(List.of(p0, p1, p3)).activePlayerIds(List.of("p0", "p1", "p3"))
                     .remainingDeck(List.of())
-                    .currentPlayerId("p3").smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
+                    .currentPlayerId("p3").smallBlind(10).bigBlind(20).build();
             tailWrap.removePlayer(p3);
             assertEquals("p0", tailWrap.getCurrentPlayer().getPlayerId());
 
@@ -1818,7 +1801,7 @@ class GameTest {
             Game allNonActionable = Game.restoreBuilder().gameId("non-actionable")
                     .players(List.of(ai, cur, fld)).activePlayerIds(List.of("p0", "p1", "p2"))
                     .remainingDeck(List.of())
-                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
+                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).build();
             allNonActionable.removePlayer(cur);
             assertEquals(2, allNonActionable.getActivePlayers().size());
             assertNotNull(allNonActionable.getCurrentPlayer());
@@ -1826,7 +1809,7 @@ class GameTest {
             Game singleAllIn = Game.restoreBuilder().gameId("single-allin")
                     .players(List.of(ai, cur)).activePlayerIds(List.of("p0", "p1"))
                     .remainingDeck(List.of())
-                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
+                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).build();
             singleAllIn.removePlayer(cur);
             assertEquals(1, singleAllIn.getActivePlayers().size());
             assertEquals("p0", singleAllIn.getCurrentPlayer().getPlayerId());
@@ -1834,7 +1817,7 @@ class GameTest {
 
         @Test
         void rapidSequentialRemovalsForwardReverseAndCurrentMaintainBounds() {
-            Game forward = createStandardGame(6, 1000, new HandEvaluatorService());
+            Game forward = createStandardGame(6, 1000);
             while (!forward.getActivePlayers().isEmpty()) {
                 forward.removePlayer(forward.getActivePlayers().getFirst());
                 if (!forward.getActivePlayers().isEmpty()) {
@@ -1844,7 +1827,7 @@ class GameTest {
                 }
             }
 
-            Game reverse = createStandardGame(6, 1000, new HandEvaluatorService());
+            Game reverse = createStandardGame(6, 1000);
             while (!reverse.getActivePlayers().isEmpty()) {
                 reverse.removePlayer(reverse.getActivePlayers().getLast());
                 if (!reverse.getActivePlayers().isEmpty()) {
@@ -1854,7 +1837,7 @@ class GameTest {
                 }
             }
 
-            Game curEveryStep = createStandardGame(6, 1000, new HandEvaluatorService());
+            Game curEveryStep = createStandardGame(6, 1000);
             while (curEveryStep.getActivePlayers().size() > 1) {
                 curEveryStep.removePlayer(curEveryStep.getCurrentPlayer());
                 assertTrue(curEveryStep.getHandSeatOrderSnapshot().contains(curEveryStep.getDealerPlayerId()));
@@ -1866,7 +1849,7 @@ class GameTest {
         @ParameterizedTest
         @ValueSource(ints = {11, 23, 42, 77, 99, 137, 256, 512, 1024, 2048})
         void rapidRemoval_FuzzRandomPermutations(int seed) {
-            Game fuzz = createStandardGame(6, 1000, new HandEvaluatorService());
+            Game fuzz = createStandardGame(6, 1000);
             List<Player> queue = new ArrayList<>(fuzz.getActivePlayers());
             Collections.shuffle(queue, new Random(seed));
 
@@ -1884,7 +1867,7 @@ class GameTest {
 
         @Test
         void threeToTwoTransitionAndSingleSurvivorResetToGameOver() {
-            Game threeToTwo = createStandardGame(3, 1000, new HandEvaluatorService());
+            Game threeToTwo = createStandardGame(3, 1000);
             threeToTwo.removePlayer(threeToTwo.getActivePlayers().get(2));
             assertEquals(2, threeToTwo.getActivePlayers().size());
             assertFalse(threeToTwo.resetForNewHand());
@@ -1914,7 +1897,7 @@ class GameTest {
                     .currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
                     .handSeatOrder(List.of("d", "a", "b", "c")).dealerAnchorPlayerId("d")
                     .smallBlindPlayerId("a").bigBlindPlayerId("b").everyoneHasHadInitialTurn(true)
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             anchored.removePlayer(d);
             anchored.removePlayer(b);
             assertEquals("a", anchored.getSmallBlindPlayerId());
@@ -1938,7 +1921,7 @@ class GameTest {
                     .currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 10, "b", 20)).handSeatOrder(List.of("a", "b", "c", "d"))
                     .dealerAnchorPlayerId("d").smallBlindPlayerId("a").bigBlindPlayerId("b")
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             sbLeft.removePlayer(a2);
             assertEquals("c", sbLeft.getCurrentPlayer().getPlayerId());
             sbLeft.processPlayerDecision(c2, new PlayerDecision(PlayerAction.CALL, 0, "c"));
@@ -1959,7 +1942,7 @@ class GameTest {
                     .pot(0).currentPlayerId("c2")
                     .currentHighestBet(0).currentPhase(GamePhase.FLOP).smallBlind(10).bigBlind(20)
                     .handSeatOrder(List.of("a2", "b2", "c2", "d2")).dealerAnchorPlayerId("d2")
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             dealerLeft.removePlayer(dd);
             dealerLeft.dealTurn();
             assertEquals("a2", dealerLeft.getCurrentPlayer().getPlayerId());
@@ -1973,7 +1956,7 @@ class GameTest {
                     .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(List.of()).currentPlayerId("b")
                     .currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
                     .handSeatOrder(List.of("a", "b", "c", "d")).dealerAnchorPlayerId("a")
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
             succ.removePlayer(succ.getPlayers().get(1));
             TurnOutcome succOutcome = succ.advanceAfterPlayerRemoval();
             assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, succOutcome.type());
@@ -1991,7 +1974,7 @@ class GameTest {
                             new Card(Rank.FOUR, Suit.HEARTS)))
                     .currentPlayerId("c").currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
                     .handSeatOrder(List.of("a", "b", "c")).dealerAnchorPlayerId("a")
-                    .actedPlayersInRound(Set.of("a", "b")).handEvaluator(mockHandEvaluator).build();
+                    .actedPlayersInRound(Set.of("a", "b")).build();
             flopComplete.removePlayer(flopComplete.getPlayers().get(2));
             TurnOutcome turnOutcome = flopComplete.advanceAfterPlayerRemoval();
             assertEquals(TurnOutcome.TurnOutcomeType.PHASE_ADVANCED, turnOutcome.type());
@@ -2003,7 +1986,7 @@ class GameTest {
         void headsUpBlindsRotationTurnProgressionAndBlindIdSafety() {
             Game headsUpGame = createGame("heads-up-rotate", List.of(
                     new Player("Dealer", "d1", 1000), new Player("Opponent", "o1", 1000)),
-                    10, 20, mockHandEvaluator);
+                    10, 20);
             headsUpGame.postBlinds();
             assertEquals("d1", headsUpGame.getDealerPlayerId());
             assertEquals(10, headsUpGame.getActivePlayers().get(0).getCurrentBet());
@@ -2027,7 +2010,7 @@ class GameTest {
             assertEquals(currentBeforeRemoval, game.getCurrentPlayer());
             assertEquals(2, game.getActivePlayers().size());
 
-            Game blindSafety = createStandardGame(3, 1000, mockHandEvaluator);
+            Game blindSafety = createStandardGame(3, 1000);
             blindSafety.postBlinds();
             Player nonCurrentSb = blindSafety.getActivePlayers().get(1);
             assertNotEquals(nonCurrentSb, blindSafety.getCurrentPlayer());
@@ -2051,7 +2034,7 @@ class GameTest {
                             new Card(Rank.FOUR, Suit.HEARTS)))
                     .currentPlayerId("a").currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
                     .handSeatOrder(List.of("a", "b", "c")).dealerAnchorPlayerId("a")
-                    .handEvaluator(mockHandEvaluator).build();
+                    .build();
 
             Player actorA = midHandOut.getPlayers().get(0);
             Player outOpponentB = midHandOut.getPlayers().get(1);
@@ -2070,7 +2053,7 @@ class GameTest {
 
         @Test
         void stateRevisionIncrementsAndResetsAcrossBeginHandAndRestore() {
-            Game revGame = createStandardGame(2, 1000, mockHandEvaluator);
+            Game revGame = createStandardGame(2, 1000);
             assertEquals(0L, revGame.getStateRevision());
             assertEquals(0L, revGame.getHandNumber());
 
@@ -2090,7 +2073,7 @@ class GameTest {
             Game restored = Game.restoreBuilder().gameId("game-restore-rev")
                     .players(List.of(new Player("Alice", "p1", 1000), new Player("Bob", "p2", 1000)))
                     .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of()).smallBlind(10).bigBlind(20)
-                    .handEvaluator(mockHandEvaluator).handNumber(42L).stateRevision(199L)
+                    .handNumber(42L).stateRevision(199L)
                     .scheduledTaskDeadlines(Map.of()).scheduledTaskGenerations(Map.of()).build();
             assertEquals(42L, restored.getHandNumber());
             assertEquals(199L, restored.getStateRevision());
@@ -2113,7 +2096,7 @@ class GameTest {
         void readyGateAndSchedulingDelegationOnGameAggregateRoot() {
             Player p1 = new Player("Alice", "p1", 1000);
             Player p2 = new Player("Bob", "p2", 1000);
-            Game aggGame = createGame("game-adversarial-1", List.of(p1, p2), 10, 20, new HandEvaluatorService());
+            Game aggGame = createGame("game-adversarial-1", List.of(p1, p2), 10, 20);
 
             assertEquals(ReadyGateState.CLOSED, aggGame.getReadyGateState());
             assertFalse(aggGame.isReadyCountdownActive());
@@ -2160,7 +2143,7 @@ class GameTest {
 
         @Test
         void readyGateExcludesZeroChipPlayersAndHandlesRepairAndTransitions() {
-            Game readyGame = createStandardGame(3, 1000, new HandEvaluatorService());
+            Game readyGame = createStandardGame(3, 1000);
             dealToRiverAndShowdown(readyGame);
             readyGame.openOrWaitReadyGate(50_000L);
             readyGame.getPlayers().get(1).doAction(PlayerAction.ALL_IN, 0, 0);
@@ -2169,7 +2152,7 @@ class GameTest {
             readyGame.getPlayers().get(2).setReadyForNextHand(true);
             assertTrue(readyGame.areAllEligiblePlayersReady());
 
-            Game fewerOpen = createStandardGame(2, 1000, new HandEvaluatorService());
+            Game fewerOpen = createStandardGame(2, 1000);
             dealToRiverAndShowdown(fewerOpen);
             fewerOpen.getPlayers().get(1).setDisconnected(true);
             fewerOpen.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 99_999L);
@@ -2177,7 +2160,7 @@ class GameTest {
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, fewerOpen.getReadyGateState());
             assertNull(fewerOpen.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
 
-            Game fewerExpire = createStandardGame(2, 1000, new HandEvaluatorService());
+            Game fewerExpire = createStandardGame(2, 1000);
             dealToRiverAndShowdown(fewerExpire);
             fewerExpire.openOrWaitReadyGate(50_000L);
             fewerExpire.getPlayers().get(1).setDisconnected(true);
@@ -2190,7 +2173,7 @@ class GameTest {
             Game repairMissing = Game.restoreBuilder().gameId("repair-missing").players(List.of(r1, r2))
                     .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of()).smallBlind(10).bigBlind(20)
                     .currentPhase(GamePhase.SHOWDOWN).readyGateState(ReadyGateState.COUNTING_DOWN)
-                    .readyCountdownDeadlineEpochMs(null).handEvaluator(new HandEvaluatorService()).build();
+                    .readyCountdownDeadlineEpochMs(null).build();
             assertTrue(repairMissing.repairRecoveredReadyGate(60_000L));
             assertTrue(repairMissing.isReadyCountdownActive());
             assertEquals(60_000L, repairMissing.getReadyCountdownDeadlineEpochMs());
@@ -2199,7 +2182,7 @@ class GameTest {
             Game repairReschedule = Game.restoreBuilder().gameId("repair-resched").players(List.of(r1, r2))
                     .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of()).smallBlind(10).bigBlind(20)
                     .currentPhase(GamePhase.SHOWDOWN).readyGateState(ReadyGateState.COUNTING_DOWN)
-                    .readyCountdownDeadlineEpochMs(70_000L).handEvaluator(new HandEvaluatorService()).build();
+                    .readyCountdownDeadlineEpochMs(70_000L).build();
             assertFalse(repairReschedule.repairRecoveredReadyGate(60_000L));
             assertEquals(70_000L, repairReschedule.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
         }

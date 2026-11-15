@@ -4,7 +4,6 @@ import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.*;
-import com.pokergame.service.HandEvaluatorService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
@@ -16,12 +15,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
 
 /**
  * Dedicated unit tests for {@link GameRestoreBuilder}.
- * Verifies snapshot reconstruction across all 37 internal fields, validation rules,
+ * Verifies snapshot reconstruction across all 36 internal fields, validation rules,
  * fallback defaults, deck draw integrity, task scheduling generations, state revisions,
  * and defensive collection isolation.
  */
@@ -32,22 +29,16 @@ class GameRestoreBuilderTest {
     private static final String GAME_ID = "restore-test-game";
 
     // =========================================================================
-    // 1. Full 37-Field Exhaustive Verification
+    // 1. Full 36-Field Exhaustive Verification
     // =========================================================================
 
     @Test
-    @DisplayName("restoreAll37Fields_EveryPropertyFaithfullyRestored: asserts all 37 fields")
-    void restoreAll37Fields_EveryPropertyFaithfullyRestored() {
-        HandEvaluatorService mockEvaluator = mock(HandEvaluatorService.class);
-        when(mockEvaluator.getBestHand(any(), any()))
-                .thenReturn(new HandEvaluationResult(
-                        List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES),
-                                new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
-                                new Card(Rank.TEN, Suit.SPADES)),
-                        HandRank.ROYAL_FLUSH));
-
+    @DisplayName("restoreAll36Fields_EveryPropertyFaithfullyRestored: asserts all 36 fields")
+    void restoreAll36Fields_EveryPropertyFaithfullyRestored() {
         Player p1 = player("p1", "Alice", 1000);
+        p1.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
         Player p2 = player("p2", "Bob", 800);
+        p2.getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.CLUBS)));
         Player p3 = player("p3", "Charlie", 600);
         List<Player> allPlayers = List.of(p1, p2, p3);
         List<String> activeIds = List.of("p1", "p2");
@@ -123,10 +114,9 @@ class GameRestoreBuilderTest {
                 .actedPlayersInRound(actedPlayers)                  // 34
                 .scheduledTaskDeadlines(taskDeadlines)              // 35
                 .scheduledTaskGenerations(taskGenerations)          // 36
-                .handEvaluator(mockEvaluator)                       // 37
                 .build();
 
-        // Direct assertions on all 37 fields
+        // Direct assertions on all 36 fields
         assertEquals(GAME_ID, game.getGameId());                                     // 1
         assertEquals(allPlayers, game.getPlayers());                                 // 2
         assertEquals(2, game.getActivePlayers().size());                             // 3
@@ -172,9 +162,10 @@ class GameRestoreBuilderTest {
                 game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));         // 36
         assertEquals(taskGenerations, game.getScheduledTaskGenerationsSnapshot());    // 36
 
-        // Verify handEvaluator (37) is wired by triggering showdown
-        game.conductShowdown();
-        verify(mockEvaluator, atLeastOnce()).getBestHand(any(), any());              // 37
+        // Verify hand evaluation works on the restored game by triggering showdown
+        List<Player> winners = game.conductShowdown();
+        assertEquals(List.of(p1), winners);
+        assertEquals(HandRank.ROYAL_FLUSH, p1.getHandRank());
     }
 
     // =========================================================================
@@ -559,8 +550,7 @@ class GameRestoreBuilderTest {
                 .everyoneHasHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .scheduledTaskGenerations(Map.of())
-                .handEvaluator(new HandEvaluatorService());
+                .scheduledTaskGenerations(Map.of());
     }
 
     @Nested
@@ -606,8 +596,7 @@ class GameRestoreBuilderTest {
                     .handSeatOrder(mutableSeatOrder)
                     .actedPlayersInRound(mutableActed)
                     .scheduledTaskDeadlines(mutableDeadlines)
-                    .scheduledTaskGenerations(mutableGenerations)
-                    .handEvaluator(new HandEvaluatorService());
+                    .scheduledTaskGenerations(mutableGenerations);
 
             // --- Mutate BEFORE build() ---
             mutablePlayers.add(p3);
@@ -1036,7 +1025,6 @@ class GameRestoreBuilderTest {
                         .bigBlind(bb)
                         .handNumber(handNum)
                         .stateRevision(revision)
-                        .handEvaluator(new HandEvaluatorService())
                         .build();
 
                 // Invariant assertions:
@@ -1107,8 +1095,7 @@ class GameRestoreBuilderTest {
                     .everyoneHasHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
-                    .scheduledTaskGenerations(Map.of())
-                    .handEvaluator(new HandEvaluatorService());
+                    .scheduledTaskGenerations(Map.of());
         }
     }
 }

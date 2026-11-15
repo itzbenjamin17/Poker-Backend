@@ -48,9 +48,6 @@ class GameTaskSchedulerTest {
     private RoomService roomService;
 
     @Mock
-    private HandEvaluatorService handEvaluator;
-
-    @Mock
     private ObjectProvider<GameLifecycleService> lifecycleProvider;
 
     @Mock
@@ -85,7 +82,7 @@ class GameTaskSchedulerTest {
     private Game createAndRegisterGame() {
         Game game = new Game(GAME_ID, List.of(
                 new Player("Host", "host", 1000),
-                new Player("Player2", "p2", 1000)), 6, 5, 10, handEvaluator);
+                new Player("Player2", "p2", 1000)), 6, 5, 10);
         game.resetForNewHand();
         game.beginHand();
         game.dealHoleCards();

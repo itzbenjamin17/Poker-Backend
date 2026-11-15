@@ -2,7 +2,6 @@ package com.pokergame.model;
 
 import com.pokergame.model.PotCalculator.PotAllocation;
 import com.pokergame.model.PotCalculator.PotComputationResult;
-import com.pokergame.service.HandEvaluatorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +24,7 @@ import java.util.stream.Collectors;
  */
 final class ShowdownResolver {
     private static final Logger logger = LoggerFactory.getLogger(ShowdownResolver.class);
+    private static final HandEvaluator HAND_EVALUATOR = new HandEvaluator();
 
     private ShowdownResolver() {
     }
@@ -42,13 +42,12 @@ final class ShowdownResolver {
     /**
      * Evaluates the best hand for each player and stores it on the player.
      *
-     * @param handEvaluator evaluator service
      * @param communityCards board cards
      * @param players players to evaluate
      */
-    static void evaluateHands(HandEvaluatorService handEvaluator, List<Card> communityCards, List<Player> players) {
+    static void evaluateHands(List<Card> communityCards, List<Player> players) {
         for (Player player : players) {
-            HandEvaluationResult result = handEvaluator.getBestHand(communityCards, player.getHoleCards());
+            HandEvaluationResult result = HAND_EVALUATOR.getBestHand(communityCards, player.getHoleCards());
             player.setBestHand(result.bestHand());
             player.setHandRank(result.handRank());
         }
@@ -59,14 +58,13 @@ final class ShowdownResolver {
      * Odd chips from uneven splits are awarded one per winner clockwise starting to the dealer's left.
      *
      * @param gameId         game identifier (logging only)
-     * @param handEvaluator  evaluator service used for same-rank tie-breaks
      * @param computation    pot layers and uncalled amounts
      * @param players        all seated players (used to resolve refund recipients and fallback seat order)
      * @param handSeatOrder  clockwise player IDs for the current hand; falls back to {@code players} order when empty
      * @param dealerPlayerId player ID holding the dealer button for odd-chip ordering, or {@code null}
      * @return the distribution result
      */
-    static Distribution distribute(String gameId, HandEvaluatorService handEvaluator,
+    static Distribution distribute(String gameId,
             PotComputationResult computation, List<Player> players,
             List<String> handSeatOrder, String dealerPlayerId) {
         List<PotAllocation> allocations = computation.allocations();
@@ -99,7 +97,7 @@ final class ShowdownResolver {
 
         for (int i = 0; i < allocations.size(); i++) {
             PotAllocation allocation = allocations.get(i);
-            List<Player> potWinners = determineWinners(handEvaluator, allocation.eligiblePlayers());
+            List<Player> potWinners = determineWinners(allocation.eligiblePlayers());
 
             if (potWinners.isEmpty()) {
                 logger.warn("Pot {} has no winners. Keeping {} chips in pot.", i, allocation.amount());
@@ -146,11 +144,10 @@ final class ShowdownResolver {
     /**
      * Determines the winning player(s) by comparing hand ranks, handling ties.
      *
-     * @param handEvaluator evaluator service used for same-rank comparison
      * @param players players to compare (already evaluated)
      * @return winners; several on a tie, empty if no players
      */
-    static List<Player> determineWinners(HandEvaluatorService handEvaluator, List<Player> players) {
+    static List<Player> determineWinners(List<Player> players) {
         List<Player> sortablePlayers = new ArrayList<>(players);
         sortablePlayers.sort(Comparator.comparing(Player::getHandRank).reversed());
 
@@ -165,12 +162,12 @@ final class ShowdownResolver {
         for (int i = 1; i < sortablePlayers.size(); i++) {
             Player currentPlayer = sortablePlayers.get(i);
             if (currentPlayer.getHandRank() == bestPlayer.getHandRank()) {
-                boolean challengerBeatsBest = handEvaluator.isBetterHandOfSameRank(
+                boolean challengerBeatsBest = HAND_EVALUATOR.isBetterHandOfSameRank(
                         currentPlayer.getBestHand(),
                         bestPlayer.getBestHand(),
                         bestPlayer.getHandRank());
 
-                boolean bestBeatsChallenger = handEvaluator.isBetterHandOfSameRank(
+                boolean bestBeatsChallenger = HAND_EVALUATOR.isBetterHandOfSameRank(
                         bestPlayer.getBestHand(),
                         currentPlayer.getBestHand(),
                         bestPlayer.getHandRank());

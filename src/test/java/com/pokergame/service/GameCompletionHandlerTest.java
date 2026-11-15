@@ -14,7 +14,6 @@ import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.GameEligibility;
-import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
@@ -65,9 +64,6 @@ class GameCompletionHandlerTest {
     private RoomService roomService;
 
     @Mock
-    private HandEvaluatorService handEvaluator;
-
-    @Mock
     private SimpMessagingTemplate messagingTemplate;
 
     @Mock
@@ -96,8 +92,6 @@ class GameCompletionHandlerTest {
                 activeGames, roomService, realGameStateService, runtimeTimers,
                 taskSchedulerFacade, mutableClock, DEFAULT_TIMINGS);
 
-        lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
-                .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
         lenient().when(taskScheduler.schedule(any(Runnable.class), any(Instant.class)))
                 .thenAnswer(_ -> mock(ScheduledFuture.class));
 
@@ -108,7 +102,7 @@ class GameCompletionHandlerTest {
     }
 
     private Game createAndRegisterStartedGame(List<Player> players) {
-        Game game = new Game(ROOM_ID, players, testRoom.getMaxPlayers(), 5, 10, handEvaluator);
+        Game game = new Game(ROOM_ID, players, testRoom.getMaxPlayers(), 5, 10);
         game.resetForNewHand();
         game.beginHand();
         game.dealHoleCards();
@@ -156,6 +150,9 @@ class GameCompletionHandlerTest {
             Game game = createAndRegisterStartedGame(List.of(
                     new Player("Host", "host", 100),
                     new Player("Player2", "p2", 100)));
+            game.dealFlop();
+            game.dealTurn();
+            game.dealRiver();
             game.setForfeitPending(true);
             clearInvocations(messagingTemplate, taskScheduler);
 
@@ -184,7 +181,11 @@ class GameCompletionHandlerTest {
         void handleGameEnd_HeadsUpAllIn_ShouldPickWinnerWithChips() {
             Player host = new Player("Host", "host", 0);
             Player p2 = new Player("Player2", "p2", 2000);
-            Game game = new Game(ROOM_ID, List.of(host, p2), 6, 5, 10, handEvaluator);
+            Game game = new Game(ROOM_ID, List.of(host, p2), 6, 5, 10);
+            game.dealHoleCards();
+            game.dealFlop();
+            game.dealTurn();
+            game.dealRiver();
             registerGame(game);
 
             clearInvocations(messagingTemplate, taskScheduler);
@@ -247,7 +248,7 @@ class GameCompletionHandlerTest {
                     .handContributions(Map.of()).preHandCarryOver(10)
                     .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, true))
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
-                    .scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
+                    .scheduledTaskDeadlines(Map.of()).build();
             registerGame(terminal);
 
             clearInvocations(messagingTemplate);
@@ -277,6 +278,9 @@ class GameCompletionHandlerTest {
             Game game = createAndRegisterStartedGame(List.of(
                     new Player("Host", "host", 1000),
                     new Player("Player2", "p2", 1000)));
+            game.dealFlop();
+            game.dealTurn();
+            game.dealRiver();
             @SuppressWarnings("unchecked")
             ScheduledFuture<Object> cleanupFuture = mock(ScheduledFuture.class);
             @SuppressWarnings("unchecked")
@@ -382,8 +386,7 @@ class GameCompletionHandlerTest {
                     List.of(new Player("Host", "host", 100), new Player("Player2", "p2", 100)),
                     testRoom.getMaxPlayers(),
                     5,
-                    10,
-                    new HandEvaluatorService());
+                    10);
             game.resetForNewHand();
             game.beginHand();
             game.dealHoleCards();
@@ -488,6 +491,9 @@ class GameCompletionHandlerTest {
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 assertThrows(IllegalStateException.class, () -> completion.getGameReview(ROOM_ID, "Host"));
 
+                game.dealFlop();
+                game.dealTurn();
+                game.dealRiver();
                 game.conductShowdown();
                 assertThrows(IllegalStateException.class, () -> completion.getGameReview(ROOM_ID, "Host"));
             }

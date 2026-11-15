@@ -66,9 +66,6 @@ class GameStateServiceTest {
     @Mock
     private RoomService roomService;
 
-    @Mock
-    private HandEvaluatorService handEvaluator;
-
     private Game testGame;
     private Room testRoom;
     private List<Player> testPlayers;
@@ -88,7 +85,7 @@ class GameStateServiceTest {
         testPlayers.add(new Player("Player1", UUID.randomUUID().toString(), 100));
         testPlayers.add(new Player("Player2", UUID.randomUUID().toString(), 100));
 
-        testGame = new Game(GAME_ID, testPlayers, 6, 5, 10, handEvaluator);
+        testGame = new Game(GAME_ID, testPlayers, 6, 5, 10);
 
         testRoom = new Room(
                 GAME_ID,
@@ -178,7 +175,7 @@ class GameStateServiceTest {
     @Test
     void broadcastGameState_WithThreePlayers_ShouldSendThreePrivateMessages() {
         testPlayers.add(new Player("Player3", UUID.randomUUID().toString(), 100));
-        testGame = new Game(GAME_ID, testPlayers, 6, 5, 10, handEvaluator);
+        testGame = new Game(GAME_ID, testPlayers, 6, 5, 10);
         testRoom.addPlayer("Player3");
 
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
@@ -200,7 +197,7 @@ class GameStateServiceTest {
         threePlayers.add(new Player("Player2", UUID.randomUUID().toString(), 100));
         threePlayers.add(new Player("Player3", UUID.randomUUID().toString(), 100));
 
-        Game game = new Game(GAME_ID, threePlayers, 6, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, threePlayers, 6, 5, 10);
         game.postBlinds();
 
         Room room = new Room(
@@ -607,7 +604,7 @@ class GameStateServiceTest {
                 .lastSettlementResult(new HandSettlementResult(Map.of(winner.getPlayerId(), 100), Map.of(),
                         Set.of(winner.getPlayerId()), 0, true)).scheduledTaskDeadlines(Map.of())
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
-                .handEvaluator(handEvaluator).build();
+                .build();
 
         GameEndResponse event = gameStateService.recordGameEnd(contested, winner, false);
 
@@ -619,7 +616,7 @@ class GameStateServiceTest {
     void recordGameEnd_ForfeitDuringReadyCountdownAfterContestedShowdown_RevealsShowdownWinnerHoleCards() {
         Player p1 = new Player("Player1", "p1", 100);
         Player p2 = new Player("Player2", "p2", 100);
-        Game game = new Game(GAME_ID, List.of(p1, p2), 6, 5, 10, new HandEvaluatorService());
+        Game game = new Game(GAME_ID, List.of(p1, p2), 6, 5, 10);
         game.dealHoleCards();
         game.postBlinds();
         Player firstActor = game.getCurrentPlayer();
@@ -658,7 +655,7 @@ class GameStateServiceTest {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         Player p1 = new Player("Player1", "p1", 100);
         Player p2 = new Player("Player2", "p2", 100);
-        Game game = new Game(GAME_ID, List.of(p1, p2), 6, 5, 10, new HandEvaluatorService());
+        Game game = new Game(GAME_ID, List.of(p1, p2), 6, 5, 10);
         game.dealHoleCards();
         game.postBlinds();
 
@@ -709,7 +706,7 @@ class GameStateServiceTest {
                 .currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10)
                 .handContributions(Map.of()).preHandCarryOver(10).lastSettlementResult(settled)
                 .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
+                .scheduledTaskDeadlines(Map.of()).build();
         terminal.settleGameEnd(bb, Set.of());
 
         GameEndResponse result = gameStateService.recordGameEnd(terminal, bb, true);
@@ -746,7 +743,7 @@ class GameStateServiceTest {
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of())
                 .lastSettlementResult(settlement).preHandCarryOver(0).readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                .handEvaluator(handEvaluator).build();
+                .build();
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
         gameStateService.broadcastShowdownResults(settled);
@@ -766,21 +763,28 @@ class GameStateServiceTest {
         List<Player> players = List.of(
                 settledPlayer("Main", "main", 50), settledPlayer("Side1", "side1", 100),
                 settledPlayer("Side2", "side2", 150), settledPlayer("Side3", "side3", 150));
+        players.get(0).getHoleCards().clear();
+        players.get(0).getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+        players.get(1).getHoleCards().clear();
+        players.get(1).getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.HEARTS), new Card(Rank.SEVEN, Suit.CLUBS)));
+        players.get(2).getHoleCards().clear();
+        players.get(2).getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.DIAMONDS)));
+        players.get(3).getHoleCards().clear();
+        players.get(3).getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.FIVE, Suit.DIAMONDS)));
         Game settled = Game.restoreBuilder().gameId(GAME_ID).players(players)
                 .activePlayerIds(players.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
-                .communityCards(List.of()).pot(450)
+                .communityCards(List.of(
+                        new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
+                        new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.EIGHT, Suit.DIAMONDS),
+                        new Card(Rank.TWO, Suit.CLUBS)))
+                .pot(450)
                 .dealerAnchorPlayerId("main").smallBlindPlayerId("main").bigBlindPlayerId("side1")
                 .currentPlayerId("main").currentHighestBet(150).currentPhase(GamePhase.RIVER)
                 .gameOver(false).smallBlind(5).bigBlind(10)
                 .handContributions(Map.of("main", 50, "side1", 100, "side2", 150, "side3", 150))
                 .preHandCarryOver(0).readyCountdownActive(true).everyoneHasHadInitialTurn(true)
-                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
+                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of()).build();
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        when(handEvaluator.getBestHand(any(), any()))
-                .thenReturn(new HandEvaluationResult(List.of(), HandRank.ROYAL_FLUSH))
-                .thenReturn(new HandEvaluationResult(List.of(), HandRank.STRAIGHT))
-                .thenReturn(new HandEvaluationResult(List.of(), HandRank.ONE_PAIR))
-                .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
 
         settled.conductShowdown();
         ArgumentCaptor<Object> initialCaptor = ArgumentCaptor.forClass(Object.class);
@@ -826,7 +830,7 @@ class GameStateServiceTest {
                         0, true))
                 .readyCountdownActive(true).readyCountdownDeadlineEpochMs(12345L)
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                .handEvaluator(handEvaluator).build();
+                .build();
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(settled);
 
@@ -852,7 +856,7 @@ class GameStateServiceTest {
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 100, true))
                 .readyCountdownActive(true).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
+                .scheduledTaskDeadlines(Map.of()).build();
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(voidGame);
 
@@ -886,7 +890,7 @@ class GameStateServiceTest {
                 .lastSettlementResult(new HandSettlementResult(Map.of(winner.getPlayerId(), 150), Map.of(),
                         Set.of(winner.getPlayerId()), 0, true))
                 .readyCountdownActive(true).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
+                .scheduledTaskDeadlines(Map.of()).build();
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
         gameStateService.broadcastShowdownResults(settled);
@@ -923,7 +927,7 @@ class GameStateServiceTest {
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(handEvaluator)
+                
                 .build();
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(showdownGame);
@@ -961,7 +965,7 @@ class GameStateServiceTest {
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(handEvaluator)
+                
                 .build();
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(countdownGame);
@@ -999,7 +1003,7 @@ class GameStateServiceTest {
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(handEvaluator)
+                
                 .build();
 
         gameStateService.broadcastGameState(showdownGame);
@@ -1068,7 +1072,7 @@ class GameStateServiceTest {
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(handEvaluator)
+                
                 .build();
 
         // 1. Initial ready toggle (Player 1 marks ready)
@@ -1175,7 +1179,7 @@ class GameStateServiceTest {
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(handEvaluator)
+                
                 .build();
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(countdownGame);
@@ -1233,7 +1237,7 @@ class GameStateServiceTest {
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(handEvaluator)
+                
                 .build();
     }
 
@@ -1587,7 +1591,7 @@ class GameStateServiceTest {
         Player player2 = new Player("Player2", UUID.randomUUID().toString(), 100);
 
         List<Player> players = List.of(player1, player2);
-        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10);
 
         PrivatePlayerState snapshot = gameStateService.getPrivatePlayerStateSnapshot(game, "Player1");
 
@@ -1651,7 +1655,7 @@ class GameStateServiceTest {
                     .everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(handEvaluator)
+                    
                     .build();
 
             GameEndResponse response = gameStateService.buildGameEndResponse(restored, winner, false);
@@ -1664,7 +1668,7 @@ class GameStateServiceTest {
                 new Player("P1", "id-1", 100),
                 new Player("P2", "id-2", 100),
                 new Player("P3", "id-3", 100),
-                new Player("P4", "id-4", 100)), 8, 5, 10, handEvaluator);
+                new Player("P4", "id-4", 100)), 8, 5, 10);
         GameEndResponse response = gameStateService.recordGameEnd(validCapacityGame, validCapacityGame.getPlayers().getFirst(), false);
         assertEquals(8, response.finalState().maxPlayers());
         assertEquals(FIXED_INSTANT.toEpochMilli(), response.finalState().serverTimeEpochMs());
@@ -1755,7 +1759,7 @@ class GameStateServiceTest {
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(handEvaluator)
+                
                 .build();
 
         gameStateService.broadcastShowdownResults(game);
@@ -1830,7 +1834,7 @@ class GameStateServiceTest {
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(handEvaluator)
+                
                 .build();
 
         gameStateService.broadcastShowdownResults(gameA);
@@ -1863,7 +1867,7 @@ class GameStateServiceTest {
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .handEvaluator(handEvaluator)
+                
                 .build();
 
         PublicGameStateResponse snapshotB = gameStateService.getPublicGameStateSnapshot(gameB);
@@ -1887,7 +1891,7 @@ class GameStateServiceTest {
         GameStateService projections = new GameStateService(rooms, template, FIXED_CLOCK);
         Game game = new Game("room", List.of(
                 new Player("Alice", "alice-id", 100),
-                new Player("Host", "host-id", 100)), 6, 5, 10, handEvaluator);
+                new Player("Host", "host-id", 100)), 6, 5, 10);
         game.dealHoleCards();
 
         projections.broadcastGameState(game);
@@ -1937,7 +1941,7 @@ class GameStateServiceTest {
 
         Game game = new Game("room", List.of(
                 new Player("Alice", "alice-id", 100),
-                new Player("Host", "host-id", 100)), 6, 5, 10, handEvaluator);
+                new Player("Host", "host-id", 100)), 6, 5, 10);
         projections.broadcastGameState(game);
         ArgumentCaptor<String> recipient = ArgumentCaptor.forClass(String.class);
         verify(publisher).convertAndSendToUser(recipient.capture(), eq("/queue/private"), any(PrivatePlayerState.class));

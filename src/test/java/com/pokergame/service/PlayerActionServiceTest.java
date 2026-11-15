@@ -58,10 +58,6 @@ class PlayerActionServiceTest {
 
     @Mock
     private GameStateService gameStateService;
-
-    @Mock
-    private HandEvaluatorService handEvaluator;
-
     private RoomCoordinator roomCoordinator;
     private PlayerActionService playerActionService;
 
@@ -84,7 +80,7 @@ class PlayerActionServiceTest {
         testPlayers.add(new Player("Player2", UUID.randomUUID().toString(), 1000));
         testPlayers.add(new Player("Player3", UUID.randomUUID().toString(), 1000));
 
-        testGame = new Game(GAME_ID, testPlayers, 6, 5, 10, handEvaluator);
+        testGame = new Game(GAME_ID, testPlayers, 6, 5, 10);
         testGame.resetForNewHand();
         testGame.dealHoleCards();
         testGame.postBlinds();
@@ -140,8 +136,9 @@ class PlayerActionServiceTest {
     @DisplayName("processPlayerAction should throw BadRequestException when game is in SHOWDOWN phase")
     void rejectsActionDuringShowdownPhase() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
-        when(handEvaluator.getBestHand(any(), any()))
-                .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
+        testGame.dealFlop();
+        testGame.dealTurn();
+        testGame.dealRiver();
         testGame.conductShowdown();
         assertEquals(GamePhase.SHOWDOWN, testGame.getCurrentPhase());
 
@@ -339,7 +336,7 @@ class PlayerActionServiceTest {
         shortStackPlayers.add(new Player("Short", UUID.randomUUID().toString(), 5));
         shortStackPlayers.add(new Player("BB", UUID.randomUUID().toString(), 1000));
 
-        Game shortStackGame = new Game(GAME_ID, shortStackPlayers, 6, 5, 10, handEvaluator);
+        Game shortStackGame = new Game(GAME_ID, shortStackPlayers, 6, 5, 10);
         shortStackGame.resetForNewHand();
         shortStackGame.dealHoleCards();
         shortStackGame.postBlinds();
@@ -384,7 +381,7 @@ class PlayerActionServiceTest {
         lowChipPlayers.add(new Player("LowChip", UUID.randomUUID().toString(), 5)); // Only 5 chips
         lowChipPlayers.add(new Player("Normal", UUID.randomUUID().toString(), 1000));
 
-        Game lowChipGame = new Game(GAME_ID, lowChipPlayers, 6, 5, 10, handEvaluator);
+        Game lowChipGame = new Game(GAME_ID, lowChipPlayers, 6, 5, 10);
         lowChipGame.resetForNewHand();
         lowChipGame.dealHoleCards();
         lowChipGame.postBlinds();
@@ -452,7 +449,7 @@ class PlayerActionServiceTest {
         twoPlayers.add(new Player("P1", UUID.randomUUID().toString(), 1000));
         twoPlayers.add(new Player("P2", UUID.randomUUID().toString(), 1000));
 
-        Game twoPlayerGame = new Game(GAME_ID, twoPlayers, 6, 5, 10, handEvaluator);
+        Game twoPlayerGame = new Game(GAME_ID, twoPlayers, 6, 5, 10);
         twoPlayerGame.resetForNewHand();
         twoPlayerGame.dealHoleCards();
         twoPlayerGame.postBlinds();
@@ -478,7 +475,7 @@ class PlayerActionServiceTest {
         players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
         players.add(new Player("P3", UUID.randomUUID().toString(), 1000));
 
-        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -509,7 +506,7 @@ class PlayerActionServiceTest {
         players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
         players.add(new Player("P3", UUID.randomUUID().toString(), 1000));
 
-        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -548,7 +545,7 @@ class PlayerActionServiceTest {
         players.add(new Player("P1", UUID.randomUUID().toString(), 1000));
         players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
 
-        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -641,7 +638,7 @@ class PlayerActionServiceTest {
         players.add(allInPlayer);
         players.add(thirdPlayer);
 
-        Game gameWithAllIn = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
+        Game gameWithAllIn = new Game(GAME_ID, players, 6, 5, 10);
         gameWithAllIn.resetForNewHand();
         gameWithAllIn.dealHoleCards();
         gameWithAllIn.postBlinds();
@@ -784,7 +781,7 @@ class PlayerActionServiceTest {
         Game independent = new Game(independentId, new ArrayList<>(List.of(
                 new Player("Alice", "a", 1000),
                 new Player("Bob", "b", 1000),
-                new Player("Charlie", "c", 1000))), 6, 5, 10, handEvaluator);
+                new Player("Charlie", "c", 1000))), 6, 5, 10);
         independent.resetForNewHand();
         independent.dealHoleCards();
         independent.postBlinds();
@@ -895,7 +892,7 @@ class PlayerActionServiceTest {
         players.add(new Player("P1", UUID.randomUUID().toString(), 1000));
         players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
 
-        Game twoPlayerGame = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
+        Game twoPlayerGame = new Game(GAME_ID, players, 6, 5, 10);
         twoPlayerGame.resetForNewHand();
         twoPlayerGame.dealHoleCards();
         twoPlayerGame.postBlinds();
@@ -923,7 +920,7 @@ class PlayerActionServiceTest {
         List<Player> players = new ArrayList<>();
         players.add(new Player("P1", UUID.randomUUID().toString(), 100));
         players.add(new Player("P2", UUID.randomUUID().toString(), 100));
-        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -953,7 +950,6 @@ class PlayerActionServiceTest {
      * Plays legal check/call actions through the service for the current actor until the hand
      * leaves PRE_FLOP, returning the outcome that advanced the first betting round. Used to reach
      * a PHASE_ADVANCED outcome through real play rather than a stubbed {@code processPlayerDecision}.
-     * handEvaluator is mocked only to score hands if a showdown is reached, not to force progression.
      */
     private void playUntilPhaseAdvances(Game game) {
         GamePhase startPhase = game.getCurrentPhase();
@@ -975,7 +971,7 @@ class PlayerActionServiceTest {
         List<Player> players = new ArrayList<>();
         players.add(new Player("A", UUID.randomUUID().toString(), 1000));
         players.add(new Player("B", UUID.randomUUID().toString(), 1000));
-        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -1002,15 +998,11 @@ class PlayerActionServiceTest {
         List<Player> players = new ArrayList<>();
         players.add(new Player("A", UUID.randomUUID().toString(), 1000));
         players.add(new Player("B", UUID.randomUUID().toString(), 1000));
-        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(game);
-        // The showdown evaluates hands; a fixed result just names a winner deterministically. It
-        // does not drive progression to showdown, which comes from the real river betting round.
-        when(handEvaluator.getBestHand(anyList(), anyList()))
-                .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
         // Check/call every street until the river betting round completes and the hand resolves.
         for (int guard = 0; guard < 40 && game.getCurrentPhase() != GamePhase.SHOWDOWN; guard++) {
             Player actor = game.getCurrentPlayer();
@@ -1339,7 +1331,7 @@ class PlayerActionServiceTest {
                 .everyoneHasHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.TURN_TIMEOUT, FIXED_INSTANT.toEpochMilli()))
-                .handEvaluator(handEvaluator)
+                
                 .build();
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(expiredTurnGame);
 

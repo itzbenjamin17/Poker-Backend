@@ -24,9 +24,7 @@ import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.model.Card;
 import com.pokergame.model.Game;
-import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
@@ -83,9 +81,6 @@ class PlayerDepartureHandlerTest {
     private RoomService roomService;
 
     @Mock
-    private HandEvaluatorService handEvaluator;
-
-    @Mock
     private GameStateService gameStateService;
 
     @Mock
@@ -113,8 +108,6 @@ class PlayerDepartureHandlerTest {
         testRoom.addPlayer("Host");
         testRoom.addPlayer("Player2");
 
-        lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
-                .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
         lenient().when(taskScheduler.schedule(any(Runnable.class), any(Instant.class)))
                 .thenAnswer(_ -> mock(ScheduledFuture.class));
 
@@ -142,7 +135,7 @@ class PlayerDepartureHandlerTest {
                 roomService, stateService, completionHandler, handProgression,
                 readinessCoordinator, timerRegistry, activeGames, mutableClock);
         gameLifecycleService = new GameLifecycleService(
-                roomService, handEvaluator, stateService, activeGames, timerRegistry, scheduler,
+                roomService, stateService, activeGames, timerRegistry, scheduler,
                 completionHandler, handProgression, readinessCoordinator, departureHandler,
                 roomCoordinator, mutableClock, DEFAULT_TIMINGS);
         lifecycleRef.set(gameLifecycleService);
@@ -453,6 +446,9 @@ class PlayerDepartureHandlerTest {
 
             // Terminal state frozen: roster stays intact
             Game active = getGameLocked(ROOM_ID);
+            active.dealFlop();
+            active.dealTurn();
+            active.dealRiver();
             active.markGameOver();
             reset(roomService);
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
@@ -463,9 +459,6 @@ class PlayerDepartureHandlerTest {
 
         @Test
         void removePlayers_PreFlopAbandonedDuringCleanupWindow_DetachesWithoutSettling() {
-            HandEvaluatorService realEvaluator = new HandEvaluatorService();
-            lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
-                    .thenAnswer(inv -> realEvaluator.getBestHand(inv.getArgument(0), inv.getArgument(1)));
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
 
             withRoomLock(ROOM_ID, () -> {
@@ -486,7 +479,10 @@ class PlayerDepartureHandlerTest {
 
             Game game = getGameLocked(ROOM_ID);
             verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
-            verify(handEvaluator, never()).getBestHand(anyList(), anyList());
+            assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
+            assertNull(game.getLastSettlementResult());
+            assertTrue(game.getPlayers().stream()
+                    .allMatch(p -> p.getHandRank() == HandRank.NO_HAND && p.getBestHand().isEmpty()));
             verifyNoInteractions(gameStateService);
             assertFalse(game.isFinalPotSettled());
             assertTrue(game.getGameEndResult().abandoned());
@@ -631,7 +627,7 @@ class PlayerDepartureHandlerTest {
             verify(gameStateService, never()).broadcastGameState(any(Game.class));
 
             AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                    JsonMapper.builder().findAndAddModules().build(), handEvaluator);
+                    JsonMapper.builder().findAndAddModules().build());
             Game restored = mapper.deserialize(mapper.serialize(testRoom, survivor.getName(), game)).game();
             assertTrue(restored.isForfeitPending());
             assertTrue(restored.getPlayers().stream()
@@ -759,7 +755,11 @@ class PlayerDepartureHandlerTest {
             when(roomService.getRoom(r6Id)).thenReturn(r6);
             when(roomService.getCurrentHost(r6Id)).thenReturn("Host");
             withRoomLock(r6Id, () -> gameLifecycleService.createGameFromRoom(r6Id));
-            getGameLocked(r6Id).markGameOver();
+            Game r6Game = getGameLocked(r6Id);
+            r6Game.dealFlop();
+            r6Game.dealTurn();
+            r6Game.dealRiver();
+            r6Game.markGameOver();
             reset(roomService);
             when(roomService.getRoom(r6Id)).thenReturn(r6);
             when(roomService.getCurrentHost(r6Id)).thenReturn("Host");
@@ -931,12 +931,6 @@ class PlayerDepartureHandlerTest {
                 Player bigBlind = game.getPlayers().stream()
                         .filter(player -> player.getPlayerId().equals(game.getBigBlindPlayerId()))
                         .findFirst().orElseThrow();
-                lenient().when(handEvaluator.getBestHand(anyList(), anyList())).thenAnswer(invocation -> {
-                    List<Card> holeCards = invocation.getArgument(1);
-                    HandRank rank = holeCards.equals(smallBlind.getHoleCards())
-                            ? HandRank.ROYAL_FLUSH : HandRank.HIGH_CARD;
-                    return new HandEvaluationResult(List.of(), rank);
-                });
 
                 Player actor = game.getCurrentPlayer();
                 if (!actor.equals(smallBlind)) {
@@ -1325,9 +1319,6 @@ class PlayerDepartureHandlerTest {
 
         @Test
         void removeDisconnectedPlayer_PreFlopAbandonedDuringCleanupWindow_NoOpsAndKeepsRoomMembers() {
-            HandEvaluatorService realEvaluator = new HandEvaluatorService();
-            lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
-                    .thenAnswer(inv -> realEvaluator.getBestHand(inv.getArgument(0), inv.getArgument(1)));
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             long disconnectDeadline = BASE_EPOCH_MS + 5_000L;
 
@@ -1355,7 +1346,10 @@ class PlayerDepartureHandlerTest {
 
             verifyNobodyRemovedFromRoom();
             assertTrue(testRoom.hasPlayer("Player2"));
-            verify(handEvaluator, never()).getBestHand(anyList(), anyList());
+            assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
+            assertNull(game.getLastSettlementResult());
+            assertTrue(game.getPlayers().stream()
+                    .allMatch(p -> p.getHandRank() == HandRank.NO_HAND && p.getBestHand().isEmpty()));
             verifyNoInteractions(gameStateService);
             assertFalse(game.isFinalPotSettled());
             assertTrue(game.getGameEndResult().abandoned());
@@ -1509,9 +1503,12 @@ class PlayerDepartureHandlerTest {
 
                     Game game = new Game(roomId, List.of(
                             new Player("Host", "p1", 1000),
-                            new Player("Player2", "p2", 1000)), 6, 10, 20, handEvaluator);
+                            new Player("Player2", "p2", 1000)), 6, 10, 20);
                     game.dealHoleCards();
                     game.postBlinds();
+                    game.dealFlop();
+                    game.dealTurn();
+                    game.dealRiver();
 
                     when(roomService.getRoom(roomId)).thenReturn(room);
                     withRoomLock(roomId, () -> gameLifecycleService.restoreGame(game));
@@ -1650,7 +1647,7 @@ class PlayerDepartureHandlerTest {
                     Game game = new Game(roomId, List.of(
                             new Player("Host", "p1", 1000),
                             new Player("Successor", "p2", 1000),
-                            new Player("Player3", "p3", 1000)), 6, 10, 20, handEvaluator);
+                            new Player("Player3", "p3", 1000)), 6, 10, 20);
                     game.dealHoleCards();
                     game.postBlinds();
                     withRoomLock(roomId, () -> gameLifecycleService.restoreGame(game));

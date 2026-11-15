@@ -5,7 +5,6 @@ import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
 import com.pokergame.model.PotCalculator.PotAllocation;
 import com.pokergame.model.PotCalculator.PotComputationResult;
-import com.pokergame.service.HandEvaluatorService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -14,10 +13,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /** Unit tests for the package-private ShowdownResolver collaborator. */
 @Tag("unit")
@@ -26,18 +21,57 @@ class ShowdownResolverTest {
 
     private static final String GAME_ID = "showdown-test";
 
-    private final HandEvaluatorService evaluator = mock(HandEvaluatorService.class);
+    private static final List<Card> FLUSH_HAND = List.of(
+            new Card(Rank.TWO, Suit.SPADES),
+            new Card(Rank.FIVE, Suit.SPADES),
+            new Card(Rank.SEVEN, Suit.SPADES),
+            new Card(Rank.JACK, Suit.SPADES),
+            new Card(Rank.ACE, Suit.SPADES));
+
+    private static final List<Card> STRAIGHT_HAND = List.of(
+            new Card(Rank.FOUR, Suit.SPADES),
+            new Card(Rank.FIVE, Suit.HEARTS),
+            new Card(Rank.SIX, Suit.DIAMONDS),
+            new Card(Rank.SEVEN, Suit.CLUBS),
+            new Card(Rank.EIGHT, Suit.SPADES));
+
+    private static final List<Card> PAIR_ACES_HAND = List.of(
+            new Card(Rank.TWO, Suit.SPADES),
+            new Card(Rank.FIVE, Suit.CLUBS),
+            new Card(Rank.SEVEN, Suit.DIAMONDS),
+            new Card(Rank.ACE, Suit.HEARTS),
+            new Card(Rank.ACE, Suit.SPADES));
+
+    private static final List<Card> PAIR_TWOS_HAND = List.of(
+            new Card(Rank.TWO, Suit.SPADES),
+            new Card(Rank.TWO, Suit.HEARTS),
+            new Card(Rank.FIVE, Suit.CLUBS),
+            new Card(Rank.SEVEN, Suit.DIAMONDS),
+            new Card(Rank.KING, Suit.CLUBS));
 
     private static Player player(String id, int chips, HandRank rank) {
+        return player(id, chips, rank, defaultBestHandFor(rank));
+    }
+
+    private static Player player(String id, int chips, HandRank rank, List<Card> bestHand) {
         Player p = new Player(id, id, chips);
         p.setHandRank(rank);
-        p.setBestHand(List.of());
+        p.setBestHand(bestHand);
         return p;
+    }
+
+    private static List<Card> defaultBestHandFor(HandRank rank) {
+        return switch (rank) {
+            case FLUSH -> FLUSH_HAND;
+            case STRAIGHT -> STRAIGHT_HAND;
+            case ONE_PAIR -> PAIR_ACES_HAND;
+            default -> List.of();
+        };
     }
 
     @Test
     void determineWinners_EmptyList_ReturnsEmpty() {
-        assertTrue(ShowdownResolver.determineWinners(evaluator, List.of()).isEmpty());
+        assertTrue(ShowdownResolver.determineWinners(List.of()).isEmpty());
     }
 
     @Test
@@ -45,27 +79,23 @@ class ShowdownResolverTest {
         Player a = player("a", 0, HandRank.ONE_PAIR);
         Player b = player("b", 0, HandRank.FLUSH);
 
-        assertEquals(List.of(b), ShowdownResolver.determineWinners(evaluator, List.of(a, b)));
+        assertEquals(List.of(b), ShowdownResolver.determineWinners(List.of(a, b)));
     }
 
     @Test
     void determineWinners_SameRankTie_ReturnsBoth() {
-        when(evaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
         Player a = player("a", 0, HandRank.FLUSH);
         Player b = player("b", 0, HandRank.FLUSH);
 
-        assertEquals(2, ShowdownResolver.determineWinners(evaluator, List.of(a, b)).size());
+        assertEquals(2, ShowdownResolver.determineWinners(List.of(a, b)).size());
     }
 
     @Test
     void determineWinners_SameRankKicker_BetterHandWins() {
-        Player a = player("a", 0, HandRank.ONE_PAIR);
-        Player b = player("b", 0, HandRank.ONE_PAIR);
-        a.setBestHand(List.of(new Card(Rank.ACE, Suit.HEARTS)));
-        b.setBestHand(List.of(new Card(Rank.TWO, Suit.SPADES)));
-        when(evaluator.isBetterHandOfSameRank(any(), any(), any())).thenAnswer(inv -> inv.getArgument(0) == a.getBestHand());
+        Player a = player("a", 0, HandRank.ONE_PAIR, PAIR_ACES_HAND);
+        Player b = player("b", 0, HandRank.ONE_PAIR, PAIR_TWOS_HAND);
 
-        assertEquals(List.of(a), ShowdownResolver.determineWinners(evaluator, List.of(a, b)));
+        assertEquals(List.of(a), ShowdownResolver.determineWinners(List.of(a, b)));
     }
 
     @Test
@@ -76,7 +106,7 @@ class ShowdownResolverTest {
                 List.of(new PotAllocation(200, List.of(a, b))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, evaluator, computation, List.of(a, b), List.of("a", "b"), "a");
+                GAME_ID, computation, List.of(a, b), List.of("a", "b"), "a");
 
         assertEquals(200, a.getChips());
         assertEquals(0, b.getChips());
@@ -88,14 +118,13 @@ class ShowdownResolverTest {
 
     @Test
     void distribute_OddChipSplit_AwardsOddChipsClockwiseFromDealer() {
-        when(evaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
         Player a = player("a", 0, HandRank.FLUSH);
         Player b = player("b", 0, HandRank.FLUSH);
         PotComputationResult computation = new PotComputationResult(
                 List.of(new PotAllocation(101, List.of(a, b))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, evaluator, computation, List.of(a, b), List.of("a", "b"), "a");
+                GAME_ID, computation, List.of(a, b), List.of("a", "b"), "a");
 
         assertEquals(50, a.getChips());
         assertEquals(51, b.getChips());
@@ -106,7 +135,6 @@ class ShowdownResolverTest {
 
     @Test
     void distribute_ThreeWaySplitWithTwoOddChips_AwardsFirstTwoClockwiseFromDealer() {
-        when(evaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
         Player a = player("a", 0, HandRank.STRAIGHT);
         Player b = player("b", 0, HandRank.STRAIGHT);
         Player c = player("c", 0, HandRank.STRAIGHT);
@@ -114,7 +142,7 @@ class ShowdownResolverTest {
                 List.of(new PotAllocation(101, List.of(a, b, c))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, evaluator, computation, List.of(a, b, c), List.of("a", "b", "c"), "b");
+                GAME_ID, computation, List.of(a, b, c), List.of("a", "b", "c"), "b");
 
         assertEquals(34, c.getChips());
         assertEquals(34, a.getChips());
@@ -126,7 +154,6 @@ class ShowdownResolverTest {
 
     @Test
     void distribute_EmptyHandSeatOrder_FallsBackToPlayersOrder() {
-        when(evaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
         Player a = player("a", 0, HandRank.FLUSH);
         Player b = player("b", 0, HandRank.FLUSH);
         Player c = player("c", 0, HandRank.FLUSH);
@@ -134,7 +161,7 @@ class ShowdownResolverTest {
                 List.of(new PotAllocation(101, List.of(a, b, c))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, evaluator, computation, List.of(a, b, c), List.of(), "a");
+                GAME_ID, computation, List.of(a, b, c), List.of(), "a");
 
         assertEquals(34, b.getChips());
         assertEquals(34, c.getChips());
@@ -150,7 +177,7 @@ class ShowdownResolverTest {
                 List.of(new PotAllocation(100, List.of(a))), Map.of("a", 40, "f", 30), 70);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, evaluator, computation, List.of(a, folded), List.of("a", "f"), "a");
+                GAME_ID, computation, List.of(a, folded), List.of("a", "f"), "a");
 
         assertEquals(140, a.getChips());
         assertEquals(0, folded.getChips());
@@ -163,7 +190,7 @@ class ShowdownResolverTest {
                 List.of(new PotAllocation(75, List.of())), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, evaluator, computation, List.of(), List.of(), null);
+                GAME_ID, computation, List.of(), List.of(), null);
 
         assertEquals(75, d.remainder());
         assertTrue(d.winners().isEmpty());
@@ -173,19 +200,31 @@ class ShowdownResolverTest {
     void evaluateHandsStoresEachPlayersOwnEvaluation() {
         Player a = player("a", 100, HandRank.NO_HAND);
         Player b = player("b", 100, HandRank.NO_HAND);
-        List<Card> board = List.of(new Card(Rank.ACE, Suit.HEARTS));
-        List<Card> pair = List.of(new Card(Rank.ACE, Suit.SPADES));
-        List<Card> highCard = List.of(new Card(Rank.KING, Suit.SPADES));
-        when(evaluator.getBestHand(eq(board), any())).thenReturn(
-                new HandEvaluationResult(pair, HandRank.ONE_PAIR),
-                new HandEvaluationResult(highCard, HandRank.HIGH_CARD));
+        a.getHoleCards().addAll(List.of(new Card(Rank.JACK, Suit.DIAMONDS), new Card(Rank.FOUR, Suit.DIAMONDS)));
+        b.getHoleCards().addAll(List.of(new Card(Rank.KING, Suit.CLUBS), new Card(Rank.THREE, Suit.SPADES)));
+        List<Card> board = List.of(
+                new Card(Rank.TWO, Suit.HEARTS),
+                new Card(Rank.FIVE, Suit.DIAMONDS),
+                new Card(Rank.SEVEN, Suit.CLUBS),
+                new Card(Rank.NINE, Suit.SPADES),
+                new Card(Rank.JACK, Suit.HEARTS));
 
-        ShowdownResolver.evaluateHands(evaluator, board, List.of(a, b));
+        ShowdownResolver.evaluateHands(board, List.of(a, b));
 
-        assertEquals(pair, a.getBestHand());
         assertEquals(HandRank.ONE_PAIR, a.getHandRank());
-        assertEquals(highCard, b.getBestHand());
+        assertEquals(List.of(
+                new Card(Rank.FIVE, Suit.DIAMONDS),
+                new Card(Rank.SEVEN, Suit.CLUBS),
+                new Card(Rank.NINE, Suit.SPADES),
+                new Card(Rank.JACK, Suit.DIAMONDS),
+                new Card(Rank.JACK, Suit.HEARTS)), a.getBestHand());
         assertEquals(HandRank.HIGH_CARD, b.getHandRank());
+        assertEquals(List.of(
+                new Card(Rank.FIVE, Suit.DIAMONDS),
+                new Card(Rank.SEVEN, Suit.CLUBS),
+                new Card(Rank.NINE, Suit.SPADES),
+                new Card(Rank.JACK, Suit.HEARTS),
+                new Card(Rank.KING, Suit.CLUBS)), b.getBestHand());
     }
 
     @Test
@@ -198,7 +237,7 @@ class ShowdownResolverTest {
                 new PotAllocation(40, List.of(b, c))), Map.of("c", 12), 12);
 
         var distribution = ShowdownResolver.distribute(
-                GAME_ID, evaluator, pots, List.of(a, b, c), List.of("a", "b", "c"), "a");
+                GAME_ID, pots, List.of(a, b, c), List.of("a", "b", "c"), "a");
 
         assertEquals(List.of(a, b, c), distribution.winners());
         assertEquals(Map.of("a", 30, "b", 51, "c", 50), distribution.settlement().contestedAwards());
