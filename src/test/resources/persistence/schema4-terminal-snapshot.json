@@ -78,10 +78,6 @@
       "suit" : "CLUBS"
     } ],
     "pot" : 0,
-    "dealerPosition" : 0,
-    "smallBlindPosition" : 0,
-    "bigBlindPosition" : 1,
-    "currentPlayerPosition" : 0,
     "currentHighestBet" : 0,
     "currentPhase" : "SHOWDOWN",
     "gameOver" : true,
@@ -102,6 +98,7 @@
     "dealerAnchorPlayerId" : "a",
     "smallBlindPlayerId" : "a",
     "bigBlindPlayerId" : "b",
+    "currentPlayerId" : "a",
     "lastSettlementResult" : null,
     "terminalCarryOverSettled" : false,
     "readyGateState" : "CLOSED",

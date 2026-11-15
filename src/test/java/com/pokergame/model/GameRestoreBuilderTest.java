@@ -97,11 +97,8 @@ class GameRestoreBuilderTest {
                 .remainingDeck(deckCards)                           // 4
                 .communityCards(community)                          // 5
                 .pot(475)                                           // 6
-                .dealerPosition(1)                                  // 7
-                .smallBlindPosition(2)                              // 8
-                .bigBlindPosition(0)                                // 9
-                .currentPlayerPosition(0)                           // 10
-                .currentHighestBet(100)                             // 11
+                .currentPlayerId("p1")                              // 7
+                .currentHighestBet(100)                             // 8
                 .preHandCarryOver(25)                               // 12
                 .currentPhase(GamePhase.FLOP)                       // 13
                 .gameOver(false)                                    // 14
@@ -139,11 +136,8 @@ class GameRestoreBuilderTest {
         assertEquals(deckCards, game.getRemainingDeckSnapshot());                    // 4
         assertEquals(community, game.getCommunityCards());                          // 5
         assertEquals(475, game.getPot());                                            // 6
-        assertEquals(1, game.getDealerPosition());                                   // 7
-        assertEquals(2, game.getSmallBlindPosition());                               // 8
-        assertEquals(0, game.getBigBlindPosition());                                 // 9
-        assertEquals(0, game.getCurrentPlayerPosition());                            // 10
-        assertEquals("p1", game.getCurrentPlayer().getPlayerId());                  // 10
+        assertEquals("p1", game.getCurrentPlayerId());                               // 7
+        assertEquals("p1", game.getCurrentPlayer().getPlayerId());                   // 7
         assertEquals(100, game.getCurrentHighestBet());                              // 11
         assertEquals(25, game.getCarryOverPot());                                    // 12
         assertEquals(GamePhase.FLOP, game.getCurrentPhase());                        // 13
@@ -540,10 +534,7 @@ class GameRestoreBuilderTest {
                 .remainingDeck(List.of())
                 .communityCards(List.of())
                 .pot(0)
-                .dealerPosition(0)
-                .smallBlindPosition(0)
-                .bigBlindPosition(1)
-                .currentPlayerPosition(0)
+                .currentPlayerId("p1")
                 .currentHighestBet(0)
                 .preHandCarryOver(0)
                 .currentPhase(GamePhase.PRE_FLOP)
@@ -899,25 +890,29 @@ class GameRestoreBuilderTest {
         }
 
         // =========================================================================
-        // 4. Position Normalization Under Out-of-Bounds Indices
+        // 4. Current Player Resolution Under Unknown or Missing IDs
         // =========================================================================
 
-        @ParameterizedTest(name = "currentPlayerPosition={0}")
-        @ValueSource(ints = {-10, -1, 0, 1, 2, 5, 999})
-        @DisplayName("positionNormalization_CurrentPlayerResolvesSafely")
-        void testPositionNormalization_CurrentPlayerResolvesSafely(int testPos) {
+        @ParameterizedTest(name = "currentPlayerId={0}")
+        @org.junit.jupiter.params.provider.NullSource
+        @ValueSource(strings = {"", "missing", "p1", "p2"})
+        @DisplayName("currentPlayerResolution_UnknownOrValidIdResolvesSafely")
+        void testCurrentPlayerResolution_UnknownOrValidIdResolvesSafely(String testPlayerId) {
             Player p1 = player("p1", "Alice", 1000);
             Player p2 = player("p2", "Bob", 1000);
 
             Game game = defaultBuilder()
                     .players(List.of(p1, p2))
                     .activePlayerIds(List.of("p1", "p2"))
-                    .currentPlayerPosition(testPos)
+                    .currentPlayerId(testPlayerId)
                     .build();
 
             Player current = game.getCurrentPlayer();
             assertNotNull(current);
             assertTrue(current.getPlayerId().equals("p1") || current.getPlayerId().equals("p2"));
+            if ("p1".equals(testPlayerId) || "p2".equals(testPlayerId)) {
+                assertEquals(testPlayerId, current.getPlayerId());
+            }
         }
 
         @Test
@@ -1030,10 +1025,10 @@ class GameRestoreBuilderTest {
                         .communityCards(community)
                         .remainingDeck(List.of())
                         .pot(pot)
-                        .dealerPosition(rng.nextInt(activeCount))
-                        .smallBlindPosition(rng.nextInt(activeCount))
-                        .bigBlindPosition(rng.nextInt(activeCount))
-                        .currentPlayerPosition(rng.nextInt(activeCount))
+                        .dealerAnchorPlayerId(activeIds.get(rng.nextInt(activeCount)))
+                        .smallBlindPlayerId(activeIds.get(rng.nextInt(activeCount)))
+                        .bigBlindPlayerId(activeIds.get(rng.nextInt(activeCount)))
+                        .currentPlayerId(activeIds.get(rng.nextInt(activeCount)))
                         .currentHighestBet(rng.nextInt(1000))
                         .preHandCarryOver(carryOver)
                         .currentPhase(phase)
@@ -1087,10 +1082,7 @@ class GameRestoreBuilderTest {
                     .remainingDeck(List.of())
                     .communityCards(List.of())
                     .pot(0)
-                    .dealerPosition(0)
-                    .smallBlindPosition(0)
-                    .bigBlindPosition(1)
-                    .currentPlayerPosition(0)
+                    .currentPlayerId("p1")
                     .currentHighestBet(0)
                     .preHandCarryOver(0)
                     .currentPhase(GamePhase.PRE_FLOP)

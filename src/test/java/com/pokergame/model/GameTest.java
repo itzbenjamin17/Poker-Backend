@@ -142,10 +142,10 @@ class GameTest {
                 .remainingDeck(List.of())
                 .communityCards(List.of())
                 .pot(pot)
-                .dealerPosition(0)
-                .smallBlindPosition(0)
-                .bigBlindPosition(Math.min(1, handPlayers.size() - 1))
-                .currentPlayerPosition(currentPlayerPosition)
+                .dealerAnchorPlayerId(handPlayers.get(0).getPlayerId())
+                .smallBlindPlayerId(handPlayers.get(0).getPlayerId())
+                .bigBlindPlayerId(handPlayers.get(Math.min(1, handPlayers.size() - 1)).getPlayerId())
+                .currentPlayerId(handPlayers.get(currentPlayerPosition).getPlayerId())
                 .currentHighestBet(highestBet)
                 .currentPhase(GamePhase.PRE_FLOP)
                 .gameOver(false)
@@ -192,10 +192,10 @@ class GameTest {
                 .remainingDeck(List.of())
                 .communityCards(List.of())
                 .pot(pot)
-                .dealerPosition(0)
-                .smallBlindPosition(0)
-                .bigBlindPosition(1)
-                .currentPlayerPosition(2)
+                .dealerAnchorPlayerId(shortId)
+                .smallBlindPlayerId(shortId)
+                .bigBlindPlayerId(bettorId)
+                .currentPlayerId(owingId)
                 .currentHighestBet(250)
                 .currentPhase(GamePhase.FLOP)
                 .gameOver(false)
@@ -378,7 +378,9 @@ class GameTest {
             playerTwo.setHandRank(HandRank.ONE_PAIR);
             playerThree.doAction(PlayerAction.BET, 100, 0);
 
-            int dealerPositionBeforeReset = game.getDealerPosition();
+            String dealerBeforeReset = game.getDealerPlayerId();
+            int dealerIndexBeforeReset = game.getActivePlayers().stream()
+                    .map(Player::getPlayerId).toList().indexOf(dealerBeforeReset);
             int potBeforeReset = game.getPot();
             List<Integer> chipCountsBeforeReset = game.getPlayers().stream()
                     .map(Player::getChips)
@@ -392,7 +394,8 @@ class GameTest {
             assertEquals(0, game.getCurrentHighestBet());
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertEquals(players.size(), game.getActivePlayers().size());
-            assertEquals((dealerPositionBeforeReset + 1) % players.size(), game.getDealerPosition());
+            assertEquals(players.get((dealerIndexBeforeReset + 1) % players.size()).getPlayerId(),
+                    game.getDealerPlayerId());
             assertEquals(chipCountsBeforeReset, game.getPlayers().stream().map(Player::getChips).toList());
 
             for (Player player : game.getPlayers()) {
@@ -432,7 +435,7 @@ class GameTest {
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertFalse(game.isGameOver());
             assertEquals(0, game.getCurrentHighestBet());
-            assertEquals(0, game.getDealerPosition());
+            assertEquals("p1", game.getDealerPlayerId());
         }
 
         @Test
@@ -502,10 +505,10 @@ class GameTest {
                     .remainingDeck(deckCards)
                     .communityCards(community)
                     .pot(100)
-                    .dealerPosition(1)
-                    .smallBlindPosition(0)
-                    .bigBlindPosition(1)
-                    .currentPlayerPosition(0)
+                    .dealerAnchorPlayerId("p2-id")
+                    .smallBlindPlayerId("p1-id")
+                    .bigBlindPlayerId("p2-id")
+                    .currentPlayerId("p1-id")
                     .currentHighestBet(50)
                     .currentPhase(GamePhase.FLOP)
                     .gameOver(false)
@@ -737,10 +740,10 @@ class GameTest {
                     .remainingDeck(List.of())
                     .communityCards(List.of())
                     .pot(20)
-                    .dealerPosition(0)
-                    .smallBlindPosition(0)
-                    .bigBlindPosition(1)
-                    .currentPlayerPosition(1)
+                    .dealerAnchorPlayerId("ai")
+                    .smallBlindPlayerId("ai")
+                    .bigBlindPlayerId("matched")
+                    .currentPlayerId("matched")
                     .currentHighestBet(10)
                     .currentPhase(GamePhase.PRE_FLOP)
                     .gameOver(false)
@@ -764,10 +767,10 @@ class GameTest {
                     .remainingDeck(List.of())
                     .communityCards(List.of())
                     .pot(10)
-                    .dealerPosition(0)
-                    .smallBlindPosition(0)
-                    .bigBlindPosition(1)
-                    .currentPlayerPosition(1)
+                    .dealerAnchorPlayerId("ai")
+                    .smallBlindPlayerId("ai")
+                    .bigBlindPlayerId("owing")
+                    .currentPlayerId("owing")
                     .currentHighestBet(10)
                     .currentPhase(GamePhase.PRE_FLOP)
                     .gameOver(false)
@@ -796,10 +799,9 @@ class GameTest {
                     .remainingDeck(List.of())
                     .communityCards(List.of())
                     .pot(100)
-                    .dealerPosition(0)
-                    .smallBlindPosition(1)
-                    .bigBlindPosition(2)
-                    .currentPlayerPosition(2)
+                    .smallBlindPlayerId("f")
+                    .bigBlindPlayerId("leaving")
+                    .currentPlayerId("leaving")
                     .currentHighestBet(0)
                     .currentPhase(GamePhase.FLOP)
                     .gameOver(false)
@@ -841,10 +843,10 @@ class GameTest {
                             new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.FIVE, Suit.SPADES),
                             new Card(Rank.SIX, Suit.CLUBS)))
                     .pot(100)
-                    .dealerPosition(0)
-                    .smallBlindPosition(0)
-                    .bigBlindPosition(1)
-                    .currentPlayerPosition(1)
+                    .dealerAnchorPlayerId("allIn")
+                    .smallBlindPlayerId("allIn")
+                    .bigBlindPlayerId("caller")
+                    .currentPlayerId("caller")
                     .currentHighestBet(100)
                     .currentPhase(GamePhase.RIVER)
                     .gameOver(false)
@@ -954,7 +956,7 @@ class GameTest {
             Game gameUncalled = Game.restoreBuilder().gameId("odd-chip-game")
                     .players(List.of(p1, p2, p3)).activePlayerIds(List.of("p1", "p2", "p3"))
                     .remainingDeck(List.of()).communityCards(List.of()).pot(100)
-                    .dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(2)
+                    .dealerAnchorPlayerId("p1").smallBlindPlayerId("p1").bigBlindPlayerId("p2").currentPlayerId("p3")
                     .currentHighestBet(34).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
                     .smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p1", 33, "p2", 33, "p3", 34))
@@ -968,7 +970,7 @@ class GameTest {
             Game oddGame = Game.restoreBuilder().gameId("odd-game-split")
                     .players(List.of(p1, p2, p3)).activePlayerIds(List.of("p1", "p2", "p3"))
                     .remainingDeck(List.of()).communityCards(List.of()).pot(101)
-                    .dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(2)
+                    .dealerAnchorPlayerId("p1").smallBlindPlayerId("p1").bigBlindPlayerId("p2").currentPlayerId("p3")
                     .currentHighestBet(34).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
                     .smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p1", 33, "p2", 34, "p3", 34))
@@ -1001,8 +1003,8 @@ class GameTest {
 
             Game ordinary = Game.restoreBuilder().gameId("coalesce-ordinary-pots")
                     .players(List.of(a, b, f1, f2, f3)).activePlayerIds(List.of("a", "b", "f1", "f2", "f3"))
-                    .remainingDeck(List.of()).communityCards(List.of()).pot(230).dealerPosition(0)
-                    .smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(0).currentHighestBet(100)
+                    .remainingDeck(List.of()).communityCards(List.of()).pot(230).dealerAnchorPlayerId("a")
+                    .smallBlindPlayerId("a").bigBlindPlayerId("b").currentPlayerId("a").currentHighestBet(100)
                     .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 100, "b", 100, "f1", 5, "f2", 10, "f3", 15))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
@@ -1025,8 +1027,8 @@ class GameTest {
 
             Game deadUpper = Game.restoreBuilder().gameId("dead-upper-layer").players(List.of(a, b, c, d))
                     .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(List.of())
-                    .communityCards(List.of()).pot(550).dealerPosition(0).smallBlindPosition(1)
-                    .bigBlindPosition(2).currentPlayerPosition(0).currentHighestBet(200)
+                    .communityCards(List.of()).pot(550).dealerAnchorPlayerId("a").smallBlindPlayerId("b")
+                    .bigBlindPlayerId("c").currentPlayerId("a").currentHighestBet(200)
                     .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 50, "b", 100, "c", 200, "d", 200))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
@@ -1051,8 +1053,8 @@ class GameTest {
             Player midPlayer = new Player("Mid", "m", 150);
             Game departedGame = Game.restoreBuilder().gameId("departed-contributor").players(List.of(shortPlayer, midPlayer))
                     .activePlayerIds(List.of("s", "m")).remainingDeck(List.of()).communityCards(List.of())
-                    .pot(350).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                    .currentPlayerPosition(0).currentHighestBet(150).currentPhase(GamePhase.RIVER)
+                    .pot(350).dealerAnchorPlayerId("s").smallBlindPlayerId("s").bigBlindPlayerId("m")
+                    .currentPlayerId("s").currentHighestBet(150).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("s", 50, "m", 150, "departed", 150))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
@@ -1085,8 +1087,8 @@ class GameTest {
             Game deadBlindGame = Game.restoreBuilder().gameId("zero-contribution-contender")
                     .players(List.of(contender, foldedSb, foldedBb))
                     .activePlayerIds(List.of("a", "b", "c")).remainingDeck(List.of()).communityCards(List.of())
-                    .pot(30).dealerPosition(0).smallBlindPosition(1).bigBlindPosition(2)
-                    .currentPlayerPosition(0).currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP)
+                    .pot(30).dealerAnchorPlayerId("a").smallBlindPlayerId("b").bigBlindPlayerId("c")
+                    .currentPlayerId("a").currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("b", 10, "c", 20)).preHandCarryOver(0)
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
@@ -1117,8 +1119,8 @@ class GameTest {
             Player owing = restoredPlayer("Owing", "owing", 950, 50, false);
             Game live = Game.restoreBuilder().gameId("live-cap-pending-bet").players(List.of(shortStack, bettor, owing))
                     .activePlayerIds(List.of("short", "bettor", "owing")).remainingDeck(List.of())
-                    .communityCards(List.of()).pot(350).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                    .currentPlayerPosition(2).currentHighestBet(250).currentPhase(GamePhase.FLOP)
+                    .communityCards(List.of()).pot(350).dealerAnchorPlayerId("short").smallBlindPlayerId("short")
+                    .bigBlindPlayerId("bettor").currentPlayerId("owing").currentHighestBet(250).currentPhase(GamePhase.FLOP)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("short", 50, "bettor", 250, "owing", 50))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
@@ -1398,8 +1400,8 @@ class GameTest {
                     .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
             Game realGame = Game.restoreBuilder().gameId("real-high-card-showdown").players(List.of(ace, king))
                     .activePlayerIds(List.of("ace", "king")).remainingDeck(List.of()).communityCards(board)
-                    .pot(100).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                    .currentPlayerPosition(0).currentHighestBet(50).currentPhase(GamePhase.RIVER)
+                    .pot(100).dealerAnchorPlayerId("ace").smallBlindPlayerId("ace").bigBlindPlayerId("king")
+                    .currentPlayerId("ace").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("ace", 50, "king", 50)).preHandCarryOver(0)
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
@@ -1418,8 +1420,8 @@ class GameTest {
             Player coB = restoredPlayer("B", "b", 50, 0, true);
             Game carryGame = Game.restoreBuilder().gameId("carry-over-remainder").players(List.of(coA, coB))
                     .activePlayerIds(List.of("a", "b")).remainingDeck(List.of()).communityCards(List.of())
-                    .pot(101).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                    .currentPlayerPosition(0).currentHighestBet(50).currentPhase(GamePhase.RIVER)
+                    .pot(101).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                    .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50, "b", 50))
                     .preHandCarryOver(1).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
@@ -1465,8 +1467,8 @@ class GameTest {
             Player termA = restoredPlayer("A", "a", 50, 50, true);
             Game unsettled = Game.restoreBuilder().gameId("terminal-reset-ledger").players(List.of(termA))
                     .activePlayerIds(List.of("a")).remainingDeck(List.of()).communityCards(List.of())
-                    .pot(50).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(0)
-                    .currentPlayerPosition(0).currentHighestBet(50).currentPhase(GamePhase.RIVER)
+                    .pot(50).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("a")
+                    .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(true).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50))
                     .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
@@ -1495,8 +1497,8 @@ class GameTest {
             Player ob = new Player("B", "b", 100);
             Game oddCarry = Game.restoreBuilder().gameId("terminal-odd-carry").players(List.of(oa, ob))
                     .activePlayerIds(List.of("a", "b")).remainingDeck(List.of()).communityCards(List.of())
-                    .pot(1).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                    .currentPlayerPosition(0).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
+                    .pot(1).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                    .currentPlayerId("a").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                     .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of())
                     .preHandCarryOver(1).lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, true))
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
@@ -1536,15 +1538,19 @@ class GameTest {
             assertEquals(4, dealerRemoval.getActivePlayers().size());
             assertEquals("p3", dealerRemoval.getCurrentPlayer().getPlayerId());
             dealerRemoval.resetForNewHand();
-            assertEquals("p1", dealerRemoval.getActivePlayers().get(dealerRemoval.getDealerPosition()).getPlayerId());
+            assertEquals("p1", dealerRemoval.getDealerPlayerId());
 
             Game sbRemoval = createStandardGame(4, 1000, new HandEvaluatorService());
-            Player sbPlayer = sbRemoval.getActivePlayers().get(sbRemoval.getSmallBlindPosition());
+            Player sbPlayer = sbRemoval.getActivePlayers().stream()
+                    .filter(p -> p.getPlayerId().equals(sbRemoval.getSmallBlindPlayerId()))
+                    .findFirst().orElseThrow();
             sbRemoval.removePlayer(sbPlayer);
             assertEquals("p3", sbRemoval.getCurrentPlayer().getPlayerId());
 
             Game bbRemoval = createStandardGame(4, 1000, new HandEvaluatorService());
-            Player bbPlayer = bbRemoval.getActivePlayers().get(bbRemoval.getBigBlindPosition());
+            Player bbPlayer = bbRemoval.getActivePlayers().stream()
+                    .filter(p -> p.getPlayerId().equals(bbRemoval.getBigBlindPlayerId()))
+                    .findFirst().orElseThrow();
             bbRemoval.removePlayer(bbPlayer);
             assertEquals("p3", bbRemoval.getCurrentPlayer().getPlayerId());
 
@@ -1552,6 +1558,37 @@ class GameTest {
             Player curPlayer = curRemoval.getCurrentPlayer();
             curRemoval.removePlayer(curPlayer);
             assertEquals("p0", curRemoval.getCurrentPlayer().getPlayerId());
+        }
+
+        @Test
+        void midHandBlindDeparturesPreserveBlindIdsAndTailDepartureSkipsWrappedOutPlayer() {
+            Game sbGame = createStandardGame(4, 1000, new HandEvaluatorService());
+            sbGame.postBlinds();
+            String sbId = sbGame.getSmallBlindPlayerId();
+            String bbId = sbGame.getBigBlindPlayerId();
+            String actorId = sbGame.getCurrentPlayer().getPlayerId();
+            sbGame.removePlayer(sbGame.getActivePlayers().get(1));
+            assertEquals(sbId, sbGame.getSmallBlindPlayerId());
+            assertEquals(bbId, sbGame.getBigBlindPlayerId());
+            assertEquals(actorId, sbGame.getCurrentPlayer().getPlayerId());
+
+            Game bbGame = createStandardGame(4, 1000, new HandEvaluatorService());
+            bbGame.postBlinds();
+            String bbGameSbId = bbGame.getSmallBlindPlayerId();
+            String bbGameBbId = bbGame.getBigBlindPlayerId();
+            String bbGameActorId = bbGame.getCurrentPlayer().getPlayerId();
+            bbGame.removePlayer(bbGame.getActivePlayers().get(2));
+            assertEquals(bbGameSbId, bbGame.getSmallBlindPlayerId());
+            assertEquals(bbGameBbId, bbGame.getBigBlindPlayerId());
+            assertEquals(bbGameActorId, bbGame.getCurrentPlayer().getPlayerId());
+
+            Game wrappedOut = createStandardGame(4, 1000, new HandEvaluatorService());
+            wrappedOut.postBlinds();
+            wrappedOut.getActivePlayers().get(0).setIsOut();
+            Player tailActor = wrappedOut.getCurrentPlayer();
+            assertEquals("p3", tailActor.getPlayerId());
+            wrappedOut.removePlayer(tailActor);
+            assertEquals("p1", wrappedOut.getCurrentPlayer().getPlayerId());
         }
 
         @Test
@@ -1563,7 +1600,7 @@ class GameTest {
             Game foldedSuccessor = Game.restoreBuilder().gameId("succ-fold")
                     .players(List.of(p0, p1, p2Folded, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
                     .remainingDeck(List.of())
-                    .currentPlayerPosition(1).smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
+                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
             foldedSuccessor.removePlayer(p1);
             assertEquals("p3", foldedSuccessor.getCurrentPlayer().getPlayerId());
 
@@ -1571,14 +1608,14 @@ class GameTest {
             Game allInSuccessor = Game.restoreBuilder().gameId("succ-allin")
                     .players(List.of(p0, p1, p2AllIn, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
                     .remainingDeck(List.of())
-                    .currentPlayerPosition(1).smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
+                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
             allInSuccessor.removePlayer(p1);
             assertEquals("p3", allInSuccessor.getCurrentPlayer().getPlayerId());
 
             Game tailWrap = Game.restoreBuilder().gameId("tail-wrap")
                     .players(List.of(p0, p1, p3)).activePlayerIds(List.of("p0", "p1", "p3"))
                     .remainingDeck(List.of())
-                    .currentPlayerPosition(2).smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
+                    .currentPlayerId("p3").smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
             tailWrap.removePlayer(p3);
             assertEquals("p0", tailWrap.getCurrentPlayer().getPlayerId());
 
@@ -1588,7 +1625,7 @@ class GameTest {
             Game allNonActionable = Game.restoreBuilder().gameId("non-actionable")
                     .players(List.of(ai, cur, fld)).activePlayerIds(List.of("p0", "p1", "p2"))
                     .remainingDeck(List.of())
-                    .currentPlayerPosition(1).smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
+                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
             allNonActionable.removePlayer(cur);
             assertEquals(2, allNonActionable.getActivePlayers().size());
             assertNotNull(allNonActionable.getCurrentPlayer());
@@ -1596,7 +1633,7 @@ class GameTest {
             Game singleAllIn = Game.restoreBuilder().gameId("single-allin")
                     .players(List.of(ai, cur)).activePlayerIds(List.of("p0", "p1"))
                     .remainingDeck(List.of())
-                    .currentPlayerPosition(1).smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
+                    .currentPlayerId("p1").smallBlind(10).bigBlind(20).handEvaluator(mockHandEvaluator).build();
             singleAllIn.removePlayer(cur);
             assertEquals(1, singleAllIn.getActivePlayers().size());
             assertEquals("p0", singleAllIn.getCurrentPlayer().getPlayerId());
@@ -1627,7 +1664,7 @@ class GameTest {
             Game curEveryStep = createStandardGame(6, 1000, new HandEvaluatorService());
             while (curEveryStep.getActivePlayers().size() > 1) {
                 curEveryStep.removePlayer(curEveryStep.getCurrentPlayer());
-                assertTrue(curEveryStep.getDealerPosition() < curEveryStep.getActivePlayers().size());
+                assertTrue(curEveryStep.getHandSeatOrderSnapshot().contains(curEveryStep.getDealerPlayerId()));
                 assertNotNull(curEveryStep.getCurrentPlayer());
             }
             assertEquals(1, curEveryStep.getActivePlayers().size());
@@ -1644,7 +1681,7 @@ class GameTest {
                 fuzz.removePlayer(target);
                 int remaining = fuzz.getActivePlayers().size();
                 if (remaining > 0) {
-                    assertTrue(fuzz.getDealerPosition() >= 0 && fuzz.getDealerPosition() < remaining);
+                    assertTrue(fuzz.getHandSeatOrderSnapshot().contains(fuzz.getDealerPlayerId()));
                     assertTrue(fuzz.getActivePlayers().contains(fuzz.getCurrentPlayer()));
                 }
             }
@@ -1659,10 +1696,10 @@ class GameTest {
             assertEquals(2, threeToTwo.getActivePlayers().size());
             assertFalse(threeToTwo.resetForNewHand());
 
-            assertEquals(1, threeToTwo.getDealerPosition());
-            assertEquals(1, threeToTwo.getSmallBlindPosition());
-            assertEquals(0, threeToTwo.getBigBlindPosition());
-            assertEquals(1, threeToTwo.getCurrentPlayerPosition());
+            assertEquals("p1", threeToTwo.getDealerPlayerId());
+            assertEquals("p1", threeToTwo.getSmallBlindPlayerId());
+            assertEquals("p0", threeToTwo.getBigBlindPlayerId());
+            assertEquals("p1", threeToTwo.getCurrentPlayerId());
             assertEquals("p1", threeToTwo.getCurrentPlayer().getPlayerId());
 
             threeToTwo.removePlayer(threeToTwo.getActivePlayers().get(1));
@@ -1680,7 +1717,7 @@ class GameTest {
             Game anchored = Game.restoreBuilder().gameId("position-anchor")
                     .players(List.of(d, a, b, c)).activePlayerIds(List.of("d", "a", "b", "c"))
                     .remainingDeck(List.of())
-                    .pot(0).dealerPosition(0).smallBlindPosition(1).bigBlindPosition(2).currentPlayerPosition(3)
+                    .pot(0).currentPlayerId("c")
                     .currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
                     .handSeatOrder(List.of("d", "a", "b", "c")).dealerAnchorPlayerId("d")
                     .smallBlindPlayerId("a").bigBlindPlayerId("b").everyoneHasHadInitialTurn(true)
@@ -1704,7 +1741,7 @@ class GameTest {
                             new Card(Rank.TWO, Suit.SPADES), new Card(Rank.THREE, Suit.SPADES),
                             new Card(Rank.FOUR, Suit.SPADES), new Card(Rank.FIVE, Suit.SPADES),
                             new Card(Rank.SIX, Suit.SPADES)))
-                    .pot(30).dealerPosition(3).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(2)
+                    .pot(30).currentPlayerId("c")
                     .currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 10, "b", 20)).handSeatOrder(List.of("a", "b", "c", "d"))
                     .dealerAnchorPlayerId("d").smallBlindPlayerId("a").bigBlindPlayerId("b")
@@ -1726,7 +1763,7 @@ class GameTest {
             Game dealerLeft = Game.restoreBuilder().gameId("departed-dealer-post-flop")
                     .players(List.of(da, db, dc, dd)).activePlayerIds(List.of("a2", "b2", "c2", "d2"))
                     .remainingDeck(List.of(new Card(Rank.SEVEN, Suit.CLUBS)))
-                    .pot(0).dealerPosition(3).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(2)
+                    .pot(0).currentPlayerId("c2")
                     .currentHighestBet(0).currentPhase(GamePhase.FLOP).smallBlind(10).bigBlind(20)
                     .handSeatOrder(List.of("a2", "b2", "c2", "d2")).dealerAnchorPlayerId("d2")
                     .handEvaluator(mockHandEvaluator).build();
@@ -1740,7 +1777,7 @@ class GameTest {
                             restoredPlayer("B", "b", 1000, 0, false),
                             restoredPlayer("C", "c", 1000, 0, false),
                             restoredPlayer("D", "d", 1000, 0, false)))
-                    .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(List.of()).currentPlayerPosition(1)
+                    .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(List.of()).currentPlayerId("b")
                     .currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
                     .handSeatOrder(List.of("a", "b", "c", "d")).dealerAnchorPlayerId("a")
                     .handEvaluator(mockHandEvaluator).build();
@@ -1759,7 +1796,7 @@ class GameTest {
                     .communityCards(List.of(
                             new Card(Rank.TWO, Suit.CLUBS), new Card(Rank.THREE, Suit.DIAMONDS),
                             new Card(Rank.FOUR, Suit.HEARTS)))
-                    .currentPlayerPosition(2).currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
+                    .currentPlayerId("c").currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
                     .handSeatOrder(List.of("a", "b", "c")).dealerAnchorPlayerId("a")
                     .actedPlayersInRound(Set.of("a", "b")).handEvaluator(mockHandEvaluator).build();
             flopComplete.removePlayer(flopComplete.getPlayers().get(2));
@@ -1775,13 +1812,13 @@ class GameTest {
                     new Player("Dealer", "d1", 1000), new Player("Opponent", "o1", 1000)),
                     10, 20, mockHandEvaluator);
             headsUpGame.postBlinds();
-            assertEquals(0, headsUpGame.getDealerPosition());
+            assertEquals("d1", headsUpGame.getDealerPlayerId());
             assertEquals(10, headsUpGame.getActivePlayers().get(0).getCurrentBet());
             assertEquals(20, headsUpGame.getActivePlayers().get(1).getCurrentBet());
 
             headsUpGame.resetForNewHand();
             headsUpGame.postBlinds();
-            assertEquals(1, headsUpGame.getDealerPosition());
+            assertEquals("o1", headsUpGame.getDealerPlayerId());
             assertEquals(10, headsUpGame.getActivePlayers().get(1).getCurrentBet());
             assertEquals(20, headsUpGame.getActivePlayers().get(0).getCurrentBet());
 
@@ -1819,7 +1856,7 @@ class GameTest {
                     .communityCards(List.of(
                             new Card(Rank.TWO, Suit.CLUBS), new Card(Rank.THREE, Suit.DIAMONDS),
                             new Card(Rank.FOUR, Suit.HEARTS)))
-                    .currentPlayerPosition(0).currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
+                    .currentPlayerId("a").currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
                     .handSeatOrder(List.of("a", "b", "c")).dealerAnchorPlayerId("a")
                     .handEvaluator(mockHandEvaluator).build();
 

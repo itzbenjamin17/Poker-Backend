@@ -416,7 +416,14 @@ class GameLifecycleServiceTest {
             Game callHand = getGameLocked(threeHanded.getRoomId());
             callHand.conductShowdown();
             int playerCount = callHand.getActivePlayers().size();
-            int nextSmallBlindIndex = (callHand.getDealerPosition() + 2) % playerCount;
+            int currentDealerIndex = -1;
+            for (int i = 0; i < playerCount; i++) {
+                if (callHand.getActivePlayers().get(i).getPlayerId().equals(callHand.getDealerPlayerId())) {
+                    currentDealerIndex = i;
+                    break;
+                }
+            }
+            int nextSmallBlindIndex = (currentDealerIndex + 2) % playerCount;
             int nextBigBlindIndex = (nextSmallBlindIndex + 1) % playerCount;
             int nextActorIndex = (nextBigBlindIndex + 1) % playerCount;
             for (int index = 0; index < callHand.getPlayers().size(); index++) {

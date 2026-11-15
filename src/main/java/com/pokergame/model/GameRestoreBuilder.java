@@ -25,10 +25,7 @@ public class GameRestoreBuilder {
     private List<Card> remainingDeck;
     private List<Card> communityCards;
     private int pot;
-    private int dealerPosition;
-    private int smallBlindPosition;
-    private int bigBlindPosition;
-    private int currentPlayerPosition;
+    private String currentPlayerId;
     private int currentHighestBet;
     private int preHandCarryOver;
     private GamePhase currentPhase;
@@ -99,23 +96,8 @@ public class GameRestoreBuilder {
         return this;
     }
 
-    public GameRestoreBuilder dealerPosition(int dealerPosition) {
-        this.dealerPosition = dealerPosition;
-        return this;
-    }
-
-    public GameRestoreBuilder smallBlindPosition(int smallBlindPosition) {
-        this.smallBlindPosition = smallBlindPosition;
-        return this;
-    }
-
-    public GameRestoreBuilder bigBlindPosition(int bigBlindPosition) {
-        this.bigBlindPosition = bigBlindPosition;
-        return this;
-    }
-
-    public GameRestoreBuilder currentPlayerPosition(int currentPlayerPosition) {
-        this.currentPlayerPosition = currentPlayerPosition;
+    public GameRestoreBuilder currentPlayerId(String currentPlayerId) {
+        this.currentPlayerId = currentPlayerId;
         return this;
     }
 
@@ -286,20 +268,8 @@ public class GameRestoreBuilder {
         return pot;
     }
 
-    int getDealerPosition() {
-        return dealerPosition;
-    }
-
-    int getSmallBlindPosition() {
-        return smallBlindPosition;
-    }
-
-    int getBigBlindPosition() {
-        return bigBlindPosition;
-    }
-
-    int getCurrentPlayerPosition() {
-        return currentPlayerPosition;
+    String getCurrentPlayerId() {
+        return currentPlayerId;
     }
 
     int getCurrentHighestBet() {

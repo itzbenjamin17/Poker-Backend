@@ -224,15 +224,14 @@ public final class AggregateSnapshotMapper {
         return new AggregateStateImage.GameState(
             game.getGameId(), playerStates, activePlayerIds,
             cards(game.getRemainingDeckSnapshot()), cards(game.getCommunityCards()), game.getPot(),
-            game.getDealerPosition(), game.getSmallBlindPosition(), game.getBigBlindPosition(),
-            game.getCurrentPlayerPosition(), game.getCurrentHighestBet(), game.getCurrentPhase(),
+            game.getCurrentHighestBet(), game.getCurrentPhase(),
             game.isGameOver(), game.getSmallBlind(), game.getBigBlind(), game.getHandContributionsSnapshot(),
             game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs(),
             game.hasAllPlayersHadInitialTurn(), game.getActedPlayerIdsSnapshot(),
             game.getScheduledTaskDeadlinesSnapshot(), game.getCarryOverPot(),
             game.getLastFullRaiseByStreetSnapshot(), game.getLastActedWagerByPlayerSnapshot(),
             game.getHandSeatOrderSnapshot(), game.getDealerPlayerId(), game.getSmallBlindPlayerId(),
-            game.getBigBlindPlayerId(), settlementState(game.getLastSettlementResult()),
+            game.getBigBlindPlayerId(), game.getCurrentPlayerId(), settlementState(game.getLastSettlementResult()),
             game.isFinalPotSettled(), game.getReadyGateState(), game.getHandNumber(),
             game.getScheduledTaskGenerationsSnapshot(), game.isForfeitPending(), game.getStateRevision(),
             toTerminalResultState(game.getGameEndResult()));
@@ -311,10 +310,7 @@ public final class AggregateSnapshotMapper {
                 .remainingDeck(cardsFromState(state.remainingDeck()))
                 .communityCards(cardsFromState(state.communityCards()))
                 .pot(state.pot())
-                .dealerPosition(state.dealerPosition())
-                .smallBlindPosition(state.smallBlindPosition())
-                .bigBlindPosition(state.bigBlindPosition())
-                .currentPlayerPosition(state.currentPlayerPosition())
+                .currentPlayerId(state.currentPlayerId())
                 .currentHighestBet(state.currentHighestBet())
                 .currentPhase(state.currentPhase())
                 .gameOver(state.gameOver())

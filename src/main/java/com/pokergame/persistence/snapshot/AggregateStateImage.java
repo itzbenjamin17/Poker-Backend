@@ -83,10 +83,6 @@ public record AggregateStateImage(boolean deleted, RoomState room, String curren
      * @param remainingDeck                 the cards still in the deck, in exact order
      * @param communityCards                the cards on the table
      * @param pot                           total chips in the pot right now
-     * @param dealerPosition                who has the dealer button
-     * @param smallBlindPosition            who posted the small blind
-     * @param bigBlindPosition              who posted the big blind
-     * @param currentPlayerPosition         whose turn it is to act
      * @param currentHighestBet             the amount a player has to match to stay in
      * @param currentPhase                  what part of the hand we're in (like the flop or river)
      * @param gameOver                      true if the game is finished
@@ -105,6 +101,7 @@ public record AggregateStateImage(boolean deleted, RoomState room, String curren
      * @param dealerAnchorPlayerId           original dealer identity for correct clockwise position recovery
      * @param smallBlindPlayerId             actual small blind payer identity, even if that player departed
      * @param bigBlindPlayerId               actual big blind payer identity, even if that player departed
+     * @param currentPlayerId                player ID whose turn it is to act
      * @param lastSettlementResult           immutable settled awards, refunds, winners and explicit remainder
      * @param terminalCarryOverSettled       guards the final carry-over award against recovery-time repayout
      * @param readyGateState                 current ready-gate state machine phase
@@ -115,17 +112,17 @@ public record AggregateStateImage(boolean deleted, RoomState room, String curren
      * @param retainedTerminalResult         frozen immutable terminal result retained across post-game review
      */
     public record GameState(String gameId, List<PlayerState> players, List<String> activePlayerIds,
-            List<CardState> remainingDeck, List<CardState> communityCards, int pot, int dealerPosition,
-            int smallBlindPosition, int bigBlindPosition, int currentPlayerPosition, int currentHighestBet,
+            List<CardState> remainingDeck, List<CardState> communityCards, int pot, int currentHighestBet,
             GamePhase currentPhase, boolean gameOver, int smallBlind, int bigBlind,
             Map<String, Integer> handContributions, boolean readyCountdownActive,
             Long readyCountdownDeadlineEpochMs, boolean everyoneHasHadInitialTurn, Set<String> actedPlayerIds,
             Map<ScheduledGameTask, Long> scheduledTaskDeadlines, int preHandCarryOver,
             Map<String, Integer> lastFullRaiseByStreet, Map<String, Integer> lastActedWagerByPlayer,
             List<String> handSeatOrder, String dealerAnchorPlayerId, String smallBlindPlayerId,
-            String bigBlindPlayerId, SettlementState lastSettlementResult, boolean terminalCarryOverSettled,
-            ReadyGateState readyGateState, long handNumber, Map<ScheduledGameTask, Long> scheduledTaskGenerations,
-            boolean forfeitPending, long stateRevision, TerminalResultState retainedTerminalResult) {
+            String bigBlindPlayerId, String currentPlayerId, SettlementState lastSettlementResult,
+            boolean terminalCarryOverSettled, ReadyGateState readyGateState, long handNumber,
+            Map<ScheduledGameTask, Long> scheduledTaskGenerations, boolean forfeitPending, long stateRevision,
+            TerminalResultState retainedTerminalResult) {
     }
 
     /** Plain persisted form of the immutable hand settlement result. */

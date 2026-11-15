@@ -182,14 +182,11 @@ public class Game {
         this.gameEndResult = builder.getRetainedTerminalResult();
 
         this.seating = new TableSeating(
-                builder.getDealerPosition(),
-                builder.getSmallBlindPosition(),
-                builder.getBigBlindPosition(),
-                builder.getCurrentPlayerPosition(),
                 builder.getHandSeatOrder(),
                 builder.getDealerAnchorPlayerId(),
                 builder.getSmallBlindPlayerId(),
                 builder.getBigBlindPlayerId(),
+                builder.getCurrentPlayerId(),
                 this.players);
         this.bettingRound = new BettingRound(
                 builder.getCurrentHighestBet(),
@@ -307,8 +304,8 @@ public class Game {
                     String.format("Trying to post blinds for a game %s which has less than 2 players", gameId));
         }
         seating.assignBlindsForHand(activePlayers);
-        Player smallBlindPlayer = activePlayers.get(seating.getSmallBlindPosition());
-        Player bigBlindPlayer = activePlayers.get(seating.getBigBlindPosition());
+        Player smallBlindPlayer = findActivePlayerById(seating.getSmallBlindPlayerId(activePlayers));
+        Player bigBlindPlayer = findActivePlayerById(seating.getBigBlindPlayerId(activePlayers));
 
         logger.debug("Posting blinds for game {} | SB={} (chips={}) | BB={} (chips={}) | potBefore={}",
                 gameId, smallBlindPlayer.getName(), smallBlindPlayer.getChips(),
@@ -500,7 +497,9 @@ public class Game {
             return;
         }
         bettingRound.removePlayer(player.getPlayerId());
-        seating.removePlayer(players, activePlayers, player);
+        players.remove(player);
+        activePlayers.remove(player);
+        seating.removePlayer(activePlayers, player.getPlayerId());
     }
 
     /**
@@ -826,22 +825,6 @@ public class Game {
         return lastSettlementResult != null && lastSettlementResult.settled();
     }
 
-    public int getDealerPosition() {
-        return seating.getDealerPosition();
-    }
-
-    public int getSmallBlindPosition() {
-        return seating.getSmallBlindPosition();
-    }
-
-    public int getBigBlindPosition() {
-        return seating.getBigBlindPosition();
-    }
-
-    public int getCurrentPlayerPosition() {
-        return seating.getCurrentPlayerPosition();
-    }
-
     public List<String> getHandSeatOrderSnapshot() {
         return seating.getHandSeatOrderSnapshot();
     }
@@ -856,6 +839,10 @@ public class Game {
 
     public String getBigBlindPlayerId() {
         return seating.getBigBlindPlayerId(activePlayers);
+    }
+
+    public String getCurrentPlayerId() {
+        return seating.getCurrentPlayerId();
     }
 
     public long getHandNumber() {
@@ -993,6 +980,13 @@ public class Game {
                 .filter(player -> player.getName().equals(playerName))
                 .findFirst()
                 .orElse(null);
+    }
+
+    private Player findActivePlayerById(String playerId) {
+        return activePlayers.stream()
+                .filter(p -> p != null && p.getPlayerId().equals(playerId))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("Blind player not found in active players: " + playerId));
     }
 
     private void postBlind(Player player, int blindAmount) {

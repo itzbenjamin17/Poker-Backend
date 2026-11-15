@@ -234,8 +234,8 @@ class GameCompletionHandlerTest {
                     .out(true).disconnected(false).readyForNextHand(false).build();
             Game terminal = Game.restoreBuilder().gameId(ROOM_ID).players(List.of(winner, eliminated))
                     .activePlayerIds(List.of("host")).remainingDeck(List.of()).communityCards(List.of()).pot(10)
-                    .dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(0)
-                    .currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false).smallBlind(5).bigBlind(10)
+                    .dealerAnchorPlayerId("host").smallBlindPlayerId("host").bigBlindPlayerId("p2")
+                    .currentPlayerId("host").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false).smallBlind(5).bigBlind(10)
                     .handContributions(Map.of()).preHandCarryOver(10)
                     .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, true))
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())

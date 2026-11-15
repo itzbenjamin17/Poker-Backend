@@ -145,8 +145,8 @@ class AggregateSnapshotMapperTest {
         room.setGameStarted(true);
         List<Player> players = List.of(new Player("Alice", "a", 1030), new Player("Bob", "b", 970));
         Game game = Game.restoreBuilder().gameId("room-2").players(players).activePlayerIds(List.of("a", "b"))
-                .remainingDeck(List.of()).communityCards(List.of()).pot(3).dealerPosition(0).smallBlindPosition(0)
-                .bigBlindPosition(1).currentPlayerPosition(0).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
+                .remainingDeck(List.of()).communityCards(List.of()).pot(3).currentPlayerId("a").currentHighestBet(0)
+                .currentPhase(GamePhase.SHOWDOWN)
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(3)
                 .lastFullRaiseByStreet(Map.of("PRE_FLOP", 10)).lastActedWagerByPlayer(Map.of("a", 20))
                 .handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a").smallBlindPlayerId("a")
@@ -235,7 +235,7 @@ class AggregateSnapshotMapperTest {
 
         Game game = Game.restoreBuilder().gameId("room-terminal").players(players).activePlayerIds(List.of("a", "b"))
                 .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
-                .dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(0).currentHighestBet(0)
+                .currentPlayerId("a").currentHighestBet(0)
                 .currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10).handContributions(Map.of())
                 .preHandCarryOver(0).lastFullRaiseByStreet(Map.of()).lastActedWagerByPlayer(Map.of())
                 .handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
@@ -286,8 +286,8 @@ class AggregateSnapshotMapperTest {
                 bettingPlayer("Short2", "s2", 50, 150, false));
         Game game = Game.restoreBuilder().gameId("room-3").players(players)
                 .activePlayerIds(players.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
-                .communityCards(List.of()).pot(500).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                .currentPlayerPosition(0).currentHighestBet(150).currentPhase(GamePhase.PRE_FLOP).gameOver(false)
+                .communityCards(List.of()).pot(500).currentPlayerId("a")
+                .currentHighestBet(150).currentPhase(GamePhase.PRE_FLOP).gameOver(false)
                 .smallBlind(5).bigBlind(10).handContributions(Map.of("a", 100, "b", 100, "s1", 150, "s2", 150))
                 .preHandCarryOver(0).lastFullRaiseByStreet(Map.of("PRE_FLOP", 100))
                 .lastActedWagerByPlayer(Map.of("a", 100)).handSeatOrder(List.of("a", "b", "s1", "s2"))
@@ -668,7 +668,7 @@ class AggregateSnapshotMapperTest {
 
         Game game = Game.restoreBuilder().gameId(TERMINAL_ROOM_ID).players(players).activePlayerIds(List.of("a", "b"))
                 .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
-                .dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(0)
+                .currentPlayerId("a")
                 .currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10)
                 .handContributions(Map.of()).preHandCarryOver(0).lastFullRaiseByStreet(Map.of())
                 .lastActedWagerByPlayer(Map.of()).handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a")
@@ -1470,14 +1470,11 @@ class AggregateSnapshotMapperTest {
                 .remainingDeck(List.of())
                 .smallBlind(5)
                 .bigBlind(10)
-                .dealerPosition(0)
-                .smallBlindPosition(7)
-                .bigBlindPosition(-1)
-                .currentPlayerPosition(-2)
                 .handSeatOrder(List.of("p1", "p2", "p3"))
                 .dealerAnchorPlayerId("p1")
                 .smallBlindPlayerId(null)
                 .bigBlindPlayerId(null)
+                .currentPlayerId("p2")
                 .currentPhase(GamePhase.PRE_FLOP)
                 .handEvaluator(evaluator)
                 .build();
