@@ -1,5 +1,7 @@
 package com.pokergame.service;
 
+import com.pokergame.util.RoomCoordinator;
+
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.GamePhase;

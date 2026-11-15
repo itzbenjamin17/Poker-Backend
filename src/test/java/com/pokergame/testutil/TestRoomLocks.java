@@ -1,6 +1,6 @@
 package com.pokergame.testutil;
 
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.util.LockLease;
 import java.util.Objects;
 import java.util.function.Supplier;

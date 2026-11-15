@@ -6,7 +6,7 @@ import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.service.GameLifecycleService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.testutil.TestRoomLocks;
 import org.awaitility.Awaitility;

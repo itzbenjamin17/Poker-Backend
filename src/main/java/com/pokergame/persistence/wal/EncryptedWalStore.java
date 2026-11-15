@@ -21,12 +21,15 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.util.LockLease;
+import com.pokergame.util.RoomCoordinator;
 import java.nio.file.AccessDeniedException;
 import java.util.Locale;
 import org.slf4j.Logger;
@@ -46,7 +49,7 @@ import org.slf4j.LoggerFactory;
  * in memory while recovery protection for the affected room is degraded.
  * </p>
  * <p>
- * Callers hold the room lock for per-room operations (or run during single-threaded startup recovery).
+ * Callers must hold the room lock via {@link RoomCoordinator} for per-room operations.
  * </p>
  */
 public final class EncryptedWalStore {
@@ -58,6 +61,7 @@ public final class EncryptedWalStore {
     private final Path directory;
     private final EncryptionKeyring keyring;
     private final WalFaultInjector faultInjector;
+    private final RoomCoordinator roomCoordinator;
     private final SecureRandom secureRandom = new SecureRandom();
     private final ConcurrentHashMap<String, Long> nextSequences = new ConcurrentHashMap<>();
     private final Set<String> failedRooms = ConcurrentHashMap.newKeySet();
@@ -68,26 +72,30 @@ public final class EncryptedWalStore {
     /**
      * Creates a regular store for saving games in production.
      *
-     * @param directory the folder to save files in
-     * @param keyring   the encryption keys to use
+     * @param directory       the folder to save files in
+     * @param keyring         the encryption keys to use
+     * @param roomCoordinator coordinator managing per-room concurrency locks
      * @throws PersistenceException if we can't create or write to the folder
      */
-    public EncryptedWalStore(Path directory, EncryptionKeyring keyring) {
-        this(directory, keyring, WalFaultInjector.NONE);
+    public EncryptedWalStore(Path directory, EncryptionKeyring keyring, RoomCoordinator roomCoordinator) {
+        this(directory, keyring, WalFaultInjector.NONE, roomCoordinator);
     }
 
     /**
      * Creates a store that lets us intentionally cause crashes during testing.
      *
-     * @param directory     the folder to save files in
-     * @param keyring       the encryption keys to use
-     * @param faultInjector a tool to simulate crashes for our tests
+     * @param directory       the folder to save files in
+     * @param keyring         the encryption keys to use
+     * @param faultInjector   a tool to simulate crashes for our tests
+     * @param roomCoordinator coordinator managing per-room concurrency locks
      * @throws PersistenceException if we can't create or write to the folder
      */
-    public EncryptedWalStore(Path directory, EncryptionKeyring keyring, WalFaultInjector faultInjector) {
+    public EncryptedWalStore(Path directory, EncryptionKeyring keyring, WalFaultInjector faultInjector,
+            RoomCoordinator roomCoordinator) {
         this.directory = directory.toAbsolutePath().normalize();
         this.keyring = keyring;
         this.faultInjector = faultInjector;
+        this.roomCoordinator = Objects.requireNonNull(roomCoordinator, "roomCoordinator must not be null");
         try {
             Files.createDirectories(this.directory);
             if (!Files.isDirectory(this.directory) || !Files.isWritable(this.directory)) {
@@ -110,6 +118,7 @@ public final class EncryptedWalStore {
      */
     public WalTransaction prepare(String roomId) {
         validateRoomId(roomId);
+        roomCoordinator.assertHeldByCurrentThread(roomId);
         requireHealthy(roomId);
         if (requiresCheckpoint(roomId)) {
             throw new PersistenceException("WAL needs a full checkpoint before appending");
@@ -136,6 +145,9 @@ public final class EncryptedWalStore {
      * @throws PersistenceException if we have trouble writing or encrypting the data
      */
     public void commit(WalTransaction transaction, byte[] payload) {
+        Objects.requireNonNull(transaction, "transaction must not be null");
+        validateRoomId(transaction.roomId());
+        roomCoordinator.assertHeldByCurrentThread(transaction.roomId());
         requireHealthy(transaction.roomId());
         try {
             long expected = transaction.prepareSequence() + 1;
@@ -154,7 +166,7 @@ public final class EncryptedWalStore {
     /**
      * Reads the file to find the latest valid game state.
      * It's okay if the very last save got cut off during a crash, but any other file issues will cause this to fail safely.
-     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
+     * Caller must hold the room lock for {@code roomId}.
      *
      * @param roomId the room to restore
      * @return the latest saved game data, or empty if there's no saved data
@@ -162,6 +174,7 @@ public final class EncryptedWalStore {
      */
     public Optional<byte[]> recoverLatest(String roomId) {
         validateRoomId(roomId);
+        roomCoordinator.assertHeldByCurrentThread(roomId);
         deleteCompactingFileQuietly(roomId);
         Path path = walPath(roomId);
         if (!Files.exists(path)) {
@@ -179,7 +192,8 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Restores all rooms by reading their save files in alphabetical order.
+     * Restores all rooms by reading their save files in alphabetical order, acquiring each room's
+     * {@link RoomCoordinator} lock for its recovery or cleanup step.
      * This ensures the server starts up fully before players can join.
      *
      * @return a map of room IDs to their saved game data
@@ -199,28 +213,30 @@ public final class EncryptedWalStore {
                     .sorted(Comparator.comparing(Path::toString)).toList()) {
                 String fileName = path.getFileName().toString();
                 String roomId = fileName.substring(0, fileName.length() - 4);
-                Optional<byte[]> latest;
-                try {
-                    latest = recoverLatest(roomId);
-                } catch (MissingPersistenceKeyException missingKey) {
-                    recoveryFailed.set(true);
-                    lastError = missingKey.getClass().getSimpleName();
-                    throw missingKey;
-                } catch (RuntimeException e) {
-                    logger.error("Corrupted WAL file detected during recoverAll for room {}: {}", roomId, e.getMessage());
-                    quarantine(roomId, e.getMessage());
-                    continue;
-                }
-                if (latest.isPresent()) {
-                    recovered.put(roomId, latest.get());
-                } else {
-                    logger.info("Cleaning up uncommitted WAL file for room {}", roomId);
+                try (LockLease _ = roomCoordinator.acquire(roomId)) {
+                    Optional<byte[]> latest;
                     try {
-                        delete(roomId);
+                        latest = recoverLatest(roomId);
+                    } catch (MissingPersistenceKeyException missingKey) {
+                        recoveryFailed.set(true);
+                        lastError = missingKey.getClass().getSimpleName();
+                        throw missingKey;
                     } catch (RuntimeException e) {
-                        logger.warn("Failed to delete uncommitted WAL file for room {} during recovery; skipping",
-                                roomId, e);
-                        clearRoomTracking(roomId);
+                        logger.error("Corrupted WAL file detected during recoverAll for room {}: {}", roomId, e.getMessage());
+                        quarantine(roomId, e.getMessage());
+                        continue;
+                    }
+                    if (latest.isPresent()) {
+                        recovered.put(roomId, latest.get());
+                    } else {
+                        logger.info("Cleaning up uncommitted WAL file for room {}", roomId);
+                        try {
+                            delete(roomId);
+                        } catch (RuntimeException e) {
+                            logger.warn("Failed to delete uncommitted WAL file for room {} during recovery; skipping",
+                                    roomId, e);
+                            clearRoomTracking(roomId);
+                        }
                     }
                 }
             }
@@ -244,6 +260,7 @@ public final class EncryptedWalStore {
      */
     public void compact(String roomId, byte[] latestPayload) {
         validateRoomId(roomId);
+        roomCoordinator.assertHeldByCurrentThread(roomId);
         requireHealthy(roomId);
         checkpoint(roomId, latestPayload);
     }
@@ -258,6 +275,7 @@ public final class EncryptedWalStore {
      */
     public void checkpoint(String roomId, byte[] latestPayload) {
         validateRoomId(roomId);
+        roomCoordinator.assertHeldByCurrentThread(roomId);
         long startMs = System.currentTimeMillis();
         long bytesBefore = walSize(roomId);
         try {
@@ -290,13 +308,14 @@ public final class EncryptedWalStore {
      * Doing it in this order ensures a crash won't bring a dead room back to life.
      * Allowed even when this or another room has an outstanding write failure, and clears
      * failure and checkpoint tracking for {@code roomId} on success.
-     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
+     * Caller must hold the room lock for {@code roomId}.
      *
      * @param roomId the room to delete
      * @throws PersistenceException if we fail to delete the file or startup recovery failed
      */
     public void delete(String roomId) {
         validateRoomId(roomId);
+        roomCoordinator.assertHeldByCurrentThread(roomId);
         if (recoveryFailed.get()) {
             throw new PersistenceException("Persistence recovery failed");
         }
@@ -321,7 +340,7 @@ public final class EncryptedWalStore {
      * Quarantines a corrupted WAL file for a specific room by moving it out of active recovery.
      * Internal tracking for the room is cleaned up so that the failure of this single room
      * does not prevent other rooms from operating or recovering.
-     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
+     * Caller must hold the room lock for {@code roomId}.
      *
      * @param roomId the room whose corrupted WAL should be quarantined
      * @param reason diagnostic explanation for the quarantine
@@ -330,6 +349,7 @@ public final class EncryptedWalStore {
      */
     public Path quarantine(String roomId, String reason) {
         validateRoomId(roomId);
+        roomCoordinator.assertHeldByCurrentThread(roomId);
         Path wal = walPath(roomId);
         Path quarantinePath = directory.resolve(roomId + ".wal.corrupted");
         deleteCompactingFileQuietly(roomId);
@@ -355,12 +375,13 @@ public final class EncryptedWalStore {
      * Clears in-memory sequence, checkpoint, and failure tracking for a room that is not
      * kept in active memory (for example after quarantine, deletion, or skipping an un-restored room
      * whose WAL delete failed during startup recovery).
-     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
+     * Caller must hold the room lock for {@code roomId}.
      *
      * @param roomId the room whose tracking should be removed
      */
     public void clearRoomTracking(String roomId) {
         validateRoomId(roomId);
+        roomCoordinator.assertHeldByCurrentThread(roomId);
         nextSequences.remove(roomId);
         checkpointRooms.remove(roomId);
         failedRooms.remove(roomId);
@@ -368,7 +389,7 @@ public final class EncryptedWalStore {
 
     /**
      * Convenience alias for {@link #quarantine(String, String)}.
-     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
+     * Caller must hold the room lock for {@code roomId}.
      *
      * @param roomId the room whose corrupted WAL should be quarantined
      * @param reason diagnostic explanation for the quarantine
@@ -408,6 +429,7 @@ public final class EncryptedWalStore {
      * @return {@code true} if a full checkpoint is required before appending
      */
     public boolean requiresCheckpoint(String roomId) {
+        roomCoordinator.assertHeldByCurrentThread(roomId);
         return checkpointRooms.contains(roomId);
     }
 
@@ -446,6 +468,7 @@ public final class EncryptedWalStore {
      * @return the file size in bytes, or a huge number if we can't read it
      */
     public long walSize(String roomId) {
+        roomCoordinator.assertHeldByCurrentThread(roomId);
         try {
             Path path = walPath(roomId);
             return Files.exists(path) ? Files.size(path) : 0;
@@ -736,12 +759,13 @@ public final class EncryptedWalStore {
     /**
      * Records a failed save without allowing a different room's successful retry to
      * clear it. Full checkpoint replacement is required before ordinary appends resume.
-     * Caller must hold the room lock for {@code roomId} (or run during single-threaded startup recovery).
+     * Caller must hold the room lock for {@code roomId}.
      *
      * @param roomId room whose current state has not been confirmed saved
      * @param failure what went wrong
      */
     public void recordWriteFailure(String roomId, RuntimeException failure) {
+        roomCoordinator.assertHeldByCurrentThread(roomId);
         checkpointRooms.add(roomId);
         failedRooms.add(roomId);
         lastError = failure.getClass().getSimpleName();

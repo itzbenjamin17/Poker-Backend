@@ -1,5 +1,7 @@
 package com.pokergame.service;
 
+import com.pokergame.util.RoomCoordinator;
+
 import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

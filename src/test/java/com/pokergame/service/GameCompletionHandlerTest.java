@@ -1,5 +1,7 @@
 package com.pokergame.service;
 
+import com.pokergame.util.RoomCoordinator;
+
 import com.pokergame.config.LifecycleTimingProperties;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicPlayerState;

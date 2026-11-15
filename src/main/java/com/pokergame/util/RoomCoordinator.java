@@ -1,10 +1,7 @@
-package com.pokergame.service;
+package com.pokergame.util;
 
 import static java.util.Objects.requireNonNull;
 
-import com.pokergame.util.KeyedLockRegistry;
-import com.pokergame.util.LockLease;
-import com.pokergame.util.VisibleForTesting;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.stereotype.Service;
 

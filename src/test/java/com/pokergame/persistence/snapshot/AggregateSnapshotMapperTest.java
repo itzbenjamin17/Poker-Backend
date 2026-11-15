@@ -29,7 +29,7 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
 import com.pokergame.enums.Rank;
 import com.pokergame.service.HandEvaluatorService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.GameStateService;
 import com.pokergame.util.LockLease;
 import org.awaitility.Awaitility;
@@ -231,7 +231,7 @@ class AggregateSnapshotMapperTest {
                 true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, 123456789L, 42);
 
         GameEndResponse terminalResult = new GameEndResponse("GAME_END", "room-terminal", "Alice", 2000, false,
-                "🏆 Alice wins the game with 2000 chips!", finalState);
+                "ðŸ† Alice wins the game with 2000 chips!", finalState);
 
         Game game = Game.restoreBuilder().gameId("room-terminal").players(players).activePlayerIds(List.of("a", "b"))
                 .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
@@ -267,7 +267,7 @@ class AggregateSnapshotMapperTest {
         assertEquals("Alice", restoredResult.winner());
         assertEquals(2000, restoredResult.winnerChips());
         assertFalse(restoredResult.isForfeit());
-        assertEquals("🏆 Alice wins the game with 2000 chips!", restoredResult.message());
+        assertEquals("ðŸ† Alice wins the game with 2000 chips!", restoredResult.message());
         assertNotNull(restoredResult.finalState());
         assertEquals(42, restoredResult.finalState().stateRevision());
         assertEquals(2, restoredResult.finalState().players().size());
@@ -1014,10 +1014,13 @@ class AggregateSnapshotMapperTest {
             byte[] snapshotBytes = snapshotMapper.serialize(room, "Alice", game);
 
             // Store into real encrypted WAL
+            RoomCoordinator coordinator = new RoomCoordinator();
             EncryptionKeyring keyring = new EncryptionKeyring("k1", Map.of("k1", new SecretKeySpec(new byte[32], "AES")));
-            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring);
-            WalTransaction tx = walStore.prepare(ROOM_ID);
-            walStore.commit(tx, snapshotBytes);
+            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring, coordinator);
+            try (LockLease _ = coordinator.acquire(ROOM_ID)) {
+                WalTransaction tx = walStore.prepare(ROOM_ID);
+                walStore.commit(tx, snapshotBytes);
+            }
 
             // Recover from WAL
             Map<String, byte[]> recoveredMap = walStore.recoverAll();
@@ -1068,10 +1071,13 @@ class AggregateSnapshotMapperTest {
             byte[] snapshotBytes = snapshotMapper.serialize(room, "Alice", game);
 
             // WAL round-trip
+            RoomCoordinator coordinator = new RoomCoordinator();
             EncryptionKeyring keyring = new EncryptionKeyring("k1", Map.of("k1", new SecretKeySpec(new byte[32], "AES")));
-            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring);
-            WalTransaction tx = walStore.prepare(ROOM_ID);
-            walStore.commit(tx, snapshotBytes);
+            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring, coordinator);
+            try (LockLease _ = coordinator.acquire(ROOM_ID)) {
+                WalTransaction tx = walStore.prepare(ROOM_ID);
+                walStore.commit(tx, snapshotBytes);
+            }
 
             RecoveredAggregate recovered = snapshotMapper.deserialize(walStore.recoverAll().get(ROOM_ID));
             Game restored = recovered.game();
@@ -1108,10 +1114,13 @@ class AggregateSnapshotMapperTest {
             byte[] snapshotBytes = snapshotMapper.serialize(room, "Alice", game);
 
             // WAL round-trip
+            RoomCoordinator coordinator = new RoomCoordinator();
             EncryptionKeyring keyring = new EncryptionKeyring("k1", Map.of("k1", new SecretKeySpec(new byte[32], "AES")));
-            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring);
-            WalTransaction tx = walStore.prepare(ROOM_ID);
-            walStore.commit(tx, snapshotBytes);
+            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring, coordinator);
+            try (LockLease _ = coordinator.acquire(ROOM_ID)) {
+                WalTransaction tx = walStore.prepare(ROOM_ID);
+                walStore.commit(tx, snapshotBytes);
+            }
 
             RecoveredAggregate recovered = snapshotMapper.deserialize(walStore.recoverAll().get(ROOM_ID));
             Game restored = recovered.game();
@@ -1148,10 +1157,13 @@ class AggregateSnapshotMapperTest {
             byte[] snapshotBytes = snapshotMapper.serialize(room, "Alice", game);
 
             // WAL round-trip
+            RoomCoordinator coordinator = new RoomCoordinator();
             EncryptionKeyring keyring = new EncryptionKeyring("k1", Map.of("k1", new SecretKeySpec(new byte[32], "AES")));
-            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring);
-            WalTransaction tx = walStore.prepare(ROOM_ID);
-            walStore.commit(tx, snapshotBytes);
+            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring, coordinator);
+            try (LockLease _ = coordinator.acquire(ROOM_ID)) {
+                WalTransaction tx = walStore.prepare(ROOM_ID);
+                walStore.commit(tx, snapshotBytes);
+            }
 
             RecoveredAggregate recovered = snapshotMapper.deserialize(walStore.recoverAll().get(ROOM_ID));
             Game restored = recovered.game();
@@ -1189,10 +1201,13 @@ class AggregateSnapshotMapperTest {
             byte[] snapshotBytes = snapshotMapper.serialize(room, "Alice", game);
 
             // WAL round-trip
+            RoomCoordinator coordinator = new RoomCoordinator();
             EncryptionKeyring keyring = new EncryptionKeyring("k1", Map.of("k1", new SecretKeySpec(new byte[32], "AES")));
-            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring);
-            WalTransaction tx = walStore.prepare(ROOM_ID);
-            walStore.commit(tx, snapshotBytes);
+            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring, coordinator);
+            try (LockLease _ = coordinator.acquire(ROOM_ID)) {
+                WalTransaction tx = walStore.prepare(ROOM_ID);
+                walStore.commit(tx, snapshotBytes);
+            }
 
             RecoveredAggregate recovered = snapshotMapper.deserialize(walStore.recoverAll().get(ROOM_ID));
             Game restored = recovered.game();

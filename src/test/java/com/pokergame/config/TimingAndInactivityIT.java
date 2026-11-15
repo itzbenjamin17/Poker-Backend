@@ -13,7 +13,7 @@ import com.pokergame.model.Game;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.testutil.MutableClock;
 import org.junit.jupiter.api.AfterEach;

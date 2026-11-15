@@ -1,5 +1,7 @@
 package com.pokergame.service;
 
+import com.pokergame.util.RoomCoordinator;
+
 import com.pokergame.config.WebSocketAuthInterceptor;
 import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.controller.GameController;

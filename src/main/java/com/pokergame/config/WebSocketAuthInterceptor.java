@@ -3,7 +3,7 @@ package com.pokergame.config;
 import com.pokergame.model.Room;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.util.LockLease;
 import com.pokergame.util.MdcKeys;

@@ -1,5 +1,7 @@
 package com.pokergame.service;
 
+import com.pokergame.util.RoomCoordinator;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;

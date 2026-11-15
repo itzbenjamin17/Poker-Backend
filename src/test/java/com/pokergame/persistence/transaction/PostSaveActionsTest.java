@@ -6,7 +6,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.pokergame.config.RoomTimingProperties;
 import com.pokergame.model.Room;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.service.event.RoomDestroyed;
 import org.junit.jupiter.api.AfterEach;

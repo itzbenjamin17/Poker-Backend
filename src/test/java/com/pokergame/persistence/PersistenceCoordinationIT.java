@@ -31,7 +31,7 @@ import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.testutil.TestRoomFixtures;
 import org.junit.jupiter.api.AfterEach;
@@ -194,9 +194,9 @@ class PersistenceCoordinationIT {
             withRoomLock(roomCoordinator, roomId, () -> {
                 gameLifecycleService.evictGame(roomId);
                 roomService.destroyRoom(roomId);
+                walStore.delete(roomId);
                 return null;
             });
-            walStore.delete(roomId);
         }
         awaitPendingSavesFlushed();
         trackedRoomIds.clear();
@@ -357,7 +357,8 @@ class PersistenceCoordinationIT {
 
         FAULT_INJECTOR.set(WalFaultInjector.NONE);
         awaitPendingSavesFlushed();
-        RecoveredAggregate recovered = snapshotMapper.deserialize(walStore.recoverLatest(roomId).orElseThrow());
+        RecoveredAggregate recovered = withRoomLock(roomCoordinator, roomId,
+                () -> snapshotMapper.deserialize(walStore.recoverLatest(roomId).orElseThrow()));
         assertThat(recovered.room().getPlayers()).containsExactlyInAnyOrder("Host", "Alice", "Bob");
     }
 
@@ -481,7 +482,8 @@ class PersistenceCoordinationIT {
         assertThatCode(() -> webSocketAuthInterceptor.preSend(stompSubscription(roomFixtures.principalFor(roomId, "Alice")), null))
                 .doesNotThrowAnyException();
 
-        RecoveredAggregate recovered = snapshotMapper.deserialize(walStore.recoverLatest(roomId).orElseThrow());
+        RecoveredAggregate recovered = withRoomLock(roomCoordinator, roomId,
+                () -> snapshotMapper.deserialize(walStore.recoverLatest(roomId).orElseThrow()));
         assertThat(recovered.room().getMembershipId("Alice")).isNotEqualTo(retiredAlice.membershipId());
     }
 
@@ -538,7 +540,8 @@ class PersistenceCoordinationIT {
 
         FAULT_INJECTOR.set(WalFaultInjector.NONE);
         awaitPendingSavesFlushed();
-        RecoveredAggregate recovered = snapshotMapper.deserialize(walStore.recoverLatest(roomId).orElseThrow());
+        RecoveredAggregate recovered = withRoomLock(roomCoordinator, roomId,
+                () -> snapshotMapper.deserialize(walStore.recoverLatest(roomId).orElseThrow()));
         assertThat(recovered.room().getPlayers()).containsExactlyInAnyOrder("Host", "Alice", "Bob");
     }
 
@@ -587,7 +590,10 @@ class PersistenceCoordinationIT {
 
         FAULT_INJECTOR.set(WalFaultInjector.NONE);
         awaitPendingSavesFlushed();
-        assertThat(walStore.recoverLatest(roomId)).isEmpty();
+        withRoomLock(roomCoordinator, roomId, () -> {
+            assertThat(walStore.recoverLatest(roomId)).isEmpty();
+            return null;
+        });
     }
 
     @Test
@@ -631,18 +637,25 @@ class PersistenceCoordinationIT {
 
         // Healthy room can still persist mutations and delete its WAL while failedRoomId remains degraded.
         roomService.joinRoom(healthyRoomId, new JoinRoomRequest("Healthy Isolation Room", "Dana", null));
-        RecoveredAggregate healthySnapshot = snapshotMapper.deserialize(walStore.recoverLatest(healthyRoomId).orElseThrow());
-        assertThat(healthySnapshot.room().getPlayers()).containsExactlyInAnyOrder("HostB", "Bob", "Dana");
-        assertThat(walStore.requiresCheckpoint(healthyRoomId)).isFalse();
+        withRoomLock(roomCoordinator, healthyRoomId, () -> {
+            RecoveredAggregate healthySnapshot = snapshotMapper.deserialize(walStore.recoverLatest(healthyRoomId).orElseThrow());
+            assertThat(healthySnapshot.room().getPlayers()).containsExactlyInAnyOrder("HostB", "Bob", "Dana");
+            assertThat(walStore.requiresCheckpoint(healthyRoomId)).isFalse();
+            return null;
+        });
 
         roomService.destroyRoom(healthyRoomId);
-        assertThat(walStore.recoverLatest(healthyRoomId)).isEmpty();
+        withRoomLock(roomCoordinator, healthyRoomId, () -> {
+            assertThat(walStore.recoverLatest(healthyRoomId)).isEmpty();
+            return null;
+        });
         assertThat(walStore.unsavedRoomCount()).isEqualTo(1);
         assertThat(walStore.isHealthy(failedRoomId)).isFalse();
 
         FAULT_INJECTOR.set(WalFaultInjector.NONE);
         awaitPendingSavesFlushed();
-        RecoveredAggregate recoveredFailed = snapshotMapper.deserialize(walStore.recoverLatest(failedRoomId).orElseThrow());
+        RecoveredAggregate recoveredFailed = withRoomLock(roomCoordinator, failedRoomId,
+                () -> snapshotMapper.deserialize(walStore.recoverLatest(failedRoomId).orElseThrow()));
         assertThat(recoveredFailed.room().getPlayers()).containsExactlyInAnyOrder("HostA", "Alice", "Charlie");
     }
 
@@ -665,7 +678,10 @@ class PersistenceCoordinationIT {
             return null;
         });
 
-        assertThat(walStore.recoverLatest(roomId)).isPresent();
+        withRoomLock(roomCoordinator, roomId, () -> {
+            assertThat(walStore.recoverLatest(roomId)).isPresent();
+            return null;
+        });
 
         Clock afterDeadlineClock = Clock.fixed(Instant.ofEpochMilli(pastCleanupDeadline + 10_000L), ZoneOffset.UTC);
         PersistenceRecovery recovery = new PersistenceRecovery(
@@ -676,9 +692,9 @@ class PersistenceCoordinationIT {
         withRoomLock(roomCoordinator, roomId, () -> {
             assertThat(roomService.getRoom(roomId)).isNull();
             assertThat(gameLifecycleService.getGame(roomId)).isNull();
+            assertThat(walStore.recoverLatest(roomId)).isEmpty();
             return null;
         });
-        assertThat(walStore.recoverLatest(roomId)).isEmpty();
     }
 
     @Test
@@ -701,9 +717,9 @@ class PersistenceCoordinationIT {
 
         withRoomLock(roomCoordinator, roomId, () -> {
             assertThat(roomService.getRoom(roomId)).isNull();
+            assertThat(walStore.recoverLatest(roomId)).isEmpty();
             return null;
         });
-        assertThat(walStore.recoverLatest(roomId)).isEmpty();
         Mockito.verify(messagingTemplate).convertAndSend(
                 Mockito.eq("/room/" + roomId),
                 Mockito.argThat((Object payload) -> payload instanceof ApiResponse<?> response
@@ -828,9 +844,10 @@ class PersistenceCoordinationIT {
     static class CoordinationTestConfig {
         @Bean
         @Primary
-        EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring) {
+        EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring,
+                RoomCoordinator roomCoordinator) {
             return new EncryptedWalStore(properties.getDirectory(), keyring,
-                    (point, roomId) -> FAULT_INJECTOR.get().check(point, roomId));
+                    (point, roomId) -> FAULT_INJECTOR.get().check(point, roomId), roomCoordinator);
         }
 
         @Bean

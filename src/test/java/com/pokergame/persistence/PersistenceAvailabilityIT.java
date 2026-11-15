@@ -16,7 +16,7 @@ import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.persistence.wal.WalFaultPoint;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.PlayerActionService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.util.LockLease;
 import org.junit.jupiter.api.AfterEach;
@@ -118,8 +118,8 @@ class PersistenceAvailabilityIT {
             try (LockLease _ = roomCoordinator.acquire(roomId)) {
                 gameLifecycleService.evictGame(roomId);
                 roomService.destroyRoom(roomId);
+                walStore.delete(roomId);
             }
-            walStore.delete(roomId);
         }
         awaitPendingSavesFlushed();
         trackedRoomIds.clear();
@@ -185,7 +185,11 @@ class PersistenceAvailabilityIT {
 
         UNAVAILABLE_STORAGE.set(false);
         awaitPendingSavesFlushed();
-        RecoveredAggregate recovered = snapshotMapper.deserialize(walStore.recoverLatest(roomId).orElseThrow());
+        byte[] recoveredBytes;
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
+            recoveredBytes = walStore.recoverLatest(roomId).orElseThrow();
+        }
+        RecoveredAggregate recovered = snapshotMapper.deserialize(recoveredBytes);
         assertThat(recovered.game().getStateRevision()).isEqualTo(liveRevision);
     }
 
@@ -193,13 +197,14 @@ class PersistenceAvailabilityIT {
     static class FaultyStorageConfig {
         @Bean
         @Primary
-        EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring) {
+        EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring,
+                RoomCoordinator roomCoordinator) {
             return new EncryptedWalStore(properties.getDirectory(), keyring, (point, roomId) -> {
                 if (UNAVAILABLE_STORAGE.get()
                         && (point == WalFaultPoint.BEFORE_COMMIT_WRITE || point == WalFaultPoint.BEFORE_FLUSH)) {
                     throw new PersistenceException("injected availability outage");
                 }
-            });
+            }, roomCoordinator);
         }
     }
 }

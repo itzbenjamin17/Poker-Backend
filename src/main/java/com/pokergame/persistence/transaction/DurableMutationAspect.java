@@ -10,7 +10,7 @@ import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.WalTransaction;
 import com.pokergame.service.GameLifecycleService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.util.MdcKeys;
 import org.aspectj.lang.ProceedingJoinPoint;

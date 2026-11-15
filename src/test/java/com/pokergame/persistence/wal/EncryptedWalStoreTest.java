@@ -1,5 +1,8 @@
 package com.pokergame.persistence.wal;
 
+import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.util.LockLease;
+import com.pokergame.util.RoomCoordinator;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -12,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -22,9 +26,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
 import static org.junit.jupiter.api.Assertions.*;
-import com.pokergame.persistence.config.PersistenceException;
-import java.util.Arrays;
 
 /** Tests encrypted WAL store behavior. */
 @Tag("unit")
@@ -33,6 +36,8 @@ class EncryptedWalStoreTest {
     @TempDir
     Path directory;
 
+    private final RoomCoordinator roomCoordinator = new RoomCoordinator();
+
     /**
      * Protects the contract that committed payload recovers without appearing as plaintext.
      */
@@ -40,13 +45,16 @@ class EncryptedWalStoreTest {
     void committedPayloadRecoversWithoutAppearingAsPlaintext() throws Exception {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(directory, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keyring, roomCoordinator);
         byte[] snapshot = "password=very-secret;holeCards=AS,KH".getBytes(StandardCharsets.UTF_8);
 
-        WalTransaction transaction = store.prepare("room-1");
-        store.commit(transaction, snapshot);
+        withRoomLock(roomCoordinator, "room-1", () -> {
+            WalTransaction transaction = store.prepare("room-1");
+            store.commit(transaction, snapshot);
+            assertArrayEquals(snapshot, store.recoverLatest("room-1").orElseThrow());
+            return null;
+        });
 
-        assertArrayEquals(snapshot, store.recoverLatest("room-1").orElseThrow());
         String walBytes = Files.readString(directory.resolve("room-1.wal"), StandardCharsets.ISO_8859_1);
         assertFalse(walBytes.contains("very-secret"));
         assertFalse(walBytes.contains("holeCards"));
@@ -59,13 +67,15 @@ class EncryptedWalStoreTest {
     void uncommittedPrepareDoesNotReplaceLastCommittedState() {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(directory, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keyring, roomCoordinator);
 
-        WalTransaction committed = store.prepare("room-2");
-        store.commit(committed, "first".getBytes(StandardCharsets.UTF_8));
-        store.prepare("room-2");
-
-        assertEquals("first", new String(store.recoverLatest("room-2").orElseThrow(), StandardCharsets.UTF_8));
+        withRoomLock(roomCoordinator, "room-2", () -> {
+            WalTransaction committed = store.prepare("room-2");
+            store.commit(committed, "first".getBytes(StandardCharsets.UTF_8));
+            store.prepare("room-2");
+            assertEquals("first", new String(store.recoverLatest("room-2").orElseThrow(), StandardCharsets.UTF_8));
+            return null;
+        });
     }
 
     /**
@@ -74,22 +84,29 @@ class EncryptedWalStoreTest {
     @Test
     void tornFinalFrameIsIgnoredButCommittedPrefixTamperingFailsClosed() throws Exception {
         EncryptionKeyring keyring = keyring("current", (byte) 1);
-        EncryptedWalStore store = new EncryptedWalStore(directory, keyring);
-        WalTransaction transaction = store.prepare("room-3");
-        store.commit(transaction, "safe".getBytes(StandardCharsets.UTF_8));
+        EncryptedWalStore store = new EncryptedWalStore(directory, keyring, roomCoordinator);
         Path wal = directory.resolve("room-3.wal");
-        byte[] committed = Files.readAllBytes(wal);
-        store.prepare("room-3");
-        byte[] withFinalPrepare = Files.readAllBytes(wal);
-        Files.write(wal, Arrays.copyOf(withFinalPrepare, withFinalPrepare.length - 5));
-        assertEquals("safe", new String(store.recoverLatest("room-3").orElseThrow(), StandardCharsets.UTF_8));
+        byte[] committed;
+        byte[] withFinalPrepare;
+        try (LockLease _ = roomCoordinator.acquire("room-3")) {
+            WalTransaction transaction = store.prepare("room-3");
+            store.commit(transaction, "safe".getBytes(StandardCharsets.UTF_8));
+            committed = Files.readAllBytes(wal);
+            store.prepare("room-3");
+            withFinalPrepare = Files.readAllBytes(wal);
+            Files.write(wal, Arrays.copyOf(withFinalPrepare, withFinalPrepare.length - 5));
+            assertEquals("safe", new String(store.recoverLatest("room-3").orElseThrow(), StandardCharsets.UTF_8));
+        }
 
         Files.write(wal, committed);
         byte[] corrupt = committed.clone();
         corrupt[corrupt.length / 2] ^= 1;
         Files.write(wal, corrupt);
-        EncryptedWalStore recovering = new EncryptedWalStore(directory, keyring);
-        assertThrows(PersistenceException.class, () -> recovering.recoverLatest("room-3"));
+        EncryptedWalStore recovering = new EncryptedWalStore(directory, keyring, roomCoordinator);
+        withRoomLock(roomCoordinator, "room-3", () -> {
+            assertThrows(PersistenceException.class, () -> recovering.recoverLatest("room-3"));
+            return null;
+        });
         assertFalse(recovering.isHealthy());
     }
 
@@ -104,15 +121,24 @@ class EncryptedWalStoreTest {
      */
     @Test
     void copiedRecordAndMissingKeyBothFailClosed() throws Exception {
-        EncryptedWalStore oldStore = new EncryptedWalStore(directory, keyring("old", (byte) 2));
-        WalTransaction transaction = oldStore.prepare("room-a");
-        oldStore.commit(transaction, "state".getBytes(StandardCharsets.UTF_8));
+        EncryptedWalStore oldStore = new EncryptedWalStore(directory, keyring("old", (byte) 2), roomCoordinator);
+        withRoomLock(roomCoordinator, "room-a", () -> {
+            WalTransaction transaction = oldStore.prepare("room-a");
+            oldStore.commit(transaction, "state".getBytes(StandardCharsets.UTF_8));
+            return null;
+        });
         Files.copy(directory.resolve("room-a.wal"), directory.resolve("room-b.wal"),
                 StandardCopyOption.REPLACE_EXISTING);
 
-        assertThrows(PersistenceException.class, () -> oldStore.recoverLatest("room-b"));
-        EncryptedWalStore missingKey = new EncryptedWalStore(directory, keyring("new", (byte) 3));
-        assertThrows(PersistenceException.class, () -> missingKey.recoverLatest("room-a"));
+        withRoomLock(roomCoordinator, "room-b", () -> {
+            assertThrows(PersistenceException.class, () -> oldStore.recoverLatest("room-b"));
+            return null;
+        });
+        EncryptedWalStore missingKey = new EncryptedWalStore(directory, keyring("new", (byte) 3), roomCoordinator);
+        withRoomLock(roomCoordinator, "room-a", () -> {
+            assertThrows(PersistenceException.class, () -> missingKey.recoverLatest("room-a"));
+            return null;
+        });
     }
 
     /**
@@ -121,18 +147,21 @@ class EncryptedWalStoreTest {
      */
     @Test
     void recoverAllFailsClosedWithoutQuarantiningWalWhenHistoricalKeyIsMissing() throws Exception {
-        EncryptedWalStore writer = new EncryptedWalStore(directory, keyring("old", (byte) 2));
-        writer.commit(writer.prepare("room-old-key"), "accepted-state".getBytes(StandardCharsets.UTF_8));
+        EncryptedWalStore writer = new EncryptedWalStore(directory, keyring("old", (byte) 2), roomCoordinator);
+        withRoomLock(roomCoordinator, "room-old-key", () -> {
+            writer.commit(writer.prepare("room-old-key"), "accepted-state".getBytes(StandardCharsets.UTF_8));
+            return null;
+        });
         Path wal = directory.resolve("room-old-key.wal");
         byte[] original = Files.readAllBytes(wal);
 
-        EncryptedWalStore missingKey = new EncryptedWalStore(directory, keyring("current", (byte) 3));
+        EncryptedWalStore missingKey = new EncryptedWalStore(directory, keyring("current", (byte) 3), roomCoordinator);
         assertThrows(PersistenceException.class, missingKey::recoverAll);
         assertFalse(missingKey.isHealthy());
         assertArrayEquals(original, Files.readAllBytes(wal));
         assertFalse(Files.exists(directory.resolve("room-old-key.wal.corrupted")));
 
-        EncryptedWalStore corrected = new EncryptedWalStore(directory, keyring("old", (byte) 2));
+        EncryptedWalStore corrected = new EncryptedWalStore(directory, keyring("old", (byte) 2), roomCoordinator);
         assertArrayEquals("accepted-state".getBytes(StandardCharsets.UTF_8),
                 corrected.recoverAll().get("room-old-key"));
     }
@@ -143,24 +172,33 @@ class EncryptedWalStoreTest {
     @Test
     void rotationCompactsUnderCurrentKeySoOldKeyCanBeRetired() {
         EncryptionKeyring oldKeys = keyring("old", (byte) 4);
-        EncryptedWalStore oldStore = new EncryptedWalStore(directory, oldKeys);
-        WalTransaction transaction = oldStore.prepare("room-rotate");
-        oldStore.commit(transaction, "rotated-state".getBytes(StandardCharsets.UTF_8));
+        EncryptedWalStore oldStore = new EncryptedWalStore(directory, oldKeys, roomCoordinator);
+        withRoomLock(roomCoordinator, "room-rotate", () -> {
+            WalTransaction transaction = oldStore.prepare("room-rotate");
+            oldStore.commit(transaction, "rotated-state".getBytes(StandardCharsets.UTF_8));
+            return null;
+        });
 
         byte[] old = filledKey((byte) 4);
         byte[] current = filledKey((byte) 5);
         EncryptionKeyring rotating = new EncryptionKeyring("current", Map.of(
                 "old", new SecretKeySpec(old, "AES"),
                 "current", new SecretKeySpec(current, "AES")));
-        EncryptedWalStore rotatingStore = new EncryptedWalStore(directory, rotating);
-        byte[] latest = rotatingStore.recoverLatest("room-rotate").orElseThrow();
-        rotatingStore.compact("room-rotate", latest);
+        EncryptedWalStore rotatingStore = new EncryptedWalStore(directory, rotating, roomCoordinator);
+        withRoomLock(roomCoordinator, "room-rotate", () -> {
+            byte[] latest = rotatingStore.recoverLatest("room-rotate").orElseThrow();
+            rotatingStore.compact("room-rotate", latest);
+            return null;
+        });
 
-        EncryptedWalStore currentOnly = new EncryptedWalStore(directory, keyring("current", (byte) 5));
-        assertEquals("rotated-state",
-                new String(currentOnly.recoverLatest("room-rotate").orElseThrow(), StandardCharsets.UTF_8));
-        currentOnly.delete("room-rotate");
-        assertTrue(currentOnly.recoverLatest("room-rotate").isEmpty());
+        EncryptedWalStore currentOnly = new EncryptedWalStore(directory, keyring("current", (byte) 5), roomCoordinator);
+        withRoomLock(roomCoordinator, "room-rotate", () -> {
+            assertEquals("rotated-state",
+                    new String(currentOnly.recoverLatest("room-rotate").orElseThrow(), StandardCharsets.UTF_8));
+            currentOnly.delete("room-rotate");
+            assertTrue(currentOnly.recoverLatest("room-rotate").isEmpty());
+            return null;
+        });
     }
 
     /**
@@ -172,23 +210,33 @@ class EncryptedWalStoreTest {
         EncryptedWalStore store = new EncryptedWalStore(directory, keyring("current", (byte) 6),
                 (point, roomId) -> {
                     if (point == failure.get()) throw new PersistenceException("injected " + point);
-                });
-        WalTransaction transaction = store.prepare("room-fail");
-        failure.set(WalFaultPoint.BEFORE_COMMIT_WRITE);
+                }, roomCoordinator);
+        withRoomLock(roomCoordinator, "room-fail", () -> {
+            WalTransaction transaction = store.prepare("room-fail");
+            failure.set(WalFaultPoint.BEFORE_COMMIT_WRITE);
 
-        assertThrows(PersistenceException.class,
-                () -> store.commit(transaction, "lost".getBytes(StandardCharsets.UTF_8)));
+            assertThrows(PersistenceException.class,
+                    () -> store.commit(transaction, "lost".getBytes(StandardCharsets.UTF_8)));
+            return null;
+        });
         assertFalse(store.isHealthy());
         assertFalse(store.isHealthy("room-fail"));
         assertTrue(store.isHealthy("other-room"));
         failure.set(null);
-        assertThrows(PersistenceException.class, () -> store.prepare("room-fail"));
-        assertThrows(PersistenceException.class, () -> store.compact("room-fail", "lost".getBytes(StandardCharsets.UTF_8)));
+        withRoomLock(roomCoordinator, "room-fail", () -> {
+            assertThrows(PersistenceException.class, () -> store.prepare("room-fail"));
+            assertThrows(PersistenceException.class,
+                    () -> store.compact("room-fail", "lost".getBytes(StandardCharsets.UTF_8)));
+            return null;
+        });
 
-        WalTransaction otherTx = store.prepare("other-room");
-        byte[] otherPayload = "other-room-ok".getBytes(StandardCharsets.UTF_8);
-        store.commit(otherTx, otherPayload);
-        assertArrayEquals(otherPayload, store.recoverLatest("other-room").orElseThrow());
+        withRoomLock(roomCoordinator, "other-room", () -> {
+            WalTransaction otherTx = store.prepare("other-room");
+            byte[] otherPayload = "other-room-ok".getBytes(StandardCharsets.UTF_8);
+            store.commit(otherTx, otherPayload);
+            assertArrayEquals(otherPayload, store.recoverLatest("other-room").orElseThrow());
+            return null;
+        });
     }
 
     /**
@@ -201,14 +249,17 @@ class EncryptedWalStoreTest {
                 keyring("current", (byte) 8),
                 (point, roomId) -> {
                     if (point == compactionFailure.get()) throw new PersistenceException("injected " + point);
-                });
-        WalTransaction compactingTransaction = compactingStore.prepare("room-compact-fail");
+                }, roomCoordinator);
         byte[] snapshot = "durable".getBytes(StandardCharsets.UTF_8);
-        compactingStore.commit(compactingTransaction, snapshot);
-        compactionFailure.set(WalFaultPoint.BEFORE_COMPACTION_REPLACE);
+        withRoomLock(roomCoordinator, "room-compact-fail", () -> {
+            WalTransaction compactingTransaction = compactingStore.prepare("room-compact-fail");
+            compactingStore.commit(compactingTransaction, snapshot);
+            compactionFailure.set(WalFaultPoint.BEFORE_COMPACTION_REPLACE);
 
-        assertThrows(PersistenceException.class,
-                () -> compactingStore.compact("room-compact-fail", snapshot));
+            assertThrows(PersistenceException.class,
+                    () -> compactingStore.compact("room-compact-fail", snapshot));
+            return null;
+        });
         assertFalse(compactingStore.isHealthy());
 
         AtomicReference<WalFaultPoint> deleteFailure = new AtomicReference<>();
@@ -216,12 +267,15 @@ class EncryptedWalStoreTest {
                 keyring("current", (byte) 9),
                 (point, roomId) -> {
                     if (point == deleteFailure.get()) throw new PersistenceException("injected " + point);
-                });
-        WalTransaction deletingTransaction = deletingStore.prepare("room-delete-fail");
-        deletingStore.commit(deletingTransaction, snapshot);
-        deleteFailure.set(WalFaultPoint.BEFORE_DELETE);
+                }, roomCoordinator);
+        withRoomLock(roomCoordinator, "room-delete-fail", () -> {
+            WalTransaction deletingTransaction = deletingStore.prepare("room-delete-fail");
+            deletingStore.commit(deletingTransaction, snapshot);
+            deleteFailure.set(WalFaultPoint.BEFORE_DELETE);
 
-        assertThrows(PersistenceException.class, () -> deletingStore.delete("room-delete-fail"));
+            assertThrows(PersistenceException.class, () -> deletingStore.delete("room-delete-fail"));
+            return null;
+        });
         assertFalse(deletingStore.isHealthy());
     }
 
@@ -229,36 +283,57 @@ class EncryptedWalStoreTest {
     @Test
     void recoveredTornTailRequiresCheckpointBeforeFurtherAppends() throws Exception {
         EncryptionKeyring keys = keyring("current", (byte) 11);
-        EncryptedWalStore first = new EncryptedWalStore(directory, keys);
-        first.commit(first.prepare("room-torn"), new byte[]{1});
-        first.prepare("room-torn");
+        EncryptedWalStore first = new EncryptedWalStore(directory, keys, roomCoordinator);
+        withRoomLock(roomCoordinator, "room-torn", () -> {
+            first.commit(first.prepare("room-torn"), new byte[]{1});
+            first.prepare("room-torn");
+            return null;
+        });
         Path wal = directory.resolve("room-torn.wal");
         byte[] bytes = Files.readAllBytes(wal);
         Files.write(wal, Arrays.copyOf(bytes, bytes.length - 5));
-        EncryptedWalStore second = new EncryptedWalStore(directory, keys);
-        assertArrayEquals(new byte[]{1}, second.recoverLatest("room-torn").orElseThrow());
-        assertTrue(second.requiresCheckpoint("room-torn"));
-        assertThrows(PersistenceException.class, () -> second.prepare("room-torn"));
+        EncryptedWalStore second = new EncryptedWalStore(directory, keys, roomCoordinator);
+        withRoomLock(roomCoordinator, "room-torn", () -> {
+            assertArrayEquals(new byte[]{1}, second.recoverLatest("room-torn").orElseThrow());
+            assertTrue(second.requiresCheckpoint("room-torn"));
+            assertThrows(PersistenceException.class, () -> second.prepare("room-torn"));
 
-        second.checkpoint("room-torn", new byte[]{2});
-        second.commit(second.prepare("room-torn"), new byte[]{3});
-        EncryptedWalStore third = new EncryptedWalStore(directory, keys);
-        assertArrayEquals(new byte[]{3}, third.recoverLatest("room-torn").orElseThrow());
-        assertFalse(third.requiresCheckpoint("room-torn"));
+            second.checkpoint("room-torn", new byte[]{2});
+            second.commit(second.prepare("room-torn"), new byte[]{3});
+            return null;
+        });
+        EncryptedWalStore third = new EncryptedWalStore(directory, keys, roomCoordinator);
+        withRoomLock(roomCoordinator, "room-torn", () -> {
+            assertArrayEquals(new byte[]{3}, third.recoverLatest("room-torn").orElseThrow());
+            assertFalse(third.requiresCheckpoint("room-torn"));
+            return null;
+        });
     }
 
     /** One room's repair cannot declare other unsaved rooms healthy. */
     @Test
     void checkpointOnlyClearsItsOwnRoomFailure() {
-        EncryptedWalStore store = new EncryptedWalStore(directory, keyring("current", (byte) 12));
-        store.recordWriteFailure("room-A", new PersistenceException("unavailable"));
-        store.recordWriteFailure("room-B", new PersistenceException("unavailable"));
-        store.checkpoint("room-A", new byte[]{1});
+        EncryptedWalStore store = new EncryptedWalStore(directory, keyring("current", (byte) 12), roomCoordinator);
+        withRoomLock(roomCoordinator, "room-A", () -> {
+            store.recordWriteFailure("room-A", new PersistenceException("unavailable"));
+            return null;
+        });
+        withRoomLock(roomCoordinator, "room-B", () -> {
+            store.recordWriteFailure("room-B", new PersistenceException("unavailable"));
+            return null;
+        });
+        withRoomLock(roomCoordinator, "room-A", () -> {
+            store.checkpoint("room-A", new byte[]{1});
+            assertFalse(store.requiresCheckpoint("room-A"));
+            return null;
+        });
         assertFalse(store.isHealthy());
         assertEquals(1, store.unsavedRoomCount());
-        assertFalse(store.requiresCheckpoint("room-A"));
-        assertTrue(store.requiresCheckpoint("room-B"));
-        store.checkpoint("room-B", new byte[]{2});
+        withRoomLock(roomCoordinator, "room-B", () -> {
+            assertTrue(store.requiresCheckpoint("room-B"));
+            store.checkpoint("room-B", new byte[]{2});
+            return null;
+        });
         assertTrue(store.isHealthy());
         assertNull(store.lastError());
     }
@@ -274,30 +349,41 @@ class EncryptedWalStoreTest {
             throws Exception {
         EncryptionKeyring keys = keyring("current", (byte) 13);
         Path wal = directory.resolve(roomId + ".wal");
-        EncryptedWalStore writer = new EncryptedWalStore(directory, keys);
+        EncryptedWalStore writer = new EncryptedWalStore(directory, keys, roomCoordinator);
         byte[] accepted = {0};
-        writer.commit(writer.prepare(roomId), accepted);
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
+            writer.commit(writer.prepare(roomId), accepted);
+        }
 
         for (int framePrefix : framePrefixes) {
-            WalTransaction interrupted = writer.prepare(roomId);
-            long prepareEnd = Files.size(wal);
-            writer.commit(interrupted, new byte[128]);
-            assertTrue(Files.size(wal) > prepareEnd + framePrefix);
+            long prepareEnd;
+            try (LockLease _ = roomCoordinator.acquire(roomId)) {
+                WalTransaction interrupted = writer.prepare(roomId);
+                prepareEnd = Files.size(wal);
+                writer.commit(interrupted, new byte[128]);
+                assertTrue(Files.size(wal) > prepareEnd + framePrefix);
+            }
             try (FileChannel channel = FileChannel.open(wal, StandardOpenOption.WRITE)) {
                 channel.truncate(prepareEnd + framePrefix);
             }
 
-            EncryptedWalStore recovery = new EncryptedWalStore(directory, keys);
-            assertArrayEquals(accepted, recovery.recoverLatest(roomId).orElseThrow());
+            EncryptedWalStore recovery = new EncryptedWalStore(directory, keys, roomCoordinator);
+            try (LockLease _ = roomCoordinator.acquire(roomId)) {
+                assertArrayEquals(accepted, recovery.recoverLatest(roomId).orElseThrow());
+            }
             assertEquals(prepareEnd, Files.size(wal), "Torn commit prefix: " + framePrefix);
 
-            writer = new EncryptedWalStore(directory, keys);
+            writer = new EncryptedWalStore(directory, keys, roomCoordinator);
             accepted = new byte[]{(byte) framePrefix};
-            writer.commit(writer.prepare(roomId), accepted);
+            try (LockLease _ = roomCoordinator.acquire(roomId)) {
+                writer.commit(writer.prepare(roomId), accepted);
+            }
         }
 
-        EncryptedWalStore fresh = new EncryptedWalStore(directory, keys);
-        assertArrayEquals(accepted, fresh.recoverLatest(roomId).orElseThrow());
+        EncryptedWalStore fresh = new EncryptedWalStore(directory, keys, roomCoordinator);
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
+            assertArrayEquals(accepted, fresh.recoverLatest(roomId).orElseThrow());
+        }
         assertTrue(fresh.isHealthy());
         assertNull(fresh.lastError());
     }
@@ -309,10 +395,13 @@ class EncryptedWalStoreTest {
     @Test
     void orphanedCompactingFilesAreCleanedUpOnStoreInitializationAndRecovery() throws Exception {
         EncryptionKeyring keys = keyring("current", (byte) 30);
-        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
-        WalTransaction tx = store.prepare("room-orphan");
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys, roomCoordinator);
         byte[] payload = "orphan-payload".getBytes(StandardCharsets.UTF_8);
-        store.commit(tx, payload);
+        withRoomLock(roomCoordinator, "room-orphan", () -> {
+            WalTransaction tx = store.prepare("room-orphan");
+            store.commit(tx, payload);
+            return null;
+        });
 
         Path orphanedCompacting = directory.resolve("room-orphan.wal.compacting");
         Path otherCompacting = directory.resolve("other.wal.compacting");
@@ -323,7 +412,7 @@ class EncryptedWalStoreTest {
         assertTrue(Files.exists(otherCompacting));
 
         // Initializing a new store cleans up orphaned .compacting files
-        EncryptedWalStore newStore = new EncryptedWalStore(directory, keys);
+        EncryptedWalStore newStore = new EncryptedWalStore(directory, keys, roomCoordinator);
         assertFalse(Files.exists(orphanedCompacting));
         assertFalse(Files.exists(otherCompacting));
 
@@ -336,7 +425,8 @@ class EncryptedWalStoreTest {
 
         // Compacting files created before recoverLatest are cleaned up
         Files.write(orphanedCompacting, new byte[]{4, 5, 6});
-        Optional<byte[]> latest = newStore.recoverLatest("room-orphan");
+        Optional<byte[]> latest = withRoomLock(roomCoordinator, "room-orphan",
+                () -> newStore.recoverLatest("room-orphan"));
         assertTrue(latest.isPresent());
         assertArrayEquals(payload, latest.get());
         assertFalse(Files.exists(orphanedCompacting));
@@ -350,16 +440,22 @@ class EncryptedWalStoreTest {
     @Test
     void quarantineCorruptedWalMovesFileAndPreservesStoreHealthForOtherRooms() throws Exception {
         EncryptionKeyring keys = keyring("current", (byte) 42);
-        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys, roomCoordinator);
 
         // 1. Setup healthy room and corrupted room
-        WalTransaction txHealthy = store.prepare("room-healthy");
-        byte[] healthyPayload1 = "healthy-1".getBytes(StandardCharsets.UTF_8);
-        store.commit(txHealthy, healthyPayload1);
+        withRoomLock(roomCoordinator, "room-healthy", () -> {
+            WalTransaction txHealthy = store.prepare("room-healthy");
+            byte[] healthyPayload1 = "healthy-1".getBytes(StandardCharsets.UTF_8);
+            store.commit(txHealthy, healthyPayload1);
+            return null;
+        });
 
-        WalTransaction txCorrupted = store.prepare("room-corrupt");
-        byte[] corruptPayload = "corrupt-payload".getBytes(StandardCharsets.UTF_8);
-        store.commit(txCorrupted, corruptPayload);
+        withRoomLock(roomCoordinator, "room-corrupt", () -> {
+            WalTransaction txCorrupted = store.prepare("room-corrupt");
+            byte[] corruptPayload = "corrupt-payload".getBytes(StandardCharsets.UTF_8);
+            store.commit(txCorrupted, corruptPayload);
+            return null;
+        });
 
         // 2. Corrupt the WAL bytes of room-corrupt
         Path corruptWalPath = directory.resolve("room-corrupt.wal");
@@ -368,38 +464,53 @@ class EncryptedWalStoreTest {
         Files.write(corruptWalPath, walBytes);
 
         // 3. Attempting to recover room-corrupt fails with PersistenceException
-        assertThrows(PersistenceException.class, () -> store.recoverLatest("room-corrupt"));
+        withRoomLock(roomCoordinator, "room-corrupt", () -> {
+            assertThrows(PersistenceException.class, () -> store.recoverLatest("room-corrupt"));
+            return null;
+        });
         assertFalse(store.isHealthy(), "Store should be degraded while room-corrupt is in failedRooms");
-        assertThrows(PersistenceException.class, () -> store.prepare("room-corrupt"));
+        withRoomLock(roomCoordinator, "room-corrupt", () -> {
+            assertThrows(PersistenceException.class, () -> store.prepare("room-corrupt"));
+            return null;
+        });
 
         // Healthy room can still append even while room-corrupt is degraded
-        WalTransaction txHealthyBeforeQuarantine = store.prepare("room-healthy");
-        store.commit(txHealthyBeforeQuarantine, "healthy-during-degradation".getBytes(StandardCharsets.UTF_8));
+        withRoomLock(roomCoordinator, "room-healthy", () -> {
+            WalTransaction txHealthyBeforeQuarantine = store.prepare("room-healthy");
+            store.commit(txHealthyBeforeQuarantine, "healthy-during-degradation".getBytes(StandardCharsets.UTF_8));
+            return null;
+        });
 
         // 4. Quarantine the corrupted room
         Path expectedQuarantinePath = directory.resolve("room-corrupt.wal.corrupted");
         assertFalse(Files.exists(expectedQuarantinePath));
 
-        Path actualQuarantinePath = store.quarantine("room-corrupt", "Ciphertext tamper detected during recovery");
+        Path actualQuarantinePath = withRoomLock(roomCoordinator, "room-corrupt",
+                () -> store.quarantine("room-corrupt", "Ciphertext tamper detected during recovery"));
         assertEquals(expectedQuarantinePath, actualQuarantinePath);
         assertTrue(Files.exists(expectedQuarantinePath), "Quarantined file must exist on disk with .wal.corrupted suffix");
         assertFalse(Files.exists(corruptWalPath), "Original .wal file must no longer exist at active WAL path");
 
         // 5. Verify store health is restored and internal tracking cleaned up
         assertTrue(store.isHealthy(), "Quarantining corrupted room must restore store health for remaining rooms");
-        assertFalse(store.requiresCheckpoint("room-corrupt"), "Quarantined room must not require checkpoint");
+        withRoomLock(roomCoordinator, "room-corrupt", () -> {
+            assertFalse(store.requiresCheckpoint("room-corrupt"), "Quarantined room must not require checkpoint");
+            return null;
+        });
         assertNull(store.lastError(), "Last error must be cleared when no other rooms are failed");
 
         // 6. recoverLatest for quarantined room returns Optional.empty()
-        Optional<byte[]> recoveredCorrupt = store.recoverLatest("room-corrupt");
+        Optional<byte[]> recoveredCorrupt = withRoomLock(roomCoordinator, "room-corrupt",
+                () -> store.recoverLatest("room-corrupt"));
         assertTrue(recoveredCorrupt.isEmpty(), "recoverLatest on quarantined room must return Optional.empty()");
 
         // 7. Other rooms can continue committing transactions
-        WalTransaction txHealthy2 = store.prepare("room-healthy");
         byte[] healthyPayload2 = "healthy-2".getBytes(StandardCharsets.UTF_8);
-        store.commit(txHealthy2, healthyPayload2);
-
-        Optional<byte[]> recoveredHealthy = store.recoverLatest("room-healthy");
+        Optional<byte[]> recoveredHealthy = withRoomLock(roomCoordinator, "room-healthy", () -> {
+            WalTransaction txHealthy2 = store.prepare("room-healthy");
+            store.commit(txHealthy2, healthyPayload2);
+            return store.recoverLatest("room-healthy");
+        });
         assertTrue(recoveredHealthy.isPresent());
         assertArrayEquals(healthyPayload2, recoveredHealthy.get());
     }
@@ -411,19 +522,22 @@ class EncryptedWalStoreTest {
     @Test
     void quarantineWhenWalDoesNotExistCleansUpRoomTrackingSafely() {
         EncryptionKeyring keys = keyring("current", (byte) 43);
-        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys, roomCoordinator);
 
         // Record a failure for a room that has no file on disk
-        store.recordWriteFailure("room-missing", new PersistenceException("Simulated write glitch"));
-        assertFalse(store.isHealthy());
-        assertTrue(store.requiresCheckpoint("room-missing"));
+        withRoomLock(roomCoordinator, "room-missing", () -> {
+            store.recordWriteFailure("room-missing", new PersistenceException("Simulated write glitch"));
+            assertFalse(store.isHealthy());
+            assertTrue(store.requiresCheckpoint("room-missing"));
 
-        Path quarantinePath = store.quarantine("room-missing", "Clean up non-existent WAL error");
-        assertEquals(directory.resolve("room-missing.wal.corrupted"), quarantinePath);
-        assertFalse(Files.exists(quarantinePath), "No corrupted file should be created if original did not exist");
-        assertTrue(store.isHealthy(), "Store should be healthy after quarantine cleans up tracking");
-        assertFalse(store.requiresCheckpoint("room-missing"));
-        assertTrue(store.recoverLatest("room-missing").isEmpty());
+            Path quarantinePath = store.quarantine("room-missing", "Clean up non-existent WAL error");
+            assertEquals(directory.resolve("room-missing.wal.corrupted"), quarantinePath);
+            assertFalse(Files.exists(quarantinePath), "No corrupted file should be created if original did not exist");
+            assertTrue(store.isHealthy(), "Store should be healthy after quarantine cleans up tracking");
+            assertFalse(store.requiresCheckpoint("room-missing"));
+            assertTrue(store.recoverLatest("room-missing").isEmpty());
+            return null;
+        });
     }
 
     /**
@@ -432,7 +546,7 @@ class EncryptedWalStoreTest {
     @Test
     void quarantineRejectsInvalidRoomIdWithPersistenceException() {
         EncryptionKeyring keys = keyring("current", (byte) 44);
-        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys, roomCoordinator);
 
         assertThrows(PersistenceException.class, () -> store.quarantine("../../evil-path", "traversal"));
         assertThrows(PersistenceException.class, () -> store.quarantine(null, "null"));
@@ -445,20 +559,27 @@ class EncryptedWalStoreTest {
     @Test
     void quarantineExcludesQuarantinedFileFromWalCountAndRecoverAll() throws Exception {
         EncryptionKeyring keys = keyring("current", (byte) 45);
-        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys, roomCoordinator);
 
-        WalTransaction tx1 = store.prepare("room-active");
         byte[] payloadActive = "active-data".getBytes(StandardCharsets.UTF_8);
-        store.commit(tx1, payloadActive);
+        withRoomLock(roomCoordinator, "room-active", () -> {
+            WalTransaction tx1 = store.prepare("room-active");
+            store.commit(tx1, payloadActive);
+            return null;
+        });
 
-        WalTransaction tx2 = store.prepare("room-to-quarantine");
-        byte[] payloadQuarantine = "quarantine-data".getBytes(StandardCharsets.UTF_8);
-        store.commit(tx2, payloadQuarantine);
+        withRoomLock(roomCoordinator, "room-to-quarantine", () -> {
+            WalTransaction tx2 = store.prepare("room-to-quarantine");
+            byte[] payloadQuarantine = "quarantine-data".getBytes(StandardCharsets.UTF_8);
+            store.commit(tx2, payloadQuarantine);
+            return null;
+        });
 
         assertEquals(2, store.walCount());
 
         // Quarantine room-to-quarantine using alias method
-        Path quarantined = store.quarantineCorruptedWal("room-to-quarantine", "Administrative isolation");
+        Path quarantined = withRoomLock(roomCoordinator, "room-to-quarantine",
+                () -> store.quarantineCorruptedWal("room-to-quarantine", "Administrative isolation"));
         assertTrue(Files.exists(quarantined));
 
         // walCount only counts active .wal files
@@ -476,17 +597,23 @@ class EncryptedWalStoreTest {
     @Test
     void recoverAllQuarantinesCorruptedWalFilesAndRecoversRemainingValidRooms() throws Exception {
         EncryptionKeyring keys = keyring("current", (byte) 46);
-        EncryptedWalStore store = new EncryptedWalStore(directory, keys);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys, roomCoordinator);
 
         // 1. Prepare and commit a valid room
-        WalTransaction txValid = store.prepare("room-valid");
         byte[] validPayload = "valid-room-data".getBytes(StandardCharsets.UTF_8);
-        store.commit(txValid, validPayload);
+        withRoomLock(roomCoordinator, "room-valid", () -> {
+            WalTransaction txValid = store.prepare("room-valid");
+            store.commit(txValid, validPayload);
+            return null;
+        });
 
         // 2. Prepare and commit a room, then corrupt its WAL file on disk
-        WalTransaction txCorrupt = store.prepare("room-corrupt");
-        byte[] corruptPayload = "corrupt-room-data".getBytes(StandardCharsets.UTF_8);
-        store.commit(txCorrupt, corruptPayload);
+        withRoomLock(roomCoordinator, "room-corrupt", () -> {
+            WalTransaction txCorrupt = store.prepare("room-corrupt");
+            byte[] corruptPayload = "corrupt-room-data".getBytes(StandardCharsets.UTF_8);
+            store.commit(txCorrupt, corruptPayload);
+            return null;
+        });
 
         Path corruptWalPath = directory.resolve("room-corrupt.wal");
         byte[] walBytes = Files.readAllBytes(corruptWalPath);
@@ -509,7 +636,8 @@ class EncryptedWalStoreTest {
         assertFalse(Files.exists(corruptWalPath), "Original corrupted .wal must no longer exist");
         assertTrue(Files.exists(directory.resolve("room-bad-header.wal.corrupted")));
         assertFalse(Files.exists(badHeader));
-        assertTrue(store.recoverLatest("room-bad-header").isEmpty());
+        assertTrue(withRoomLock(roomCoordinator, "room-bad-header",
+                () -> store.recoverLatest("room-bad-header")).isEmpty());
 
         // Verify store remains healthy
         assertTrue(store.isHealthy(), "Store should be healthy after recoverAll isolates corrupted WAL");
@@ -523,27 +651,38 @@ class EncryptedWalStoreTest {
     @Test
     void quarantineDoesNotClearLastErrorWhenAnotherRoomStillHasWriteFailureOrRecoveryFailed() throws Exception {
         EncryptionKeyring keys = keyring("current", (byte) 48);
-        EncryptedWalStore store = new EncryptedWalStore(directory.resolve("multi-fail"), keys);
+        EncryptedWalStore store = new EncryptedWalStore(directory.resolve("multi-fail"), keys, roomCoordinator);
 
-        store.recordWriteFailure("room-still-failed", new PersistenceException("disk full"));
-        store.recordWriteFailure("room-quarantined", new PersistenceException("corrupt wal"));
-
-        store.quarantine("room-quarantined", "quarantined");
+        withRoomLock(roomCoordinator, "room-still-failed", () -> {
+            store.recordWriteFailure("room-still-failed", new PersistenceException("disk full"));
+            return null;
+        });
+        withRoomLock(roomCoordinator, "room-quarantined", () -> {
+            store.recordWriteFailure("room-quarantined", new PersistenceException("corrupt wal"));
+            store.quarantine("room-quarantined", "quarantined");
+            return null;
+        });
 
         assertFalse(store.isHealthy());
         assertEquals(1, store.unsavedRoomCount());
         assertNotNull(store.lastError(), "lastError() must remain non-null while another room has a write failure");
 
         Path keyDir = directory.resolve("recovery-fail");
-        EncryptedWalStore writer = new EncryptedWalStore(keyDir, keyring("old", (byte) 49));
-        writer.commit(writer.prepare("room-missing-key"), "state".getBytes(StandardCharsets.UTF_8));
+        EncryptedWalStore writer = new EncryptedWalStore(keyDir, keyring("old", (byte) 49), roomCoordinator);
+        withRoomLock(roomCoordinator, "room-missing-key", () -> {
+            writer.commit(writer.prepare("room-missing-key"), "state".getBytes(StandardCharsets.UTF_8));
+            return null;
+        });
 
-        EncryptedWalStore missingKeyStore = new EncryptedWalStore(keyDir, keyring("current", (byte) 50));
+        EncryptedWalStore missingKeyStore = new EncryptedWalStore(keyDir, keyring("current", (byte) 50), roomCoordinator);
         assertThrows(MissingPersistenceKeyException.class, missingKeyStore::recoverAll);
         assertFalse(missingKeyStore.isHealthy());
         assertNotNull(missingKeyStore.lastError());
 
-        missingKeyStore.quarantine("room-missing-key", "quarantine after missing key");
+        withRoomLock(roomCoordinator, "room-missing-key", () -> {
+            missingKeyStore.quarantine("room-missing-key", "quarantine after missing key");
+            return null;
+        });
         assertFalse(missingKeyStore.isHealthy());
         assertNotNull(missingKeyStore.lastError(), "lastError() must remain non-null when recoveryFailed is true");
     }
@@ -554,7 +693,7 @@ class EncryptedWalStoreTest {
      */
     @Test
     void concurrentDistinctRoomsPersistAndRecoverIndependently() throws Exception {
-        EncryptedWalStore store = new EncryptedWalStore(directory, keyring("current", (byte) 47));
+        EncryptedWalStore store = new EncryptedWalStore(directory, keyring("current", (byte) 47), roomCoordinator);
         int roomCount = 6;
         CountDownLatch ready = new CountDownLatch(roomCount);
         CountDownLatch start = new CountDownLatch(1);
@@ -566,12 +705,14 @@ class EncryptedWalStoreTest {
                 futures.add(executor.submit(() -> {
                     ready.countDown();
                     assertTrue(start.await(5, TimeUnit.SECONDS));
-                    byte[] first = (roomId + "-v1").getBytes(StandardCharsets.UTF_8);
-                    store.commit(store.prepare(roomId), first);
-                    byte[] second = (roomId + "-v2").getBytes(StandardCharsets.UTF_8);
-                    store.checkpoint(roomId, second);
-                    byte[] third = (roomId + "-v3").getBytes(StandardCharsets.UTF_8);
-                    store.commit(store.prepare(roomId), third);
+                    try (LockLease _ = roomCoordinator.acquire(roomId)) {
+                        byte[] first = (roomId + "-v1").getBytes(StandardCharsets.UTF_8);
+                        store.commit(store.prepare(roomId), first);
+                        byte[] second = (roomId + "-v2").getBytes(StandardCharsets.UTF_8);
+                        store.checkpoint(roomId, second);
+                        byte[] third = (roomId + "-v3").getBytes(StandardCharsets.UTF_8);
+                        store.commit(store.prepare(roomId), third);
+                    }
                     return null;
                 }));
             }
@@ -582,7 +723,7 @@ class EncryptedWalStoreTest {
             }
         }
 
-        EncryptedWalStore recovered = new EncryptedWalStore(directory, keyring("current", (byte) 47));
+        EncryptedWalStore recovered = new EncryptedWalStore(directory, keyring("current", (byte) 47), roomCoordinator);
         Map<String, byte[]> all = recovered.recoverAll();
         assertEquals(roomCount, all.size());
         for (int i = 0; i < roomCount; i++) {
@@ -604,33 +745,51 @@ class EncryptedWalStoreTest {
                     if (roomId.equals(failRoom.get()) && point == WalFaultPoint.BEFORE_COMMIT_WRITE) {
                         throw new PersistenceException("injected commit outage");
                     }
-                });
+                }, roomCoordinator);
 
-        store.commit(store.prepare("room-a"), "a-v1".getBytes(StandardCharsets.UTF_8));
-        store.commit(store.prepare("room-b"), "b-v1".getBytes(StandardCharsets.UTF_8));
+        withRoomLock(roomCoordinator, "room-a", () -> {
+            store.commit(store.prepare("room-a"), "a-v1".getBytes(StandardCharsets.UTF_8));
+            return null;
+        });
+        withRoomLock(roomCoordinator, "room-b", () -> {
+            store.commit(store.prepare("room-b"), "b-v1".getBytes(StandardCharsets.UTF_8));
+            return null;
+        });
 
-        WalTransaction failedTx = store.prepare("room-a");
-        failRoom.set("room-a");
-        assertThrows(PersistenceException.class,
-                () -> store.commit(failedTx, "a-v2".getBytes(StandardCharsets.UTF_8)));
-        failRoom.set(null);
+        withRoomLock(roomCoordinator, "room-a", () -> {
+            WalTransaction failedTx = store.prepare("room-a");
+            failRoom.set("room-a");
+            assertThrows(PersistenceException.class,
+                    () -> store.commit(failedTx, "a-v2".getBytes(StandardCharsets.UTF_8)));
+            failRoom.set(null);
+            return null;
+        });
 
         assertFalse(store.isHealthy());
         assertFalse(store.isHealthy("room-a"));
         assertTrue(store.isHealthy("room-b"));
         assertEquals(1, store.unsavedRoomCount());
-        assertTrue(store.requiresCheckpoint("room-a"));
+        withRoomLock(roomCoordinator, "room-a", () -> {
+            assertTrue(store.requiresCheckpoint("room-a"));
+            return null;
+        });
 
         // Deleting a different healthy room succeeds while room-a remains failed
-        store.delete("room-b");
-        assertTrue(store.recoverLatest("room-b").isEmpty());
+        withRoomLock(roomCoordinator, "room-b", () -> {
+            store.delete("room-b");
+            assertTrue(store.recoverLatest("room-b").isEmpty());
+            return null;
+        });
         assertEquals(1, store.unsavedRoomCount());
         assertFalse(store.isHealthy());
 
         // Deleting the failed room itself succeeds and clears its failed/checkpoint tracking
-        store.delete("room-a");
-        assertTrue(store.recoverLatest("room-a").isEmpty());
-        assertFalse(store.requiresCheckpoint("room-a"));
+        withRoomLock(roomCoordinator, "room-a", () -> {
+            store.delete("room-a");
+            assertTrue(store.recoverLatest("room-a").isEmpty());
+            assertFalse(store.requiresCheckpoint("room-a"));
+            return null;
+        });
         assertTrue(store.isHealthy("room-a"));
         assertEquals(0, store.unsavedRoomCount());
         assertTrue(store.isHealthy());
@@ -644,16 +803,19 @@ class EncryptedWalStoreTest {
     @Test
     void recoverAllContinuesWithoutQuarantiningOrWedgingWhenUncommittedWalDeleteFails() {
         EncryptionKeyring keys = keyring("current", (byte) 52);
-        EncryptedWalStore writer = new EncryptedWalStore(directory, keys);
-        writer.prepare("room-uncommitted");
+        EncryptedWalStore writer = new EncryptedWalStore(directory, keys, roomCoordinator);
+        withRoomLock(roomCoordinator, "room-uncommitted", () -> writer.prepare("room-uncommitted"));
         byte[] validPayload = "valid-state".getBytes(StandardCharsets.UTF_8);
-        writer.commit(writer.prepare("room-valid"), validPayload);
+        withRoomLock(roomCoordinator, "room-valid", () -> {
+            writer.commit(writer.prepare("room-valid"), validPayload);
+            return null;
+        });
 
         EncryptedWalStore recovering = new EncryptedWalStore(directory, keys, (point, roomId) -> {
             if (point == WalFaultPoint.BEFORE_DELETE && "room-uncommitted".equals(roomId)) {
                 throw new PersistenceException("injected delete failure");
             }
-        });
+        }, roomCoordinator);
 
         Map<String, byte[]> recovered = assertDoesNotThrow(recovering::recoverAll);
 
@@ -662,10 +824,52 @@ class EncryptedWalStoreTest {
         assertTrue(recovering.isHealthy());
         assertTrue(recovering.isHealthy("room-uncommitted"));
         assertEquals(0, recovering.unsavedRoomCount());
-        assertFalse(recovering.requiresCheckpoint("room-uncommitted"));
+        assertFalse(withRoomLock(roomCoordinator, "room-uncommitted",
+                () -> recovering.requiresCheckpoint("room-uncommitted")));
         assertNull(recovering.lastError());
         assertTrue(Files.exists(directory.resolve("room-uncommitted.wal")));
         assertFalse(Files.exists(directory.resolve("room-uncommitted.wal.corrupted")));
+    }
+
+    /**
+     * Protects the contract that all per-room EncryptedWalStore operations require the caller
+     * to hold the RoomCoordinator lock for the target room, while health checks stay lock-free.
+     */
+    @Test
+    void perRoomOperationsWithoutRoomCoordinatorLockThrowIllegalStateException() {
+        EncryptedWalStore store = new EncryptedWalStore(directory, keyring("current", (byte) 53), roomCoordinator);
+        String roomId = "room-lock-required";
+        WalTransaction tx = withRoomLock(roomCoordinator, roomId, () -> store.prepare(roomId));
+        byte[] payload = "state".getBytes(StandardCharsets.UTF_8);
+
+        assertPerRoomOperationsThrowIllegalState(store, roomId, tx, payload);
+
+        // Holding a different room's lock must also reject operations for roomId
+        withRoomLock(roomCoordinator, "different-room", () -> {
+            assertPerRoomOperationsThrowIllegalState(store, roomId, tx, payload);
+            return null;
+        });
+
+        // Health queries remain lock-free status checks
+        assertTrue(store.isHealthy());
+        assertTrue(store.isHealthy(roomId));
+    }
+
+    private static void assertPerRoomOperationsThrowIllegalState(
+            EncryptedWalStore store, String roomId, WalTransaction tx, byte[] payload) {
+        assertThrows(IllegalStateException.class, () -> store.prepare(roomId));
+        assertThrows(IllegalStateException.class, () -> store.commit(tx, payload));
+        assertThrows(IllegalStateException.class, () -> store.recoverLatest(roomId));
+        assertThrows(IllegalStateException.class, () -> store.compact(roomId, payload));
+        assertThrows(IllegalStateException.class, () -> store.checkpoint(roomId, payload));
+        assertThrows(IllegalStateException.class, () -> store.delete(roomId));
+        assertThrows(IllegalStateException.class, () -> store.quarantine(roomId, "reason"));
+        assertThrows(IllegalStateException.class, () -> store.quarantineCorruptedWal(roomId, "reason"));
+        assertThrows(IllegalStateException.class, () -> store.clearRoomTracking(roomId));
+        assertThrows(IllegalStateException.class, () -> store.requiresCheckpoint(roomId));
+        assertThrows(IllegalStateException.class, () -> store.walSize(roomId));
+        assertThrows(IllegalStateException.class,
+                () -> store.recordWriteFailure(roomId, new PersistenceException("failure")));
     }
 
     /**

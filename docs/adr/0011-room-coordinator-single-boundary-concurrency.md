@@ -2,7 +2,7 @@
 
 **Status**: Accepted (Supersedes [ADR-0007](0007-hierarchical-monitor-locking-order.md))
 
-We decided to protect all concurrent reads and updates to a room and its game behind a single per-room lock managed by `RoomCoordinator`, replacing the old four-layer lock hierarchy (`Room Lease -> Player Lease -> Room Monitor -> Game Monitor`).
+We decided to protect all concurrent reads and updates to a room and its game behind a single per-room lock managed by `com.pokergame.util.RoomCoordinator`, replacing the old four-layer lock hierarchy (`Room Lease -> Player Lease -> Room Monitor -> Game Monitor`).
 
 ## Context
 

@@ -13,7 +13,7 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Room;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;

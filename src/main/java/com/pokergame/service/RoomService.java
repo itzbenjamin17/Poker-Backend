@@ -1,5 +1,7 @@
 package com.pokergame.service;
 
+import com.pokergame.util.RoomCoordinator;
+
 import static java.util.Objects.requireNonNull;
 
 import com.pokergame.config.RoomTimingProperties;

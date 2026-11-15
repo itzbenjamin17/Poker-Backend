@@ -12,7 +12,7 @@ import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.security.RateLimitService;
 import com.pokergame.service.GameLifecycleService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.util.LockLease;
 import org.junit.jupiter.api.AfterEach;

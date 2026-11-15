@@ -10,7 +10,7 @@ import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.dto.internal.RoomEntryResult;

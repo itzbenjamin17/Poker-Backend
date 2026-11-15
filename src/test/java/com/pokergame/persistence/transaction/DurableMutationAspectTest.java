@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -43,7 +44,7 @@ import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.AggregateStateImage;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.service.HandEvaluatorService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import org.junit.jupiter.api.DisplayName;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
@@ -111,7 +112,7 @@ class DurableMutationAspectTest {
     void nestedDurableMutationCrossRoomBoundaryThrowsPersistenceException() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
@@ -161,7 +162,7 @@ class DurableMutationAspectTest {
     void nestedCrossRoomMutationThrowsIllegalStateExceptionWhenPersistenceEnabled() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
@@ -222,7 +223,7 @@ class DurableMutationAspectTest {
                     if (point == failure.get()) {
                         throw new PersistenceException("injected " + point);
                     }
-                });
+                }, roomCoordinator);
 
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
@@ -266,7 +267,7 @@ class DurableMutationAspectTest {
     void spelResolutionFailureThrowsPersistenceException() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
@@ -304,7 +305,7 @@ class DurableMutationAspectTest {
     void serializationFailureContinuesMutationAndLaterCommand() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         DurableMutationAspect aspect = aspectForRoom(store, "room-serialize");
         AtomicInteger moves = new AtomicInteger();
         List<String> effects = new ArrayList<>();
@@ -348,7 +349,7 @@ class DurableMutationAspectTest {
 
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         AggregateSnapshotMapper realMapper = spy(new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build(),
                 new HandEvaluatorService()));
@@ -418,7 +419,7 @@ class DurableMutationAspectTest {
     void failedMutationRestoresPreMutationImage() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
@@ -435,7 +436,10 @@ class DurableMutationAspectTest {
         Game originalGame = new Game(roomId, List.of(alice, bob), 6, 10, 20, new HandEvaluatorService());
 
         byte[] committedPayload = new byte[]{42, 43, 44};
-        store.checkpoint(roomId, committedPayload);
+        withRoomLock(roomCoordinator, roomId, () -> {
+            store.checkpoint(roomId, committedPayload);
+            return null;
+        });
 
         when(snapshotMapper.restoreStateImage(any(AggregateStateImage.class)))
                 .thenReturn(new RecoveredAggregate(originalRoom, "Alice", originalGame, false));
@@ -465,7 +469,7 @@ class DurableMutationAspectTest {
     void failedCreationEvictsAggregateWhenNoPreMutationRoomExists() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
@@ -499,7 +503,7 @@ class DurableMutationAspectTest {
     void failedMutationDoesNotResurrectOldWalWithoutPreMutationRoom() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
@@ -508,7 +512,10 @@ class DurableMutationAspectTest {
 
         String roomId = "room-recovery-fail";
         byte[] payload = new byte[]{1, 2, 3};
-        store.checkpoint(roomId, payload);
+        withRoomLock(roomCoordinator, roomId, () -> {
+            store.checkpoint(roomId, payload);
+            return null;
+        });
 
         // No pre-mutation room exists; stale WAL must not resurrect an old membership.
 
@@ -576,7 +583,7 @@ class DurableMutationAspectTest {
     void serializationFailurePreservesAcceptedStateWithoutCorruption() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         DurableMutationAspect aspect = aspectForRoom(store, "room-serialize-safe");
 
         AtomicInteger moves = new AtomicInteger();
@@ -617,7 +624,7 @@ class DurableMutationAspectTest {
     void lobbyMutationFailureEvictsGameAndPreservesLobbyRoom() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
@@ -626,7 +633,10 @@ class DurableMutationAspectTest {
 
         String roomId = "room-lobby-rollback";
         byte[] snapshotBytes = new byte[]{10, 20, 30};
-        store.checkpoint(roomId, snapshotBytes);
+        withRoomLock(roomCoordinator, roomId, () -> {
+            store.checkpoint(roomId, snapshotBytes);
+            return null;
+        });
 
         Room lobbyRoom = new Room(roomId, "Lobby Room", "Alice", 6, 10, 20, 1000, null);
         lobbyRoom.addPlayer("Alice");
@@ -657,7 +667,7 @@ class DurableMutationAspectTest {
             if (failCommit.get() && point == WalFaultPoint.BEFORE_COMMIT_WRITE) {
                 throw new PersistenceException("injected deletion commit failure");
             }
-        });
+        }, roomCoordinator);
         when(roomServiceProvider.getObject()).thenReturn(roomService);
         when(roomService.getRoom(roomId)).thenReturn(null);
         DurableMutationAspect aspect = new DurableMutationAspect(
@@ -671,7 +681,8 @@ class DurableMutationAspectTest {
         aspect.retryPendingSaves();
 
         assertEquals(0, store.unsavedRoomCount());
-        assertTrue(store.recoverLatest(roomId).isEmpty(), "The retry checkpoints and removes the deleted room's WAL");
+        assertTrue(withRoomLock(roomCoordinator, roomId, () -> store.recoverLatest(roomId)).isEmpty(),
+                "The retry checkpoints and removes the deleted room's WAL");
         verify(joinPoint, times(1)).proceed();
     }
 
@@ -687,7 +698,7 @@ class DurableMutationAspectTest {
             if (failPrepare.get() && point == WalFaultPoint.BEFORE_PREPARE_WRITE) {
                 throw new PersistenceException("injected prepare outage");
             }
-        });
+        }, roomCoordinator);
         Room existingRoom = new Room(roomId, "Retry Prepare Room", "Alice", 6, 10, 20, 1000, null);
         existingRoom.addPlayer("Alice");
         when(roomServiceProvider.getObject()).thenReturn(roomService);
@@ -712,7 +723,7 @@ class DurableMutationAspectTest {
 
         assertTrue(store.isHealthy(), "Retry checkpoints and clears failedRooms for the existing room");
         assertEquals(0, store.unsavedRoomCount());
-        assertTrue(store.recoverLatest(roomId).isPresent());
+        assertTrue(withRoomLock(roomCoordinator, roomId, () -> store.recoverLatest(roomId)).isPresent());
     }
 
     @Test
@@ -726,7 +737,7 @@ class DurableMutationAspectTest {
             if (point == WalFaultPoint.BEFORE_COMMIT_WRITE) {
                 throw new PersistenceException("injected commit outage");
             }
-        }));
+        }, roomCoordinator));
         Room existingRoom = new Room(roomId, "Retry Lock Room", "Alice", 6, 10, 20, 1000, null);
         existingRoom.addPlayer("Alice");
         when(roomServiceProvider.getObject()).thenReturn(roomService);
@@ -773,7 +784,7 @@ class DurableMutationAspectTest {
                     || point == WalFaultPoint.BEFORE_DELETE) {
                 throw new PersistenceException("injected write outage");
             }
-        });
+        }, roomCoordinator);
         when(roomServiceProvider.getObject()).thenReturn(roomService);
         when(roomService.getRoom(roomId)).thenReturn(null);
 
@@ -801,7 +812,7 @@ class DurableMutationAspectTest {
             if (roomId.equals(failRoom.get()) && point == WalFaultPoint.BEFORE_COMMIT_WRITE) {
                 throw new PersistenceException("injected outage for " + roomId);
             }
-        }));
+        }, roomCoordinator));
 
         Room roomA = new Room("room-A", "Room A", "Alice", 6, 10, 20, 1000, null);
         roomA.addPlayer("Alice");
@@ -844,7 +855,7 @@ class DurableMutationAspectTest {
             return null;
         }), validMutation());
         verify(store).delete("room-B");
-        assertTrue(store.recoverLatest("room-B").isEmpty());
+        assertTrue(withRoomLock(roomCoordinator, "room-B", () -> store.recoverLatest("room-B")).isEmpty());
         assertEquals(1, store.unsavedRoomCount());
     }
 
@@ -901,7 +912,7 @@ class DurableMutationAspectTest {
                 "current", new SecretKeySpec(new byte[32], "AES")));
         return new EncryptedWalStore(tempDir, keyring, (point, roomId) -> {
             if (unavailable.get()) throw new PersistenceException("injected storage outage");
-        });
+        }, roomCoordinator);
     }
 
     private DurableMutationAspect aspectForRoom(EncryptedWalStore store, String roomId) {

@@ -4,7 +4,7 @@ import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.model.Room;
 import com.pokergame.security.PlayerPrincipal;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import java.util.Objects;
 import java.util.Set;

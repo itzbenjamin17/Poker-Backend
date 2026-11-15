@@ -23,7 +23,7 @@ import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.config.PersistenceException;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.util.LockLease;
 import java.util.HashMap;
 
@@ -124,7 +124,9 @@ public final class PersistenceRecovery implements ApplicationRunner {
                 aggregate = mapper.deserialize(entry.getValue());
             } catch (Exception e) {
                 logger.error("Failed to recover room {}; quarantining corrupted WAL", roomId, e);
-                store.quarantine(roomId, e.getMessage());
+                try (LockLease _ = roomCoordinator.acquire(roomId)) {
+                    store.quarantine(roomId, e.getMessage());
+                }
                 continue;
             }
             
@@ -142,7 +144,9 @@ public final class PersistenceRecovery implements ApplicationRunner {
             // Make sure the file name matches the actual room ID inside the file to prevent loading corrupt data
             if (aggregate.room() == null || !roomId.equals(aggregate.room().getRoomId())) {
                 logger.error("Snapshot room identity does not match WAL file identity for room {}", roomId);
-                store.quarantine(roomId, "Snapshot room identity does not match WAL file identity");
+                try (LockLease _ = roomCoordinator.acquire(roomId)) {
+                    store.quarantine(roomId, "Snapshot room identity does not match WAL file identity");
+                }
                 continue;
             }
             

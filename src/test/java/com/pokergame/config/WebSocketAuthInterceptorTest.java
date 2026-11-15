@@ -3,7 +3,7 @@ package com.pokergame.config;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.RoomService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;

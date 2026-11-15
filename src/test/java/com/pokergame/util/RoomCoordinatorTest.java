@@ -1,6 +1,5 @@
-package com.pokergame.service;
+package com.pokergame.util;
 
-import com.pokergame.util.LockLease;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

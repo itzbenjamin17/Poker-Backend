@@ -19,7 +19,7 @@ import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -426,7 +426,7 @@ class PersistenceRestartIT {
         String uncommittedRoomId = UUID.randomUUID().toString();
         try (ConfigurableApplicationContext first = startApplication()) {
             EncryptedWalStore store = first.getBean(EncryptedWalStore.class);
-            store.prepare(uncommittedRoomId);
+            withRoomLock(first, uncommittedRoomId, () -> store.prepare(uncommittedRoomId));
             assertThat(Files.exists(walDirectory.resolve(uncommittedRoomId + ".wal"))).isTrue();
         }
 

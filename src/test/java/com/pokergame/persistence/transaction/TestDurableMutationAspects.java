@@ -2,7 +2,7 @@ package com.pokergame.persistence.transaction;
 
 import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import org.springframework.beans.factory.ObjectProvider;
 
 import static org.mockito.Mockito.mock;

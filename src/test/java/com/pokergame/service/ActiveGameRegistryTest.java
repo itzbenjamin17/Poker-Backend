@@ -1,5 +1,7 @@
 package com.pokergame.service;
 
+import com.pokergame.util.RoomCoordinator;
+
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.util.LockLease;

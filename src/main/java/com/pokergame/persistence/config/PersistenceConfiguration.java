@@ -32,7 +32,7 @@ import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.PersistenceRecovery;
 import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.service.GameLifecycleService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import org.springframework.context.ApplicationContext;
 
@@ -40,8 +40,8 @@ import org.springframework.context.ApplicationContext;
  * Sets up the save/restore system for the poker game.
  * <p>
  * Think of this class as the "master switchboard" for autosaving. When enabled,
- * it wires up all the necessary parts—like encryption keys, data storage, and 
- * recovery tools—so that active poker games can be safely saved to disk and
+ * it wires up all the necessary partsâ€”like encryption keys, data storage, and 
+ * recovery toolsâ€”so that active poker games can be safely saved to disk and
  * restored if the server crashes. Storage and recovery are conditional; the room
  * serialization aspect remains active in memory-only mode for membership safety.
  * </p>
@@ -94,14 +94,16 @@ public class PersistenceConfiguration {
     /**
      * Creates the main storage vault where all saved poker games will be kept securely.
      *
-     * @param properties settings like where to save the files on disk
-     * @param keyring    the keys used to lock and unlock the saved data
+     * @param properties      settings like where to save the files on disk
+     * @param keyring         the keys used to lock and unlock the saved data
+     * @param roomCoordinator the per-room lock shared with the rest of the application
      * @return the secure storage system
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
-    EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring) {
-        return new EncryptedWalStore(properties.getDirectory(), keyring);
+    EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring,
+            RoomCoordinator roomCoordinator) {
+        return new EncryptedWalStore(properties.getDirectory(), keyring, roomCoordinator);
     }
 
     /**

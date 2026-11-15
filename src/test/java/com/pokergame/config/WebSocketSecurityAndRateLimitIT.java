@@ -11,7 +11,7 @@ import com.pokergame.security.JwtService;
 import com.pokergame.security.RateLimitService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import org.awaitility.Awaitility;
 import org.jspecify.annotations.NonNull;

@@ -13,7 +13,7 @@ import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.service.GameLifecycleService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.util.LockLease;
 import org.awaitility.Awaitility;
@@ -159,8 +159,8 @@ class PersistenceAvailabilityTransportIT {
             try (LockLease _ = roomCoordinator.acquire(createdRoomId)) {
                 gameLifecycleService.evictGame(createdRoomId);
                 roomService.destroyRoom(createdRoomId);
+                walStore.delete(createdRoomId);
             }
-            walStore.delete(createdRoomId);
             createdRoomId = null;
         }
         awaitPendingSavesFlushed();
@@ -315,12 +315,13 @@ class PersistenceAvailabilityTransportIT {
     static class FaultyStorageConfig {
         @Bean
         @Primary
-        EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring) {
+        EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring,
+                RoomCoordinator roomCoordinator) {
             return new EncryptedWalStore(properties.getDirectory(), keyring, (point, roomId) -> {
                 if (UNAVAILABLE_STORAGE.get()) {
                     throw new PersistenceException("injected transport-test storage outage");
                 }
-            });
+            }, roomCoordinator);
         }
     }
 }

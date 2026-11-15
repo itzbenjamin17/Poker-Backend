@@ -41,7 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.pokergame.security.EndpointRateLimitFilter;
 import com.pokergame.security.RateLimitService;
 import com.pokergame.service.GameStateService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.util.LockLease;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;

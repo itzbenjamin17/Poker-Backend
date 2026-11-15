@@ -11,7 +11,7 @@ import com.pokergame.util.LockLease;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
-import com.pokergame.service.RoomCoordinator;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.model.Game;
 import com.pokergame.security.PlayerPrincipal;
 import org.slf4j.Logger;
