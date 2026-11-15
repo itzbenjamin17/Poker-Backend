@@ -183,9 +183,13 @@ final class TableSeating {
 
         if (smallBlindPlayerId != null) {
             smallBlindPosition = Math.max(0, indexOfActivePlayer(activePlayers, smallBlindPlayerId));
+        } else {
+            smallBlindPosition = normalizeIndex(activePlayers, smallBlindPosition);
         }
         if (bigBlindPlayerId != null) {
             bigBlindPosition = Math.max(0, indexOfActivePlayer(activePlayers, bigBlindPlayerId));
+        } else {
+            bigBlindPosition = normalizeIndex(activePlayers, bigBlindPosition);
         }
 
         // Preserve the current actor's turn when another seat departs.
@@ -199,14 +203,14 @@ final class TableSeating {
 
         int newCurrentPos = normalizeIndex(activePlayers, currentPlayerPosition);
         Player current = activePlayers.get(newCurrentPos);
-        if (current.getHasFolded() || current.getIsAllIn()) {
+        if (!current.canAct()) {
             newCurrentPos = findNextActionableIndex(activePlayers, newCurrentPos);
         }
         currentPlayerPosition = newCurrentPos;
     }
 
     /**
-     * Advances the turn pointer to the next active player who has not folded and is not all-in.
+     * Advances the turn pointer to the next active player who can act.
      *
      * @param activePlayers active players in the current hand
      */
@@ -215,7 +219,7 @@ final class TableSeating {
     }
 
     /**
-     * Returns the player whose turn it currently is, normalizing the index if needed.
+     * Returns the player whose turn it currently is without mutating seating state.
      *
      * @param activePlayers active players in the current hand
      * @return current player
@@ -225,8 +229,7 @@ final class TableSeating {
         if (activePlayers == null || activePlayers.isEmpty()) {
             throw new IllegalStateException("No active players available");
         }
-        currentPlayerPosition = normalizeIndex(activePlayers, currentPlayerPosition);
-        return activePlayers.get(currentPlayerPosition);
+        return activePlayers.get(normalizeIndex(activePlayers, currentPlayerPosition));
     }
 
     /**
@@ -242,8 +245,7 @@ final class TableSeating {
         if (activePlayers == null || activePlayers.isEmpty()) {
             return null;
         }
-        normalizeBlindPositions(activePlayers);
-        return activePlayers.get(smallBlindPosition).getPlayerId();
+        return activePlayers.get(normalizeIndex(activePlayers, smallBlindPosition)).getPlayerId();
     }
 
     /**
@@ -259,8 +261,7 @@ final class TableSeating {
         if (activePlayers == null || activePlayers.isEmpty()) {
             return null;
         }
-        normalizeBlindPositions(activePlayers);
-        return activePlayers.get(bigBlindPosition).getPlayerId();
+        return activePlayers.get(normalizeIndex(activePlayers, bigBlindPosition)).getPlayerId();
     }
 
     int getDealerPosition() {
@@ -345,7 +346,7 @@ final class TableSeating {
         int next = originalPosition;
         do {
             next = (next + 1) % activePlayers.size();
-        } while ((activePlayers.get(next).getHasFolded() || activePlayers.get(next).getIsAllIn())
+        } while (!activePlayers.get(next).canAct()
                 && next != originalPosition);
         return next;
     }

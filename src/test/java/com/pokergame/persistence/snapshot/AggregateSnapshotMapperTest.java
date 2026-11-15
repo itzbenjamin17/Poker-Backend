@@ -1764,4 +1764,54 @@ class AggregateSnapshotMapperTest {
             assertThrows(UnsupportedOperationException.class, () -> after.players().clear());
         }
     }
+
+    @Test
+    void repeatedSeatingGetterCallsDoNotMutateSnapshotStateImage() {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+        Room room = new Room("room-pure-getters", "Pure Getters", "Alice", 6, 5, 10, 1000, null);
+        room.addPlayer("Alice");
+        room.addPlayer("Bob");
+        room.addPlayer("Charlie");
+        room.setGameStarted(true);
+
+        List<Player> players = List.of(
+                new Player("Alice", "p1", 1000),
+                new Player("Bob", "p2", 1000),
+                new Player("Charlie", "p3", 1000));
+        Game game = Game.restoreBuilder()
+                .gameId("room-pure-getters")
+                .players(players)
+                .activePlayerIds(List.of("p1", "p2", "p3"))
+                .remainingDeck(List.of())
+                .smallBlind(5)
+                .bigBlind(10)
+                .dealerPosition(0)
+                .smallBlindPosition(7)
+                .bigBlindPosition(-1)
+                .currentPlayerPosition(-2)
+                .handSeatOrder(List.of("p1", "p2", "p3"))
+                .dealerAnchorPlayerId("p1")
+                .smallBlindPlayerId(null)
+                .bigBlindPlayerId(null)
+                .currentPhase(GamePhase.PRE_FLOP)
+                .handEvaluator(evaluator)
+                .build();
+
+        AggregateStateImage beforeImage = mapper.captureStateImage(room, "Alice", game);
+        byte[] beforeBytes = mapper.serialize(room, "Alice", game);
+
+        for (int i = 0; i < 3; i++) {
+            assertEquals("p2", game.getCurrentPlayer().getPlayerId());
+            assertEquals("p2", game.getSmallBlindPlayerId());
+            assertEquals("p3", game.getBigBlindPlayerId());
+        }
+
+        AggregateStateImage afterImage = mapper.captureStateImage(room, "Alice", game);
+        byte[] afterBytes = mapper.serialize(room, "Alice", game);
+
+        assertEquals(beforeImage, afterImage);
+        assertArrayEquals(beforeBytes, afterBytes);
+    }
 }

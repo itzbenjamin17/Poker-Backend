@@ -294,6 +294,63 @@ class TableSeatingTest {
             assertEquals(0, seating.getBigBlindPosition());
             assertEquals(0, seating.getCurrentPlayerPosition());
         }
+
+        @Test
+        void nextPlayer_AndRemovePlayer_SkipOutPlayers() {
+            List<Player> players = createPlayerList(4);
+            players.get(1).setIsOut();
+            TableSeating seating = new TableSeating(
+                    0, 1, 2, 0, seatOrderOf(players), "p0", "p1", "p2", players);
+
+            seating.nextPlayer(players);
+            assertEquals(2, seating.getCurrentPlayerPosition());
+            assertEquals("p2", seating.getCurrentPlayer(players).getPlayerId());
+
+            List<Player> table = createPlayerList(3);
+            List<Player> active = new ArrayList<>(table);
+            active.get(1).setIsOut();
+            TableSeating removalSeating = new TableSeating(
+                    0, 1, 2, 0, seatOrderOf(table), "p0", null, null, table);
+
+            // Removing current actor p0 shifts p1 (isOut) into index 0; turn must skip p1 to p2.
+            removalSeating.removePlayer(table, active, table.get(0));
+            assertEquals(1, removalSeating.getCurrentPlayerPosition());
+            assertEquals("p2", removalSeating.getCurrentPlayer(active).getPlayerId());
+        }
+
+        @Test
+        void getters_DoNotMutatePositions() {
+            List<Player> players = createPlayerList(3);
+            TableSeating seating = new TableSeating(
+                    0, 7, -1, -2, seatOrderOf(players), "p0", null, null, players);
+
+            assertEquals("p1", seating.getCurrentPlayer(players).getPlayerId());
+            assertEquals("p1", seating.getSmallBlindPlayerId(players));
+            assertEquals("p2", seating.getBigBlindPlayerId(players));
+            assertEquals(-2, seating.getCurrentPlayerPosition());
+            assertEquals(7, seating.getSmallBlindPosition());
+            assertEquals(-1, seating.getBigBlindPosition());
+
+            assertEquals("p1", seating.getCurrentPlayer(players).getPlayerId());
+            assertEquals("p1", seating.getSmallBlindPlayerId(players));
+            assertEquals("p2", seating.getBigBlindPlayerId(players));
+            assertEquals(-2, seating.getCurrentPlayerPosition());
+            assertEquals(7, seating.getSmallBlindPosition());
+            assertEquals(-1, seating.getBigBlindPosition());
+        }
+
+        @Test
+        void removePlayer_WithNullBlindIds_NormalizesBlindPositions() {
+            List<Player> table = createPlayerList(3);
+            List<Player> active = new ArrayList<>(table);
+            TableSeating seating = new TableSeating(
+                    0, 2, 2, 0, seatOrderOf(table), "p0", null, null, table);
+
+            seating.removePlayer(table, active, table.get(1));
+            assertEquals(2, active.size());
+            assertTrue(seating.getSmallBlindPosition() >= 0 && seating.getSmallBlindPosition() < active.size());
+            assertTrue(seating.getBigBlindPosition() >= 0 && seating.getBigBlindPosition() < active.size());
+        }
     }
 
     @Nested

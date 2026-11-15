@@ -1806,6 +1806,33 @@ class GameTest {
             assertNotNull(bigBlindId);
             assertTrue(blindSafety.getActivePlayers().stream().anyMatch(p -> p.getPlayerId().equals(bigBlindId)));
         }
+
+        @Test
+        void turnRotationSkipsOpponentMarkedOutMidHand() {
+            Game midHandOut = Game.restoreBuilder().gameId("mid-hand-out")
+                    .players(List.of(
+                            restoredPlayer("A", "a", 1000, 0, false),
+                            restoredPlayer("B", "b", 1000, 0, false),
+                            restoredPlayer("C", "c", 1000, 0, false)))
+                    .activePlayerIds(List.of("a", "b", "c"))
+                    .remainingDeck(List.of(new Card(Rank.SIX, Suit.CLUBS)))
+                    .communityCards(List.of(
+                            new Card(Rank.TWO, Suit.CLUBS), new Card(Rank.THREE, Suit.DIAMONDS),
+                            new Card(Rank.FOUR, Suit.HEARTS)))
+                    .currentPlayerPosition(0).currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
+                    .handSeatOrder(List.of("a", "b", "c")).dealerAnchorPlayerId("a")
+                    .handEvaluator(mockHandEvaluator).build();
+
+            Player actorA = midHandOut.getPlayers().get(0);
+            Player outOpponentB = midHandOut.getPlayers().get(1);
+            outOpponentB.setIsOut();
+
+            TurnOutcome outcome = midHandOut.processPlayerDecision(
+                    actorA, new PlayerDecision(PlayerAction.CHECK, 0, actorA.getPlayerId()));
+
+            assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, outcome.type());
+            assertEquals("c", midHandOut.getCurrentPlayer().getPlayerId());
+        }
     }
 
     @Nested
