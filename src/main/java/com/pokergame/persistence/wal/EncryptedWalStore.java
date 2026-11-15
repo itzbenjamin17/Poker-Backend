@@ -52,8 +52,6 @@ import org.slf4j.LoggerFactory;
 public final class EncryptedWalStore {
     private static final Logger logger = LoggerFactory.getLogger(EncryptedWalStore.class);
     private static final int MAGIC = 0x504B574C; // PKWL
-    private static final short FORMAT_VERSION = 1;
-    private static final short SCHEMA_VERSION = 1;
     private static final int NONCE_LENGTH = 12;
     private static final int MAX_FRAME_LENGTH = 64 * 1024 * 1024;
 
@@ -187,7 +185,7 @@ public final class EncryptedWalStore {
      * @return a map of room IDs to their saved game data
      * @throws PersistenceException if store-level directory enumeration fails, a required decryption key
      *                              is missing, or the store is unhealthy;
-     *                              per-room corrupted WAL files or unsupported schemas are quarantined
+     *                              per-room corrupted or unreadable WAL files are quarantined
      *                              ({@code <roomId>.wal.corrupted}) so remaining rooms can recover
      */
     public Map<String, byte[]> recoverAll() {
@@ -510,8 +508,6 @@ public final class EncryptedWalStore {
 
             ByteArrayOutputStream bodyBytes = new ByteArrayOutputStream();
             try (DataOutputStream body = new DataOutputStream(bodyBytes)) {
-                body.writeShort(FORMAT_VERSION);
-                body.writeShort(SCHEMA_VERSION);
                 body.writeLong(sequence);
                 body.writeLong(transactionId.getMostSignificantBits());
                 body.writeLong(transactionId.getLeastSignificantBits());
@@ -600,11 +596,6 @@ public final class EncryptedWalStore {
 
     private WalRecord decodeFrame(ByteBuffer frame, String expectedRoomId) {
         try {
-            short format = frame.getShort();
-            short schema = frame.getShort();
-            if (format != FORMAT_VERSION || schema != SCHEMA_VERSION) {
-                throw new PersistenceException("Unsupported WAL format or schema version");
-            }
             long sequence = frame.getLong();
             UUID transactionId = new UUID(frame.getLong(), frame.getLong());
             RecordType type = RecordType.from(frame.get());
@@ -636,8 +627,8 @@ public final class EncryptedWalStore {
     private byte[] associatedData(String roomId, long sequence, UUID transactionId, RecordType type, String keyId) {
         byte[] room = roomId.getBytes(StandardCharsets.UTF_8);
         byte[] key = keyId.getBytes(StandardCharsets.UTF_8);
-        ByteBuffer aad = ByteBuffer.allocate(2 + 2 + 8 + 16 + 1 + 2 + room.length + 2 + key.length);
-        aad.putShort(FORMAT_VERSION).putShort(SCHEMA_VERSION).putLong(sequence)
+        ByteBuffer aad = ByteBuffer.allocate(8 + 16 + 1 + 2 + room.length + 2 + key.length);
+        aad.putLong(sequence)
                 .putLong(transactionId.getMostSignificantBits()).putLong(transactionId.getLeastSignificantBits())
                 .put(type.code).putShort((short) room.length).put(room).putShort((short) key.length).put(key);
         return aad.array();

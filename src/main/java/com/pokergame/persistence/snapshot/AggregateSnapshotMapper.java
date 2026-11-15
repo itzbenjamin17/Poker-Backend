@@ -1,6 +1,7 @@
 package com.pokergame.persistence.snapshot;
 
 import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
@@ -11,17 +12,13 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.Objects;
 import java.time.LocalDateTime;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.persistence.config.PersistenceException;
-import com.pokergame.enums.ReadyGateState;
 import com.pokergame.model.HandSettlementResult;
-import tools.jackson.databind.JsonNode;
 
 /**
  * Converts live game data (Rooms and Games) into a clean snapshot format for saving to disk,
@@ -44,7 +41,11 @@ public final class AggregateSnapshotMapper {
      * @param handEvaluator hand evaluator that restored games will use
      */
     public AggregateSnapshotMapper(ObjectMapper objectMapper, HandEvaluatorService handEvaluator) {
-        this.objectMapper = objectMapper;
+        this.objectMapper = objectMapper.rebuild()
+                .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
+                .disable(DeserializationFeature.FAIL_ON_NULL_CREATOR_PROPERTIES)
+                .build();
         this.handEvaluator = handEvaluator;
     }
 
@@ -66,8 +67,7 @@ public final class AggregateSnapshotMapper {
         AggregateStateImage.GameState gameState;
         roomState = toRoomState(room);
         gameState = toState(game);
-        return new AggregateStateImage(AggregateStateImage.CURRENT_SCHEMA_VERSION, false, roomState,
-                currentHost, gameState);
+        return new AggregateStateImage(false, roomState, currentHost, gameState);
     }
 
     private AggregateStateImage.RoomState toRoomState(Room room) {
@@ -125,28 +125,21 @@ public final class AggregateSnapshotMapper {
     public byte[] serializeDeletion(String roomId) {
         AggregateStateImage.RoomState tombstone = new AggregateStateImage.RoomState(
                 roomId, "deleted", "deleted", 2, 1, 2, 20, null, null, Map.of(), false);
-        return write(new AggregateStateImage(AggregateStateImage.CURRENT_SCHEMA_VERSION, true, tombstone,
-                "deleted", null));
+        return write(new AggregateStateImage(true, tombstone, "deleted", null));
     }
 
     /**
      * Reads a snapshot from bytes and turns it back into a usable Room and Game.
-     * It checks the schema version first, then carefully reconstructs the objects 
-     * to keep the exact same state without accidentally triggering side effects like card shuffling.
+     * It parses the snapshot strictly and reconstructs the objects to keep the exact same
+     * state without accidentally triggering side effects like card shuffling.
      *
      * @param bytes the saved snapshot bytes
      * @return the reconstructed Room and Game (or a marker saying it was deleted)
-     * @throws PersistenceException if the snapshot is corrupted or from an older unsupported version
+     * @throws PersistenceException if the snapshot is corrupted or invalid
      */
     public RecoveredAggregate deserialize(byte[] bytes) {
         try {
-            JsonNode root = objectMapper.readTree(bytes);
-            int schemaVersion = root.path("schemaVersion").asInt(-1);
-            // Verify that we can actually read this snapshot version
-            if (schemaVersion != AggregateStateImage.CURRENT_SCHEMA_VERSION) {
-                throw new PersistenceException("Unsupported aggregate snapshot schema: " + schemaVersion);
-            }
-            AggregateStateImage image = objectMapper.treeToValue(root, AggregateStateImage.class);
+            AggregateStateImage image = objectMapper.readValue(bytes, AggregateStateImage.class);
             return restoreStateImage(image);
         } catch (JacksonException | IllegalArgumentException e) {
             throw new PersistenceException("Cannot decode aggregate snapshot", e);
@@ -159,10 +152,10 @@ public final class AggregateSnapshotMapper {
      *
      * @param image captured aggregate data
      * @return independently reconstructed room and game
-     * @throws PersistenceException if the image is invalid or unsupported
+     * @throws PersistenceException if the image is invalid or null
      */
     public RecoveredAggregate restoreStateImage(AggregateStateImage image) {
-        if (image == null || image.schemaVersion() != AggregateStateImage.CURRENT_SCHEMA_VERSION) {
+        if (image == null) {
             throw new PersistenceException("Unsupported in-memory aggregate image");
         }
         // If this snapshot marks a deleted room, just return a deleted result
@@ -293,12 +286,6 @@ public final class AggregateSnapshotMapper {
     }
 
     private Game restoreGame(AggregateStateImage.GameState state, int maxPlayers) {
-        if (state.stateRevision() < 0) {
-            throw new PersistenceException("Invalid negative public state revision in snapshot");
-        }
-        if (state.retainedTerminalResult() != null) {
-            validateTerminalResult(state.gameId(), state.retainedTerminalResult());
-        }
         // Rebuild all the players first
         List<Player> players = state.players().stream().map(player -> Player.restoreBuilder()
                 .name(player.name())
@@ -356,145 +343,6 @@ public final class AggregateSnapshotMapper {
                 .retainedTerminalResult(fromTerminalResultState(state.retainedTerminalResult()))
                 .handEvaluator(handEvaluator) // Reattach the service needed for evaluating hands
                 .build();
-    }
-
-    private void validateTerminalResult(String expectedGameId, AggregateStateImage.TerminalResultState state) {
-        if (state == null) return;
-        final long jsMaxSafeInteger = 9_007_199_254_740_991L;
-        final var finalState = state.finalState();
-        if (!"GAME_END".equals(state.type())) {
-            throw new PersistenceException("Retained terminal result has invalid type");
-        }
-        if (state.gameId() == null || !state.gameId().equals(expectedGameId)) {
-            throw new PersistenceException("Retained terminal result gameId does not match game identity");
-        }
-        boolean isAbandoned = Boolean.TRUE.equals(state.abandoned()) || "INACTIVITY".equals(state.reason());
-        if (isAbandoned) {
-            if (state.winner() != null || state.winnerChips() != null) {
-                throw new PersistenceException("Retained terminal result abandonment contains a winner");
-            }
-        } else {
-            if (state.winner() == null || state.winner().trim().isEmpty()) {
-                throw new PersistenceException("Retained terminal result missing winner name");
-            }
-            if (state.winnerChips() == null) {
-                throw new PersistenceException("Retained terminal result missing winner chips");
-            }
-            if (state.winnerChips() < 0) {
-                throw new PersistenceException("Retained terminal result has invalid negative winner chips");
-            }
-        }
-        if (state.message() == null || state.message().trim().isEmpty()) {
-            throw new PersistenceException("Retained terminal result missing message");
-        }
-        if (finalState == null) {
-            throw new PersistenceException("Retained terminal result missing final state projection");
-        }
-        if (finalState.maxPlayers() < 2 || finalState.maxPlayers() > 10) {
-            throw new PersistenceException("Retained terminal result final state has invalid max players capacity");
-        }
-        if (finalState.stateRevision() < 0 || finalState.stateRevision() > jsMaxSafeInteger ||
-                finalState.handNumber() < 0 || finalState.handNumber() > jsMaxSafeInteger ||
-                finalState.serverTimeEpochMs() < 0 || finalState.serverTimeEpochMs() > jsMaxSafeInteger) {
-            throw new PersistenceException("Retained terminal result has invalid negative state revision");
-        }
-        if (finalState.players() == null || finalState.players().isEmpty()) {
-            throw new PersistenceException("Retained terminal result missing final players projection");
-        }
-        if (finalState.players().size() > finalState.maxPlayers()) {
-            throw new PersistenceException("Retained terminal result exceeds player capacity");
-        }
-        if (finalState.phase() == null || finalState.readyGateState() == null || finalState.pots() == null ||
-                finalState.communityCards() == null || finalState.winners() == null || finalState.legalActions() == null) {
-            throw new PersistenceException("Retained terminal result has incomplete final state");
-        }
-        if (finalState.pot() < 0 || finalState.currentBet() < 0 ||
-                (finalState.uncalledAmount() != null && finalState.uncalledAmount() < 0) ||
-                (finalState.carryOverAmount() != null && finalState.carryOverAmount() < 0) ||
-                (finalState.minimumBetAmount() != null && finalState.minimumBetAmount() < 0) ||
-                (finalState.minimumRaiseAmount() != null && finalState.minimumRaiseAmount() < 0) ||
-                finalState.pots().stream().anyMatch(value -> value == null || value < 0) ||
-                finalState.communityCards().size() > 5) {
-            throw new PersistenceException("Retained terminal result has invalid final state bounds");
-        }
-        if (finalState.currentPlayerName() != null || finalState.currentPlayerId() != null ||
-                !finalState.legalActions().isEmpty() || Boolean.TRUE.equals(finalState.isReadyCountdownActive()) ||
-                finalState.readyCountdownDeadlineEpochMs() != null || !Boolean.FALSE.equals(finalState.isAutoAdvancing()) ||
-                !Boolean.FALSE.equals(finalState.isReadyCountdownActive()) || !Boolean.FALSE.equals(finalState.claimWinAvailable()) ||
-                finalState.claimWinPlayerName() != null || finalState.winningsPerPlayer() != null ||
-                finalState.readyGateState() != ReadyGateState.CLOSED) {
-            throw new PersistenceException("Retained terminal result contains live-game controls");
-        }
-        if (!validateCards(finalState.communityCards(), 5)) {
-            throw new PersistenceException("Retained terminal result has invalid community cards");
-        }
-        if (isAbandoned ? !finalState.winners().isEmpty()
-                : finalState.winners().size() != 1 || !state.winner().equals(finalState.winners().getFirst())) {
-            throw new PersistenceException("Retained terminal result winner roster is incoherent");
-        }
-
-        Set<String> ids = new HashSet<>();
-        Set<String> names = new HashSet<>();
-        Set<String> allHoleCards = new HashSet<>();
-        Set<String> seenCards = new HashSet<>();
-        for (var card : finalState.communityCards()) seenCards.add(card.rank() + ":" + card.suit());
-        AggregateStateImage.FinalPlayerState champion = null;
-        int champions = 0;
-        for (var player : finalState.players()) {
-            if (player == null || blank(player.id()) || blank(player.name()) || player.chips() < 0 ||
-                    player.currentBet() < 0 || player.status() == null ||
-                    !Set.of("FOLDED", "OUT", "DISCONNECTED", "ACTIVE", "ALL_IN").contains(player.status()) ||
-                    !ids.add(player.id()) || !names.add(player.name())) {
-                throw new PersistenceException("Retained terminal result has invalid player identity or fields");
-            }
-            if (player.isCurrentPlayer() || player.chipsWon() != null) {
-                throw new PersistenceException("Retained terminal result contains live player fields");
-            }
-            if (player.bestHand() != null && !validateCards(player.bestHand(), 5)) {
-                throw new PersistenceException("Retained terminal result has invalid best-hand cards");
-            }
-            if (player.holeCards() != null && !player.holeCards().isEmpty() && player.holeCards().size() != 2) {
-                throw new PersistenceException("Retained terminal result has invalid hole cards");
-            }
-            if (player.holeCards() != null && !validateCards(player.holeCards(), 2)) {
-                throw new PersistenceException("Retained terminal result has invalid hole cards");
-            }
-            if (player.holeCards() != null) {
-                for (var card : player.holeCards()) {
-                    String identity = card.rank() + ":" + card.suit();
-                    if (!allHoleCards.add(identity) || !seenCards.add(identity)) {
-                        throw new PersistenceException("Retained terminal result contains duplicate hole cards");
-                    }
-                }
-            }
-            if (Boolean.TRUE.equals(player.isWinner())) {
-                champions++;
-                champion = player;
-            } else if (player.isWinner() == null || player.isWinner()) {
-                throw new PersistenceException("Retained terminal result has invalid champion flags");
-            }
-            if (player.disconnectDeadlineEpochMs() != null &&
-                    (player.disconnectDeadlineEpochMs() < 0 || player.disconnectDeadlineEpochMs() > jsMaxSafeInteger)) {
-                throw new PersistenceException("Retained terminal result has invalid player deadline");
-            }
-        }
-        if (isAbandoned ? champions != 0
-                : champions != 1 || champion == null || !state.winner().equals(champion.name()) ||
-                !Objects.equals(champion.chips(), state.winnerChips())) {
-            throw new PersistenceException("Retained terminal result champion does not match frozen players");
-        }
-    }
-
-    private static boolean blank(String value) { return value == null || value.trim().isEmpty(); }
-
-    private static boolean validateCards(List<AggregateStateImage.CardState> cards, int maxSize) {
-        if (cards == null || cards.size() > maxSize) return false;
-        Set<String> unique = new HashSet<>();
-        for (var card : cards) {
-            if (card == null || card.rank() == null || card.suit() == null ||
-                    !unique.add(card.rank() + ":" + card.suit())) return false;
-        }
-        return true;
     }
 
     private AggregateStateImage.TerminalResultState toTerminalResultState(GameEndResponse response) {

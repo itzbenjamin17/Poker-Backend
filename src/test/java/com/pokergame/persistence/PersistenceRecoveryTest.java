@@ -24,6 +24,7 @@ import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.context.support.GenericApplicationContext;
 
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
@@ -308,6 +309,74 @@ class PersistenceRecoveryTest {
                     eq(room.getHostName()));
         }
         verify(gameLifecycleService).restoreGame(argThat(restored -> active.getRoomId().equals(restored.getGameId())));
+    }
+
+    /** Protects the contract that recovery quarantines a WAL whose snapshot has an unknown key. */
+    @Test
+    void startupQuarantinesSnapshotWithUnknownKeyAndRecoversValidRooms(@TempDir Path directory) {
+        EncryptionKeyring keys = new EncryptionKeyring("current",
+                Map.of("current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore realStore = new EncryptedWalStore(directory, keys);
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        JsonMapper jsonMapper = JsonMapper.builder().findAndAddModules().build();
+        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(jsonMapper, evaluator);
+
+        Room validRoom = roomForRecovery("valid-room", "Alice");
+        Room unknownKeyRoom = roomForRecovery("unknown-key-room", "Bob");
+        realStore.commit(realStore.prepare(validRoom.getRoomId()),
+                realMapper.serialize(realMapper.captureStateImage(validRoom, "Alice", null)));
+
+        byte[] baseSnapshot = realMapper.serialize(realMapper.captureStateImage(unknownKeyRoom, "Bob", null));
+        ObjectNode tree = (ObjectNode) jsonMapper.readTree(baseSnapshot);
+        tree.put("staleFieldFromOlderBuild", "unexpected");
+        realStore.commit(realStore.prepare(unknownKeyRoom.getRoomId()), jsonMapper.writeValueAsBytes(tree));
+
+        PersistenceRecovery recovery = new PersistenceRecovery(realStore, realMapper, roomService,
+                gameLifecycleService, webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
+        recovery.run(new DefaultApplicationArguments());
+
+        assertTrue(recovery.isComplete());
+        assertTrue(realStore.isHealthy());
+        assertFalse(Files.exists(directory.resolve("unknown-key-room.wal")));
+        assertTrue(Files.exists(directory.resolve("unknown-key-room.wal.corrupted")));
+        assertTrue(Files.exists(directory.resolve("valid-room.wal")));
+        verify(roomService, never()).restoreRoom(argThat(r -> "unknown-key-room".equals(r.getRoomId())), any());
+        verify(roomService).restoreRoom(argThat(r -> "valid-room".equals(r.getRoomId())), eq("Alice"));
+    }
+
+    /** Protects the contract that recovery quarantines a WAL whose snapshot is missing a required creator key. */
+    @Test
+    void startupQuarantinesSnapshotWithMissingKeyAndRecoversValidRooms(@TempDir Path directory) {
+        EncryptionKeyring keys = new EncryptionKeyring("current",
+                Map.of("current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore realStore = new EncryptedWalStore(directory, keys);
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        JsonMapper jsonMapper = JsonMapper.builder().findAndAddModules().build();
+        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(jsonMapper, evaluator);
+
+        Room validRoom = roomForRecovery("valid-room", "Alice");
+        Room missingKeyRoom = roomForRecovery("missing-key-room", "Bob");
+        realStore.commit(realStore.prepare(validRoom.getRoomId()),
+                realMapper.serialize(realMapper.captureStateImage(validRoom, "Alice", null)));
+
+        byte[] baseSnapshot = realMapper.serialize(realMapper.captureStateImage(missingKeyRoom, "Bob", null));
+        ObjectNode tree = (ObjectNode) jsonMapper.readTree(baseSnapshot);
+        tree.remove("currentHost");
+        realStore.commit(realStore.prepare(missingKeyRoom.getRoomId()), jsonMapper.writeValueAsBytes(tree));
+
+        PersistenceRecovery recovery = new PersistenceRecovery(realStore, realMapper, roomService,
+                gameLifecycleService, webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
+        recovery.run(new DefaultApplicationArguments());
+
+        assertTrue(recovery.isComplete());
+        assertTrue(realStore.isHealthy());
+        assertFalse(Files.exists(directory.resolve("missing-key-room.wal")));
+        assertTrue(Files.exists(directory.resolve("missing-key-room.wal.corrupted")));
+        assertTrue(Files.exists(directory.resolve("valid-room.wal")));
+        verify(roomService, never()).restoreRoom(argThat(r -> "missing-key-room".equals(r.getRoomId())), any());
+        verify(roomService).restoreRoom(argThat(r -> "valid-room".equals(r.getRoomId())), eq("Alice"));
     }
 
     /** Registers a host so the captured room has a valid membership and roster. */

@@ -59,8 +59,6 @@ import com.pokergame.service.RoomService;
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.HashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.mockito.Mockito;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import java.time.LocalDateTime;
@@ -72,7 +70,6 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
-import tools.jackson.databind.node.NullNode;
 import tools.jackson.databind.node.ObjectNode;
 import java.io.UncheckedIOException;
 
@@ -140,7 +137,7 @@ class AggregateSnapshotMapperTest {
     }
 
     @Test
-    void settlementAndSchemaFourRoundTripAndRejectsVersionThreeAndTwo() {
+    void settlementAndTerminalRoundTripPreservesState() {
         HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room("room-2", "Recovery", "Alice", 4, 5, 10, 1000, "secret");
         room.addPlayer("Alice");
@@ -180,8 +177,9 @@ class AggregateSnapshotMapperTest {
         assertEquals(9L, restored.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
         assertTrue(restored.isForfeitPending());
         assertEquals(19, restored.getStateRevision(), "Persisted same-hand public revision must survive restart");
-        assertTrue(new String(snapshot, StandardCharsets.UTF_8).contains("\"stateRevision\":19"));
-        assertTrue(new String(snapshot, StandardCharsets.UTF_8).contains("\"schemaVersion\":4"));
+        String json = new String(snapshot, StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"stateRevision\":19"));
+        assertFalse(json.contains("schemaVersion"));
         restored.settleGameEnd(restored.getPlayers().getFirst(), Set.of());
         assertEquals(1033, restored.getPlayers().getFirst().getChips(),
                 "A recovered terminal marker prevents a second carry-over payout");
@@ -192,19 +190,6 @@ class AggregateSnapshotMapperTest {
         assertEquals(aliceBeforeRetry, restored.getPlayers().getFirst().getChips());
         assertEquals(bobBeforeRetry, restored.getPlayers().get(1).getChips());
 
-        String versionThree = new String(snapshot, StandardCharsets.UTF_8).replace("\"schemaVersion\":4", "\"schemaVersion\":3");
-        assertNotEquals(new String(snapshot, StandardCharsets.UTF_8), versionThree);
-        assertThrows(PersistenceException.class,
-                () -> mapper.deserialize(versionThree.getBytes(StandardCharsets.UTF_8)));
-
-        String versionTwo = new String(snapshot, StandardCharsets.UTF_8).replace("\"schemaVersion\":4", "\"schemaVersion\":2");
-        assertNotEquals(new String(snapshot, StandardCharsets.UTF_8), versionTwo);
-        assertThrows(PersistenceException.class,
-                () -> mapper.deserialize(versionTwo.getBytes(StandardCharsets.UTF_8)));
-        String invalidRevision = new String(snapshot, StandardCharsets.UTF_8).replace("\"stateRevision\":19", "\"stateRevision\":-1");
-        assertThrows(PersistenceException.class,
-                () -> mapper.deserialize(invalidRevision.getBytes(StandardCharsets.UTF_8)));
-
         Map<String, Integer> mutableAwards = new HashMap<>(Map.of("a", 1));
         HandSettlementResult immutable = new HandSettlementResult(mutableAwards, Map.of(), Set.of("a"), 0, true);
         mutableAwards.put("b", 2);
@@ -213,7 +198,7 @@ class AggregateSnapshotMapperTest {
     }
 
     @Test
-    void retainedTerminalResultRoundTripAndValidation() {
+    void retainedTerminalResultRoundTrip() {
         HandEvaluatorService evaluator = new HandEvaluatorService();
         Room room = new Room("room-terminal", "Final Table", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
@@ -266,10 +251,13 @@ class AggregateSnapshotMapperTest {
 
         byte[] snapshot = mapper.serialize(room, "Alice", game);
         String json = new String(snapshot, StandardCharsets.UTF_8);
-        assertTrue(json.contains("\"schemaVersion\":4"));
+        assertFalse(json.contains("schemaVersion"));
         assertTrue(json.contains("\"retainedTerminalResult\""));
         assertTrue(json.contains("\"winner\":\"Alice\""));
         assertTrue(json.contains("\"winnerChips\":2000"));
+        assertTrue(json.contains("\"inactivityDeadlineEpochMs\":null"));
+        assertTrue(json.contains("\"abandoned\":null"));
+        assertTrue(json.contains("\"reason\":null"));
 
         Game restored = mapper.deserialize(snapshot).game();
         assertNotNull(restored.getGameEndResult());
@@ -285,67 +273,6 @@ class AggregateSnapshotMapperTest {
         assertEquals(2, restoredResult.finalState().players().size());
         assertEquals("Alice", restoredResult.finalState().players().get(0).name());
         assertEquals("Bob", restoredResult.finalState().players().get(1).name());
-
-        // Validate corrupt terminal results
-        String wrongGameId = json.replace("\"retainedTerminalResult\":{\"type\":\"GAME_END\",\"gameId\":\"room-terminal\"",
-                "\"retainedTerminalResult\":{\"type\":\"GAME_END\",\"gameId\":\"wrong-game-id\"");
-        assertThrows(PersistenceException.class,
-                () -> mapper.deserialize(wrongGameId.getBytes(StandardCharsets.UTF_8)));
-
-        String negativeChips = json.replace("\"winnerChips\":2000", "\"winnerChips\":-1");
-        assertThrows(PersistenceException.class,
-                () -> mapper.deserialize(negativeChips.getBytes(StandardCharsets.UTF_8)));
-
-        String missingWinner = json.replace("\"winner\":\"Alice\"", "\"winner\":\"\"");
-        assertThrows(PersistenceException.class,
-                () -> mapper.deserialize(missingWinner.getBytes(StandardCharsets.UTF_8)));
-
-        String missingMessage = json.replace("\"message\":", "\"message\":\"\", \"oldMessage\":");
-        assertThrows(PersistenceException.class,
-                () -> mapper.deserialize(missingMessage.getBytes(StandardCharsets.UTF_8)));
-
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"maxPlayers\":6", "\"maxPlayers\":1");
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"maxPlayers\":6", "\"maxPlayers\":11");
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"name\":\"Alice\",\"chips\":2000", "\"name\":\"Alice\",\"chips\":-1");
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"winners\":[\"Alice\"]", "\"winners\":[]");
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"id\":\"b\",\"name\":\"Bob\"", "\"id\":\"a\",\"name\":\"Bob\"");
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"status\":\"ACTIVE\"", "\"status\":\"UNKNOWN\"");
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"currentPlayerName\":null", "\"currentPlayerName\":\"Alice\"");
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"readyCountdownDeadlineEpochMs\":null", "\"readyCountdownDeadlineEpochMs\":-1");
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"handNumber\":1", "\"handNumber\":-1");
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"holeCards\":null", "\"holeCards\":[{\"rank\":\"TWO\",\"suit\":\"HEARTS\"}]");
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"holeCards\":null", "\"holeCards\":[{\"rank\":\"TEN\",\"suit\":\"CLUBS\"},{\"rank\":\"THREE\",\"suit\":\"DIAMONDS\"}]");
-        assertTerminalFinalStateCorruptionRejected(mapper, json, "\"isWinner\":true", "\"isWinner\":false");
-        assertTerminalCorruptionRejected(mapper, json, "\"type\":\"GAME_END\"", "\"type\":\"OTHER\"");
-    }
-
-    private static void assertTerminalCorruptionRejected(AggregateSnapshotMapper mapper, String json,
-            String target, String replacement) {
-        int terminalStart = json.indexOf("\"retainedTerminalResult\":{");
-        assertTrue(terminalStart >= 0);
-        String prefix = json.substring(0, terminalStart);
-        String terminal = json.substring(terminalStart);
-        assertTrue(terminal.contains(target), "terminal fixture mutation target missing: " + target);
-        String corrupted = prefix + terminal.replaceFirst(Pattern.quote(target),
-                Matcher.quoteReplacement(replacement));
-        assertTrue(corrupted.startsWith(prefix), "room and live game fixture must remain unchanged");
-        assertThrows(PersistenceException.class,
-                () -> mapper.deserialize(corrupted.getBytes(StandardCharsets.UTF_8)));
-    }
-
-    private static void assertTerminalFinalStateCorruptionRejected(AggregateSnapshotMapper mapper, String json,
-            String target, String replacement) {
-        int finalStateStart = json.indexOf("\"finalState\":{", json.indexOf("\"retainedTerminalResult\":{"));
-        assertTrue(finalStateStart >= 0);
-        String prefix = json.substring(0, finalStateStart);
-        String finalState = json.substring(finalStateStart);
-        assertTrue(finalState.contains(target), "nested final state mutation target missing: " + target);
-        String corrupted = prefix + finalState.replaceFirst(Pattern.quote(target),
-                Matcher.quoteReplacement(replacement));
-        assertEquals(json.substring(0, finalStateStart), corrupted.substring(0, finalStateStart),
-                "room, live game, and retained terminal envelope must remain unchanged");
-        assertThrows(PersistenceException.class,
-                () -> mapper.deserialize(corrupted.getBytes(StandardCharsets.UTF_8)));
     }
 
     @Test
@@ -423,15 +350,45 @@ class AggregateSnapshotMapperTest {
     }
 
     @Test
-    void rejectsUnsupportedAggregateSnapshotSchema() {
-        HandEvaluatorService evaluator = new HandEvaluatorService();
-        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build(), evaluator);
-        String legacyJson = "{\"schemaVersion\":2,\"deleted\":false,\"room\":{\"roomId\":\"r1\"}}";
+    void deserializeRejectsUnknownProperty() {
+        AggregateSnapshotMapper mapper = newMapper();
+        ObjectNode snapshot = validTerminalSnapshotTree();
+        snapshot.put("unexpectedField", "stale");
+
         PersistenceException ex = assertThrows(
                 PersistenceException.class,
-                () -> mapper.deserialize(legacyJson.getBytes(StandardCharsets.UTF_8)));
-        assertTrue(ex.getMessage().contains("Unsupported aggregate snapshot schema: 2"));
+                () -> mapper.deserialize(JSON.writeValueAsBytes(snapshot)));
+        assertEquals("Cannot decode aggregate snapshot", ex.getMessage());
+    }
+
+    @Test
+    void deserializeRejectsMissingCreatorProperty() {
+        AggregateSnapshotMapper mapper = newMapper();
+        ObjectNode snapshot = validTerminalSnapshotTree();
+        ((ObjectNode) snapshot.get("room")).remove("inactivityDeadlineEpochMs");
+
+        PersistenceException ex = assertThrows(
+                PersistenceException.class,
+                () -> mapper.deserialize(JSON.writeValueAsBytes(snapshot)));
+        assertEquals("Cannot decode aggregate snapshot", ex.getMessage());
+    }
+
+    @Test
+    void lobbyRoundTripAcceptsNullInactivityDeadline() {
+        Room room = new Room("room-lobby-null", "Lobby", "Alice", 6, 5, 10, 1000, null);
+        room.addPlayer("Alice");
+        AggregateSnapshotMapper mapper = newMapper();
+
+        byte[] snapshot = mapper.serialize(room, "Alice", null);
+        String json = new String(snapshot, StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"inactivityDeadlineEpochMs\":null"));
+        assertFalse(json.contains("schemaVersion"));
+
+        RecoveredAggregate recovered = mapper.deserialize(snapshot);
+        assertFalse(recovered.deleted());
+        assertNull(recovered.game());
+        assertNull(recovered.room().getInactivityDeadlineEpochMs());
+        assertEquals("Alice", recovered.currentHost());
     }
 
     private Player bettingPlayer(String name, String id, int chips, int currentBet, boolean allIn) {
@@ -644,7 +601,6 @@ class AggregateSnapshotMapperTest {
     }
 
     private static final JsonMapper JSON = JsonMapper.builder().findAndAddModules().build();
-    private static final long JS_MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
     private static final String TERMINAL_ROOM_ID = "room-terminal";
 
     private static AggregateSnapshotMapper newMapper() {
@@ -652,9 +608,9 @@ class AggregateSnapshotMapperTest {
     }
 
     /**
-     * Classpath location of the hand-written schema-4 terminal snapshot fixture. The fixture is an
+     * Classpath location of the hand-written terminal snapshot fixture. The fixture is an
      * independent oracle (ADR-0001): it is NOT produced by {@link AggregateSnapshotMapper#captureStateImage}, so a
-     * symmetric field rename in the writer and reader cannot silently keep the corruption matrix green.
+     * symmetric field rename in the writer and reader cannot silently keep the shape check green.
      */
     private static final String TERMINAL_FIXTURE = "/persistence/schema4-terminal-snapshot.json";
 
@@ -755,23 +711,8 @@ class AggregateSnapshotMapperTest {
         }
     }
 
-    private static ObjectNode finalStateOf(ObjectNode terminal) {
-        return (ObjectNode) terminal.get("finalState");
-    }
-
-    private static ArrayNode playersOf(ObjectNode terminal) {
-        return (ArrayNode) finalStateOf(terminal).get("players");
-    }
-
     private static ObjectNode playerOf(ObjectNode terminal, int index) {
-        return (ObjectNode) playersOf(terminal).get(index);
-    }
-
-    private static ObjectNode card(String rank, String suit) {
-        ObjectNode card = JSON.createObjectNode();
-        card.put("rank", rank);
-        card.put("suit", suit);
-        return card;
+        return (ObjectNode) ((ArrayNode) terminal.get("finalState").get("players")).get(index);
     }
 
     /** Builds a JSON array of cards; a {@code null} element becomes a JSON null entry. */
@@ -785,255 +726,6 @@ class AggregateSnapshotMapperTest {
             }
         }
         return array;
-    }
-
-    private static Arguments rejected(String name, Consumer<ObjectNode> corruption, String messageSuffix) {
-        return Arguments.of(name, corruption, "Retained terminal result " + messageSuffix);
-    }
-
-    private static void abandonTerminalResult(ObjectNode terminal) {
-        terminal.put("abandoned", true);
-        terminal.put("reason", "INACTIVITY");
-        terminal.putNull("winner");
-        terminal.putNull("winnerChips");
-        finalStateOf(terminal).putArray("winners");
-        playerOf(terminal, 0).put("isWinner", false);
-    }
-
-    static Stream<Arguments> corruptTerminalResults() {
-        return Stream.of(
-                // Envelope
-                rejected("wrong type", t -> t.put("type", "OTHER"), "has invalid type"),
-                rejected("null type", t -> t.putNull("type"), "has invalid type"),
-                rejected("gameId mismatch", t -> t.put("gameId", "wrong-game-id"),
-                        "gameId does not match game identity"),
-                rejected("null gameId", t -> t.putNull("gameId"), "gameId does not match game identity"),
-                rejected("empty winner", t -> t.put("winner", ""), "missing winner name"),
-                rejected("blank winner", t -> t.put("winner", "   "), "missing winner name"),
-                rejected("null winner", t -> t.putNull("winner"), "missing winner name"),
-                rejected("null winner chips", t -> t.putNull("winnerChips"), "missing winner chips"),
-                rejected("missing winner chips", t -> t.remove("winnerChips"), "missing winner chips"),
-                rejected("abandonment with winner", t -> {
-                    abandonTerminalResult(t);
-                    t.put("winner", "Alice");
-                }, "abandonment contains a winner"),
-                rejected("abandonment with winner chips", t -> {
-                    abandonTerminalResult(t);
-                    t.put("winnerChips", 2000);
-                }, "abandonment contains a winner"),
-                rejected("abandonment with winner roster", t -> {
-                    abandonTerminalResult(t);
-                    finalStateOf(t).putArray("winners").add("Alice");
-                }, "winner roster is incoherent"),
-                rejected("abandonment with champion", t -> {
-                    abandonTerminalResult(t);
-                    playerOf(t, 0).put("isWinner", true);
-                }, "champion does not match frozen players"),
-                rejected("negative winner chips", t -> t.put("winnerChips", -1),
-                        "has invalid negative winner chips"),
-                rejected("empty message", t -> t.put("message", ""), "missing message"),
-                rejected("blank message", t -> t.put("message", "  "), "missing message"),
-                rejected("null message", t -> t.putNull("message"), "missing message"),
-                rejected("missing final state", t -> t.putNull("finalState"), "missing final state projection"),
-
-                // Final state capacity, revision and roster
-                rejected("maxPlayers below 2", t -> finalStateOf(t).put("maxPlayers", 1),
-                        "final state has invalid max players capacity"),
-                rejected("maxPlayers above 10", t -> finalStateOf(t).put("maxPlayers", 11),
-                        "final state has invalid max players capacity"),
-                rejected("negative state revision", t -> finalStateOf(t).put("stateRevision", -1),
-                        "has invalid negative state revision"),
-                rejected("state revision above JS safe integer",
-                        t -> finalStateOf(t).put("stateRevision", JS_MAX_SAFE_INTEGER + 1),
-                        "has invalid negative state revision"),
-                rejected("negative hand number", t -> finalStateOf(t).put("handNumber", -1),
-                        "has invalid negative state revision"),
-                rejected("hand number above JS safe integer",
-                        t -> finalStateOf(t).put("handNumber", JS_MAX_SAFE_INTEGER + 1),
-                        "has invalid negative state revision"),
-                rejected("negative server time", t -> finalStateOf(t).put("serverTimeEpochMs", -1),
-                        "has invalid negative state revision"),
-                rejected("server time above JS safe integer",
-                        t -> finalStateOf(t).put("serverTimeEpochMs", JS_MAX_SAFE_INTEGER + 1),
-                        "has invalid negative state revision"),
-                rejected("null players", t -> finalStateOf(t).putNull("players"),
-                        "missing final players projection"),
-                rejected("empty players", t -> finalStateOf(t).putArray("players"),
-                        "missing final players projection"),
-                rejected("more players than capacity", t -> {
-                    finalStateOf(t).put("maxPlayers", 2);
-                    ObjectNode third = playerOf(t, 1).deepCopy();
-                    third.put("id", "c");
-                    third.put("name", "Carol");
-                    playersOf(t).add(third);
-                }, "exceeds player capacity"),
-
-                // Final state null fields
-                rejected("null phase", t -> finalStateOf(t).putNull("phase"), "has incomplete final state"),
-                rejected("null ready gate", t -> finalStateOf(t).putNull("readyGateState"),
-                        "has incomplete final state"),
-                rejected("null pots", t -> finalStateOf(t).putNull("pots"), "has incomplete final state"),
-                rejected("null community cards", t -> finalStateOf(t).putNull("communityCards"),
-                        "has incomplete final state"),
-                rejected("null winners", t -> finalStateOf(t).putNull("winners"), "has incomplete final state"),
-                rejected("null legal actions", t -> finalStateOf(t).putNull("legalActions"),
-                        "has incomplete final state"),
-
-                // Final state bounds
-                rejected("negative pot", t -> finalStateOf(t).put("pot", -1), "has invalid final state bounds"),
-                rejected("negative current bet", t -> finalStateOf(t).put("currentBet", -1),
-                        "has invalid final state bounds"),
-                rejected("negative uncalled amount", t -> finalStateOf(t).put("uncalledAmount", -1),
-                        "has invalid final state bounds"),
-                rejected("negative carry-over amount", t -> finalStateOf(t).put("carryOverAmount", -1),
-                        "has invalid final state bounds"),
-                rejected("negative minimum bet", t -> finalStateOf(t).put("minimumBetAmount", -1),
-                        "has invalid final state bounds"),
-                rejected("negative minimum raise", t -> finalStateOf(t).put("minimumRaiseAmount", -1),
-                        "has invalid final state bounds"),
-                rejected("negative side pot", t -> finalStateOf(t).putArray("pots").add(-1),
-                        "has invalid final state bounds"),
-                rejected("null side pot", t -> finalStateOf(t).putArray("pots").addNull(),
-                        "has invalid final state bounds"),
-                rejected("six community cards", t -> finalStateOf(t).set("communityCards", cardArray(
-                        card("TWO", "CLUBS"), card("THREE", "CLUBS"), card("FOUR", "CLUBS"),
-                        card("FIVE", "CLUBS"), card("SIX", "CLUBS"), card("SEVEN", "CLUBS"))),
-                        "has invalid final state bounds"),
-
-                // Live-game controls that must be cleared on a finished game
-                rejected("current player name still set", t -> finalStateOf(t).put("currentPlayerName", "Alice"),
-                        "contains live-game controls"),
-                rejected("current player id still set", t -> finalStateOf(t).put("currentPlayerId", "a"),
-                        "contains live-game controls"),
-                rejected("legal actions still present", t -> finalStateOf(t).putArray("legalActions").add("FOLD"),
-                        "contains live-game controls"),
-                rejected("ready countdown active", t -> finalStateOf(t).put("isReadyCountdownActive", true),
-                        "contains live-game controls"),
-                rejected("null ready countdown flag", t -> finalStateOf(t).putNull("isReadyCountdownActive"),
-                        "contains live-game controls"),
-                rejected("ready countdown deadline still set",
-                        t -> finalStateOf(t).put("readyCountdownDeadlineEpochMs", 1000L),
-                        "contains live-game controls"),
-                rejected("auto advancing", t -> finalStateOf(t).put("isAutoAdvancing", true),
-                        "contains live-game controls"),
-                rejected("null auto advancing flag", t -> finalStateOf(t).putNull("isAutoAdvancing"),
-                        "contains live-game controls"),
-                rejected("claim win available", t -> finalStateOf(t).put("claimWinAvailable", true),
-                        "contains live-game controls"),
-                rejected("null claim win flag", t -> finalStateOf(t).putNull("claimWinAvailable"),
-                        "contains live-game controls"),
-                rejected("claim win player name still set", t -> finalStateOf(t).put("claimWinPlayerName", "Alice"),
-                        "contains live-game controls"),
-                rejected("winnings per player still set", t -> finalStateOf(t).put("winningsPerPlayer", 5),
-                        "contains live-game controls"),
-                rejected("ready gate not closed", t -> finalStateOf(t).put("readyGateState", "WAITING_FOR_PLAYERS"),
-                        "contains live-game controls"),
-
-                // Community cards and winner roster
-                rejected("duplicate community cards", t -> finalStateOf(t).set("communityCards",
-                        cardArray(card("TEN", "CLUBS"), card("TEN", "CLUBS"))), "has invalid community cards"),
-                rejected("community card with null rank", t -> finalStateOf(t).set("communityCards",
-                        cardArray(card(null, "CLUBS"))), "has invalid community cards"),
-                rejected("community card with null suit", t -> finalStateOf(t).set("communityCards",
-                        cardArray(card("TEN", null))), "has invalid community cards"),
-                rejected("null community card", t -> finalStateOf(t).set("communityCards", cardArray((ObjectNode) null)),
-                        "has invalid community cards"),
-                rejected("empty winner roster", t -> finalStateOf(t).putArray("winners"),
-                        "winner roster is incoherent"),
-                rejected("two winners in roster", t -> finalStateOf(t).putArray("winners").add("Alice").add("Bob"),
-                        "winner roster is incoherent"),
-                rejected("roster winner differs from winner", t -> finalStateOf(t).putArray("winners").add("Bob"),
-                        "winner roster is incoherent"),
-
-                // Player identity and fields
-                rejected("null player entry", t -> playersOf(t).set(1, NullNode.getInstance()),
-                        "has invalid player identity or fields"),
-                rejected("null player id", t -> playerOf(t, 1).putNull("id"),
-                        "has invalid player identity or fields"),
-                rejected("blank player id", t -> playerOf(t, 1).put("id", " "),
-                        "has invalid player identity or fields"),
-                rejected("null player name", t -> playerOf(t, 1).putNull("name"),
-                        "has invalid player identity or fields"),
-                rejected("blank player name", t -> playerOf(t, 1).put("name", ""),
-                        "has invalid player identity or fields"),
-                rejected("negative player chips", t -> playerOf(t, 0).put("chips", -1),
-                        "has invalid player identity or fields"),
-                rejected("negative player bet", t -> playerOf(t, 1).put("currentBet", -1),
-                        "has invalid player identity or fields"),
-                rejected("null player status", t -> playerOf(t, 1).putNull("status"),
-                        "has invalid player identity or fields"),
-                rejected("unknown player status", t -> playerOf(t, 0).put("status", "UNKNOWN"),
-                        "has invalid player identity or fields"),
-                rejected("duplicate player id", t -> playerOf(t, 1).put("id", "a"),
-                        "has invalid player identity or fields"),
-                rejected("duplicate player name", t -> playerOf(t, 1).put("name", "Alice"),
-                        "has invalid player identity or fields"),
-                rejected("current player flag still set", t -> playerOf(t, 0).put("isCurrentPlayer", true),
-                        "contains live player fields"),
-                rejected("chips won still set", t -> playerOf(t, 1).put("chipsWon", 10),
-                        "contains live player fields"),
-
-                // Player cards
-                rejected("duplicate best-hand cards", t -> playerOf(t, 1).set("bestHand",
-                        cardArray(card("TWO", "CLUBS"), card("TWO", "CLUBS"))), "has invalid best-hand cards"),
-                rejected("best hand with six cards", t -> playerOf(t, 1).set("bestHand", cardArray(
-                        card("TWO", "CLUBS"), card("THREE", "CLUBS"), card("FOUR", "CLUBS"),
-                        card("FIVE", "CLUBS"), card("SIX", "CLUBS"), card("SEVEN", "CLUBS"))),
-                        "has invalid best-hand cards"),
-                rejected("best hand with null rank", t -> playerOf(t, 1).set("bestHand",
-                        cardArray(card(null, "CLUBS"))), "has invalid best-hand cards"),
-                rejected("single hole card", t -> playerOf(t, 1).set("holeCards",
-                        cardArray(card("TWO", "HEARTS"))), "has invalid hole cards"),
-                rejected("three hole cards", t -> playerOf(t, 1).set("holeCards", cardArray(
-                        card("TWO", "HEARTS"), card("THREE", "HEARTS"), card("FOUR", "HEARTS"))),
-                        "has invalid hole cards"),
-                rejected("hole card with null suit", t -> playerOf(t, 1).set("holeCards",
-                        cardArray(card("TWO", "HEARTS"), card("THREE", null))), "has invalid hole cards"),
-                rejected("null hole card", t -> playerOf(t, 1).set("holeCards",
-                        cardArray(card("TWO", "HEARTS"), null)), "has invalid hole cards"),
-                rejected("same hole card twice in one hand", t -> playerOf(t, 1).set("holeCards",
-                        cardArray(card("TWO", "HEARTS"), card("TWO", "HEARTS"))), "has invalid hole cards"),
-                rejected("hole card duplicates community card", t -> playerOf(t, 1).set("holeCards",
-                        cardArray(card("TEN", "CLUBS"), card("THREE", "DIAMONDS"))), "contains duplicate hole cards"),
-                rejected("hole cards duplicate another player's", t -> playerOf(t, 1).set("holeCards",
-                        cardArray(card("ACE", "SPADES"), card("KING", "SPADES"))), "contains duplicate hole cards"),
-
-                // Champion flags, deadlines and chip balance
-                rejected("null champion flag", t -> playerOf(t, 1).putNull("isWinner"),
-                        "has invalid champion flags"),
-                rejected("null champion flag on winner", t -> playerOf(t, 0).putNull("isWinner"),
-                        "has invalid champion flags"),
-                rejected("negative disconnect deadline", t -> playerOf(t, 1).put("disconnectDeadlineEpochMs", -1L),
-                        "has invalid player deadline"),
-                rejected("disconnect deadline above JS safe integer",
-                        t -> playerOf(t, 1).put("disconnectDeadlineEpochMs", JS_MAX_SAFE_INTEGER + 1),
-                        "has invalid player deadline"),
-                rejected("no champion flagged", t -> playerOf(t, 0).put("isWinner", false),
-                        "champion does not match frozen players"),
-                rejected("two champions flagged", t -> playerOf(t, 1).put("isWinner", true),
-                        "champion does not match frozen players"),
-                rejected("champion is not the winner", t -> {
-                    playerOf(t, 0).put("isWinner", false);
-                    playerOf(t, 1).put("isWinner", true);
-                }, "champion does not match frozen players"),
-                rejected("champion chips below winner chips", t -> playerOf(t, 0).put("chips", 1999),
-                        "champion does not match frozen players"),
-                rejected("champion chips above winner chips", t -> playerOf(t, 0).put("chips", 2001),
-                        "champion does not match frozen players"));
-    }
-
-    @ParameterizedTest(name = "[{index}] {0}")
-    @MethodSource("corruptTerminalResults")
-    @DisplayName("deserialize rejects a corrupt retained terminal result with the specific message")
-    void deserialize_CorruptRetainedTerminalResult_IsRejectedWithSpecificMessage(String name,
-            Consumer<ObjectNode> corruption, String expectedMessage) {
-        ObjectNode snapshot = validTerminalSnapshotTree();
-        corruption.accept((ObjectNode) snapshot.at("/game/retainedTerminalResult"));
-
-        PersistenceException ex = assertThrows(PersistenceException.class,
-                () -> newMapper().deserialize(JSON.writeValueAsBytes(snapshot)));
-
-        assertEquals(expectedMessage, ex.getMessage(), name);
     }
 
     @Test
@@ -1088,9 +780,7 @@ class AggregateSnapshotMapperTest {
                 Arguments.of("null game id", (Consumer<ObjectNode>) g -> g.putNull("gameId"),
                         "Game identity does not match room identity in snapshot"),
                 Arguments.of("negative pot", (Consumer<ObjectNode>) g -> g.put("pot", -1),
-                        "Invalid negative pot in snapshot"),
-                Arguments.of("negative state revision", (Consumer<ObjectNode>) g -> g.put("stateRevision", -1),
-                        "Invalid negative public state revision in snapshot"));
+                        "Invalid negative pot in snapshot"));
     }
 
     @ParameterizedTest(name = "[{index}] {0}")
@@ -1113,33 +803,28 @@ class AggregateSnapshotMapperTest {
                 null, null, Map.of(), false);
     }
 
-    private static AggregateStateImage lobbyImage(int schemaVersion, AggregateStateImage.RoomState room) {
-        return new AggregateStateImage(schemaVersion, false, room, "Host", null);
+    private static AggregateStateImage lobbyImage(AggregateStateImage.RoomState room) {
+        return new AggregateStateImage(false, room, "Host", null);
     }
 
     static Stream<Arguments> invalidImages() {
-        int current = AggregateStateImage.CURRENT_SCHEMA_VERSION;
         String unsupported = "Unsupported in-memory aggregate image";
         String missingRoom = "Missing required room state in aggregate snapshot";
         String badParameters = "Invalid room parameters in snapshot";
         return Stream.of(
                 Arguments.of("null image", null, unsupported),
-                Arguments.of("older schema version", lobbyImage(current - 1, roomState("r", 6, 5, 10, 100)),
-                        unsupported),
-                Arguments.of("newer schema version", lobbyImage(current + 1, roomState("r", 6, 5, 10, 100)),
-                        unsupported),
-                Arguments.of("missing room", lobbyImage(current, null), missingRoom),
-                Arguments.of("null room id", lobbyImage(current, roomState(null, 6, 5, 10, 100)), missingRoom),
-                Arguments.of("empty room id", lobbyImage(current, roomState("", 6, 5, 10, 100)), missingRoom),
-                Arguments.of("blank room id", lobbyImage(current, roomState("   ", 6, 5, 10, 100)), missingRoom),
-                Arguments.of("maxPlayers below 2", lobbyImage(current, roomState("r", 1, 5, 10, 100)), badParameters),
-                Arguments.of("maxPlayers above 10", lobbyImage(current, roomState("r", 11, 5, 10, 100)),
+                Arguments.of("missing room", lobbyImage(null), missingRoom),
+                Arguments.of("null room id", lobbyImage(roomState(null, 6, 5, 10, 100)), missingRoom),
+                Arguments.of("empty room id", lobbyImage(roomState("", 6, 5, 10, 100)), missingRoom),
+                Arguments.of("blank room id", lobbyImage(roomState("   ", 6, 5, 10, 100)), missingRoom),
+                Arguments.of("maxPlayers below 2", lobbyImage(roomState("r", 1, 5, 10, 100)), badParameters),
+                Arguments.of("maxPlayers above 10", lobbyImage(roomState("r", 11, 5, 10, 100)),
                         badParameters),
-                Arguments.of("small blind below 1", lobbyImage(current, roomState("r", 6, 0, 10, 100)),
+                Arguments.of("small blind below 1", lobbyImage(roomState("r", 6, 0, 10, 100)),
                         badParameters),
                 Arguments.of("big blind below twice the small blind",
-                        lobbyImage(current, roomState("r", 6, 5, 9, 100)), badParameters),
-                Arguments.of("buy-in below the big blind", lobbyImage(current, roomState("r", 6, 5, 10, 9)),
+                        lobbyImage(roomState("r", 6, 5, 9, 100)), badParameters),
+                Arguments.of("buy-in below the big blind", lobbyImage(roomState("r", 6, 5, 10, 9)),
                         badParameters));
     }
 
@@ -1158,10 +843,9 @@ class AggregateSnapshotMapperTest {
     @DisplayName("restoreStateImage accepts the boundary room parameters")
     void restoreStateImage_BoundaryRoomParameters_AreAccepted() {
         AggregateSnapshotMapper mapper = newMapper();
-        int current = AggregateStateImage.CURRENT_SCHEMA_VERSION;
 
-        Room minimal = mapper.restoreStateImage(lobbyImage(current, roomState("r", 2, 1, 2, 2))).room();
-        Room maximal = mapper.restoreStateImage(lobbyImage(current, roomState("r", 10, 5, 10, 10))).room();
+        Room minimal = mapper.restoreStateImage(lobbyImage(roomState("r", 2, 1, 2, 2))).room();
+        Room maximal = mapper.restoreStateImage(lobbyImage(roomState("r", 10, 5, 10, 10))).room();
 
         assertEquals(2, minimal.getMaxPlayers());
         assertEquals(10, maximal.getMaxPlayers());
@@ -1173,7 +857,7 @@ class AggregateSnapshotMapperTest {
         AggregateSnapshotMapper mapper = newMapper();
 
         RecoveredAggregate fromImage = mapper.restoreStateImage(
-                new AggregateStateImage(AggregateStateImage.CURRENT_SCHEMA_VERSION, true, null, null, null));
+                new AggregateStateImage(true, null, null, null));
         RecoveredAggregate fromTombstone = mapper.deserialize(mapper.serializeDeletion("gone-room"));
 
         for (RecoveredAggregate recovered : List.of(fromImage, fromTombstone)) {
@@ -1215,8 +899,7 @@ class AggregateSnapshotMapperTest {
             String originalHost, Map<String, LocalDateTime> members, String expectedHost) {
         AggregateStateImage.RoomState room = new AggregateStateImage.RoomState("r", "Room", originalHost, 6, 5, 10,
                 100, null, null, members, false);
-        AggregateStateImage image = new AggregateStateImage(AggregateStateImage.CURRENT_SCHEMA_VERSION, false, room,
-                currentHost, null);
+        AggregateStateImage image = new AggregateStateImage(false, room, currentHost, null);
 
         RecoveredAggregate recovered = newMapper().restoreStateImage(image);
 

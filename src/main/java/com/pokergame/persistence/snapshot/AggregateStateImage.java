@@ -9,7 +9,6 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.ReadyGateState;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -24,15 +23,13 @@ import java.util.Set;
  * older saved games won't automatically break. We only save plain data here.
  * </p>
  *
- * @param schemaVersion the version number of this save format
  * @param deleted       true if this room was deleted
  * @param room          the saved room details (like its name and rules)
  * @param currentHost   the current host of the room
  * @param game          the saved game progress, or {@code null} if the game hasn't started
  */
-public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState room, String currentHost,
+public record AggregateStateImage(boolean deleted, RoomState room, String currentHost,
         GameState game) {
-    public static final int CURRENT_SCHEMA_VERSION = 4;
 
     /**
      * Details about the room itself (the lobby) that we need to restore, like passwords and who joined when.
@@ -53,7 +50,7 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
             int bigBlind, int buyIn, String password, LocalDateTime createdAt,
             Map<String, LocalDateTime> playersWithJoinTime, Map<String, String> playerMembershipIds,
             boolean gameStarted,
-            @JsonInclude(JsonInclude.Include.NON_NULL) Long inactivityDeadlineEpochMs) {
+            Long inactivityDeadlineEpochMs) {
         @JsonCreator
         public RoomState {
             playerMembershipIds = playerMembershipIds == null
@@ -140,10 +137,10 @@ public record AggregateStateImage(int schemaVersion, boolean deleted, RoomState 
             String type,
             String gameId,
             String winner,
-            @JsonInclude(JsonInclude.Include.NON_NULL) Integer winnerChips,
+            Integer winnerChips,
             boolean isForfeit,
-            @JsonInclude(JsonInclude.Include.NON_NULL) Boolean abandoned,
-            @JsonInclude(JsonInclude.Include.NON_NULL) String reason,
+            Boolean abandoned,
+            String reason,
             String message,
             FinalGameState finalState) {
     }

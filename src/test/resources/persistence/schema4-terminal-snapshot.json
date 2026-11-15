@@ -1,5 +1,4 @@
 {
-  "schemaVersion" : 4,
   "deleted" : false,
   "room" : {
     "roomId" : "room-terminal",
@@ -19,7 +18,8 @@
       "Alice" : "11111111-1111-1111-1111-111111111111",
       "Bob" : "22222222-2222-2222-2222-222222222222"
     },
-    "gameStarted" : true
+    "gameStarted" : true,
+    "inactivityDeadlineEpochMs" : null
   },
   "currentHost" : "Alice",
   "game" : {
@@ -117,6 +117,8 @@
       "winner" : "Alice",
       "winnerChips" : 2000,
       "isForfeit" : false,
+      "abandoned" : null,
+      "reason" : null,
       "message" : "Alice wins the game with 2000 chips!",
       "finalState" : {
         "maxPlayers" : 6,

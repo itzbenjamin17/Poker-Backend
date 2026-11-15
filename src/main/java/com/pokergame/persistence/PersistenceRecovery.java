@@ -90,7 +90,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
      *
      * @param args application startup arguments
      * @throws PersistenceException if store-level WAL enumeration or I/O fails; per-room
-     *                              corrupted WAL files or unsupported schemas are quarantined
+     *                              corrupted or unreadable WAL files are quarantined
      *                              ({@code <roomId>.wal.corrupted}) so remaining rooms can recover
      */
     @Override
