@@ -135,9 +135,9 @@ class PlayerDepartureHandlerTest {
                 roomService, stateService, completionHandler, handProgression,
                 readinessCoordinator, timerRegistry, activeGames, mutableClock);
         gameLifecycleService = new GameLifecycleService(
-                roomService, stateService, activeGames, timerRegistry, scheduler,
+                roomService, activeGames, timerRegistry, scheduler,
                 completionHandler, handProgression, readinessCoordinator, departureHandler,
-                roomCoordinator, mutableClock, DEFAULT_TIMINGS);
+                roomCoordinator, mutableClock);
         lifecycleRef.set(gameLifecycleService);
     }
 

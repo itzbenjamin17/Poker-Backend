@@ -31,6 +31,7 @@ import java.time.Instant;
 import com.pokergame.util.RoomCoordinator;
 import com.pokergame.util.LockLease;
 
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -581,6 +582,34 @@ public class WebSocketEventListener {
         }
     }
 
+    /**
+     * Cancels and removes all pending disconnect timers belonging to {@code roomId}.
+     * Caller must hold the room lock for {@code roomId}.
+     *
+     * @param roomId the unique ID of the room
+     */
+    public void cancelRoomPendingDisconnects(String roomId) {
+        if (roomId == null) {
+            return;
+        }
+        roomCoordinator.assertHeldByCurrentThread(roomId);
+        cancelPendingDisconnectsForRoom(roomId);
+    }
+
+    private Set<String> cancelPendingDisconnectsForRoom(String roomId) {
+        Set<String> cancelledUsers = new HashSet<>();
+        for (Map.Entry<String, PendingDisconnect> entry : pendingDisconnects.entrySet()) {
+            String user = entry.getKey();
+            if (belongsToRoom(user, roomId)) {
+                PendingDisconnect pending = entry.getValue();
+                pending.cancel();
+                pendingDisconnects.remove(user, pending);
+                cancelledUsers.add(user);
+            }
+        }
+        return cancelledUsers;
+    }
+
     private static boolean belongsToRoom(String user, String roomId) {
         int separator = user.lastIndexOf(':');
         return separator >= 0 && user.substring(separator + 1).equals(roomId);
@@ -592,13 +621,8 @@ public class WebSocketEventListener {
         }
         try (LockLease _ = acquireRoomLease(roomId)) {
             gameLifecycleService.cancelTimers(roomId, false);
-            Set<String> usersToClean = new HashSet<>();
+            Set<String> usersToClean = cancelPendingDisconnectsForRoom(roomId);
             for (String user : activeSessionsByUser.keySet()) {
-                if (belongsToRoom(user, roomId)) {
-                    usersToClean.add(user);
-                }
-            }
-            for (String user : pendingDisconnects.keySet()) {
                 if (belongsToRoom(user, roomId)) {
                     usersToClean.add(user);
                 }

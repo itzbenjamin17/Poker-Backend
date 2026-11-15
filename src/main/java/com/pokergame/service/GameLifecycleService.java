@@ -4,7 +4,6 @@ import com.pokergame.util.RoomCoordinator;
 
 import static java.util.Objects.requireNonNull;
 
-import com.pokergame.config.LifecycleTimingProperties;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.ScheduledGameTask;
@@ -15,10 +14,6 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.DurableMutation;
-import com.pokergame.persistence.transaction.PostSaveActions;
-import com.pokergame.service.GameTaskScheduler.ScheduledTimer;
-import com.pokergame.util.MdcUtils;
-import com.pokergame.util.MdcUtils.MdcScope;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -31,14 +26,13 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 /**
- * Coordinates game creation, player departures, scheduled timers, recovery, and public game
+ * Coordinates game creation, player departures, scheduled timers, and public game
  * lifecycle queries under entry-point and durable-mutation room lock boundaries.
  */
 @Service
 public class GameLifecycleService {
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
     private final RoomService roomService;
-    private final GameStateService gameStateService;
     private final ActiveGameRegistry activeGames;
     private final GameTimerRegistry runtimeTimers;
     private final GameTaskScheduler taskScheduler;
@@ -48,11 +42,9 @@ public class GameLifecycleService {
     private final PlayerDepartureHandler departureHandler;
     private final RoomCoordinator roomCoordinator;
     private final Clock clock;
-    private final LifecycleTimingProperties timings;
 
     GameLifecycleService(
             RoomService roomService,
-            GameStateService gameStateService,
             ActiveGameRegistry activeGames,
             GameTimerRegistry runtimeTimers,
             GameTaskScheduler taskScheduler,
@@ -61,10 +53,8 @@ public class GameLifecycleService {
             GameReadinessCoordinator readinessCoordinator,
             PlayerDepartureHandler departureHandler,
             RoomCoordinator roomCoordinator,
-            Clock clock,
-            LifecycleTimingProperties timings) {
+            Clock clock) {
         this.roomService = roomService;
-        this.gameStateService = gameStateService;
         this.activeGames = activeGames;
         this.runtimeTimers = runtimeTimers;
         this.taskScheduler = taskScheduler;
@@ -74,7 +64,6 @@ public class GameLifecycleService {
         this.departureHandler = departureHandler;
         this.roomCoordinator = roomCoordinator;
         this.clock = clock;
-        this.timings = timings;
     }
 
     /**
@@ -172,20 +161,6 @@ public class GameLifecycleService {
     }
 
     /**
-     * Schedules the inactivity expiration timer for an active game.
-     *
-     * @param gameId          the unique ID of the game
-     * @param deadlineEpochMs target expiration epoch time in milliseconds
-     */
-    public void scheduleGameInactivity(String gameId, Long deadlineEpochMs) {
-        if (gameId == null || deadlineEpochMs == null) {
-            return;
-        }
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        taskScheduler.scheduleGameInactivity(gameId, deadlineEpochMs);
-    }
-
-    /**
      * Abandons the game due to inactivity only if {@code expectedDeadlineEpochMs} still matches
      * the room's current deadline and has expired.
      *
@@ -270,28 +245,6 @@ public class GameLifecycleService {
         if (room != null) {
             room.setGameStarted(false);
             room.setTerminal(false);
-        }
-    }
-
-    /**
-     * Repairs ready-gate timers after startup recovery and schedules all pending timers after save.
-     *
-     * @param gameId the unique ID of the recovered game
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void resumeRecoveredTimers(String gameId) {
-        Game game = activeGames.get(gameId);
-        if (game == null) {
-            return;
-        }
-        try (MdcScope _ = MdcUtils.withRoomId(gameId)) {
-            boolean normalized = game.repairRecoveredReadyGate(clock.millis() + timings.readyCountdownMs());
-            List<ScheduledTimer> timers = GameTaskScheduler.listActiveTimers(gameId, game);
-            PostSaveActions.runAfterSave(() -> timers.forEach(taskScheduler::registerTimer));
-            if (normalized) {
-                gameStateService.broadcastGameState(game);
-            }
-            logger.info("Resumed {} recovered timers for game {}", timers.size(), gameId);
         }
     }
 

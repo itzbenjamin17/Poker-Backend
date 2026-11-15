@@ -1,7 +1,6 @@
 package com.pokergame.persistence;
 
 import com.pokergame.config.WebSocketAuthInterceptor;
-import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.controller.GameController;
 import com.pokergame.controller.RoomController;
 import com.pokergame.dto.request.CreateRoomRequest;
@@ -58,13 +57,9 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
-import org.springframework.test.util.AopTestUtils;
 
 import java.nio.file.Path;
-import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -164,7 +159,7 @@ class PersistenceCoordinationIT {
     private WebSocketAuthInterceptor webSocketAuthInterceptor;
 
     @Autowired
-    private WebSocketEventListener webSocketEventListener;
+    private RoomRecoveryHandler roomRecoveryHandler;
 
     @Autowired
     private ApplicationContext applicationContext;
@@ -284,23 +279,25 @@ class PersistenceCoordinationIT {
 
         CountDownLatch insideRestore = new CountDownLatch(1);
         CountDownLatch releaseRecovery = new CountDownLatch(1);
-        RoomService unwrappedRoomService = AopTestUtils.getTargetObject(roomService);
-        RoomService spyRoomService = Mockito.spy(unwrappedRoomService);
-        Mockito.doAnswer(invocation -> {
+        RoomRecoveryHandler blockingHandler = recovered -> {
             assertThat(roomCoordinator.isHeldByCurrentThread(roomId)).isTrue();
             insideRestore.countDown();
-            if (!releaseRecovery.await(ASYNC_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
-                throw new IllegalStateException("Timed out waiting inside recovery");
+            try {
+                if (!releaseRecovery.await(ASYNC_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                    throw new IllegalStateException("Timed out waiting inside recovery");
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(interrupted);
             }
-            return invocation.callRealMethod();
-        }).when(spyRoomService).restoreRoom(Mockito.any(Room.class), Mockito.anyString());
+            return roomRecoveryHandler.restore(recovered);
+        };
 
         PersistenceRecovery recovery = new PersistenceRecovery(
-                walStore, snapshotMapper, spyRoomService, gameLifecycleService, webSocketEventListener,
-                applicationContext, 5_000L, Clock.systemUTC(), roomCoordinator);
+                walStore, snapshotMapper, blockingHandler, applicationContext, roomCoordinator);
 
         try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
-            Future<?> recoveryFuture = executor.submit(recovery::recover);
+            Future<?> recoveryFuture = executor.submit(() -> recovery.run(null));
             assertThat(insideRestore.await(ASYNC_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).isTrue();
 
             assertThat(roomCoordinator.tryAcquire(roomId)).isNull();
@@ -683,11 +680,9 @@ class PersistenceCoordinationIT {
             return null;
         });
 
-        Clock afterDeadlineClock = Clock.fixed(Instant.ofEpochMilli(pastCleanupDeadline + 10_000L), ZoneOffset.UTC);
         PersistenceRecovery recovery = new PersistenceRecovery(
-                walStore, snapshotMapper, roomService, gameLifecycleService, webSocketEventListener,
-                applicationContext, 5_000L, afterDeadlineClock, roomCoordinator);
-        recovery.recover();
+                walStore, snapshotMapper, roomRecoveryHandler, applicationContext, roomCoordinator);
+        recovery.run(null);
 
         withRoomLock(roomCoordinator, roomId, () -> {
             assertThat(roomService.getRoom(roomId)).isNull();

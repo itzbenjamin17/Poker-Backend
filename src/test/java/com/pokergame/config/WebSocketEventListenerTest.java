@@ -15,6 +15,7 @@ import org.springframework.web.socket.messaging.SessionConnectEvent;
 import org.springframework.web.socket.messaging.SessionDisconnectEvent;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.ScheduledFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -826,5 +827,46 @@ class WebSocketEventListenerTest {
         listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(
                 this, message(StompCommand.DISCONNECT, "session-b1", null), "session-b1", null)));
         verify(scheduler, times(2)).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    void cancelRoomPendingDisconnectsRequiresRoomLockAndCancelsOnlyMatchingRoom() {
+        RoomService roomService = mock(RoomService.class);
+        GameLifecycleService lifecycle = mock(GameLifecycleService.class);
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        RoomCoordinator roomCoordinator = new RoomCoordinator();
+        WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle,
+                mock(RateLimitService.class), scheduler, roomCoordinator, 60_000L);
+
+        String roomA = "room-pending-A";
+        String roomB = "room-pending-B";
+        ScheduledFuture<?> futureA = mock(ScheduledFuture.class);
+        ScheduledFuture<?> futureB = mock(ScheduledFuture.class);
+        ArgumentCaptor<Runnable> callbackCaptor = ArgumentCaptor.forClass(Runnable.class);
+        doReturn(futureA).doReturn(futureB)
+                .when(scheduler).schedule(callbackCaptor.capture(), any(Instant.class));
+
+        listener.scheduleRecoveredDisconnect(roomA, "Alice", System.currentTimeMillis() + 30_000L);
+        listener.scheduleRecoveredDisconnect(roomB, "Bob", System.currentTimeMillis() + 30_000L);
+        List<Runnable> callbacks = callbackCaptor.getAllValues();
+
+        assertThatThrownBy(() -> listener.cancelRoomPendingDisconnects(roomA))
+                .isInstanceOf(IllegalStateException.class);
+
+        try (LockLease _ = roomCoordinator.acquire(roomA)) {
+            listener.cancelRoomPendingDisconnects(roomA);
+        }
+
+        verify(futureA).cancel(false);
+        verify(futureB, never()).cancel(anyBoolean());
+
+        callbacks.get(0).run();
+        verify(lifecycle, never()).removeDisconnectedPlayer(eq(roomA), anyString(), any(), anyLong());
+
+        Room bobRoom = new Room(roomB, "Room B", "Bob", 4, 10, 20, 1000, null);
+        bobRoom.addPlayer("Bob");
+        when(roomService.getRoom(roomB)).thenReturn(bobRoom);
+        callbacks.get(1).run();
+        verify(lifecycle).removeDisconnectedPlayer(eq(roomB), eq("Bob"), isNull(), anyLong());
     }
 }

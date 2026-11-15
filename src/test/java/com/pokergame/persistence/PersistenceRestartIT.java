@@ -375,6 +375,170 @@ class PersistenceRestartIT {
     }
 
     @Test
+    @DisplayName("Expired lobby is discarded during startup recovery and its WAL is deleted")
+    void expiredLobbyIsDiscardedOnRestartAndWalIsDeleted() {
+        String roomId = UUID.randomUUID().toString();
+        try (ConfigurableApplicationContext first = startApplication()) {
+            RoomService rooms = first.getBean(RoomService.class);
+            AggregateSnapshotMapper mapper = first.getBean(AggregateSnapshotMapper.class);
+            EncryptedWalStore store = first.getBean(EncryptedWalStore.class);
+
+            rooms.createRoom(roomId, new CreateRoomRequest("Expired Lobby", "Alice", 4, 5, 10, 1000, null));
+            withRoomLock(first, roomId, () -> {
+                Room room = rooms.getRoom(roomId);
+                room.setInactivityDeadlineEpochMs(System.currentTimeMillis() - 10_000L);
+                byte[] image = mapper.serialize(room, rooms.getCurrentHost(roomId), null);
+                store.checkpoint(roomId, image);
+                return null;
+            });
+            assertThat(Files.exists(walDirectory.resolve(roomId + ".wal"))).isTrue();
+        }
+
+        try (ConfigurableApplicationContext second = startApplication()) {
+            withRoomLock(second, roomId, () -> {
+                assertThat(second.getBean(RoomService.class).getRoom(roomId)).isNull();
+                return null;
+            });
+            assertThat(Files.exists(walDirectory.resolve(roomId + ".wal"))).isFalse();
+        }
+    }
+
+    @Test
+    @DisplayName("Inactive active game is abandoned on restart and schedules cleanup")
+    void inactiveGameIsAbandonedOnRestartWithCleanupScheduled() {
+        String roomId = UUID.randomUUID().toString();
+        try (ConfigurableApplicationContext first = startApplication(120_000L, 30_000L)) {
+            RoomService rooms = first.getBean(RoomService.class);
+            GameLifecycleService games = first.getBean(GameLifecycleService.class);
+            AggregateSnapshotMapper mapper = first.getBean(AggregateSnapshotMapper.class);
+            EncryptedWalStore store = first.getBean(EncryptedWalStore.class);
+
+            rooms.createRoom(roomId, new CreateRoomRequest("Inactive Game", "Alice", 6, 5, 10, 1000, null));
+            rooms.joinRoom(roomId, new JoinRoomRequest("Inactive Game", "Bob", null));
+            games.createGameFromRoom(roomId);
+
+            withRoomLock(first, roomId, () -> {
+                Room room = rooms.getRoom(roomId);
+                room.setInactivityDeadlineEpochMs(System.currentTimeMillis() - 10_000L);
+                byte[] image = mapper.serialize(room, rooms.getCurrentHost(roomId), games.getGame(roomId));
+                store.checkpoint(roomId, image);
+                return null;
+            });
+        }
+
+        try (ConfigurableApplicationContext second = startApplication(120_000L, 30_000L)) {
+            RoomService rooms = second.getBean(RoomService.class);
+            GameLifecycleService games = second.getBean(GameLifecycleService.class);
+            withRoomLock(second, roomId, () -> {
+                Room restoredRoom = rooms.getRoom(roomId);
+                Game restoredGame = games.getGame(roomId);
+                assertThat(restoredRoom).isNotNull();
+                assertThat(restoredRoom.isTerminal()).isTrue();
+                assertThat(restoredGame).isNotNull();
+                assertThat(restoredGame.isGameOver()).isTrue();
+                assertThat(restoredGame.isAbandoned()).isTrue();
+                assertThat(restoredGame.getGameEndResult()).isNotNull();
+                assertThat(restoredGame.getGameEndResult().abandoned()).isTrue();
+                assertThat(restoredGame.getGameEndResult().reason()).isEqualTo("INACTIVITY");
+                assertThat(restoredGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP)).isNotNull();
+                return null;
+            });
+            assertThat(countActiveScheduledFutures(second)).isGreaterThan(0);
+        }
+    }
+
+    @Test
+    @DisplayName("Longer stored disconnect deadline is preserved over fresh grace period across restart")
+    void longerStoredDisconnectDeadlineIsPreservedAcrossRestart() {
+        String roomId = UUID.randomUUID().toString();
+        long longerDeadline = System.currentTimeMillis() + 300_000L;
+        try (ConfigurableApplicationContext first = startApplication(5_000L)) {
+            RoomService rooms = first.getBean(RoomService.class);
+            GameLifecycleService games = first.getBean(GameLifecycleService.class);
+            AggregateSnapshotMapper mapper = first.getBean(AggregateSnapshotMapper.class);
+            EncryptedWalStore store = first.getBean(EncryptedWalStore.class);
+
+            rooms.createRoom(roomId, new CreateRoomRequest("Long Grace", "Alice", 6, 5, 10, 1000, null));
+            rooms.joinRoom(roomId, new JoinRoomRequest("Long Grace", "Bob", null));
+            games.createGameFromRoom(roomId);
+
+            withRoomLock(first, roomId, () -> {
+                Game game = games.getGame(roomId);
+                game.findPlayerByName("Alice").setDisconnectDeadlineEpochMs(longerDeadline);
+                game.findPlayerByName("Bob").setDisconnectDeadlineEpochMs(null);
+                byte[] image = mapper.serialize(rooms.getRoom(roomId), rooms.getCurrentHost(roomId), game);
+                store.checkpoint(roomId, image);
+                return null;
+            });
+        }
+
+        try (ConfigurableApplicationContext second = startApplication(5_000L)) {
+            RoomService rooms = second.getBean(RoomService.class);
+            GameLifecycleService games = second.getBean(GameLifecycleService.class);
+            withRoomLock(second, roomId, () -> {
+                Room restoredRoom = rooms.getRoom(roomId);
+                Game restoredGame = games.getGame(roomId);
+                Player alice = restoredGame.findPlayerByName("Alice");
+                Player bob = restoredGame.findPlayerByName("Bob");
+                assertThat(alice.getIsDisconnected()).isTrue();
+                assertThat(alice.getDisconnectDeadlineEpochMs()).isEqualTo(longerDeadline);
+                assertThat(restoredRoom.getAbsenceDeadline("Alice")).isEqualTo(longerDeadline);
+                assertThat(bob.getIsDisconnected()).isTrue();
+                assertThat(bob.getDisconnectDeadlineEpochMs()).isLessThan(longerDeadline);
+                return null;
+            });
+        }
+    }
+
+    @Test
+    @DisplayName("Recovered turn timeout timer is re-armed and executes after restart")
+    void rearmedTurnTimeoutExecutesAfterRestart() {
+        String roomId = UUID.randomUUID().toString();
+        String timedOutActor;
+        String survivingPlayer;
+        try (ConfigurableApplicationContext first = startApplication(60_000L, 60_000L)) {
+            RoomService rooms = first.getBean(RoomService.class);
+            GameLifecycleService games = first.getBean(GameLifecycleService.class);
+            AggregateSnapshotMapper mapper = first.getBean(AggregateSnapshotMapper.class);
+            EncryptedWalStore store = first.getBean(EncryptedWalStore.class);
+            WebSocketEventListener listener = first.getBean(WebSocketEventListener.class);
+
+            rooms.createRoom(roomId, new CreateRoomRequest("Timer Rearm", "Alice", 6, 5, 10, 1000, null));
+            rooms.joinRoom(roomId, new JoinRoomRequest("Timer Rearm", "Bob", null));
+            listener.handleWebSocketConnectListener(connectEvent(first, "Alice", roomId, "t-alice"));
+            listener.handleWebSocketConnectListener(connectEvent(first, "Bob", roomId, "t-bob"));
+            games.createGameFromRoom(roomId);
+
+            timedOutActor = withRoomLock(first, roomId, () -> games.getGame(roomId).getCurrentPlayer().getName());
+            survivingPlayer = "Alice".equals(timedOutActor) ? "Bob" : "Alice";
+
+            withRoomLock(first, roomId, () -> {
+                Game game = games.getGame(roomId);
+                game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, System.currentTimeMillis() + 500L);
+                byte[] image = mapper.serialize(rooms.getRoom(roomId), rooms.getCurrentHost(roomId), game);
+                store.checkpoint(roomId, image);
+                return null;
+            });
+        }
+
+        try (ConfigurableApplicationContext second = startApplication(60_000L, 60_000L)) {
+            RoomService rooms = second.getBean(RoomService.class);
+            GameLifecycleService games = second.getBean(GameLifecycleService.class);
+            second.getBean(WebSocketEventListener.class)
+                    .handleWebSocketConnectListener(connectEvent(second, survivingPlayer, roomId, "t-surviving"));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> withRoomLock(second, roomId, () -> {
+                Room restoredRoom = rooms.getRoom(roomId);
+                Game restoredGame = games.getGame(roomId);
+                assertThat(restoredRoom).isNotNull();
+                assertThat(restoredRoom.hasPlayer(timedOutActor)).isFalse();
+                assertThat(restoredRoom.hasPlayer(survivingPlayer)).isTrue();
+                assertThat(restoredGame.isGameOver()).isTrue();
+                return null;
+            }));
+        }
+    }
+
+    @Test
     @DisplayName("Normal game completion followed by cleanup removes room and deletes WAL file")
     void normalGameEndDeletesWalFile() {
         String roomId = UUID.randomUUID().toString();

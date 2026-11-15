@@ -135,9 +135,9 @@ class GameLifecycleServiceTest {
                 roomService, gameStateService, completionHandler, handProgression,
                 readinessCoordinator, timerRegistry, activeGames, mutableClock);
         gameLifecycleService = new GameLifecycleService(
-                roomService, gameStateService, activeGames, timerRegistry, scheduler,
+                roomService, activeGames, timerRegistry, scheduler,
                 completionHandler, handProgression, readinessCoordinator, departureHandler,
-                roomCoordinator, mutableClock, timings);
+                roomCoordinator, mutableClock);
         lifecycleRef.set(gameLifecycleService);
     }
 
@@ -698,15 +698,13 @@ class GameLifecycleServiceTest {
         }
 
         @Test
-        void restoreAndResumeRecoveredAndRollbackTimers() {
+        void restoreAndRollbackTimers() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            @SuppressWarnings("unchecked")
-            ScheduledFuture<Object> recoveredReadyFuture = mock(ScheduledFuture.class);
             @SuppressWarnings("unchecked")
             ScheduledFuture<Object> rollbackReadyFuture = mock(ScheduledFuture.class);
             @SuppressWarnings("unchecked")
             ScheduledFuture<Object> rollbackInactivityFuture = mock(ScheduledFuture.class);
-            doReturn(recoveredReadyFuture, rollbackReadyFuture, rollbackInactivityFuture)
+            doReturn(rollbackReadyFuture, rollbackInactivityFuture)
                     .when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
 
             Game game = new Game(ROOM_ID,
@@ -714,21 +712,10 @@ class GameLifecycleServiceTest {
                     6, 5, 10);
             dealBoardAndShowdown(game);
             game.openOrWaitReadyGate(BASE_EPOCH_MS + 10_000L);
-            // Force recovered ready countdown missing deadline and verify resume repairs and schedules it
-            game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
             withRoomLock(ROOM_ID, () -> {
                 gameLifecycleService.restoreGame(game);
                 testRoom.setInactivityDeadlineEpochMs(BASE_EPOCH_MS + 50_000L);
 
-                gameLifecycleService.resumeRecoveredTimers(ROOM_ID);
-                assertEquals(BASE_EPOCH_MS + 10_000L,
-                        game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
-                verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 10_000L)));
-
-                gameLifecycleService.cancelTimers(ROOM_ID, false);
-                verify(recoveredReadyFuture).cancel(false);
-
-                clearInvocations(taskScheduler);
                 gameLifecycleService.resumeRollbackTimers(ROOM_ID);
                 verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 10_000L)));
                 verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 50_000L)));

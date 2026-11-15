@@ -10,7 +10,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.EnableAspectJAutoProxy;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -30,7 +30,7 @@ import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.PersistenceRecovery;
-import com.pokergame.config.WebSocketEventListener;
+import com.pokergame.persistence.RoomRecoveryHandler;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
@@ -48,6 +48,7 @@ import org.springframework.context.ApplicationContext;
  */
 @Configuration
 @EnableConfigurationProperties(PersistenceProperties.class)
+@EnableAspectJAutoProxy(proxyTargetClass = true, exposeProxy = true)
 public class PersistenceConfiguration {
     private static final Logger logger = LoggerFactory.getLogger(PersistenceConfiguration.class);
 
@@ -130,29 +131,20 @@ public class PersistenceConfiguration {
     /**
      * Manages the process of reloading saved games back into memory when the server starts up.
      *
-     * @param store                   the secure vault holding the saved games
-     * @param mapper                  the tool to convert saved data back into live games
-     * @param roomService             where reloaded rooms will be registered
-     * @param gameLifecycleService    where reloaded games will be registered
-     * @param webSocketEventListener  handles player connections after a reload
-     * @param applicationContext      tells the system when the server is fully ready
-     * @param disconnectGracePeriodMs extra time given to players to reconnect after a server restart
-     * @param clock                   the application clock, used to check which saved deadlines have passed
-     * @param roomCoordinator         the per-room lock shared with the rest of the application
+     * @param store              the secure vault holding the saved games
+     * @param mapper             the tool to convert saved data back into live games
+     * @param recoveryHandler    the domain handler that applies restart rules per room
+     * @param applicationContext tells the system when the server is fully ready
+     * @param roomCoordinator    the per-room lock shared with the rest of the application
      * @return the process that recovers games
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
     PersistenceRecovery persistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper,
-            RoomService roomService,
-            GameLifecycleService gameLifecycleService,
-            WebSocketEventListener webSocketEventListener,
+            RoomRecoveryHandler recoveryHandler,
             ApplicationContext applicationContext,
-            @Value("${poker.room.disconnect-grace-period-ms:120000}") long disconnectGracePeriodMs,
-            java.time.Clock clock,
             RoomCoordinator roomCoordinator) {
-        return new PersistenceRecovery(store, mapper, roomService, gameLifecycleService, webSocketEventListener,
-                applicationContext, disconnectGracePeriodMs, clock, roomCoordinator);
+        return new PersistenceRecovery(store, mapper, recoveryHandler, applicationContext, roomCoordinator);
     }
 
     /**

@@ -1,53 +1,48 @@
 package com.pokergame.persistence;
 
-import com.pokergame.config.WebSocketEventListener;
-import com.pokergame.enums.ScheduledGameTask;
+import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
+
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.service.GameLifecycleService;
-import com.pokergame.service.GameStateService;
+import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;
+import com.pokergame.persistence.wal.WalFaultPoint;
 import com.pokergame.util.RoomCoordinator;
-import com.pokergame.service.RoomService;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.DefaultApplicationArguments;
+import org.springframework.boot.availability.AvailabilityChangeEvent;
+import org.springframework.boot.availability.ReadinessState;
+import org.springframework.context.ApplicationListener;
 import org.springframework.context.support.GenericApplicationContext;
-
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
-import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.Clock;
-import java.util.List;
-import java.util.Map;
-
-import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
-import com.pokergame.persistence.wal.EncryptedWalStore;
-import com.pokergame.persistence.wal.WalFaultPoint;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
-import com.pokergame.persistence.snapshot.RecoveredAggregate;
-import com.pokergame.persistence.config.PersistenceException;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-/** Tests persistence recovery coordinator behavior. */
+/** Tests persistence recovery storage, quarantine, locking, and handler dispatch contracts. */
 @Tag("unit")
 @ExtendWith(MockitoExtension.class)
 class PersistenceRecoveryTest {
@@ -59,16 +54,9 @@ class PersistenceRecoveryTest {
     private AggregateSnapshotMapper mapper;
 
     @Mock
-    private RoomService roomService;
-
-    @Mock
-    private GameLifecycleService gameLifecycleService;
-
-    @Mock
-    private WebSocketEventListener webSocketEventListener;
+    private RoomRecoveryHandler recoveryHandler;
 
     private GenericApplicationContext applicationContext;
-    private static final long DISCONNECT_GRACE_PERIOD_MS = 15_000L;
 
     @BeforeEach
     void setUp() {
@@ -76,10 +64,6 @@ class PersistenceRecoveryTest {
         applicationContext.refresh();
     }
 
-    /**
-     * Closes the per-test Spring context so its beans and threads are released rather than
-     * leaking across the test class.
-     */
     @AfterEach
     void tearDown() {
         if (applicationContext != null) {
@@ -87,17 +71,13 @@ class PersistenceRecoveryTest {
         }
     }
 
-    /**
-     * Protects the contract that recovery quarantines snapshots whose room identity does not match the WAL file identity.
-     */
     @Test
-    void mismatchedRoomIdentityThrowsPersistenceException() {
+    void mismatchedRoomIdentityQuarantinesWalAndRecoversRemainingRooms() {
         Room roomY = mock(Room.class);
         when(roomY.getRoomId()).thenReturn("room-Y");
         RecoveredAggregate aggregate = new RecoveredAggregate(roomY, "host", null, false);
 
-        Room roomValid = new Room("room-valid", "Valid Room", "Alice", 6, 10, 20, 1000, null);
-        roomValid.addPlayer("Alice");
+        Room roomValid = roomForRecovery("room-valid", "Alice");
         RecoveredAggregate validAggregate = new RecoveredAggregate(roomValid, "Alice", null, false);
 
         when(store.recoverAll()).thenReturn(Map.of(
@@ -105,161 +85,96 @@ class PersistenceRecoveryTest {
                 "room-valid", new byte[]{4, 5, 6}));
         when(mapper.deserialize(new byte[]{1, 2, 3})).thenReturn(aggregate);
         when(mapper.deserialize(new byte[]{4, 5, 6})).thenReturn(validAggregate);
+        when(recoveryHandler.restore(validAggregate)).thenReturn(RecoveryDecision.KEEP);
 
         PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), new RoomCoordinator());
+                store, mapper, recoveryHandler, applicationContext, new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
         verify(store).quarantine("room-X", "Snapshot room identity does not match WAL file identity");
-        verify(roomService).restoreRoom(roomValid, "Alice");
+        verify(recoveryHandler).restore(validAggregate);
+        verify(recoveryHandler, never()).restore(aggregate);
         assertTrue(recovery.isComplete());
     }
 
-    /**
-     * Protects the contract that committed deletion tombstones delete the WAL file and do not restore the room.
-     */
     @Test
-    void deletionTombstoneDeletesWalAndDoesNotRegisterRoom() {
+    void deletionTombstoneDeletesWalAndDoesNotInvokeHandler() {
         RecoveredAggregate tombstone = new RecoveredAggregate(null, null, null, true);
 
         when(store.recoverAll()).thenReturn(Map.of("room-deleted", new byte[]{1, 2, 3}));
         when(mapper.deserialize(any())).thenReturn(tombstone);
 
         PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), new RoomCoordinator());
+                store, mapper, recoveryHandler, applicationContext, new RoomCoordinator());
 
         recovery.run(new DefaultApplicationArguments());
 
         verify(store).delete("room-deleted");
-        verifyNoInteractions(roomService);
-        verifyNoInteractions(gameLifecycleService);
-        verifyNoInteractions(webSocketEventListener);
+        verifyNoInteractions(recoveryHandler);
         assertTrue(recovery.isComplete());
     }
 
-    /**
-     * Protects the contract that aggregate recovery marks players disconnected with Math.max deadline logic and resumes timers.
-     */
     @Test
-    void happyPathRecoversAggregateAndMarksPlayersDisconnectedWithCorrectDeadlines() {
-        Room room = new Room("room-1", "Room 1", "Alice", 6, 10, 20, 1000, null);
-        room.addPlayer("Alice");
-        room.addPlayer("Bob");
-
-        Player alice = new Player("Alice", "alice-id", 1000);
-        long futureStoredDeadline = System.currentTimeMillis() + 60_000L;
-        alice.setDisconnectDeadlineEpochMs(futureStoredDeadline);
-
-        Player bob = new Player("Bob", "bob-id", 1000);
-        bob.setDisconnectDeadlineEpochMs(null);
-
-        Game game = mock(Game.class);
-        when(game.getGameId()).thenReturn("room-1");
-        when(game.getPlayers()).thenReturn(List.of(alice, bob));
-
-        RecoveredAggregate aggregate = new RecoveredAggregate(room, "Alice", game, false);
+    void restoreAcquiresRoomLockAroundHandlerAndPublishesReadinessTransitions() {
+        Room room = roomForRecovery("room-1", "Alice");
+        RecoveredAggregate aggregate = new RecoveredAggregate(room, "Alice", null, false);
         when(store.recoverAll()).thenReturn(Map.of("room-1", new byte[]{1, 2, 3}));
         when(mapper.deserialize(any())).thenReturn(aggregate);
 
+        RoomCoordinator coordinator = new RoomCoordinator();
+        AtomicBoolean lockHeldDuringRestore = new AtomicBoolean(false);
+        when(recoveryHandler.restore(aggregate)).thenAnswer(_ -> {
+            lockHeldDuringRestore.set(coordinator.isHeldByCurrentThread("room-1"));
+            return RecoveryDecision.KEEP;
+        });
+
+        List<ReadinessState> states = new ArrayList<>();
+        applicationContext.addApplicationListener(
+                (ApplicationListener<AvailabilityChangeEvent<ReadinessState>>) event -> states.add(event.getState()));
+
         PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), new RoomCoordinator());
+                store, mapper, recoveryHandler, applicationContext, coordinator);
+        assertFalse(recovery.isComplete());
 
-        long beforeRun = System.currentTimeMillis();
         recovery.run(new DefaultApplicationArguments());
-        long afterRun = System.currentTimeMillis();
 
-        verify(roomService).restoreRoom(room, "Alice");
-        verify(gameLifecycleService).restoreGame(game);
-        verify(gameLifecycleService).resumeRecoveredTimers("room-1");
-
-        assertTrue(alice.getIsDisconnected());
-        assertEquals(futureStoredDeadline, alice.getDisconnectDeadlineEpochMs());
-        verify(webSocketEventListener).scheduleRecoveredDisconnect("room-1", "Alice", futureStoredDeadline);
-
-        assertTrue(bob.getIsDisconnected());
-        assertNotNull(bob.getDisconnectDeadlineEpochMs());
-        assertTrue(bob.getDisconnectDeadlineEpochMs() >= beforeRun + DISCONNECT_GRACE_PERIOD_MS);
-        assertTrue(bob.getDisconnectDeadlineEpochMs() <= afterRun + DISCONNECT_GRACE_PERIOD_MS);
-
-        ArgumentCaptor<Long> bobDeadlineCaptor = ArgumentCaptor.forClass(Long.class);
-        verify(webSocketEventListener).scheduleRecoveredDisconnect(eq("room-1"), eq("Bob"), bobDeadlineCaptor.capture());
-        assertEquals(bob.getDisconnectDeadlineEpochMs(), bobDeadlineCaptor.getValue());
-
+        assertTrue(lockHeldDuringRestore.get());
+        assertFalse(coordinator.isHeldByCurrentThread("room-1"));
+        verify(store, never()).delete("room-1");
+        verify(store, never()).quarantine(anyString(), anyString());
+        assertEquals(List.of(ReadinessState.REFUSING_TRAFFIC, ReadinessState.ACCEPTING_TRAFFIC), states);
         assertTrue(recovery.isComplete());
     }
 
-    /**
-     * Protects the contract that recovery re-registers scheduled timers for active games and disconnect deadlines for all players.
-     */
     @Test
-    void happyPathRecoveryReRegistersScheduledTimersAndDisconnectDeadlines() {
-        Room activeRoom = new Room("room-active", "Active Game Room", "Alice", 6, 10, 20, 1000, null);
-        activeRoom.addPlayer("Alice");
-        activeRoom.addPlayer("Bob");
+    void handlerDiscardDecisionDeletesWalWithoutQuarantine() {
+        Room expiredRoom = roomForRecovery("expired-room", "Alice");
+        RecoveredAggregate expiredAggregate = new RecoveredAggregate(expiredRoom, "Alice", null, false);
+        Room validRoom = roomForRecovery("valid-room", "Bob");
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Bob", null, false);
 
-        Player alice = new Player("Alice", "alice-id", 1000);
-        long futureDeadline = System.currentTimeMillis() + 45_000L;
-        alice.setDisconnectDeadlineEpochMs(futureDeadline);
-
-        Player bob = new Player("Bob", "bob-id", 1000);
-        bob.setDisconnectDeadlineEpochMs(null);
-
-        Game activeGame = mock(Game.class);
-        when(activeGame.getGameId()).thenReturn("room-active");
-        when(activeGame.getPlayers()).thenReturn(List.of(alice, bob));
-
-        RecoveredAggregate activeAggregate = new RecoveredAggregate(activeRoom, "Alice", activeGame, false);
-
-        Room lobbyRoom = new Room("room-lobby", "Lobby Room", "Charlie", 6, 10, 20, 1000, null);
-        lobbyRoom.addPlayer("Charlie");
-        RecoveredAggregate lobbyAggregate = new RecoveredAggregate(lobbyRoom, "Charlie", null, false);
-
+        byte[] expiredBytes = new byte[]{1};
+        byte[] validBytes = new byte[]{2};
         when(store.recoverAll()).thenReturn(Map.of(
-                "room-active", new byte[]{1, 2},
-                "room-lobby", new byte[]{3, 4}));
-        when(mapper.deserialize(new byte[]{1, 2})).thenReturn(activeAggregate);
-        when(mapper.deserialize(new byte[]{3, 4})).thenReturn(lobbyAggregate);
+                "expired-room", expiredBytes,
+                "valid-room", validBytes));
+        when(mapper.deserialize(expiredBytes)).thenReturn(expiredAggregate);
+        when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
+        when(recoveryHandler.restore(expiredAggregate)).thenReturn(RecoveryDecision.DISCARD);
+        when(recoveryHandler.restore(validAggregate)).thenReturn(RecoveryDecision.KEEP);
 
         PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), new RoomCoordinator());
+                store, mapper, recoveryHandler, applicationContext, new RoomCoordinator());
 
-        long beforeRun = System.currentTimeMillis();
         recovery.run(new DefaultApplicationArguments());
-        long afterRun = System.currentTimeMillis();
 
-        // Active game: restored and timers resumed
-        verify(gameLifecycleService).restoreGame(activeGame);
-        verify(gameLifecycleService).resumeRecoveredTimers("room-active");
-
-        // Lobby room: no game restored or timers resumed
-        verify(gameLifecycleService, never()).resumeRecoveredTimers("room-lobby");
-
-        // Disconnect deadlines registered for all players
-        verify(webSocketEventListener).scheduleRecoveredDisconnect("room-active", "Alice", futureDeadline);
-
-        ArgumentCaptor<Long> bobDeadlineCaptor = ArgumentCaptor.forClass(Long.class);
-        verify(webSocketEventListener).scheduleRecoveredDisconnect(eq("room-active"), eq("Bob"), bobDeadlineCaptor.capture());
-        assertTrue(bobDeadlineCaptor.getValue() >= beforeRun + DISCONNECT_GRACE_PERIOD_MS);
-        assertTrue(bobDeadlineCaptor.getValue() <= afterRun + DISCONNECT_GRACE_PERIOD_MS);
-
-        ArgumentCaptor<Long> charlieDeadlineCaptor = ArgumentCaptor.forClass(Long.class);
-        verify(webSocketEventListener).scheduleRecoveredDisconnect(eq("room-lobby"), eq("Charlie"), charlieDeadlineCaptor.capture());
-        assertTrue(charlieDeadlineCaptor.getValue() >= beforeRun + DISCONNECT_GRACE_PERIOD_MS);
-        assertTrue(charlieDeadlineCaptor.getValue() <= afterRun + DISCONNECT_GRACE_PERIOD_MS);
-
+        verify(store).delete("expired-room");
+        verify(store, never()).delete("valid-room");
+        verify(store, never()).quarantine(anyString(), anyString());
         assertTrue(recovery.isComplete());
     }
 
-    /** Runs recovery with real encrypted state images and isolates faults in decoding and registration. */
     @Test
     void startupQuarantinesUnreadableAndUnrestorableRoomsWhileKeepingValidRooms(@TempDir Path directory) {
         EncryptionKeyring keys = new EncryptionKeyring("current",
@@ -288,17 +203,16 @@ class PersistenceRecoveryTest {
             realStore.commit(realStore.prepare("malformed-json"), "{".getBytes(StandardCharsets.UTF_8));
             return null;
         });
-        doAnswer(invocation -> {
-            Room restored = invocation.getArgument(0);
-            if (unrestorable.getRoomId().equals(restored.getRoomId())) {
+        when(recoveryHandler.restore(any())).thenAnswer(invocation -> {
+            RecoveredAggregate recovered = invocation.getArgument(0);
+            if (unrestorable.getRoomId().equals(recovered.room().getRoomId())) {
                 throw new IllegalStateException("Injected room registration failure");
             }
-            return null;
-        }).when(roomService).restoreRoom(any(Room.class), anyString());
+            return RecoveryDecision.KEEP;
+        });
 
-        PersistenceRecovery recovery = new PersistenceRecovery(realStore, realMapper, roomService,
-                gameLifecycleService, webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), coordinator);
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                realStore, realMapper, recoveryHandler, applicationContext, coordinator);
         recovery.run(new DefaultApplicationArguments());
 
         assertTrue(recovery.isComplete());
@@ -311,13 +225,10 @@ class PersistenceRecoveryTest {
         }
         for (Room room : List.of(active, waiting)) {
             assertTrue(Files.exists(directory.resolve(room.getRoomId() + ".wal")));
-            verify(roomService).restoreRoom(argThat(restored -> room.getRoomId().equals(restored.getRoomId())),
-                    eq(room.getHostName()));
+            verify(recoveryHandler).restore(argThat(recovered -> room.getRoomId().equals(recovered.room().getRoomId())));
         }
-        verify(gameLifecycleService).restoreGame(argThat(restored -> active.getRoomId().equals(restored.getGameId())));
     }
 
-    /** Protects the contract that recovery quarantines a WAL whose snapshot has an unknown key. */
     @Test
     void startupQuarantinesSnapshotWithUnknownKeyAndRecoversValidRooms(@TempDir Path directory) {
         EncryptionKeyring keys = new EncryptionKeyring("current",
@@ -342,10 +253,10 @@ class PersistenceRecoveryTest {
             realStore.commit(realStore.prepare(unknownKeyRoom.getRoomId()), jsonMapper.writeValueAsBytes(tree));
             return null;
         });
+        when(recoveryHandler.restore(any())).thenReturn(RecoveryDecision.KEEP);
 
-        PersistenceRecovery recovery = new PersistenceRecovery(realStore, realMapper, roomService,
-                gameLifecycleService, webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), coordinator);
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                realStore, realMapper, recoveryHandler, applicationContext, coordinator);
         recovery.run(new DefaultApplicationArguments());
 
         assertTrue(recovery.isComplete());
@@ -353,11 +264,10 @@ class PersistenceRecoveryTest {
         assertFalse(Files.exists(directory.resolve("unknown-key-room.wal")));
         assertTrue(Files.exists(directory.resolve("unknown-key-room.wal.corrupted")));
         assertTrue(Files.exists(directory.resolve("valid-room.wal")));
-        verify(roomService, never()).restoreRoom(argThat(r -> "unknown-key-room".equals(r.getRoomId())), any());
-        verify(roomService).restoreRoom(argThat(r -> "valid-room".equals(r.getRoomId())), eq("Alice"));
+        verify(recoveryHandler, never()).restore(argThat(r -> "unknown-key-room".equals(r.room().getRoomId())));
+        verify(recoveryHandler).restore(argThat(r -> "valid-room".equals(r.room().getRoomId())));
     }
 
-    /** Protects the contract that recovery quarantines a WAL whose snapshot is missing a required creator key. */
     @Test
     void startupQuarantinesSnapshotWithMissingKeyAndRecoversValidRooms(@TempDir Path directory) {
         EncryptionKeyring keys = new EncryptionKeyring("current",
@@ -382,10 +292,10 @@ class PersistenceRecoveryTest {
             realStore.commit(realStore.prepare(missingKeyRoom.getRoomId()), jsonMapper.writeValueAsBytes(tree));
             return null;
         });
+        when(recoveryHandler.restore(any())).thenReturn(RecoveryDecision.KEEP);
 
-        PersistenceRecovery recovery = new PersistenceRecovery(realStore, realMapper, roomService,
-                gameLifecycleService, webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), coordinator);
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                realStore, realMapper, recoveryHandler, applicationContext, coordinator);
         recovery.run(new DefaultApplicationArguments());
 
         assertTrue(recovery.isComplete());
@@ -393,31 +303,14 @@ class PersistenceRecoveryTest {
         assertFalse(Files.exists(directory.resolve("missing-key-room.wal")));
         assertTrue(Files.exists(directory.resolve("missing-key-room.wal.corrupted")));
         assertTrue(Files.exists(directory.resolve("valid-room.wal")));
-        verify(roomService, never()).restoreRoom(argThat(r -> "missing-key-room".equals(r.getRoomId())), any());
-        verify(roomService).restoreRoom(argThat(r -> "valid-room".equals(r.getRoomId())), eq("Alice"));
+        verify(recoveryHandler, never()).restore(argThat(r -> "missing-key-room".equals(r.room().getRoomId())));
+        verify(recoveryHandler).restore(argThat(r -> "valid-room".equals(r.room().getRoomId())));
     }
 
-    /** Registers a host so the captured room has a valid membership and roster. */
-    private Room roomForRecovery(String roomId, String host) {
-        Room room = new Room(roomId, roomId, host, 6, 10, 20, 1000, null);
-        room.addPlayer(host);
-        return room;
-    }
-
-    /**
-     * Protects the contract that when a corrupted snapshot causes mapper.deserialize to throw,
-     * PersistenceRecovery catches the exception, calls store.quarantine(roomId, reason),
-     * does not abort startup, and recovers all remaining valid rooms and games.
-     */
     @Test
     void corruptedSnapshotDeserializationFailureQuarantinesWalAndRecoversRemainingRooms() {
-        Room validRoom = new Room("room-valid", "Valid Room", "Alice", 6, 10, 20, 1000, null);
-        validRoom.addPlayer("Alice");
-        Player alice = new Player("Alice", "alice-id", 1000);
-        Game validGame = mock(Game.class);
-        when(validGame.getGameId()).thenReturn("room-valid");
-        when(validGame.getPlayers()).thenReturn(List.of(alice));
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", validGame, false);
+        Room validRoom = roomForRecovery("room-valid", "Alice");
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", null, false);
 
         byte[] corruptBytes = new byte[]{9, 9, 9};
         byte[] validBytes = new byte[]{1, 2, 3};
@@ -427,47 +320,24 @@ class PersistenceRecoveryTest {
                 "room-valid", validBytes));
         when(mapper.deserialize(corruptBytes)).thenThrow(new PersistenceException("Corrupted JSON payload in WAL"));
         when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
+        when(recoveryHandler.restore(validAggregate)).thenReturn(RecoveryDecision.KEEP);
 
         PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), new RoomCoordinator());
+                store, mapper, recoveryHandler, applicationContext, new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
-        // Quarantine called for the corrupt room with error message
-        verify(store).quarantine(eq("room-corrupt"), eq("Corrupted JSON payload in WAL"));
-
-        // Valid room and game are restored into services
-        verify(roomService).restoreRoom(validRoom, "Alice");
-        verify(gameLifecycleService).restoreGame(validGame);
-        verify(gameLifecycleService).resumeRecoveredTimers("room-valid");
-        verify(webSocketEventListener).scheduleRecoveredDisconnect(eq("room-valid"), eq("Alice"), anyLong());
-
-        assertTrue(recovery.isComplete(), "Recovery must be marked complete and accept traffic despite one corrupt room");
+        verify(store).quarantine("room-corrupt", "Corrupted JSON payload in WAL");
+        verify(recoveryHandler).restore(validAggregate);
+        assertTrue(recovery.isComplete());
     }
 
-    /**
-     * Protects the contract that when aggregate restoration throws (e.g. restoreGame throws runtime exception),
-     * PersistenceRecovery catches the exception, calls store.quarantine(roomId, reason),
-     * does not abort startup, and recovers all remaining valid rooms and games.
-     */
     @Test
-    void aggregateGameRestorationExceptionQuarantinesWalAndRecoversRemainingRooms() {
-        Room brokenRoom = new Room("room-broken", "Broken Game Room", "Bob", 6, 10, 20, 1000, null);
-        brokenRoom.addPlayer("Bob");
-        Player bob = new Player("Bob", "bob-id", 1000);
-        Game brokenGame = mock(Game.class);
-        when(brokenGame.getPlayers()).thenReturn(List.of(bob));
-        RecoveredAggregate brokenAggregate = new RecoveredAggregate(brokenRoom, "Bob", brokenGame, false);
-
-        Room validRoom = new Room("room-valid", "Valid Room", "Alice", 6, 10, 20, 1000, null);
-        validRoom.addPlayer("Alice");
-        Player alice = new Player("Alice", "alice-id", 1000);
-        Game validGame = mock(Game.class);
-        when(validGame.getGameId()).thenReturn("room-valid");
-        when(validGame.getPlayers()).thenReturn(List.of(alice));
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", validGame, false);
+    void handlerRestorationExceptionQuarantinesWalAndRecoversRemainingRooms() {
+        Room brokenRoom = roomForRecovery("room-broken", "Bob");
+        RecoveredAggregate brokenAggregate = new RecoveredAggregate(brokenRoom, "Bob", null, false);
+        Room validRoom = roomForRecovery("room-valid", "Alice");
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", null, false);
 
         byte[] brokenBytes = new byte[]{4, 5, 6};
         byte[] validBytes = new byte[]{1, 2, 3};
@@ -477,73 +347,20 @@ class PersistenceRecoveryTest {
                 "room-valid", validBytes));
         when(mapper.deserialize(brokenBytes)).thenReturn(brokenAggregate);
         when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
-
-        doThrow(new IllegalStateException("Inconsistent aggregate state during restoreGame"))
-                .when(gameLifecycleService).restoreGame(brokenGame);
-        doNothing().when(gameLifecycleService).restoreGame(validGame);
+        when(recoveryHandler.restore(brokenAggregate))
+                .thenThrow(new IllegalStateException("Inconsistent aggregate state during restore"));
+        when(recoveryHandler.restore(validAggregate)).thenReturn(RecoveryDecision.KEEP);
 
         PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), new RoomCoordinator());
+                store, mapper, recoveryHandler, applicationContext, new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
-        // Quarantine called for the broken room
-        verify(store).quarantine(eq("room-broken"), eq("Inconsistent aggregate state during restoreGame"));
-
-        // Valid room and game restored cleanly
-        verify(roomService).restoreRoom(validRoom, "Alice");
-        verify(gameLifecycleService).restoreGame(validGame);
-        verify(gameLifecycleService).resumeRecoveredTimers("room-valid");
-
-        assertTrue(recovery.isComplete(), "Recovery must complete and accept traffic despite one broken game");
-    }
-
-    /**
-     * Protects the contract that when roomService.restoreRoom throws a runtime exception,
-     * PersistenceRecovery catches the exception, calls store.quarantine(roomId, reason),
-     * does not abort startup, and recovers all remaining valid rooms.
-     */
-    @Test
-    void roomServiceRestorationExceptionQuarantinesWalAndRecoversRemainingRooms() {
-        Room brokenRoom = new Room("room-broken", "Broken Room", "Bob", 6, 10, 20, 1000, null);
-        brokenRoom.addPlayer("Bob");
-        RecoveredAggregate brokenAggregate = new RecoveredAggregate(brokenRoom, "Bob", null, false);
-
-        Room validRoom = new Room("room-valid", "Valid Room", "Alice", 6, 10, 20, 1000, null);
-        validRoom.addPlayer("Alice");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", null, false);
-
-        byte[] brokenBytes = new byte[]{7, 8};
-        byte[] validBytes = new byte[]{1, 2};
-
-        when(store.recoverAll()).thenReturn(Map.of(
-                "room-broken", brokenBytes,
-                "room-valid", validBytes));
-        when(mapper.deserialize(brokenBytes)).thenReturn(brokenAggregate);
-        when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
-
-        doThrow(new RuntimeException("Room host constraint violated"))
-                .when(roomService).restoreRoom(brokenRoom, "Bob");
-        doNothing().when(roomService).restoreRoom(validRoom, "Alice");
-
-        PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), new RoomCoordinator());
-
-        assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
-
-        verify(store).quarantine(eq("room-broken"), eq("Room host constraint violated"));
-        verify(roomService).restoreRoom(validRoom, "Alice");
+        verify(store).quarantine("room-broken", "Inconsistent aggregate state during restore");
+        verify(recoveryHandler).restore(validAggregate);
         assertTrue(recovery.isComplete());
     }
 
-    /**
-     * Protects the contract that when all room WAL files are corrupted,
-     * PersistenceRecovery quarantines every corrupt file and still completes startup cleanly.
-     */
     @Test
     void allRoomsCorruptedQuarantinesAllAndCompletesStartupWithoutCrash() {
         byte[] corrupt1 = new byte[]{1};
@@ -556,156 +373,13 @@ class PersistenceRecoveryTest {
         when(mapper.deserialize(corrupt2)).thenThrow(new PersistenceException("Corrupt 2"));
 
         PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), new RoomCoordinator());
+                store, mapper, recoveryHandler, applicationContext, new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
         verify(store).quarantine("room-corrupt-1", "Corrupt 1");
         verify(store).quarantine("room-corrupt-2", "Corrupt 2");
-        verifyNoInteractions(roomService);
-        verifyNoInteractions(gameLifecycleService);
-        assertTrue(recovery.isComplete());
-    }
-
-    /**
-     * Protects the contract that when an exception is thrown during post-registration timer resumption,
-     * PersistenceRecovery evicts the already-registered room and game from memory, quarantines the room's WAL,
-     * and allows all remaining valid rooms to recover cleanly.
-     */
-    @Test
-    void postRestorationTimerResumptionExceptionEvictsRoomAndGameAndQuarantinesWal() {
-        Room brokenRoom = new Room("room-timer-fail", "Timer Fail Room", "Bob", 6, 10, 20, 1000, null);
-        brokenRoom.addPlayer("Bob");
-        Player bob = new Player("Bob", "bob-id", 1000);
-        Game brokenGame = mock(Game.class);
-        when(brokenGame.getGameId()).thenReturn("room-timer-fail");
-        when(brokenGame.getPlayers()).thenReturn(List.of(bob));
-        RecoveredAggregate brokenAggregate = new RecoveredAggregate(brokenRoom, "Bob", brokenGame, false);
-
-        Room validRoom = new Room("room-valid", "Valid Room", "Alice", 6, 10, 20, 1000, null);
-        validRoom.addPlayer("Alice");
-        Player alice = new Player("Alice", "alice-id", 1000);
-        Game validGame = mock(Game.class);
-        when(validGame.getGameId()).thenReturn("room-valid");
-        when(validGame.getPlayers()).thenReturn(List.of(alice));
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", validGame, false);
-
-        byte[] brokenBytes = new byte[]{4, 5, 6};
-        byte[] validBytes = new byte[]{1, 2, 3};
-
-        when(store.recoverAll()).thenReturn(Map.of(
-                "room-timer-fail", brokenBytes,
-                "room-valid", validBytes));
-        when(mapper.deserialize(brokenBytes)).thenReturn(brokenAggregate);
-        when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
-
-        doThrow(new IllegalStateException("Failed to resume recovered timers"))
-                .when(gameLifecycleService).resumeRecoveredTimers("room-timer-fail");
-        doNothing().when(gameLifecycleService).resumeRecoveredTimers("room-valid");
-
-        PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), new RoomCoordinator());
-
-        assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
-
-        // Broken room and game were restored first, then evicted and quarantined after timer failure
-        verify(roomService).restoreRoom(brokenRoom, "Bob");
-        verify(gameLifecycleService).restoreGame(brokenGame);
-        verify(gameLifecycleService).evictGame("room-timer-fail");
-        verify(roomService).evictRoom("room-timer-fail");
-        verify(store).quarantine("room-timer-fail", "Failed to resume recovered timers");
-
-        // Valid room and game restored cleanly and not evicted
-        verify(roomService).restoreRoom(validRoom, "Alice");
-        verify(gameLifecycleService).restoreGame(validGame);
-        verify(gameLifecycleService).resumeRecoveredTimers("room-valid");
-        verify(gameLifecycleService, never()).evictGame("room-valid");
-        verify(roomService, never()).evictRoom("room-valid");
-
-        assertTrue(recovery.isComplete());
-    }
-
-    @Test
-    void lobbyExpiredDuringDowntimeIsDeletedAndNotRestored() {
-        java.time.Clock clock = mock(java.time.Clock.class);
-        when(clock.millis()).thenReturn(1_900_000_000_000L);
-
-        Room room = new Room("expired-lobby", "Expired Room", "Alice", 6, 10, 20, 1000, null);
-        room.addPlayer("Alice");
-        room.setInactivityDeadlineEpochMs(1_899_999_000_000L); // overdue
-        RecoveredAggregate aggregate = new RecoveredAggregate(room, "Alice", null, false);
-
-        when(store.recoverAll()).thenReturn(Map.of("expired-lobby", new byte[]{1, 2}));
-        when(mapper.deserialize(any())).thenReturn(aggregate);
-
-        PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS, clock, new RoomCoordinator());
-
-        recovery.run(new DefaultApplicationArguments());
-
-        verify(store).delete("expired-lobby");
-        verifyNoInteractions(roomService);
-        assertTrue(recovery.isComplete());
-    }
-
-    @Test
-    void lobbyWithFutureDeadlinePreservesDeadlineAndSchedulesInactivity() {
-        java.time.Clock clock = mock(java.time.Clock.class);
-        when(clock.millis()).thenReturn(1_900_000_000_000L);
-
-        long futureDeadline = 1_900_001_800_000L;
-        Room room = new Room("future-lobby", "Future Room", "Alice", 6, 10, 20, 1000, null);
-        room.addPlayer("Alice");
-        room.setInactivityDeadlineEpochMs(futureDeadline);
-        RecoveredAggregate aggregate = new RecoveredAggregate(room, "Alice", null, false);
-
-        when(store.recoverAll()).thenReturn(Map.of("future-lobby", new byte[]{1, 2}));
-        when(mapper.deserialize(any())).thenReturn(aggregate);
-
-        PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS, clock, new RoomCoordinator());
-
-        recovery.run(new DefaultApplicationArguments());
-
-        verify(roomService).restoreRoom(room, "Alice");
-        verify(roomService).scheduleLobbyInactivity("future-lobby", futureDeadline);
-        assertTrue(recovery.isComplete());
-    }
-
-    @Test
-    void downtimeExpiredActiveGameInactivityRecoversAsAbandonedGameWithTerminalCleanup() {
-        java.time.Clock clock = mock(java.time.Clock.class);
-        when(clock.millis()).thenReturn(1_900_000_000_000L);
-
-        Room room = new Room("expired-game", "Expired Game Room", "Alice", 6, 10, 20, 1000, null);
-        room.addPlayer("Alice");
-        room.addPlayer("Bob");
-        room.setInactivityDeadlineEpochMs(1_899_999_000_000L); // overdue
-
-        Game game = mock(Game.class);
-        when(game.isGameOver()).thenReturn(false);
-
-        RecoveredAggregate aggregate = new RecoveredAggregate(room, "Alice", game, false);
-
-        when(store.recoverAll()).thenReturn(Map.of("expired-game", new byte[]{1, 2}));
-        when(mapper.deserialize(any())).thenReturn(aggregate);
-
-        PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS, clock, new RoomCoordinator());
-
-        recovery.run(new DefaultApplicationArguments());
-
-        verify(roomService).restoreRoom(room, "Alice");
-        verify(gameLifecycleService).restoreGame(game);
-        verify(gameLifecycleService).abandonGameDueToInactivity("expired-game");
-        verify(gameLifecycleService, never()).resumeRecoveredTimers(anyString());
+        verifyNoInteractions(recoveryHandler);
         assertTrue(recovery.isComplete());
     }
 
@@ -722,126 +396,51 @@ class PersistenceRecoveryTest {
                 "room-valid", validBytes));
         when(mapper.deserialize(tombstoneBytes)).thenReturn(tombstone);
         when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
+        when(recoveryHandler.restore(validAggregate)).thenReturn(RecoveryDecision.KEEP);
         doThrow(new PersistenceException("Cannot delete WAL")).when(store).delete("room-tombstone");
 
         PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                Clock.systemUTC(), new RoomCoordinator());
+                store, mapper, recoveryHandler, applicationContext, new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
         verify(store, never()).quarantine(eq("room-tombstone"), anyString());
         verify(store).clearRoomTracking("room-tombstone");
-        verify(roomService).restoreRoom(validRoom, "Alice");
-        verify(roomService, never()).restoreRoom(argThat(r -> "room-tombstone".equals(r.getRoomId())), anyString());
+        verify(recoveryHandler).restore(validAggregate);
+        verify(recoveryHandler, never()).restore(argThat(r -> r != null && r.room() != null
+                && "room-tombstone".equals(r.room().getRoomId())));
         assertTrue(recovery.isComplete());
     }
 
     @Test
-    void expiredLobbyDeleteFailureDoesNotQuarantineOrRestoreLobby() {
-        Clock clock = Clock.fixed(java.time.Instant.ofEpochMilli(1_900_000_000_000L), java.time.ZoneOffset.UTC);
-
-        Room expiredLobby = roomForRecovery("expired-lobby", "Alice");
-        expiredLobby.setInactivityDeadlineEpochMs(1_899_999_000_000L);
-        RecoveredAggregate expiredAggregate = new RecoveredAggregate(expiredLobby, "Alice", null, false);
-
+    void discardedRoomDeleteFailureDoesNotQuarantineOrAbortRecovery() {
+        Room discardedRoom = roomForRecovery("expired-room", "Alice");
+        RecoveredAggregate discardedAggregate = new RecoveredAggregate(discardedRoom, "Alice", null, false);
         Room validRoom = roomForRecovery("room-valid", "Bob");
         RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Bob", null, false);
 
-        byte[] expiredBytes = new byte[]{1};
+        byte[] discardedBytes = new byte[]{1};
         byte[] validBytes = new byte[]{2};
         when(store.recoverAll()).thenReturn(Map.of(
-                "expired-lobby", expiredBytes,
+                "expired-room", discardedBytes,
                 "room-valid", validBytes));
-        when(mapper.deserialize(expiredBytes)).thenReturn(expiredAggregate);
+        when(mapper.deserialize(discardedBytes)).thenReturn(discardedAggregate);
         when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
-        doThrow(new PersistenceException("Cannot delete expired lobby WAL")).when(store).delete("expired-lobby");
+        when(recoveryHandler.restore(discardedAggregate)).thenReturn(RecoveryDecision.DISCARD);
+        when(recoveryHandler.restore(validAggregate)).thenReturn(RecoveryDecision.KEEP);
+        doThrow(new PersistenceException("Cannot delete discarded WAL")).when(store).delete("expired-room");
 
         PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                clock, new RoomCoordinator());
+                store, mapper, recoveryHandler, applicationContext, new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
-        verify(store, never()).quarantine(eq("expired-lobby"), anyString());
-        verify(store).clearRoomTracking("expired-lobby");
-        verify(roomService, never()).restoreRoom(expiredLobby, "Alice");
-        verify(roomService).restoreRoom(validRoom, "Bob");
+        verify(store, never()).quarantine(eq("expired-room"), anyString());
+        verify(store).clearRoomTracking("expired-room");
+        verify(recoveryHandler).restore(validAggregate);
         assertTrue(recovery.isComplete());
     }
 
-    @Test
-    void expiredCleanupGameDeleteFailureDoesNotQuarantineOrRestoreGame() {
-        Clock clock = Clock.fixed(java.time.Instant.ofEpochMilli(1_900_000_000_000L), java.time.ZoneOffset.UTC);
-
-        Room expiredRoom = roomForRecovery("expired-cleanup", "Alice");
-        Game expiredGame = mock(Game.class);
-        when(expiredGame.isGameOver()).thenReturn(true);
-        when(expiredGame.isCleanupExpired(1_900_000_000_000L)).thenReturn(true);
-        RecoveredAggregate expiredAggregate = new RecoveredAggregate(expiredRoom, "Alice", expiredGame, false);
-
-        Room validRoom = roomForRecovery("room-valid", "Bob");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Bob", null, false);
-
-        byte[] expiredBytes = new byte[]{1};
-        byte[] validBytes = new byte[]{2};
-        when(store.recoverAll()).thenReturn(Map.of(
-                "expired-cleanup", expiredBytes,
-                "room-valid", validBytes));
-        when(mapper.deserialize(expiredBytes)).thenReturn(expiredAggregate);
-        when(mapper.deserialize(validBytes)).thenReturn(validAggregate);
-        doThrow(new PersistenceException("Cannot delete expired game WAL")).when(store).delete("expired-cleanup");
-
-        PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                clock, new RoomCoordinator());
-
-        assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
-
-        verify(store, never()).quarantine(eq("expired-cleanup"), anyString());
-        verify(store).clearRoomTracking("expired-cleanup");
-        verify(roomService, never()).restoreRoom(expiredRoom, "Alice");
-        verify(gameLifecycleService, never()).restoreGame(expiredGame);
-        verify(roomService).restoreRoom(validRoom, "Bob");
-        assertTrue(recovery.isComplete());
-    }
-
-    @Test
-    void disconnectGraceDeadlineUsesInjectedClock() {
-        long fixedNow = 1_000_000_000L;
-        Clock fixedClock = Clock.fixed(java.time.Instant.ofEpochMilli(fixedNow), java.time.ZoneOffset.UTC);
-        long expectedDeadline = fixedNow + DISCONNECT_GRACE_PERIOD_MS;
-
-        Room room = roomForRecovery("room-clock", "Alice");
-        Player alice = new Player("Alice", "alice-id", 1000);
-        alice.setDisconnectDeadlineEpochMs(null);
-        Game game = mock(Game.class);
-        when(game.getGameId()).thenReturn("room-clock");
-        when(game.getPlayers()).thenReturn(List.of(alice));
-        RecoveredAggregate aggregate = new RecoveredAggregate(room, "Alice", game, false);
-
-        when(store.recoverAll()).thenReturn(Map.of("room-clock", new byte[]{1}));
-        when(mapper.deserialize(any())).thenReturn(aggregate);
-
-        PersistenceRecovery recovery = new PersistenceRecovery(
-                store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                fixedClock, new RoomCoordinator());
-
-        recovery.run(new DefaultApplicationArguments());
-
-        assertEquals(expectedDeadline, alice.getDisconnectDeadlineEpochMs());
-        verify(webSocketEventListener).scheduleRecoveredDisconnect("room-clock", "Alice", expectedDeadline);
-    }
-
-    /**
-     * Protects the contract that when WAL deletion fails during startup recovery for a tombstone
-     * or expired lobby using a real EncryptedWalStore, the WAL is not quarantined and store health
-     * and unsavedRoomCount are not wedged in a failed state.
-     */
     @Test
     void realStoreDeleteFailureDuringRecoveryDoesNotQuarantineOrWedgeStoreHealth(@TempDir Path directory) {
         EncryptionKeyring keys = new EncryptionKeyring("current",
@@ -856,12 +455,8 @@ class PersistenceRecoveryTest {
         AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
-        long now = 1_900_000_000_000L;
-        Clock fixedClock = Clock.fixed(java.time.Instant.ofEpochMilli(now), java.time.ZoneOffset.UTC);
-
         Room validRoom = roomForRecovery("valid-room", "Alice");
         Room expiredLobby = roomForRecovery("expired-lobby", "Bob");
-        expiredLobby.setInactivityDeadlineEpochMs(now - 60_000L);
 
         withRoomLock(coordinator, validRoom.getRoomId(), () -> {
             realStore.commit(realStore.prepare(validRoom.getRoomId()),
@@ -879,11 +474,17 @@ class PersistenceRecoveryTest {
             return null;
         });
 
+        when(recoveryHandler.restore(argThat(r -> r != null && r.room() != null
+                && "expired-lobby".equals(r.room().getRoomId()))))
+                .thenReturn(RecoveryDecision.DISCARD);
+        when(recoveryHandler.restore(argThat(r -> r != null && r.room() != null
+                && "valid-room".equals(r.room().getRoomId()))))
+                .thenReturn(RecoveryDecision.KEEP);
+
         failDelete.set(true);
 
-        PersistenceRecovery recovery = new PersistenceRecovery(realStore, realMapper, roomService,
-                gameLifecycleService, webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
-                fixedClock, coordinator);
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                realStore, realMapper, recoveryHandler, applicationContext, coordinator);
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
@@ -901,8 +502,13 @@ class PersistenceRecoveryTest {
         assertTrue(Files.exists(directory.resolve("tombstone-room.wal")));
         assertFalse(Files.exists(directory.resolve("tombstone-room.wal.corrupted")));
 
-        verify(roomService).restoreRoom(argThat(r -> "valid-room".equals(r.getRoomId())), eq("Alice"));
-        verify(roomService, never()).restoreRoom(argThat(r -> "expired-lobby".equals(r.getRoomId())), anyString());
-        verify(roomService, never()).restoreRoom(argThat(r -> "tombstone-room".equals(r.getRoomId())), anyString());
+        verify(recoveryHandler).restore(argThat(r -> "valid-room".equals(r.room().getRoomId())));
+        verify(recoveryHandler).restore(argThat(r -> "expired-lobby".equals(r.room().getRoomId())));
+    }
+
+    private Room roomForRecovery(String roomId, String host) {
+        Room room = new Room(roomId, roomId, host, 6, 10, 20, 1000, null);
+        room.addPlayer(host);
+        return room;
     }
 }
