@@ -1270,29 +1270,33 @@ class PlayerDepartureHandlerTest {
                     ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline));
             assertNoOpDisconnect(sSpecConn, testRoom, game);
 
-            // Room-only spectator expired -> leaves room
+            // Room-only spectator expired -> no-op after game over, stays in room until cleanup
             testRoom.setPlayerConnected("Spectator", false);
             testRoom.setAbsenceDeadline("Spectator", pastDeadline);
+            RoomGameSnapshot sSpecExpired = snapshotRoomAndGame(testRoom, game);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
                     ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline));
-            verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Spectator")), any());
+            assertNoOpDisconnect(sSpecExpired, testRoom, game);
+            assertTrue(testRoom.hasPlayer("Spectator"));
 
-            // Expired game-player deadline -> leaves room, retains frozen roster
+            // Expired game-player deadline -> no-op after game over, retains room member and frozen roster
             p2.setDisconnected(true);
             p2.setDisconnectDeadlineEpochMs(pastDeadline);
+            RoomGameSnapshot sP2Expired = snapshotRoomAndGame(testRoom, game);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
                     ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline));
-            verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
+            assertNoOpDisconnect(sP2Expired, testRoom, game);
+            assertTrue(testRoom.hasPlayer("Player2"));
             assertTrue(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Player2")));
 
-            // Falls back to room absence deadline when game player deadline is null
+            // Room absence deadline fallback when game player deadline is null -> no-op after game over
             p2.setDisconnectDeadlineEpochMs(null);
             testRoom.setAbsenceDeadline("Player2", pastDeadline);
-            reset(roomService);
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+            RoomGameSnapshot sFallback = snapshotRoomAndGame(testRoom, game);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
                     ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline));
-            verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
+            assertNoOpDisconnect(sFallback, testRoom, game);
+            assertTrue(testRoom.hasPlayer("Player2"));
         }
 
         @Test
@@ -1318,7 +1322,7 @@ class PlayerDepartureHandlerTest {
         }
 
         @Test
-        void removeDisconnectedPlayer_PreFlopAbandonedDuringCleanupWindow_DetachesWithoutSettling() {
+        void removeDisconnectedPlayer_PreFlopAbandonedDuringCleanupWindow_NoOpsAndKeepsRoomMembers() {
             HandEvaluatorService realEvaluator = new HandEvaluatorService();
             lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
                     .thenAnswer(inv -> realEvaluator.getBestHand(inv.getArgument(0), inv.getArgument(1)));
@@ -1347,7 +1351,8 @@ class PlayerDepartureHandlerTest {
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
                     ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), disconnectDeadline));
 
-            verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
+            verifyNobodyRemovedFromRoom();
+            assertTrue(testRoom.hasPlayer("Player2"));
             verify(handEvaluator, never()).getBestHand(anyList(), anyList());
             verifyNoInteractions(gameStateService);
             assertFalse(game.isFinalPotSettled());

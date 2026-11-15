@@ -758,4 +758,58 @@ class TimingAndInactivityIT {
             assertThat(state.turnDeadlineEpochMs()).isNull();
         }
     }
+
+    @Nested
+    @DisplayName("Disconnect grace after game over")
+    class DisconnectGraceAfterGameOverTests {
+
+        @Test
+        @DisplayName("player disconnected before game over stays a room member after grace expires and can fetch GET /review")
+        void disconnectedPlayerRemainsRoomMemberAfterGraceExpiresPostGameOverAndGetsReview() throws Exception {
+            String roomName = uniqueName("DisconnectReview");
+            JsonNode host = createRoom(roomName, "Host", 4);
+            JsonNode guest = joinRoom(roomName, "Guest");
+            String roomId = host.path("roomId").asText();
+            String hostToken = host.path("token").asText();
+            String guestToken = guest.path("token").asText();
+
+            startGame(roomId, hostToken);
+            lifecycle.markPlayerReconnected(roomId, "Host");
+            lifecycle.markPlayerReconnected(roomId, "Guest");
+
+            long gracePeriodMs = 100L;
+            assertThat(gracePeriodMs).isLessThan(lifecycleTimingProperties.gameEndDisplayDelayMs());
+            long graceDeadline = clock.millis() + gracePeriodMs;
+
+            String guestMembershipId = withRoomLock(roomCoordinator, roomId, () -> {
+                var room = rooms.getRoom(roomId);
+                room.setPlayerConnected("Guest", false);
+                room.setAbsenceDeadline("Guest", graceDeadline);
+                return room.getMembershipId("Guest");
+            });
+            lifecycle.markPlayerDisconnected(roomId, "Guest", graceDeadline);
+
+            lifecycle.abandonGameDueToInactivity(roomId);
+            long cleanupDeadline = withRoomLock(roomCoordinator, roomId, () ->
+                    lifecycle.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            assertThat(graceDeadline).isLessThan(cleanupDeadline);
+
+            clock.setMillis(graceDeadline);
+            lifecycle.removeDisconnectedPlayer(roomId, "Guest", guestMembershipId, graceDeadline);
+
+            boolean guestStillInRoom = withRoomLock(roomCoordinator, roomId, () ->
+                    rooms.getRoom(roomId).hasPlayer("Guest"));
+            assertThat(guestStillInRoom).isTrue();
+
+            var response = restClient.get()
+                    .uri("/api/game/" + roomId + "/review")
+                    .header("Authorization", "Bearer " + guestToken)
+                    .retrieve()
+                    .toEntity(GameEndResponse.class);
+            assertThat(response.getStatusCode().value()).isEqualTo(200);
+            assertThat(response.getBody()).isNotNull();
+            assertThat(response.getBody().abandoned()).isTrue();
+            assertThat(response.getBody().reason()).isEqualTo("INACTIVITY");
+        }
+    }
 }

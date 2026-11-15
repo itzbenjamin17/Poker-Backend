@@ -23,6 +23,7 @@ import org.springframework.stereotype.Component;
 /**
  * Coordinates player removals, disconnects, reconnects, disconnect grace expirations, turn
  * timeouts, host transfer, and disconnect win claims across rooms and live games.
+ * After game over, connections aren't tracked, and everyone stays a member until cleanup.
  */
 @Component
 class PlayerDepartureHandler {
@@ -356,6 +357,10 @@ class PlayerDepartureHandler {
         }
 
         Game game = activeGames.get(gameId);
+        if (game != null && game.isGameOver()) {
+            logger.debug("Skipping disconnect removal for player {} because game {} is already over", playerName, gameId);
+            return;
+        }
         if (hasDisconnectGraceExpired(room, game, playerName, expectedDeadlineEpochMs)) {
             removePlayersFromRoomAndGame(gameId, List.of(playerName), room, game);
         }
