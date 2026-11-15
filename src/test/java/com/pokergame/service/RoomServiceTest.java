@@ -897,7 +897,7 @@ class RoomServiceTest {
     class ExpirationAndCleanup {
 
         @Test
-        @DisplayName("pure lookup does not close room without explicit expiration coordination")
+        @DisplayName("pure lookup and joinRoom expiry check reject without closing room")
         void pureLookupDoesNotCloseExpiredRoomWithoutExplicitExpirationCoordination() {
             String roomName = "ExpiryLookupRoom";
             String roomId = createRoom(roomService, new CreateRoomRequest(
@@ -921,8 +921,8 @@ class RoomServiceTest {
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("expired due to inactivity");
 
-            assertThat(coordinatedGetRoom(roomId)).isNull();
-            assertThat(roomService.findRoomByName(roomName)).isNull();
+            assertThat(coordinatedGetRoom(roomId)).isNotNull();
+            assertThat(roomService.findRoomByName(roomName)).isNotNull();
         }
 
         @Test

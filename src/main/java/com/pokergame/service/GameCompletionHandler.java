@@ -186,8 +186,8 @@ class GameCompletionHandler {
     }
 
     /**
-     * Rejects late player activity when the room's game inactivity deadline has already expired,
-     * abandoning the game first.
+     * Rejects late player activity when the room's game inactivity deadline has already expired
+     * without mutating room or game state.
      *
      * @param gameId the unique ID of the game
      * @param room   the room holding the inactivity deadline, or {@code null}
@@ -195,7 +195,7 @@ class GameCompletionHandler {
      */
     void rejectExpiredActivity(String gameId, Room room) {
         if (room != null && room.isInactivityExpired(clock.millis())) {
-            abandonGameDueToInactivity(gameId);
+            logger.warn("Rejecting activity for expired game {} (now={})", gameId, clock.millis());
             throw new BadRequestException(
                     "Game has expired due to inactivity.",
                     "GAME_EXPIRED",

@@ -282,8 +282,8 @@ class GameReadinessCoordinatorTest {
         }
 
         @Test
-        @DisplayName("rejects mark ready with GAME_EXPIRED when inactivity deadline elapsed")
-        void markPlayerReady_ExpiredInactivity_AbandonsAndThrows() {
+        @DisplayName("rejects mark ready with GAME_EXPIRED without abandoning when inactivity deadline elapsed")
+        void markPlayerReady_ExpiredInactivity_ThrowsWithoutAbandoning() {
             Game game = createShowdownGame(List.of(
                     new Player("Host", "host", 1000),
                     new Player("Player2", "p2", 1000)));
@@ -297,7 +297,7 @@ class GameReadinessCoordinatorTest {
                         () -> readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Host"));
                 assertEquals("GAME_EXPIRED", ex.actionErrorCode());
             }
-            assertTrue(game.isGameOver());
+            assertFalse(game.isGameOver());
         }
     }
 

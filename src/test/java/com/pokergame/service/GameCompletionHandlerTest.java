@@ -367,8 +367,8 @@ class GameCompletionHandlerTest {
         }
 
         @Test
-        @DisplayName("rejectExpiredActivity abandons game and throws GAME_EXPIRED when room inactivity expired")
-        void rejectExpiredActivity_WhenExpired_AbandonsAndThrows() {
+        @DisplayName("rejectExpiredActivity throws GAME_EXPIRED without abandoning when room inactivity expired")
+        void rejectExpiredActivity_WhenExpired_ThrowsWithoutAbandoning() {
             Game game = createAndRegisterStartedGame(List.of(
                     new Player("Host", "host", 100),
                     new Player("Player2", "p2", 100)));
@@ -385,8 +385,8 @@ class GameCompletionHandlerTest {
                         () -> completion.rejectExpiredActivity(ROOM_ID, testRoom));
                 assertEquals("GAME_EXPIRED", ex.actionErrorCode());
             }
-            assertTrue(game.isGameOver());
-            assertTrue(game.getGameEndResult().abandoned());
+            assertFalse(game.isGameOver());
+            assertNull(game.getGameEndResult());
         }
     }
 

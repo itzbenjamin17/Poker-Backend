@@ -1267,8 +1267,8 @@ class PlayerActionServiceTest {
     }
 
     @Test
-    @DisplayName("an action attempted after game inactivity expiry abandons the game and throws GAME_EXPIRED")
-    void processPlayerAction_WhenGameInactivityExpired_AbandonsAndThrowsGameExpired() {
+    @DisplayName("an action attempted after game inactivity expiry throws GAME_EXPIRED without abandoning")
+    void processPlayerAction_WhenGameInactivityExpired_ThrowsGameExpiredWithoutAbandoning() {
         when(gameLifecycleService.isGameInactivityExpired(GAME_ID)).thenReturn(true);
 
         BadRequestException exception = assertThrows(BadRequestException.class, () ->
@@ -1278,7 +1278,7 @@ class PlayerActionServiceTest {
                         "Player1"));
 
         assertEquals("GAME_EXPIRED", exception.actionErrorCode());
-        verify(gameLifecycleService).abandonGameDueToInactivity(GAME_ID);
+        verify(gameLifecycleService, never()).abandonGameDueToInactivity(GAME_ID);
         verify(gameLifecycleService, never()).getGame(GAME_ID);
     }
 

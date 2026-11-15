@@ -117,7 +117,6 @@ public class GameLifecycleService {
             }
             if (roomService.isLobbyExpired(room)) {
                 logger.warn("Game creation failed: lobby {} has expired due to inactivity", roomId);
-                roomService.checkAndCloseIfExpired(roomId);
                 throw new BadRequestException("Room has expired due to inactivity.");
             }
             if (activeGames.contains(roomId) || room.isGameStarted()) {

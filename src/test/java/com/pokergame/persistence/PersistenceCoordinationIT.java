@@ -7,8 +7,11 @@ import com.pokergame.controller.RoomController;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
@@ -46,11 +49,14 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.util.AopTestUtils;
 
 import java.nio.file.Path;
@@ -164,6 +170,9 @@ class PersistenceCoordinationIT {
 
     @Autowired
     private FailingMutationProbe failingMutationProbe;
+
+    @MockitoSpyBean
+    private SimpMessagingTemplate messagingTemplate;
 
     private final Set<String> trackedRoomIds = new HashSet<>();
     private TestRoomFixtures roomFixtures;
@@ -630,6 +639,96 @@ class PersistenceCoordinationIT {
             return null;
         });
         assertThat(walStore.recoverLatest(roomId)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Joining an expired lobby under persistence throws expiry error, closes the lobby, and sends ROOM_CLOSED")
+    void joiningExpiredLobbyUnderPersistenceRejectsAndClosesLobby() {
+        String roomName = "Expired Join Persistence Room";
+        String roomId = roomFixtures.createAndConnectRoom(roomName, "Host");
+
+        withRoomLock(roomCoordinator, roomId, () -> {
+            roomService.getRoom(roomId).setInactivityDeadlineEpochMs(System.currentTimeMillis() - 1_000L);
+            return null;
+        });
+        Mockito.clearInvocations(messagingTemplate);
+
+        assertThatThrownBy(() -> roomController.joinRoom(
+                new JoinRoomRequest(roomName, "LateGuest", null),
+                new MockHttpServletRequest()))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("expired due to inactivity");
+
+        withRoomLock(roomCoordinator, roomId, () -> {
+            assertThat(roomService.getRoom(roomId)).isNull();
+            return null;
+        });
+        assertThat(walStore.recoverLatest(roomId)).isEmpty();
+        Mockito.verify(messagingTemplate).convertAndSend(
+                Mockito.eq("/room/" + roomId),
+                Mockito.argThat((Object payload) -> payload instanceof ApiResponse<?> response
+                        && ResponseMessage.ROOM_CLOSED.getMessage().equals(response.message())));
+    }
+
+    @Test
+    @DisplayName("Acting, readying, or claiming in an expired game throws GAME_EXPIRED and timer abandons the game")
+    void expiredGameActivityReturnsGameExpiredAndTimerAbandonsGame() {
+        String actRoomId = roomFixtures.createAndConnectRoom("Expired Act Room", "Host", "Alice");
+        gameLifecycleService.createGameFromRoom(actRoomId);
+        String actor = withRoomLock(roomCoordinator, actRoomId, () ->
+                gameLifecycleService.getGame(actRoomId).getCurrentPlayer().getName());
+        PlayerPrincipal actorPrincipal = roomFixtures.principalFor(actRoomId, actor);
+        withRoomLock(roomCoordinator, actRoomId, () -> {
+            roomService.getRoom(actRoomId).setInactivityDeadlineEpochMs(System.currentTimeMillis() - 1_000L);
+            return null;
+        });
+        assertThatThrownBy(() -> gameController.performAction(
+                actRoomId, new PlayerActionRequest(PlayerAction.FOLD, null), actorPrincipal))
+                .isInstanceOf(BadRequestException.class)
+                .satisfies(ex -> assertThat(((BadRequestException) ex).actionErrorCode()).isEqualTo("GAME_EXPIRED"));
+        awaitGameAbandoned(actRoomId);
+
+        String readyRoomId = roomFixtures.createAndConnectRoom("Expired Ready Room", "Host", "Alice");
+        gameLifecycleService.createGameFromRoom(readyRoomId);
+        String folder = withRoomLock(roomCoordinator, readyRoomId, () ->
+                gameLifecycleService.getGame(readyRoomId).getCurrentPlayer().getName());
+        playerActionService.processPlayerAction(readyRoomId, new PlayerActionRequest(PlayerAction.FOLD, null), folder);
+        PlayerPrincipal readyHost = roomFixtures.principalFor(readyRoomId, "Host");
+        withRoomLock(roomCoordinator, readyRoomId, () -> {
+            assertThat(gameLifecycleService.getGame(readyRoomId).isReadyCountdownActive()).isTrue();
+            roomService.getRoom(readyRoomId).setInactivityDeadlineEpochMs(System.currentTimeMillis() - 1_000L);
+            return null;
+        });
+        assertThatThrownBy(() -> gameController.markReady(readyRoomId, readyHost))
+                .isInstanceOf(BadRequestException.class)
+                .satisfies(ex -> assertThat(((BadRequestException) ex).actionErrorCode()).isEqualTo("GAME_EXPIRED"));
+        awaitGameAbandoned(readyRoomId);
+
+        String claimRoomId = roomFixtures.createAndConnectRoom("Expired Claim Room", "Host", "Alice");
+        gameLifecycleService.createGameFromRoom(claimRoomId);
+        PlayerPrincipal claimHost = roomFixtures.principalFor(claimRoomId, "Host");
+        withRoomLock(roomCoordinator, claimRoomId, () -> {
+            roomService.getRoom(claimRoomId).setPlayerConnected("Alice", false);
+            gameLifecycleService.getGame(claimRoomId).findPlayerByName("Alice").setDisconnected(true);
+            roomService.getRoom(claimRoomId).setInactivityDeadlineEpochMs(System.currentTimeMillis() - 1_000L);
+            return null;
+        });
+        assertThatThrownBy(() -> gameController.claimWin(claimRoomId, claimHost))
+                .isInstanceOf(BadRequestException.class)
+                .satisfies(ex -> assertThat(((BadRequestException) ex).actionErrorCode()).isEqualTo("GAME_EXPIRED"));
+        awaitGameAbandoned(claimRoomId);
+    }
+
+    private void awaitGameAbandoned(String roomId) {
+        await().atMost(ASYNC_TIMEOUT).untilAsserted(() -> withRoomLock(roomCoordinator, roomId, () -> {
+            Game game = gameLifecycleService.getGame(roomId);
+            assertThat(game).isNotNull();
+            assertThat(game.isGameOver()).isTrue();
+            assertThat(game.getGameEndResult()).isNotNull();
+            assertThat(game.getGameEndResult().abandoned()).isTrue();
+            assertThat(game.getGameEndResult().reason()).isEqualTo("INACTIVITY");
+            return null;
+        }));
     }
 
     @TestConfiguration(proxyBeanMethods = false)

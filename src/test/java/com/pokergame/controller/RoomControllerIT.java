@@ -179,8 +179,28 @@ class RoomControllerIT {
                 .andExpect(jsonPath("$.data.playerName").value("Player2"));
 
         verify(roomService).resolveRoomIdByName("Room1");
+        verify(roomService).checkAndCloseIfExpired(roomId);
         verify(roomService).joinRoom(eq(roomId), any(JoinRoomRequest.class));
         verify(jwtService).generateToken("Player2", roomId);
+    }
+
+    @Test
+    @DisplayName("POST /api/room/join - Closes expired lobby before join and returns 400")
+    void joinRoom_ExpiredLobby_ClosesBeforeJoinAndReturnsBadRequest() throws Exception {
+        JoinRoomRequest request = new JoinRoomRequest("Room1", "Player2", null);
+        String roomId = "room-123";
+        when(roomService.resolveRoomIdByName("Room1")).thenReturn(roomId);
+        when(roomService.checkAndCloseIfExpired(roomId)).thenReturn(true);
+
+        mockMvc.perform(post("/api/room/join")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Room has expired due to inactivity."));
+
+        verify(roomService).checkAndCloseIfExpired(roomId);
+        verify(roomService, never()).joinRoom(anyString(), any(JoinRoomRequest.class));
+        verify(jwtService, never()).generateToken(anyString(), anyString());
     }
 
     /**

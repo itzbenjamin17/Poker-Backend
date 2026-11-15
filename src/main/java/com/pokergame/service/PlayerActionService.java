@@ -75,7 +75,6 @@ public class PlayerActionService {
             if (isGameInactivityExpired(gameId)) {
                 logger.warn("Player {} attempted to act in game {} at or after inactivity deadline (now={})",
                         playerName, gameId, clock.millis());
-                gameLifecycleService.abandonGameDueToInactivity(gameId);
                 throw new BadRequestException(
                         "Game has expired due to inactivity.",
                         "GAME_EXPIRED",

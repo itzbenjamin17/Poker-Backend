@@ -104,7 +104,13 @@ public class RoomController {
         // Sanitization is owned by the room service; it returns the canonical player
         // name so the token binds to exactly the name that was stored.
         String targetRoomId = roomService.resolveRoomIdByName(joinRequest.roomName());
-        RoomEntryResult entry = roomService.joinRoom(targetRoomId, joinRequest);
+        RoomEntryResult entry;
+        try (LockLease _ = roomCoordinator.acquire(targetRoomId)) {
+            if (roomService.checkAndCloseIfExpired(targetRoomId)) {
+                throw new BadRequestException("Room has expired due to inactivity.");
+            }
+            entry = roomService.joinRoom(targetRoomId, joinRequest);
+        }
         String roomId = entry.roomId();
         String canonicalPlayerName = entry.canonicalPlayerName();
 

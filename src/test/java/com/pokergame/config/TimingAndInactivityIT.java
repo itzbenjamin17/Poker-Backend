@@ -452,7 +452,7 @@ class TimingAndInactivityIT {
         }
 
         @Test
-        @DisplayName("late activity at or after inactivity deadline is rejected and abandons game")
+        @DisplayName("late activity at or after inactivity deadline is rejected without abandoning until timer fires")
         void lateActivityAtOrAfterInactivityDeadlineIsRejectedAndAbandonsGame() throws Exception {
             String roomId = createStartedAndConnectedGame("LateActivity", "Guest");
             String actor = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
@@ -464,6 +464,13 @@ class TimingAndInactivityIT {
                     playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, 0), actor))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("inactivity");
+
+            withRoomLock(roomCoordinator, roomId, () -> {
+                assertThat(lifecycle.getGame(roomId).isGameOver()).isFalse();
+                return null;
+            });
+
+            lifecycle.abandonGameIfInactive(roomId, initialDeadline);
 
             withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
@@ -504,7 +511,7 @@ class TimingAndInactivityIT {
         }
 
         @Test
-        @DisplayName("claim-win rejected when inactivity expired and game abandons instead")
+        @DisplayName("claim-win rejected when inactivity expired without abandoning until timer fires")
         void claimWinRejectedWhenInactivityExpired() throws Exception {
             String roomId = createStartedAndConnectedGame("ClaimExpired", "Guest");
             withRoomLock(roomCoordinator, roomId, () -> {
@@ -517,6 +524,13 @@ class TimingAndInactivityIT {
 
             assertThatThrownBy(() -> lifecycle.claimWin(roomId, "Host"))
                     .isInstanceOf(BadRequestException.class);
+
+            withRoomLock(roomCoordinator, roomId, () -> {
+                assertThat(lifecycle.getGame(roomId).isGameOver()).isFalse();
+                return null;
+            });
+
+            lifecycle.abandonGameIfInactive(roomId, inactivityDeadline);
 
             withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();

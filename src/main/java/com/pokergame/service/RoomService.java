@@ -200,7 +200,6 @@ public class RoomService {
             }
             if (isLobbyExpired(room)) {
                 logger.warn("Join attempt failed: room {} has expired due to inactivity", room.getRoomName());
-                checkAndCloseIfExpired(roomId);
                 throw new BadRequestException("Room has expired due to inactivity.");
             }
             if (room.hasPassword() && !room.checkPassword(joinRequest.password(), passwordEncoder)) {
