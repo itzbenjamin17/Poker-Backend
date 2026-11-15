@@ -1038,7 +1038,8 @@ public class Game {
         PotComputationResult computation = PotCalculator.computePotAllocationsAndUncalled(
                 pot, carryOverPot, handContributions, activePlayers, players, showdownPlayers, gameId);
         ShowdownResolver.Distribution distribution =
-                ShowdownResolver.distribute(gameId, handEvaluator, computation, players);
+                ShowdownResolver.distribute(gameId, handEvaluator, computation, players,
+                        seating.getHandSeatOrderSnapshot(), seating.getDealerPlayerId());
         pot = distribution.remainder();
         lastSettlementResult = distribution.settlement();
         return distribution.winners();

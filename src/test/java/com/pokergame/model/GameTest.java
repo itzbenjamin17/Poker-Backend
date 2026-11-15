@@ -1196,7 +1196,7 @@ class GameTest {
         }
 
         @Test
-        void testDistributePotRemainderPreservedAcrossMultipleHands() {
+        void testOddChipsAwardedClockwiseAcrossRotatedDealerHands() {
             List<Card> highCard = List.of(
                     new Card(Rank.TWO, Suit.SPADES), new Card(Rank.FIVE, Suit.HEARTS),
                     new Card(Rank.SEVEN, Suit.DIAMONDS), new Card(Rank.NINE, Suit.CLUBS),
@@ -1205,24 +1205,36 @@ class GameTest {
                     .thenReturn(new HandEvaluationResult(highCard, HandRank.HIGH_CARD));
             when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
 
+            // Hand 1: dealer is p1; p2 is clockwise left of p1 and receives the odd chip.
             game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 51, "p1"));
             game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 51, "p2"));
             game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 51, "p3"));
             game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0, game.getPot());
             game.conductShowdown();
 
-            assertEquals(1, game.getPot());
-            assertEquals(List.of(1), game.getPotBreakdown());
+            assertEquals(1025, game.getPlayers().get(0).getChips());
+            assertEquals(1026, game.getPlayers().get(1).getChips());
+            assertEquals(949, game.getPlayers().get(2).getChips());
+            assertEquals(0, game.getPot());
+            assertEquals(List.of(), game.getPotBreakdown());
             assertEquals(0, game.getUncalledAmount());
 
             game.resetForNewHand();
-            assertEquals(1, game.getPot());
+            assertEquals(0, game.getPot());
+            assertEquals(0, game.getCarryOverPot());
 
-            game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 50, "p1"));
-            game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 50, "p2"));
+            // Hand 2: dealer rotated to p2; p1 is now clockwise left of dealer (after folded p3) and receives the odd chip.
+            game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 51, "p1"));
+            game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 51, "p2"));
+            game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 51, "p3"));
             game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0, game.getPot());
             game.conductShowdown();
-            assertEquals(1, game.getPot());
+
+            assertEquals(1051, game.getPlayers().get(0).getChips());
+            assertEquals(1051, game.getPlayers().get(1).getChips());
+            assertEquals(898, game.getPlayers().get(2).getChips());
+            assertEquals(0, game.getPot());
+            assertEquals(3000, game.getPlayers().stream().mapToInt(Player::getChips).sum() + game.getPot());
         }
 
         @Test
@@ -1314,10 +1326,10 @@ class GameTest {
             when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
             splitRemainder.conductShowdown();
             assertEquals(200, splitRemainder.getPlayers().get(0).getChips());
-            assertEquals(76, splitRemainder.getPlayers().get(1).getChips());
+            assertEquals(77, splitRemainder.getPlayers().get(1).getChips());
             assertEquals(76, splitRemainder.getPlayers().get(2).getChips());
             assertEquals(0, splitRemainder.getPlayers().get(3).getChips());
-            assertEquals(1, splitRemainder.getPot());
+            assertEquals(0, splitRemainder.getPot());
 
             Game uncalledRefund = createGame("uncalled-refund", List.of(
                     new Player("AllIn", "a1", 480),
@@ -1427,10 +1439,12 @@ class GameTest {
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .handEvaluator(mockHandEvaluator).build();
             carryGame.conductShowdown();
-            assertEquals(1, carryGame.getPot());
-            assertEquals(List.of(1), carryGame.getPotBreakdown());
+            assertEquals(100, coA.getChips());
+            assertEquals(101, coB.getChips());
+            assertEquals(0, carryGame.getPot());
+            assertEquals(List.of(), carryGame.getPotBreakdown());
             assertEquals(0, carryGame.getUncalledAmount());
-            assertEquals(1, carryGame.getLastSettlementResult().remainder());
+            assertEquals(0, carryGame.getLastSettlementResult().remainder());
         }
 
         @Test
@@ -1523,6 +1537,136 @@ class GameTest {
             assertEquals(3000, conserve.getPlayers().stream().mapToInt(Player::getChips).sum() + conserve.getPot());
             conserve.conductShowdown();
             assertEquals(3000, conserve.getPlayers().stream().mapToInt(Player::getChips).sum() + conserve.getPot());
+        }
+
+        @Test
+        void oddChipsGoClockwiseFromDealerWithZeroCarryOver() {
+            when(mockHandEvaluator.getBestHand(any(), any()))
+                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.FLUSH));
+            when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
+
+            // Three-way split of 101 chips (2 odd chips): seat order [p0, p1, p2, p3], dealer = p1.
+            // Clockwise from dealer p1: p2, p3 (folded), p0, p1 (dealer last) -> p2 and p0 get +1 each.
+            Player p0 = restoredPlayer("P0", "p0", 70, 0, true);
+            Player p1 = restoredPlayer("P1", "p1", 70, 0, true);
+            Player p2 = restoredPlayer("P2", "p2", 70, 0, true);
+            Player p3 = restoredPlayer("p3", "P3", 89, false, true, false);
+            Game threeWay = Game.restoreBuilder().gameId("three-way-odd-chips")
+                    .players(List.of(p0, p1, p2, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
+                    .remainingDeck(List.of()).communityCards(List.of()).pot(101)
+                    .dealerAnchorPlayerId("p1").smallBlindPlayerId("p2").bigBlindPlayerId("p3")
+                    .currentPlayerId("p0").currentHighestBet(30).currentPhase(GamePhase.RIVER)
+                    .gameOver(false).smallBlind(10).bigBlind(20)
+                    .handContributions(Map.of("p0", 30, "p1", 30, "p2", 30, "p3", 11))
+                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .handEvaluator(mockHandEvaluator).build();
+            int totalBeforeThreeWay = threeWay.getPlayers().stream().mapToInt(Player::getChips).sum() + threeWay.getPot();
+
+            threeWay.conductShowdown();
+
+            assertEquals(104, p0.getChips());
+            assertEquals(103, p1.getChips());
+            assertEquals(104, p2.getChips());
+            assertEquals(89, p3.getChips());
+            assertEquals(0, threeWay.getPot());
+            assertEquals(0, threeWay.getLastSettlementResult().remainder());
+            assertEquals(totalBeforeThreeWay,
+                    threeWay.getPlayers().stream().mapToInt(Player::getChips).sum() + threeWay.getPot());
+            assertFalse(threeWay.resetForNewHand());
+            assertEquals(0, threeWay.getCarryOverPot());
+
+            // Heads-up split of 101 chips (1 odd chip): dealer is small blind 'a', so 'b' (left of dealer) gets +1.
+            Player huA = restoredPlayer("A", "a", 50, 0, true);
+            Player huB = restoredPlayer("B", "b", 50, 0, true);
+            Game headsUp = Game.restoreBuilder().gameId("heads-up-odd-chip")
+                    .players(List.of(huA, huB)).activePlayerIds(List.of("a", "b"))
+                    .remainingDeck(List.of()).communityCards(List.of()).pot(101)
+                    .dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                    .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
+                    .gameOver(false).smallBlind(10).bigBlind(20)
+                    .handContributions(Map.of("a", 50, "b", 50)).preHandCarryOver(1)
+                    .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .handEvaluator(mockHandEvaluator).build();
+            int totalBeforeHeadsUp = headsUp.getPlayers().stream().mapToInt(Player::getChips).sum() + headsUp.getPot();
+
+            headsUp.conductShowdown();
+
+            assertEquals(100, huA.getChips());
+            assertEquals(101, huB.getChips());
+            assertEquals(0, headsUp.getPot());
+            assertEquals(0, headsUp.getLastSettlementResult().remainder());
+            assertEquals(totalBeforeHeadsUp,
+                    headsUp.getPlayers().stream().mapToInt(Player::getChips).sum() + headsUp.getPot());
+            assertFalse(headsUp.resetForNewHand());
+            assertEquals(0, headsUp.getCarryOverPot());
+
+            // Side pot with its own leftover chip (101) and rotated dealer 's2' -> 's1' is clockwise left of 's2' and gets +1.
+            Player s0 = restoredPlayer("s0", "S0", 69, false, true, false);
+            Player s1 = restoredPlayer("S1", "s1", 50, 0, true);
+            Player s2 = restoredPlayer("S2", "s2", 50, 0, true);
+            Player s3 = restoredPlayer("S3", "s3", 0, 0, true);
+            when(mockHandEvaluator.getBestHand(any(), any()))
+                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.KING, Suit.SPADES)), HandRank.FLUSH))
+                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.KING, Suit.HEARTS)), HandRank.FLUSH))
+                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.ROYAL_FLUSH));
+            Game sidePotOdd = Game.restoreBuilder().gameId("side-pot-odd-chip")
+                    .players(List.of(s0, s1, s2, s3)).activePlayerIds(List.of("s0", "s1", "s2", "s3"))
+                    .remainingDeck(List.of()).communityCards(List.of()).pot(141)
+                    .dealerAnchorPlayerId("s2").smallBlindPlayerId("s3").bigBlindPlayerId("s0")
+                    .currentPlayerId("s1").currentHighestBet(50).currentPhase(GamePhase.RIVER)
+                    .gameOver(false).smallBlind(10).bigBlind(20)
+                    .handContributions(Map.of("s0", 31, "s1", 50, "s2", 50, "s3", 10))
+                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .handEvaluator(mockHandEvaluator).build();
+            int totalBeforeSidePot = sidePotOdd.getPlayers().stream().mapToInt(Player::getChips).sum() + sidePotOdd.getPot();
+
+            sidePotOdd.conductShowdown();
+
+            assertEquals(40, s3.getChips());
+            assertEquals(101, s1.getChips());
+            assertEquals(100, s2.getChips());
+            assertEquals(69, s0.getChips());
+            assertEquals(0, sidePotOdd.getPot());
+            assertEquals(0, sidePotOdd.getLastSettlementResult().remainder());
+            assertEquals(totalBeforeSidePot,
+                    sidePotOdd.getPlayers().stream().mapToInt(Player::getChips).sum() + sidePotOdd.getPot());
+            assertFalse(sidePotOdd.resetForNewHand());
+            assertEquals(0, sidePotOdd.getCarryOverPot());
+
+            // Departed dealer still anchored in handSeatOrder: [d0, d1, d2], d1 was dealer and removed mid-hand.
+            // Clockwise from d1 is d2, then d0 -> d2 gets the odd chip.
+            Player d0 = restoredPlayer("D0", "d0", 50, 0, true);
+            Player d1 = restoredPlayer("D1", "d1", 50, 0, true);
+            Player d2 = restoredPlayer("D2", "d2", 50, 0, true);
+            when(mockHandEvaluator.getBestHand(any(), any()))
+                    .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.FLUSH));
+            Game departedDealer = Game.restoreBuilder().gameId("departed-dealer-odd-chip")
+                    .players(List.of(d0, d1, d2)).activePlayerIds(List.of("d0", "d1", "d2"))
+                    .handSeatOrder(List.of("d0", "d1", "d2"))
+                    .remainingDeck(List.of()).communityCards(List.of()).pot(101)
+                    .dealerAnchorPlayerId("d1").smallBlindPlayerId("d2").bigBlindPlayerId("d0")
+                    .currentPlayerId("d2").currentHighestBet(50).currentPhase(GamePhase.RIVER)
+                    .gameOver(false).smallBlind(10).bigBlind(20)
+                    .handContributions(Map.of("d0", 50, "d2", 50)).preHandCarryOver(1)
+                    .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .handEvaluator(mockHandEvaluator).build();
+            departedDealer.removePlayer(d1);
+            int totalBeforeDeparted = departedDealer.getPlayers().stream().mapToInt(Player::getChips).sum() + departedDealer.getPot();
+
+            departedDealer.conductShowdown();
+
+            assertEquals(100, d0.getChips());
+            assertEquals(101, d2.getChips());
+            assertEquals(0, departedDealer.getPot());
+            assertEquals(0, departedDealer.getLastSettlementResult().remainder());
+            assertEquals(totalBeforeDeparted,
+                    departedDealer.getPlayers().stream().mapToInt(Player::getChips).sum() + departedDealer.getPot());
+            assertFalse(departedDealer.resetForNewHand());
+            assertEquals(0, departedDealer.getCarryOverPot());
         }
     }
 
