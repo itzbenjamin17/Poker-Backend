@@ -238,19 +238,25 @@ class PersistenceRestartIT {
             Game replacement = mapper.deserialize(image).game();
             assertThat(replacement).isNotSameAs(original);
 
-            games.restoreGame(replacement);
             withRoomLock(context, roomId, () -> {
+                games.restoreGame(replacement);
                 assertThat(games.getGame(roomId)).isSameAs(replacement);
                 assertThat(rooms.getRoom(roomId).isGameStarted()).isTrue();
                 return null;
             });
             assertThat(countActiveScheduledFutures(context)).isEqualTo(baselineFutures);
 
-            games.resumeRollbackTimers(roomId);
+            withRoomLock(context, roomId, () -> {
+                games.resumeRollbackTimers(roomId);
+                return null;
+            });
             assertThat(countActiveScheduledFutures(context)).isGreaterThan(baselineFutures);
 
             Room roomBeforeEvict = withRoomLock(context, roomId, () -> rooms.getRoom(roomId));
-            games.evictGame(roomId);
+            withRoomLock(context, roomId, () -> {
+                games.evictGame(roomId);
+                return null;
+            });
             assertThat(countActiveScheduledFutures(context)).isEqualTo(baselineFutures);
             withRoomLock(context, roomId, () -> {
                 assertThat(games.getGame(roomId)).isNull();

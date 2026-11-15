@@ -48,6 +48,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -109,13 +110,26 @@ class RoomServiceTest {
                 null);
     }
 
-    private static RoomEntryResult createRoom(RoomService service, CreateRoomRequest request) {
-        return service.createRoom(UUID.randomUUID().toString(), request);
+    private RoomEntryResult createRoom(RoomService service, CreateRoomRequest request) {
+        String roomId = UUID.randomUUID().toString();
+        return withRoomLock(roomId, () -> service.createRoom(roomId, request));
     }
 
-    private static RoomEntryResult joinByName(RoomService service, JoinRoomRequest request) {
+    private RoomEntryResult joinByName(RoomService service, JoinRoomRequest request) {
         String roomId = service.resolveRoomIdByName(request.roomName());
-        return service.joinRoom(roomId, request);
+        return withRoomLock(roomId, () -> service.joinRoom(roomId, request));
+    }
+
+    private <T> T withRoomLock(String roomId, Supplier<T> action) {
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
+            return action.get();
+        }
+    }
+
+    private void withRoomLock(String roomId, Runnable action) {
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
+            action.run();
+        }
     }
 
     private static Room coordinatedGetRoom(RoomService service, RoomCoordinator coordinator, String roomId) {
@@ -337,8 +351,8 @@ class RoomServiceTest {
         @DisplayName("should reject format characters in player name during join")
         void joinRoom_RejectsFormatCharactersInPlayerName() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
-            assertThatThrownBy(() -> roomService.joinRoom(roomId,
-                    new JoinRoomRequest("Test Room", "Player\u200E2", null)))
+            assertThatThrownBy(() -> withRoomLock(roomId, () -> roomService.joinRoom(roomId,
+                    new JoinRoomRequest("Test Room", "Player\u200E2", null))))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("format characters");
         }
@@ -361,24 +375,25 @@ class RoomServiceTest {
             String testRoomId = createRoom(roomService, validCreateRequest).roomId();
             String smallRoomId = createRoom(roomService,
                     new CreateRoomRequest("Small Room", "Host", 2, 5, 10, 100, null)).roomId();
-            roomService.joinRoom(smallRoomId, new JoinRoomRequest("Small Room", "Player2", null));
+            withRoomLock(smallRoomId, () ->
+                    roomService.joinRoom(smallRoomId, new JoinRoomRequest("Small Room", "Player2", null)));
 
             assertThatThrownBy(() -> roomService.resolveRoomIdByName("Missing Room"))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessage("Room not found");
 
-            assertThatThrownBy(() -> roomService.joinRoom("missing-id",
-                    new JoinRoomRequest("Missing Room", "Player", null)))
+            assertThatThrownBy(() -> withRoomLock("missing-id", () -> roomService.joinRoom("missing-id",
+                    new JoinRoomRequest("Missing Room", "Player", null))))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessage("Room not found");
 
-            assertThatThrownBy(() -> roomService.joinRoom(smallRoomId,
-                    new JoinRoomRequest("Small Room", "Player3", null)))
+            assertThatThrownBy(() -> withRoomLock(smallRoomId, () -> roomService.joinRoom(smallRoomId,
+                    new JoinRoomRequest("Small Room", "Player3", null))))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessage("Room is full");
 
-            assertThatThrownBy(() -> roomService.joinRoom(testRoomId,
-                    new JoinRoomRequest("Test Room", "HostPlayer", null)))
+            assertThatThrownBy(() -> withRoomLock(testRoomId, () -> roomService.joinRoom(testRoomId,
+                    new JoinRoomRequest("Test Room", "HostPlayer", null))))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessage("Player name already taken");
         }
@@ -388,15 +403,16 @@ class RoomServiceTest {
         void joinRoom_WhenRoomFull_ThrowsBadRequestException() {
             String roomId = createRoom(roomService,
                     new CreateRoomRequest("Full Capacity Room", "Host", 2, 5, 10, 100, null)).roomId();
-            roomService.joinRoom(roomId, new JoinRoomRequest("Full Capacity Room", "Player2", null));
+            withRoomLock(roomId, () ->
+                    roomService.joinRoom(roomId, new JoinRoomRequest("Full Capacity Room", "Player2", null)));
 
             assertThatThrownBy(() -> joinByName(roomService,
                     new JoinRoomRequest("Full Capacity Room", "Player3", null)))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessage("Room is full");
 
-            assertThatThrownBy(() -> roomService.joinRoom(roomId,
-                    new JoinRoomRequest("Full Capacity Room", "Player3", null)))
+            assertThatThrownBy(() -> withRoomLock(roomId, () -> roomService.joinRoom(roomId,
+                    new JoinRoomRequest("Full Capacity Room", "Player3", null))))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessage("Room is full");
 
@@ -413,10 +429,11 @@ class RoomServiceTest {
         @DisplayName("should remove a non-host player and keep the room open")
         void givenRegularPlayer_whenLeaveRoom_thenOnlyThatPlayerIsRemoved() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
-            roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
-            reset(messagingTemplate);
-
-            roomService.leaveRoom(roomId, "Player2");
+            withRoomLock(roomId, () -> {
+                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
+                reset(messagingTemplate);
+                roomService.leaveRoom(roomId, "Player2");
+            });
 
             Room room = coordinatedGetRoom(roomId);
             assertThat(room).isNotNull();
@@ -429,7 +446,7 @@ class RoomServiceTest {
         void givenHostLeavesLobby_whenLeaveRoom_thenRoomIsDestroyed() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
 
-            roomService.leaveRoom(roomId, "HostPlayer");
+            withRoomLock(roomId, () -> roomService.leaveRoom(roomId, "HostPlayer"));
 
             assertThat(coordinatedGetRoom(roomId)).isNull();
             verify(messagingTemplate, times(2))
@@ -440,21 +457,22 @@ class RoomServiceTest {
         @DisplayName("should transfer the host when the host leaves an active batch departure")
         void givenHostLeavesActiveRoom_whenLeavePlayersBatch_thenHostTransfersToSuccessor() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
-            roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
-            roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player3", null));
-            reset(messagingTemplate);
-
-            try (LockLease _ = roomCoordinator.acquire(roomId)) {
+            withRoomLock(roomId, () -> {
+                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
+                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player3", null));
+                reset(messagingTemplate);
                 roomService.leavePlayersBatch(roomId, List.of("HostPlayer"), "Player2");
-            }
+            });
 
             Room room = coordinatedGetRoom(roomId);
-            RoomDataResponse roomData = roomService.getRoomData(roomId);
+            RoomDataResponse roomData = withRoomLock(roomId, () -> roomService.getRoomData(roomId));
 
             assertThat(room).isNotNull();
             assertThat(room.getPlayers()).containsExactly("Player2", "Player3");
-            assertThat(roomService.isRoomHost(roomId, "Player2")).isTrue();
-            assertThat(roomService.isRoomHost(roomId, "Player3")).isFalse();
+            withRoomLock(roomId, () -> {
+                assertThat(roomService.isRoomHost(roomId, "Player2")).isTrue();
+                assertThat(roomService.isRoomHost(roomId, "Player3")).isFalse();
+            });
             assertThat(roomData.hostName()).isEqualTo("Player2");
             assertThat(roomData.players())
                     .filteredOn(player -> player.name().equals("Player2"))
@@ -466,7 +484,7 @@ class RoomServiceTest {
         @Test
         @DisplayName("should reject leave requests for missing rooms")
         void givenMissingRoom_whenLeaveRoom_thenThrowResourceNotFoundException() {
-            assertThatThrownBy(() -> roomService.leaveRoom("missing-room", "Player"))
+            assertThatThrownBy(() -> withRoomLock("missing-room", () -> roomService.leaveRoom("missing-room", "Player")))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessage("Room not found");
         }
@@ -479,8 +497,10 @@ class RoomServiceTest {
                 String roomName = "Concurrent Room " + i;
                 String roomId = createRoom(roomService,
                         new CreateRoomRequest(roomName, "Host", 6, 10, 20, 1000, null)).roomId();
-                roomService.joinRoom(roomId, new JoinRoomRequest(roomName, "Successor", null));
-                roomService.joinRoom(roomId, new JoinRoomRequest(roomName, "Player3", null));
+                withRoomLock(roomId, () -> {
+                    roomService.joinRoom(roomId, new JoinRoomRequest(roomName, "Successor", null));
+                    roomService.joinRoom(roomId, new JoinRoomRequest(roomName, "Player3", null));
+                });
 
                 CyclicBarrier startBarrier = new CyclicBarrier(2);
                 try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
@@ -505,7 +525,7 @@ class RoomServiceTest {
 
                 Room room = coordinatedGetRoom(roomId);
                 assertNotNull(room);
-                String currentHost = roomService.getCurrentHost(roomId);
+                String currentHost = withRoomLock(roomId, () -> roomService.getCurrentHost(roomId));
                 assertNotNull(currentHost, "Current host must not be null while players remain");
                 assertTrue(room.getPlayers().contains(currentHost),
                         "Current host must be a member of the room, was: " + currentHost);
@@ -520,10 +540,37 @@ class RoomServiceTest {
     class RoomQueries {
 
         @Test
-        @DisplayName("getRoomData coordinates under RoomCoordinator lock for coherent projection")
-        void givenRoomDataRequest_whenGetRoomData_thenWaitsForRoomCoordinatorLease() throws Exception {
+        @DisplayName("non-durable RoomService methods enforce that callers already hold the RoomCoordinator lease")
+        void givenUncoordinatedCalls_whenCallingNonDurableMethods_thenRequireHeldRoomLock() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
-            roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
+            Room room = coordinatedGetRoom(roomId);
+
+            assertThatThrownBy(() -> roomService.getRoomData(roomId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Current thread does not hold room lock");
+            assertThatThrownBy(() -> roomService.isRoomHost(roomId, "HostPlayer"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Current thread does not hold room lock");
+            assertThatThrownBy(() -> roomService.getCurrentHost(roomId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Current thread does not hold room lock");
+            assertThatThrownBy(() -> roomService.restoreRoom(room, "HostPlayer"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Current thread does not hold room lock");
+            assertThatThrownBy(() -> roomService.evictRoom(roomId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Current thread does not hold room lock");
+            assertThatThrownBy(() -> roomService.checkAndCloseIfExpired(roomId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Current thread does not hold room lock");
+        }
+
+        @Test
+        @DisplayName("getRoomData coordinates under RoomCoordinator lock when caller acquires lease")
+        void givenRoomDataRequest_whenCoordinatedWithRoomCoordinator_thenWaitsForLease() throws Exception {
+            String roomId = createRoom(roomService, validCreateRequest).roomId();
+            withRoomLock(roomId, () ->
+                    roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null)));
 
             AtomicBoolean leaseHeld = new AtomicBoolean(false);
             AtomicBoolean releaseLease = new AtomicBoolean(false);
@@ -538,17 +585,17 @@ class RoomServiceTest {
                 });
                 Awaitility.await().atMost(2, TimeUnit.SECONDS).untilTrue(leaseHeld);
 
-                Future<RoomDataResponse> reader = executor.submit(() -> {
+                Future<RoomDataResponse> reader = executor.submit(() -> withRoomLock(roomId, () -> {
                     RoomDataResponse response = roomService.getRoomData(roomId);
                     getRoomDataFinished.set(true);
                     return response;
-                });
+                }));
 
                 try {
                     Awaitility.await().atMost(2, TimeUnit.SECONDS)
                             .until(() -> roomCoordinator.lockReservationCount(roomId) >= 2);
                     assertFalse(getRoomDataFinished.get(),
-                            "getRoomData must wait while RoomCoordinator lease is held");
+                            "coordinated reader must wait while RoomCoordinator lease is held");
 
                     releaseLease.set(true);
                     RoomDataResponse response = reader.get(2, TimeUnit.SECONDS);
@@ -565,9 +612,10 @@ class RoomServiceTest {
         @DisplayName("should expose room data including host flags and start eligibility")
         void givenRoomDataRequest_whenGetRoomData_thenReturnProjectedLobbyState() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
-            roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
+            withRoomLock(roomId, () ->
+                    roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null)));
 
-            RoomDataResponse roomData = roomService.getRoomData(roomId);
+            RoomDataResponse roomData = withRoomLock(roomId, () -> roomService.getRoomData(roomId));
 
             assertThat(roomData.roomId()).isEqualTo(roomId);
             assertThat(roomData.roomName()).isEqualTo("Test Room");
@@ -584,10 +632,12 @@ class RoomServiceTest {
         @DisplayName("should set canStartGame to false once the game has started even if player count >= 2")
         void givenGameStarted_whenGetRoomData_thenCanStartGameIsFalse() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
-            roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
-            coordinatedGetRoom(roomId).setGameStarted(true);
+            withRoomLock(roomId, () -> {
+                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
+                roomService.getRoom(roomId).setGameStarted(true);
+            });
 
-            RoomDataResponse roomData = roomService.getRoomData(roomId);
+            RoomDataResponse roomData = withRoomLock(roomId, () -> roomService.getRoomData(roomId));
 
             assertThat(roomData.gameStarted()).isTrue();
             assertThat(roomData.canStartGame()).isFalse();
@@ -600,7 +650,7 @@ class RoomServiceTest {
                     .isInstanceOf(BadRequestException.class)
                     .hasMessage("Room ID cannot be null");
 
-            assertThatThrownBy(() -> roomService.getRoomData("missing-room"))
+            assertThatThrownBy(() -> withRoomLock("missing-room", () -> roomService.getRoomData("missing-room")))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessage("Room not found");
         }
@@ -617,8 +667,10 @@ class RoomServiceTest {
             assertThat(coordinatedGetRoom("missing-room")).isNull();
             assertThat(roomService.findRoomByName("test room")).isNotNull();
             assertThat(roomService.findRoomByName("missing-room")).isNull();
-            assertThat(roomService.isRoomHost(roomId, "HostPlayer")).isTrue();
-            assertThat(roomService.isRoomHost(roomId, "Player2")).isFalse();
+            withRoomLock(roomId, () -> {
+                assertThat(roomService.isRoomHost(roomId, "HostPlayer")).isTrue();
+                assertThat(roomService.isRoomHost(roomId, "Player2")).isFalse();
+            });
         }
 
         @Test
@@ -626,11 +678,12 @@ class RoomServiceTest {
         void givenDestroyRoomRequest_whenDestroyRoom_thenRemoveRoomWithoutThrowing() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
 
-            roomService.destroyRoom(roomId);
+            withRoomLock(roomId, () -> roomService.destroyRoom(roomId));
 
             assertThat(coordinatedGetRoom(roomId)).isNull();
-            assertThat(roomService.isRoomHost(roomId, "HostPlayer")).isFalse();
-            assertThatCode(() -> roomService.destroyRoom("missing-room")).doesNotThrowAnyException();
+            assertThat(withRoomLock(roomId, () -> roomService.isRoomHost(roomId, "HostPlayer"))).isFalse();
+            assertThatCode(() -> withRoomLock("missing-room", () -> roomService.destroyRoom("missing-room")))
+                    .doesNotThrowAnyException();
         }
     }
 
@@ -708,7 +761,8 @@ class RoomServiceTest {
                             if (index % 2 == 0) {
                                 joinByName(roomService, new JoinRoomRequest(roomName, playerName, null));
                             } else {
-                                roomService.joinRoom(roomId, new JoinRoomRequest(roomName, playerName, null));
+                                withRoomLock(roomId, () ->
+                                        roomService.joinRoom(roomId, new JoinRoomRequest(roomName, playerName, null)));
                             }
                             successCount.incrementAndGet();
                         } catch (BadRequestException e) {
@@ -761,7 +815,8 @@ class RoomServiceTest {
                     futures.add(executor.submit(() -> {
                         try {
                             startBarrier.await(5, TimeUnit.SECONDS);
-                            roomService.joinRoom(roomId, new JoinRoomRequest(roomName, playerName, null));
+                            withRoomLock(roomId, () ->
+                                    roomService.joinRoom(roomId, new JoinRoomRequest(roomName, playerName, null)));
                             successCount.incrementAndGet();
                             if (isDuplicateCandidate) {
                                 duplicateSuccessCount.incrementAndGet();
@@ -818,7 +873,8 @@ class RoomServiceTest {
                         futures.add(executor.submit(() -> {
                             try {
                                 startBarrier.await(5, TimeUnit.SECONDS);
-                                roomService.joinRoom(roomId, new JoinRoomRequest(roomName, pName, null));
+                                withRoomLock(roomId, () ->
+                                        roomService.joinRoom(roomId, new JoinRoomRequest(roomName, pName, null)));
                                 success.incrementAndGet();
                             } catch (BadRequestException e) {
                                 if ("Room is full".equals(e.getMessage())) {
@@ -843,7 +899,7 @@ class RoomServiceTest {
                 Room room = coordinatedGetRoom(roomId);
                 assertEquals(capacity, room.getPlayers().size());
                 assertTrue(room.isFull());
-                roomService.destroyRoom(roomId);
+                withRoomLock(roomId, () -> roomService.destroyRoom(roomId));
             }
         }
 
@@ -870,12 +926,12 @@ class RoomServiceTest {
 
                 Awaitility.await().atMost(2, TimeUnit.SECONDS).untilTrue(roomAHeld);
 
-                Future<RoomDataResponse> taskB = executor.submit(() -> {
+                Future<RoomDataResponse> taskB = executor.submit(() -> withRoomLock(idB, () -> {
                     roomService.joinRoom(idB, new JoinRoomRequest("IndependenceRoomB", "GuestB", null));
                     RoomDataResponse response = roomService.getRoomData(idB);
                     roomBCompleted.set(true);
                     return response;
-                });
+                }));
 
                 try {
                     RoomDataResponse dataB = taskB.get(2, TimeUnit.SECONDS);
@@ -916,8 +972,8 @@ class RoomServiceTest {
             assertThat(roomLookedUp.isTerminal()).isFalse();
             assertThat(roomService.findRoomByName(roomName)).isNotNull();
 
-            assertThatThrownBy(() -> roomService.joinRoom(roomId,
-                    new JoinRoomRequest(roomName, "LateJoiner", null)))
+            assertThatThrownBy(() -> withRoomLock(roomId, () -> roomService.joinRoom(roomId,
+                    new JoinRoomRequest(roomName, "LateJoiner", null))))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("expired due to inactivity");
 
@@ -934,14 +990,14 @@ class RoomServiceTest {
             Long deadline = coordinatedGetRoom(roomId).getInactivityDeadlineEpochMs();
             assertThat(deadline).isNotNull();
 
-            assertThat(roomService.checkAndCloseIfExpired(roomId)).isFalse();
+            assertThat(withRoomLock(roomId, () -> roomService.checkAndCloseIfExpired(roomId))).isFalse();
             assertThat(coordinatedGetRoom(roomId)).isNotNull();
 
             clock.setMillis(deadline + 5_000L);
 
-            assertThat(roomService.checkAndCloseIfExpired(roomId)).isTrue();
+            assertThat(withRoomLock(roomId, () -> roomService.checkAndCloseIfExpired(roomId))).isTrue();
             assertThat(coordinatedGetRoom(roomId)).isNull();
-            assertThat(roomService.getCurrentHost(roomId)).isNull();
+            assertThat(withRoomLock(roomId, () -> roomService.getCurrentHost(roomId))).isNull();
             assertThat(roomService.findRoomByName("ExplicitCloseRoom")).isNull();
         }
 
@@ -951,22 +1007,23 @@ class RoomServiceTest {
             String roomName = "RecyclableRoom";
             String roomId1 = createRoom(roomService, new CreateRoomRequest(
                     roomName, "Host1", 4, 5, 10, 100, null)).roomId();
-            roomService.joinRoom(roomId1, new JoinRoomRequest(roomName, "Guest1", null));
-            assertThat(roomService.getCurrentHost(roomId1)).isEqualTo("Host1");
-
-            roomService.destroyRoom(roomId1);
+            withRoomLock(roomId1, () -> {
+                roomService.joinRoom(roomId1, new JoinRoomRequest(roomName, "Guest1", null));
+                assertThat(roomService.getCurrentHost(roomId1)).isEqualTo("Host1");
+                roomService.destroyRoom(roomId1);
+                assertThat(roomService.getCurrentHost(roomId1)).isNull();
+            });
 
             assertThat(coordinatedGetRoom(roomId1)).isNull();
-            assertThat(roomService.getCurrentHost(roomId1)).isNull();
             assertThat(roomService.findRoomByName(roomName)).isNull();
             assertThat(roomCoordinator.lockReservationCount(roomId1)).isZero();
 
             String roomId2 = createRoom(roomService, new CreateRoomRequest(
                     roomName, "Host2", 4, 5, 10, 100, null)).roomId();
             assertThat(roomId2).isNotEqualTo(roomId1);
-            assertThat(roomService.getCurrentHost(roomId2)).isEqualTo("Host2");
+            assertThat(withRoomLock(roomId2, () -> roomService.getCurrentHost(roomId2))).isEqualTo("Host2");
 
-            roomService.destroyRoom(roomId2);
+            withRoomLock(roomId2, () -> roomService.destroyRoom(roomId2));
             assertThat(roomCoordinator.lockReservationCount(roomId2)).isZero();
             assertThat(roomCoordinator.activeLockCount()).isZero();
         }
@@ -990,7 +1047,8 @@ class RoomServiceTest {
     @DisplayName("joinRoom establishes first connection allowance with original acceptance deadline")
     void joinRoom_EstablishesFirstConnectionRegistrationWithAcceptanceDeadline() {
         String roomId = createRoom(roomService, validCreateRequest).roomId();
-        roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
+        withRoomLock(roomId, () ->
+                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null)));
 
         Room room = coordinatedGetRoom(roomId);
         assertNotNull(room.getAbsenceDeadline("Player2"));
@@ -1005,10 +1063,11 @@ class RoomServiceTest {
     @DisplayName("leaveRoom publishes retirement of exactly the leaving member's membership")
     void leaveRoom_PublishesMembershipRetired() {
         String roomId = createRoom(roomService, validCreateRequest).roomId();
-        roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
+        withRoomLock(roomId, () ->
+                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null)));
         String p2MembershipId = coordinatedGetRoom(roomId).getMembershipId("Player2");
 
-        roomService.leaveRoom(roomId, "Player2");
+        withRoomLock(roomId, () -> roomService.leaveRoom(roomId, "Player2"));
 
         verify(eventPublisher).publishEvent(new RoomMembershipRetired(roomId, "Player2", p2MembershipId));
     }
@@ -1017,7 +1076,7 @@ class RoomServiceTest {
     @DisplayName("destroyRoom publishes room destruction")
     void destroyRoom_PublishesRoomDestroyed() {
         String roomId = createRoom(roomService, validCreateRequest).roomId();
-        roomService.destroyRoom(roomId);
+        withRoomLock(roomId, () -> roomService.destroyRoom(roomId));
 
         verify(eventPublisher).publishEvent(new RoomDestroyed(roomId));
     }
@@ -1025,7 +1084,7 @@ class RoomServiceTest {
     @Test
     @DisplayName("destroyRoom on a missing room does not publish room destruction")
     void destroyRoom_MissingRoom_DoesNotPublishRoomDestroyed() {
-        roomService.destroyRoom("missing-room");
+        withRoomLock("missing-room", () -> roomService.destroyRoom("missing-room"));
 
         verify(eventPublisher, never()).publishEvent(any(RoomDestroyed.class));
     }
@@ -1056,8 +1115,8 @@ class RoomServiceTest {
         assertThat(room.getPlayers()).contains("Guest");
         verify(mockEncoder).matches("secretPass42", "$2a$10$customMockHashForSecretPass42");
 
-        assertThatThrownBy(() -> customService.joinRoom(roomId,
-                new JoinRoomRequest("Secure Room", "Intruder", "wrongPass")))
+        assertThatThrownBy(() -> withRoomLock(roomId, () -> customService.joinRoom(roomId,
+                new JoinRoomRequest("Secure Room", "Intruder", "wrongPass"))))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessage("Invalid password");
     }
@@ -1082,8 +1141,8 @@ class RoomServiceTest {
         assertThat(r2.hasPassword()).isFalse();
         assertThat(r2.getPasswordHash()).isNull();
 
-        customService.joinRoom(roomId1, new JoinRoomRequest("Public Room 1", "P2", null));
-        customService.joinRoom(roomId2, new JoinRoomRequest("Public Room 2", "P3", "anything"));
+        withRoomLock(roomId1, () -> customService.joinRoom(roomId1, new JoinRoomRequest("Public Room 1", "P2", null)));
+        withRoomLock(roomId2, () -> customService.joinRoom(roomId2, new JoinRoomRequest("Public Room 2", "P3", "anything")));
         assertThat(r1.getPlayers()).contains("P2");
         assertThat(r2.getPlayers()).contains("P3");
         verify(mockEncoder, never()).matches(any(), any());
@@ -1097,7 +1156,7 @@ class RoomServiceTest {
         private Room registerSpiedRoom() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
             Room spied = spy(coordinatedGetRoom(roomId));
-            roomService.restoreRoom(spied, "HostPlayer");
+            withRoomLock(roomId, () -> roomService.restoreRoom(spied, "HostPlayer"));
             return spied;
         }
 
@@ -1107,8 +1166,8 @@ class RoomServiceTest {
             Room spied = registerSpiedRoom();
             doThrow(new IllegalStateException("Room is full")).when(spied).addPlayer("Guest");
 
-            assertThatThrownBy(() -> roomService.joinRoom(spied.getRoomId(),
-                    new JoinRoomRequest("Test Room", "Guest", null)))
+            assertThatThrownBy(() -> withRoomLock(spied.getRoomId(), () -> roomService.joinRoom(spied.getRoomId(),
+                    new JoinRoomRequest("Test Room", "Guest", null))))
                     .isExactlyInstanceOf(BadRequestException.class)
                     .hasMessage("Room is full");
             assertThat(spied.getPlayers()).containsExactly("HostPlayer");
@@ -1120,8 +1179,8 @@ class RoomServiceTest {
             Room spied = registerSpiedRoom();
             doThrow(new IllegalStateException("Table is full right now")).when(spied).addPlayer("Guest");
 
-            assertThatThrownBy(() -> roomService.joinRoom(spied.getRoomId(),
-                    new JoinRoomRequest("Test Room", "Guest", null)))
+            assertThatThrownBy(() -> withRoomLock(spied.getRoomId(), () -> roomService.joinRoom(spied.getRoomId(),
+                    new JoinRoomRequest("Test Room", "Guest", null))))
                     .isExactlyInstanceOf(BadRequestException.class)
                     .hasMessage("Room is full");
             assertThat(spied.getPlayers()).containsExactly("HostPlayer");
@@ -1134,8 +1193,8 @@ class RoomServiceTest {
             IllegalStateException failure = new IllegalStateException("Corrupt membership table");
             doThrow(failure).when(spied).addPlayer("Guest");
 
-            assertThatThrownBy(() -> roomService.joinRoom(spied.getRoomId(),
-                    new JoinRoomRequest("Test Room", "Guest", null)))
+            assertThatThrownBy(() -> withRoomLock(spied.getRoomId(), () -> roomService.joinRoom(spied.getRoomId(),
+                    new JoinRoomRequest("Test Room", "Guest", null))))
                     .isSameAs(failure);
         }
 
@@ -1146,8 +1205,8 @@ class RoomServiceTest {
             IllegalStateException failure = new IllegalStateException();
             doThrow(failure).when(spied).addPlayer("Guest");
 
-            assertThatThrownBy(() -> roomService.joinRoom(spied.getRoomId(),
-                    new JoinRoomRequest("Test Room", "Guest", null)))
+            assertThatThrownBy(() -> withRoomLock(spied.getRoomId(), () -> roomService.joinRoom(spied.getRoomId(),
+                    new JoinRoomRequest("Test Room", "Guest", null))))
                     .isSameAs(failure);
         }
     }
@@ -1159,18 +1218,18 @@ class RoomServiceTest {
 
         private Room roomWithOnlyNonHostPlayerLeft(boolean terminal) {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
-            roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "G1", null));
-            roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "G2", null));
-            try (LockLease _ = roomCoordinator.acquire(roomId)) {
+            withRoomLock(roomId, () -> {
+                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "G1", null));
+                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "G2", null));
                 roomService.leavePlayersBatch(roomId, List.of("HostPlayer"), "G1");
-            }
-            Room room = coordinatedGetRoom(roomId);
-            room.removePlayer("G1");
-            room.setTerminal(terminal);
-            assertThat(room.getPlayers()).containsExactly("G2");
-            assertThat(roomService.getCurrentHost(roomId)).isEqualTo("G1");
-            reset(messagingTemplate);
-            return room;
+                Room room = roomService.getRoom(roomId);
+                room.removePlayer("G1");
+                room.setTerminal(terminal);
+                assertThat(room.getPlayers()).containsExactly("G2");
+                assertThat(roomService.getCurrentHost(roomId)).isEqualTo("G1");
+                reset(messagingTemplate);
+            });
+            return coordinatedGetRoom(roomId);
         }
 
         @Test
@@ -1179,11 +1238,13 @@ class RoomServiceTest {
             Room room = roomWithOnlyNonHostPlayerLeft(true);
             String roomId = room.getRoomId();
 
-            roomService.leaveRoom(roomId, "G2");
+            withRoomLock(roomId, () -> {
+                roomService.leaveRoom(roomId, "G2");
+                assertThat(roomService.getCurrentHost(roomId)).isEqualTo("G1");
+            });
 
             assertThat(coordinatedGetRoom(roomId)).isSameAs(room);
             assertThat(room.getPlayers()).isEmpty();
-            assertThat(roomService.getCurrentHost(roomId)).isEqualTo("G1");
             verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
                     eq(new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null)));
         }
@@ -1194,7 +1255,7 @@ class RoomServiceTest {
             Room room = roomWithOnlyNonHostPlayerLeft(false);
             String roomId = room.getRoomId();
 
-            roomService.leaveRoom(roomId, "G2");
+            withRoomLock(roomId, () -> roomService.leaveRoom(roomId, "G2"));
 
             assertThat(coordinatedGetRoom(roomId)).isNull();
             verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
@@ -1221,9 +1282,10 @@ class RoomServiceTest {
         void evictRoom_UnknownRoomId_LeavesOtherRoomsUntouched() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
 
-            assertThatCode(() -> roomService.evictRoom("missing-room")).doesNotThrowAnyException();
+            assertThatCode(() -> withRoomLock("missing-room", () -> roomService.evictRoom("missing-room")))
+                    .doesNotThrowAnyException();
             assertThat(coordinatedGetRoom(roomId)).isNotNull();
-            assertThat(roomService.isRoomHost(roomId, "HostPlayer")).isTrue();
+            assertThat(withRoomLock(roomId, () -> roomService.isRoomHost(roomId, "HostPlayer"))).isTrue();
         }
 
         @Test
@@ -1232,10 +1294,12 @@ class RoomServiceTest {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
             reset(messagingTemplate, eventPublisher);
 
-            roomService.evictRoom(roomId);
+            withRoomLock(roomId, () -> {
+                roomService.evictRoom(roomId);
+                assertThat(roomService.getCurrentHost(roomId)).isNull();
+            });
 
             assertThat(coordinatedGetRoom(roomId)).isNull();
-            assertThat(roomService.getCurrentHost(roomId)).isNull();
             assertThat(roomService.findRoomByName("Test Room")).isNull();
             verify(eventPublisher, never()).publishEvent(any(RoomDestroyed.class));
             verify(messagingTemplate, never()).convertAndSend(anyString(), ArgumentMatchers.any(Object.class));

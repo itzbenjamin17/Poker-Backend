@@ -191,15 +191,14 @@ public final class DurableMutationAspect {
     }
 
     private PendingSave captureState(String roomId) {
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            Room room = roomService.getObject().getRoom(roomId);
-            if (room == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
-            Game game = gameLifecycleService.getObject().getGame(roomId);
-            String currentHost = roomService.getObject().getCurrentHost(roomId);
-            // Keep capture and serialization within the stable room coordination boundary.
-            AggregateStateImage stateImage = snapshotMapper.captureStateImage(room, currentHost, game);
-            return new PendingSave(snapshotMapper.serialize(stateImage), false);
-        }
+        roomCoordinator.assertHeldByCurrentThread(roomId);
+        Room room = roomService.getObject().getRoom(roomId);
+        if (room == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
+        Game game = gameLifecycleService.getObject().getGame(roomId);
+        String currentHost = roomService.getObject().getCurrentHost(roomId);
+        // Keep capture and serialization within the stable room coordination boundary.
+        AggregateStateImage stateImage = snapshotMapper.captureStateImage(room, currentHost, game);
+        return new PendingSave(snapshotMapper.serialize(stateImage), false);
     }
 
     private void saveState(String roomId, PendingSave pending, WalTransaction transaction) {
@@ -232,17 +231,16 @@ public final class DurableMutationAspect {
     }
 
     private RollbackState captureRollbackState(String roomId) {
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            Room room = roomService.getObject().getRoom(roomId);
-            if (room == null) return new RollbackState(null, Map.of());
-            AggregateStateImage image = snapshotMapper.captureStateImage(room,
-                    roomService.getObject().getCurrentHost(roomId), gameLifecycleService.getObject().getGame(roomId));
-            Map<String, ConnectionState> connections = new HashMap<>();
-            for (String player : room.getPlayers()) {
-                connections.put(player, new ConnectionState(room.isPlayerConnected(player), room.getAbsenceDeadline(player)));
-            }
-            return new RollbackState(image, Map.copyOf(connections));
+        roomCoordinator.assertHeldByCurrentThread(roomId);
+        Room room = roomService.getObject().getRoom(roomId);
+        if (room == null) return new RollbackState(null, Map.of());
+        AggregateStateImage image = snapshotMapper.captureStateImage(room,
+                roomService.getObject().getCurrentHost(roomId), gameLifecycleService.getObject().getGame(roomId));
+        Map<String, ConnectionState> connections = new HashMap<>();
+        for (String player : room.getPlayers()) {
+            connections.put(player, new ConnectionState(room.isPlayerConnected(player), room.getAbsenceDeadline(player)));
         }
+        return new RollbackState(image, Map.copyOf(connections));
     }
 
     /** Process-local connectivity is intentionally separate from the persisted image. */
@@ -256,37 +254,36 @@ public final class DurableMutationAspect {
      * accepted gameplay, so WAL bytes are never a safe rollback source.
      */
     private void rollbackOrEvictAggregate(String roomId, RollbackState beforeMutation, boolean prepareFailed, boolean prepared) {
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            try {
-                if (beforeMutation != null && beforeMutation.image() != null) {
-                    RecoveredAggregate aggregate = snapshotMapper.restoreStateImage(beforeMutation.image());
-                    if (aggregate.deleted() || aggregate.room() == null) {
-                        evictAggregate(roomId);
-                    } else {
-                        restoreAggregate(roomId, aggregate);
-                        beforeMutation.connections().forEach((player, state) -> {
-                            aggregate.room().setPlayerConnected(player, state.connected());
-                            aggregate.room().setAbsenceDeadline(player, state.absenceDeadline());
-                        });
-                        if (aggregate.game() != null) gameLifecycleService.getObject().resumeRollbackTimers(roomId);
-                        if (prepareFailed) queuePrepareRecoverySaveIfNeeded(roomId);
-                    }
-                } else {
-                    // A captured absence is itself accepted state: retain its pending tombstone.
-                    // Only an unavailable preimage makes a retry unsafe after rejection.
-                    if (beforeMutation == null) pendingSaves.remove(roomId);
+        roomCoordinator.assertHeldByCurrentThread(roomId);
+        try {
+            if (beforeMutation != null && beforeMutation.image() != null) {
+                RecoveredAggregate aggregate = snapshotMapper.restoreStateImage(beforeMutation.image());
+                if (aggregate.deleted() || aggregate.room() == null) {
                     evictAggregate(roomId);
+                } else {
+                    restoreAggregate(roomId, aggregate);
+                    beforeMutation.connections().forEach((player, state) -> {
+                        aggregate.room().setPlayerConnected(player, state.connected());
+                        aggregate.room().setAbsenceDeadline(player, state.absenceDeadline());
+                    });
+                    if (aggregate.game() != null) gameLifecycleService.getObject().resumeRollbackTimers(roomId);
+                    if (prepareFailed) queuePrepareRecoverySaveIfNeeded(roomId);
                 }
-            } catch (Exception restoreFailure) {
-                logger.error("Failed to restore aggregate for room {} after mutation failure; evicting to prevent dirty commits",
-                        roomId, restoreFailure);
+            } else {
+                // A captured absence is itself accepted state: retain its pending tombstone.
+                // Only an unavailable preimage makes a retry unsafe after rejection.
+                if (beforeMutation == null) pendingSaves.remove(roomId);
                 evictAggregate(roomId);
-                pendingSaves.remove(roomId);
-                recordStorageFailure(roomId, restoreFailure instanceof RuntimeException re ? re
-                        : new PersistenceException("Failed to restore aggregate for room " + roomId, restoreFailure));
-            } finally {
-                cleanupAbortedCreation(roomId, prepared);
             }
+        } catch (Exception restoreFailure) {
+            logger.error("Failed to restore aggregate for room {} after mutation failure; evicting to prevent dirty commits",
+                    roomId, restoreFailure);
+            evictAggregate(roomId);
+            pendingSaves.remove(roomId);
+            recordStorageFailure(roomId, restoreFailure instanceof RuntimeException re ? re
+                    : new PersistenceException("Failed to restore aggregate for room " + roomId, restoreFailure));
+        } finally {
+            cleanupAbortedCreation(roomId, prepared);
         }
     }
 
@@ -344,18 +341,17 @@ public final class DurableMutationAspect {
 
     /** Removes an uncommitted creation WAL only when prepare ran and no accepted room remains. */
     private void cleanupAbortedCreation(String roomId, boolean prepared) {
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            try {
-                RoomService rooms = roomService.getObject();
-                if (rooms == null || rooms.getRoom(roomId) == null) {
-                    recordsSinceCompaction.remove(roomId);
-                    if (prepared && store.isHealthy() && store.recoverLatest(roomId).isEmpty()) {
-                        store.delete(roomId);
-                    }
+        roomCoordinator.assertHeldByCurrentThread(roomId);
+        try {
+            RoomService rooms = roomService.getObject();
+            if (rooms == null || rooms.getRoom(roomId) == null) {
+                recordsSinceCompaction.remove(roomId);
+                if (prepared && store.isHealthy() && store.recoverLatest(roomId).isEmpty()) {
+                    store.delete(roomId);
                 }
-            } catch (Exception cleanupError) {
-                logger.error("Failed to clean up aborted WAL for room {}", roomId, cleanupError);
             }
+        } catch (Exception cleanupError) {
+            logger.error("Failed to clean up aborted WAL for room {}", roomId, cleanupError);
         }
     }
 

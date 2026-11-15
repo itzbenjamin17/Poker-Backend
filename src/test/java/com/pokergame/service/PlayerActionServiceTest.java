@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.util.LockLease;
 
 /**
  * Unit tests for the PlayerActionService class.
@@ -75,7 +76,7 @@ class PlayerActionServiceTest {
     void setUp() {
         roomCoordinator = new RoomCoordinator();
         playerActionService = new PlayerActionService(
-                gameLifecycleService, gameStateService, roomCoordinator, FIXED_CLOCK);
+                gameLifecycleService, gameStateService, FIXED_CLOCK);
         testPlayers = new ArrayList<>();
         testPlayers.add(new Player("Player1", UUID.randomUUID().toString(), 1000));
         testPlayers.add(new Player("Player2", UUID.randomUUID().toString(), 1000));
@@ -800,18 +801,27 @@ class PlayerActionServiceTest {
 
         PlayerActionRequest call = new PlayerActionRequest(PlayerAction.CALL, null);
         try (ExecutorService executor = Executors.newFixedThreadPool(3)) {
-            Future<?> firstAction = executor.submit(() ->
-                    playerActionService.processPlayerAction(GAME_ID, call, first.getName()));
+            Future<?> firstAction = executor.submit(() -> {
+                try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                    playerActionService.processPlayerAction(GAME_ID, call, first.getName());
+                }
+            });
             Awaitility.await().atMost(5, TimeUnit.SECONDS).untilTrue(firstEntered);
             Player next = testGame.getCurrentPlayer();
 
-            Future<?> sameGameAction = executor.submit(() ->
-                    playerActionService.processPlayerAction(GAME_ID, call, next.getName()));
+            Future<?> sameGameAction = executor.submit(() -> {
+                try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                    playerActionService.processPlayerAction(GAME_ID, call, next.getName());
+                }
+            });
             Awaitility.await().atMost(5, TimeUnit.SECONDS)
                     .until(() -> roomCoordinator.lockReservationCount(GAME_ID) >= 2);
 
-            Future<?> independentAction = executor.submit(() ->
-                    playerActionService.processPlayerAction(independentId, call, independentActor.getName()));
+            Future<?> independentAction = executor.submit(() -> {
+                try (LockLease _ = roomCoordinator.acquire(independentId)) {
+                    playerActionService.processPlayerAction(independentId, call, independentActor.getName());
+                }
+            });
             try {
                 independentAction.get(5, TimeUnit.SECONDS);
                 assertEquals(independent.getCurrentHighestBet(), independentActor.getCurrentBet());
@@ -856,7 +866,7 @@ class PlayerActionServiceTest {
             for (Player actor : actors) {
                 attempts.add(executor.submit(() -> {
                     startBarrier.await(5, TimeUnit.SECONDS);
-                    try {
+                    try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                         playerActionService.processPlayerAction(GAME_ID, request, actor.getName());
                         return true;
                     } catch (UnauthorisedActionException rejection) {

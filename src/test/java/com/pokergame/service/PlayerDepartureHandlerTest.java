@@ -46,6 +46,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -180,10 +181,20 @@ class PlayerDepartureHandlerTest {
         });
     }
 
-    private Game getGameLocked(String roomId) {
+    private <T> T withRoomLock(String roomId, Supplier<T> action) {
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            return gameLifecycleService.getGame(roomId);
+            return action.get();
         }
+    }
+
+    private void withRoomLock(String roomId, Runnable action) {
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
+            action.run();
+        }
+    }
+
+    private Game getGameLocked(String roomId) {
+        return withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId));
     }
 
     private static void setPlayerChips(Player player, int targetChips) {
@@ -201,10 +212,12 @@ class PlayerDepartureHandlerTest {
 
     private Game createTerminalGame() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-        gameLifecycleService.createGameFromRoom(ROOM_ID);
-        Game game = getGameLocked(ROOM_ID);
-        game.markGameOver();
-        return game;
+        return withRoomLock(ROOM_ID, () -> {
+            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            Game game = gameLifecycleService.getGame(ROOM_ID);
+            game.markGameOver();
+            return game;
+        });
     }
 
     private void verifyNobodyRemovedFromRoom() {
@@ -267,17 +280,22 @@ class PlayerDepartureHandlerTest {
 
         @Test
         void removePlayers_IdempotentOnMissingOrNullArguments() {
-            assertDoesNotThrow(() -> gameLifecycleService.removePlayers("nonexistent-id", List.of("Player")));
+            assertDoesNotThrow(() -> withRoomLock("nonexistent-id",
+                    () -> gameLifecycleService.removePlayers("nonexistent-id", List.of("Player"))));
 
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             reset(roomService);
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
 
-            assertDoesNotThrow(() -> gameLifecycleService.removePlayers(ROOM_ID, List.of("NonExistentPlayer")));
-            assertDoesNotThrow(() -> gameLifecycleService.removePlayers(ROOM_ID, null));
-            assertDoesNotThrow(() -> gameLifecycleService.removePlayers(ROOM_ID, List.of()));
-            assertDoesNotThrow(() -> gameLifecycleService.removePlayers("missing-room", List.of("Player2")));
+            assertDoesNotThrow(() -> withRoomLock(ROOM_ID,
+                    () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("NonExistentPlayer"))));
+            assertDoesNotThrow(() -> withRoomLock(ROOM_ID,
+                    () -> gameLifecycleService.removePlayers(ROOM_ID, null)));
+            assertDoesNotThrow(() -> withRoomLock(ROOM_ID,
+                    () -> gameLifecycleService.removePlayers(ROOM_ID, List.of())));
+            assertDoesNotThrow(() -> withRoomLock("missing-room",
+                    () -> gameLifecycleService.removePlayers("missing-room", List.of("Player2"))));
 
             verifyNobodyRemovedFromRoom();
         }
@@ -285,11 +303,11 @@ class PlayerDepartureHandlerTest {
         @Test
         void removePlayers_OneContenderRemains_EndsGame() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             String playerToLeave = game.getPlayers().getFirst().getName();
 
-            gameLifecycleService.removePlayers(ROOM_ID, List.of(playerToLeave));
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of(playerToLeave)));
 
             verify(gameStateService).sendGameEnd(any(GameEndResponse.class));
         }
@@ -297,15 +315,17 @@ class PlayerDepartureHandlerTest {
         @Test
         void removePlayers_WhenLastConnectedPlayerLeaves_PreservesDisconnectedPlayerGrace() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Host", BASE_EPOCH_MS + 120_000L);
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.createGameFromRoom(ROOM_ID);
+                gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Host", BASE_EPOCH_MS + 120_000L);
+            });
             reset(gameStateService);
             stubGameEndCapture();
 
-            gameLifecycleService.removePlayers(ROOM_ID, List.of("Player2"));
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Player2")));
 
             assertNotNull(getGameLocked(ROOM_ID));
-            assertTrue(gameLifecycleService.playerExistsInGame(ROOM_ID, "Host"));
+            assertTrue(withRoomLock(ROOM_ID, () -> gameLifecycleService.playerExistsInGame(ROOM_ID, "Host")));
             verify(roomService, never()).destroyRoom(ROOM_ID);
             verify(gameStateService, never()).sendGameEnd(any(GameEndResponse.class));
         }
@@ -314,7 +334,7 @@ class PlayerDepartureHandlerTest {
         void removePlayers_WithMultiplePlayers_ShouldContinueGameAndKeepTurnIndexSafe() {
             testRoom.addPlayer("Player3");
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             reset(gameStateService);
             stubGameEndCapture();
 
@@ -331,7 +351,8 @@ class PlayerDepartureHandlerTest {
                     .findFirst()
                     .orElseThrow();
 
-            assertDoesNotThrow(() -> gameLifecycleService.removePlayers(ROOM_ID, List.of(playerToLeave.getName())));
+            assertDoesNotThrow(() -> withRoomLock(ROOM_ID,
+                    () -> gameLifecycleService.removePlayers(ROOM_ID, List.of(playerToLeave.getName()))));
 
             Game remaining = getGameLocked(ROOM_ID);
             assertEquals(2, remaining.getPlayers().size());
@@ -342,14 +363,15 @@ class PlayerDepartureHandlerTest {
         @Test
         void removePlayers_WhenRoomMissingOrDestroyedMidFlow_CleansUpWithoutBroadcast() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             reset(gameStateService);
             stubGameEndCapture();
             Game game = getGameLocked(ROOM_ID);
             String playerToLeave = game.getPlayers().getFirst().getName();
             when(roomService.getRoom(ROOM_ID)).thenReturn(null);
 
-            assertDoesNotThrow(() -> gameLifecycleService.removePlayers(ROOM_ID, List.of(playerToLeave)));
+            assertDoesNotThrow(() -> withRoomLock(ROOM_ID,
+                    () -> gameLifecycleService.removePlayers(ROOM_ID, List.of(playerToLeave))));
             assertNull(getGameLocked(ROOM_ID));
             verify(gameStateService, never()).broadcastGameState(any(Game.class));
 
@@ -357,7 +379,7 @@ class PlayerDepartureHandlerTest {
             testRoom.setGameStarted(false);
             testRoom.addPlayer("Player3");
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             reset(gameStateService);
             stubGameEndCapture();
             Game recreated = getGameLocked(ROOM_ID);
@@ -369,7 +391,8 @@ class PlayerDepartureHandlerTest {
                     .getName();
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom, testRoom, null);
 
-            assertDoesNotThrow(() -> gameLifecycleService.removePlayers(ROOM_ID, List.of(nonCurrent)));
+            assertDoesNotThrow(() -> withRoomLock(ROOM_ID,
+                    () -> gameLifecycleService.removePlayers(ROOM_ID, List.of(nonCurrent))));
             assertNull(getGameLocked(ROOM_ID));
             verify(gameStateService, never()).broadcastGameState(any(Game.class));
         }
@@ -377,14 +400,14 @@ class PlayerDepartureHandlerTest {
         @Test
         void removePlayers_ConnectedZeroChipUnsettledContenderCanRemainTournamentWinner() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             Player zeroChipSurvivor = findGamePlayer(game, "Host");
             setPlayerChips(zeroChipSurvivor, 0);
             reset(gameStateService);
             stubGameEndCapture();
 
-            gameLifecycleService.removePlayers(ROOM_ID, List.of("Player2"));
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Player2")));
 
             verify(gameStateService).sendGameEnd(argThat(event -> event != null && event.winner().equals("Host")));
             assertTrue(game.isGameOver());
@@ -395,7 +418,7 @@ class PlayerDepartureHandlerTest {
         void removePlayers_LobbyAndActiveHostTransferAndBatchAndTerminalFreeze() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
-            gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Host")));
             verify(roomService).leaveRoom(ROOM_ID, "Host");
             verify(roomService, never()).leavePlayersBatch(anyString(), anyList(), any());
 
@@ -404,9 +427,10 @@ class PlayerDepartureHandlerTest {
             testRoom.addPlayer("Player4");
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-
-            gameLifecycleService.removePlayers(ROOM_ID, List.of("Player3", "Player4"));
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.createGameFromRoom(ROOM_ID);
+                gameLifecycleService.removePlayers(ROOM_ID, List.of("Player3", "Player4"));
+            });
             verify(roomService, times(1)).leavePlayersBatch(ROOM_ID, List.of("Player3", "Player4"), "Host");
             assertEquals(2, getGameLocked(ROOM_ID).getPlayers().size());
             assertFalse(getGameLocked(ROOM_ID).isGameOver());
@@ -416,11 +440,12 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             testRoom.setGameStarted(false);
             testRoom.addPlayer("Player3");
-            gameLifecycleService.evictGame(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.evictGame(ROOM_ID));
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-
-            gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.createGameFromRoom(ROOM_ID);
+                gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
+            });
             verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host"), "Player2");
             assertFalse(getGameLocked(ROOM_ID).getPlayers().stream().anyMatch(p -> p.getName().equals("Host")));
 
@@ -429,7 +454,7 @@ class PlayerDepartureHandlerTest {
             active.markGameOver();
             reset(roomService);
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.removePlayers(ROOM_ID, List.of("Player2"));
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Player2")));
             verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
             assertTrue(active.getPlayers().stream().anyMatch(p -> p.getName().equals("Player2")));
         }
@@ -437,7 +462,7 @@ class PlayerDepartureHandlerTest {
         @Test
         void pendingForfeitSurvivorExpiryCleansSettledShowdownRoomGameAndTasks() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             Player host = game.getPlayers().get(0);
             Player survivor = game.getPlayers().get(1);
@@ -466,12 +491,14 @@ class PlayerDepartureHandlerTest {
 
             long p2Deadline = BASE_EPOCH_MS - 100;
             survivor.setDisconnectDeadlineEpochMs(p2Deadline);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, survivor.getName(), testRoom.getMembershipId(survivor.getName()), p2Deadline);
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.removeDisconnectedPlayer(
+                        ROOM_ID, survivor.getName(), testRoom.getMembershipId(survivor.getName()), p2Deadline);
+                assertFalse(gameLifecycleService.gameExists(ROOM_ID));
+            });
 
             assertEquals(0, roomPresent.get());
             assertTrue(testRoom.getPlayers().isEmpty());
-            assertFalse(gameLifecycleService.gameExists(ROOM_ID));
             assertTrue(game.getScheduledTaskDeadlinesSnapshot().isEmpty());
         }
 
@@ -479,12 +506,13 @@ class PlayerDepartureHandlerTest {
         void pendingForfeitRetriesPreserveOutRowsAndSpectatorDepartureDoesNotAdvanceGame() {
             testRoom.addPlayer("Spectator");
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             Player spectator = findGamePlayer(game, "Spectator");
             setPlayerChips(spectator, 0);
             spectator.setIsOut();
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", BASE_EPOCH_MS + 60_000L);
+            withRoomLock(ROOM_ID, () ->
+                    gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", BASE_EPOCH_MS + 60_000L));
 
             AtomicInteger roomPresent = new AtomicInteger(1);
             reset(roomService);
@@ -498,32 +526,35 @@ class PlayerDepartureHandlerTest {
                 return null;
             }).when(roomService).leavePlayersBatch(eq(ROOM_ID), anyList(), any());
 
-            gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
-            assertTrue(game.isForfeitPending());
-            gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
-            gameLifecycleService.removePlayers(ROOM_ID, List.of("Spectator"));
-            assertTrue(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Host") && p.getIsOut()));
-            assertTrue(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Spectator") && p.getIsOut()));
-            assertTrue(game.isForfeitPending());
-            assertTrue(gameLifecycleService.gameExists(ROOM_ID));
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
+                assertTrue(game.isForfeitPending());
+                gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
+                gameLifecycleService.removePlayers(ROOM_ID, List.of("Spectator"));
+                assertTrue(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Host") && p.getIsOut()));
+                assertTrue(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Spectator") && p.getIsOut()));
+                assertTrue(game.isForfeitPending());
+                assertTrue(gameLifecycleService.gameExists(ROOM_ID));
 
-            long p2ForfeitDeadline = BASE_EPOCH_MS - 100;
-            findGamePlayer(game, "Player2").setDisconnectDeadlineEpochMs(p2ForfeitDeadline);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), p2ForfeitDeadline);
+                long p2ForfeitDeadline = BASE_EPOCH_MS - 100;
+                findGamePlayer(game, "Player2").setDisconnectDeadlineEpochMs(p2ForfeitDeadline);
+                gameLifecycleService.removeDisconnectedPlayer(
+                        ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), p2ForfeitDeadline);
+                assertFalse(gameLifecycleService.gameExists(ROOM_ID));
+            });
             assertEquals(0, roomPresent.get());
-            assertFalse(gameLifecycleService.gameExists(ROOM_ID));
             assertTrue(game.getScheduledTaskDeadlinesSnapshot().isEmpty());
         }
 
         @Test
         void pendingForfeitInvalidatesCapturedProgressionCallbacksAndReconnectSettlesOnce() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             Player departing = findGamePlayer(game, "Host");
             Player survivor = findGamePlayer(game, "Player2");
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, survivor.getName(), BASE_EPOCH_MS + 60_000L);
+            withRoomLock(ROOM_ID, () ->
+                    gameLifecycleService.markPlayerDisconnected(ROOM_ID, survivor.getName(), BASE_EPOCH_MS + 60_000L));
 
             Map<ScheduledGameTask, Long> deadlines = new EnumMap<>(ScheduledGameTask.class);
             Map<ScheduledGameTask, Long> generations = new EnumMap<>(ScheduledGameTask.class);
@@ -545,17 +576,20 @@ class PlayerDepartureHandlerTest {
             int departingStackBefore = departing.getChips();
             int expectedSurvivorEndChips = survivor.getChips() + potBefore;
 
-            gameLifecycleService.removePlayers(ROOM_ID, List.of(departing.getName()));
+            withRoomLock(ROOM_ID, () ->
+                    gameLifecycleService.removePlayers(ROOM_ID, List.of(departing.getName())));
             assertTrue(game.isForfeitPending());
             assertTrue(departing.getIsOut());
             assertFalse(testRoom.hasPlayer(departing.getName()));
 
             reset(gameStateService);
             stubGameEndCapture();
-            for (ScheduledGameTask task : deadlines.keySet()) {
-                gameLifecycleService.executeScheduledTask(
-                        ROOM_ID, task, deadlines.get(task), handBefore, generations.get(task));
-            }
+            withRoomLock(ROOM_ID, () -> {
+                for (ScheduledGameTask task : deadlines.keySet()) {
+                    gameLifecycleService.executeScheduledTask(
+                            ROOM_ID, task, deadlines.get(task), handBefore, generations.get(task));
+                }
+            });
             assertEquals(handBefore, game.getHandNumber());
             assertEquals(potBefore, game.getPot());
             assertFalse(game.isGameOver());
@@ -571,17 +605,17 @@ class PlayerDepartureHandlerTest {
                     .anyMatch(player -> player.getName().equals(departing.getName()) && player.getIsOut()));
             assertFalse(mapper.deserialize(mapper.serialize(testRoom, survivor.getName(), game))
                     .room().hasPlayer(departing.getName()));
-            gameLifecycleService.restoreGame(restored);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.restoreGame(restored));
             Player restoredSurvivor = findGamePlayer(restored, survivor.getName());
 
-            gameLifecycleService.markPlayerReconnected(ROOM_ID, restoredSurvivor.getName());
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReconnected(ROOM_ID, restoredSurvivor.getName()));
             assertTrue(restored.isGameOver());
             assertFalse(restored.isForfeitPending());
             assertEquals(departingStackBefore, findGamePlayer(restored, departing.getName()).getChips());
             assertEquals(expectedSurvivorEndChips, restoredSurvivor.getChips());
             verify(gameStateService, times(1)).sendGameEnd(any(GameEndResponse.class));
 
-            gameLifecycleService.markPlayerReconnected(ROOM_ID, restoredSurvivor.getName());
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReconnected(ROOM_ID, restoredSurvivor.getName()));
             verify(gameStateService, times(1)).sendGameEnd(any(GameEndResponse.class));
             assertEquals(expectedSurvivorEndChips, restoredSurvivor.getChips());
         }
@@ -592,7 +626,7 @@ class PlayerDepartureHandlerTest {
             testRoom.addPlayer("Player3");
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game g1 = getGameLocked(ROOM_ID);
             Player p2 = findGamePlayer(g1, "Player2");
             setPlayerChips(p2, 0);
@@ -603,7 +637,7 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             when(roomService.getCurrentHost(ROOM_ID)).thenReturn("Host");
-            gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Host")));
             verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host"), "Player3");
 
             // 2. Chooses unsettled zero-stack all-in contender over later candidate
@@ -614,7 +648,7 @@ class PlayerDepartureHandlerTest {
             r2.addPlayer("Player3");
             when(roomService.getRoom(r2Id)).thenReturn(r2);
             when(roomService.getCurrentHost(r2Id)).thenReturn("Host");
-            gameLifecycleService.createGameFromRoom(r2Id);
+            withRoomLock(r2Id, () -> gameLifecycleService.createGameFromRoom(r2Id));
             Game g2 = getGameLocked(r2Id);
             Player g2p2 = findGamePlayer(g2, "Player2");
             setPlayerChips(g2p2, 0);
@@ -622,7 +656,7 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             when(roomService.getRoom(r2Id)).thenReturn(r2);
             when(roomService.getCurrentHost(r2Id)).thenReturn("Host");
-            gameLifecycleService.removePlayers(r2Id, List.of("Host"));
+            withRoomLock(r2Id, () -> gameLifecycleService.removePlayers(r2Id, List.of("Host")));
             verify(roomService).leavePlayersBatch(r2Id, List.of("Host"), "Player2");
 
             // 3. Chooses disconnected contender over room-only spectator
@@ -633,7 +667,7 @@ class PlayerDepartureHandlerTest {
             r3.addPlayer("Player3");
             when(roomService.getRoom(r3Id)).thenReturn(r3);
             when(roomService.getCurrentHost(r3Id)).thenReturn("Host");
-            gameLifecycleService.createGameFromRoom(r3Id);
+            withRoomLock(r3Id, () -> gameLifecycleService.createGameFromRoom(r3Id));
             Game g3 = getGameLocked(r3Id);
             g3.removePlayer(findGamePlayer(g3, "Player3"));
             Player g3p2 = findGamePlayer(g3, "Player2");
@@ -642,7 +676,7 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             when(roomService.getRoom(r3Id)).thenReturn(r3);
             when(roomService.getCurrentHost(r3Id)).thenReturn("Host");
-            gameLifecycleService.removePlayers(r3Id, List.of("Host"));
+            withRoomLock(r3Id, () -> gameLifecycleService.removePlayers(r3Id, List.of("Host")));
             verify(roomService).leavePlayersBatch(r3Id, List.of("Host"), "Player2");
 
             // 4. Chooses join-order fallback when no contenders remain + batch + null when empty
@@ -654,7 +688,7 @@ class PlayerDepartureHandlerTest {
             r4.addPlayer("Spectator2");
             when(roomService.getRoom(r4Id)).thenReturn(r4);
             when(roomService.getCurrentHost(r4Id)).thenReturn("Host");
-            gameLifecycleService.createGameFromRoom(r4Id);
+            withRoomLock(r4Id, () -> gameLifecycleService.createGameFromRoom(r4Id));
             Game g4 = getGameLocked(r4Id);
             Player g4p2 = findGamePlayer(g4, "Player2");
             setPlayerChips(g4p2, 0);
@@ -664,7 +698,7 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             when(roomService.getRoom(r4Id)).thenReturn(r4);
             when(roomService.getCurrentHost(r4Id)).thenReturn("Host");
-            gameLifecycleService.removePlayers(r4Id, List.of("Host"));
+            withRoomLock(r4Id, () -> gameLifecycleService.removePlayers(r4Id, List.of("Host")));
             verify(roomService).leavePlayersBatch(r4Id, List.of("Host"), "Player2");
 
             String r5Id = "succ-batch";
@@ -675,11 +709,11 @@ class PlayerDepartureHandlerTest {
             r5.addPlayer("Player4");
             when(roomService.getRoom(r5Id)).thenReturn(r5);
             when(roomService.getCurrentHost(r5Id)).thenReturn("Host");
-            gameLifecycleService.createGameFromRoom(r5Id);
+            withRoomLock(r5Id, () -> gameLifecycleService.createGameFromRoom(r5Id));
             reset(roomService);
             when(roomService.getRoom(r5Id)).thenReturn(r5);
             when(roomService.getCurrentHost(r5Id)).thenReturn("Host");
-            gameLifecycleService.removePlayers(r5Id, List.of("Host", "Player2", "Player3"));
+            withRoomLock(r5Id, () -> gameLifecycleService.removePlayers(r5Id, List.of("Host", "Player2", "Player3")));
             verify(roomService).leavePlayersBatch(r5Id, List.of("Host", "Player2", "Player3"), "Player4");
 
             String r6Id = "succ-empty";
@@ -688,12 +722,12 @@ class PlayerDepartureHandlerTest {
             r6.addPlayer("Player2");
             when(roomService.getRoom(r6Id)).thenReturn(r6);
             when(roomService.getCurrentHost(r6Id)).thenReturn("Host");
-            gameLifecycleService.createGameFromRoom(r6Id);
+            withRoomLock(r6Id, () -> gameLifecycleService.createGameFromRoom(r6Id));
             getGameLocked(r6Id).markGameOver();
             reset(roomService);
             when(roomService.getRoom(r6Id)).thenReturn(r6);
             when(roomService.getCurrentHost(r6Id)).thenReturn("Host");
-            gameLifecycleService.removePlayers(r6Id, List.of("Host", "Player2"));
+            withRoomLock(r6Id, () -> gameLifecycleService.removePlayers(r6Id, List.of("Host", "Player2")));
             verify(roomService).leavePlayersBatch(r6Id, List.of("Host", "Player2"), null);
         }
     }
@@ -707,12 +741,12 @@ class PlayerDepartureHandlerTest {
         @Test
         void markPlayerDisconnected_AndReconnected_UpdateFlagsAndBroadcast() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             long deadline = BASE_EPOCH_MS + 120_000L;
             reset(gameStateService);
             stubGameEndCapture();
 
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline));
             Game game = getGameLocked(ROOM_ID);
             Player player2 = findGamePlayer(game, "Player2");
             assertTrue(player2.getIsDisconnected());
@@ -721,24 +755,24 @@ class PlayerDepartureHandlerTest {
 
             reset(gameStateService);
             stubGameEndCapture();
-            gameLifecycleService.markPlayerReconnected(ROOM_ID, "Player2");
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReconnected(ROOM_ID, "Player2"));
             assertFalse(player2.getIsDisconnected());
             assertNull(player2.getDisconnectDeadlineEpochMs());
             verify(gameStateService).broadcastGameState(game);
 
             // Reconnect when game over does not broadcast
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Host", deadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Host", deadline));
             game.markGameOver();
             reset(gameStateService);
             stubGameEndCapture();
-            gameLifecycleService.markPlayerReconnected(ROOM_ID, "Host");
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReconnected(ROOM_ID, "Host"));
             verify(gameStateService, never()).broadcastGameState(any(Game.class));
         }
 
         @Test
         void handleTurnTimeout_RemovesCurrentPlayerOrAbandonsIfInactivityExpired() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             String actor = game.getCurrentPlayer().getName();
 
@@ -753,7 +787,7 @@ class PlayerDepartureHandlerTest {
             inactiveRoom.addPlayer("Host");
             inactiveRoom.addPlayer("Player2");
             when(roomService.getRoom(inactiveRoomId)).thenReturn(inactiveRoom);
-            gameLifecycleService.createGameFromRoom(inactiveRoomId);
+            withRoomLock(inactiveRoomId, () -> gameLifecycleService.createGameFromRoom(inactiveRoomId));
             Game inactiveGame = getGameLocked(inactiveRoomId);
             mutableClock.setMillis(inactiveRoom.getInactivityDeadlineEpochMs());
             reset(roomService);
@@ -778,14 +812,16 @@ class PlayerDepartureHandlerTest {
         void claimWin_DisconnectedOpponents_EndsGameAndIsIdempotent() {
             testRoom.addPlayer("Player3");
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", BASE_EPOCH_MS + 120_000L);
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", BASE_EPOCH_MS + 120_000L);
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.createGameFromRoom(ROOM_ID);
+                gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", BASE_EPOCH_MS + 120_000L);
+                gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", BASE_EPOCH_MS + 120_000L);
+            });
 
             reset(gameStateService);
             stubGameEndCapture();
 
-            GameEndResponse result = gameLifecycleService.claimWin(ROOM_ID, "Host");
+            GameEndResponse result = withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
             assertEquals("GAME_END", result.type());
             assertEquals("Host", result.winner());
             assertTrue(result.isForfeit());
@@ -811,29 +847,31 @@ class PlayerDepartureHandlerTest {
             assertNotNull(initialCleanup);
 
             reset(gameStateService);
-            GameEndResponse repeated = gameLifecycleService.claimWin(ROOM_ID, "Host");
+            GameEndResponse repeated = withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
             assertSame(result, repeated);
             verify(gameStateService, never()).sendGameEnd(any());
             assertEquals(initialCleanup, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
 
             assertThrows(UnauthorisedActionException.class,
-                    () -> gameLifecycleService.claimWin(ROOM_ID, "Stranger"));
+                    () -> withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Stranger")));
         }
 
         @Test
         void claimWin_ConnectedOpponentOrAbandonedGame_ThrowsExpectedException() {
             testRoom.addPlayer("Player3");
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", BASE_EPOCH_MS + 120_000L);
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.createGameFromRoom(ROOM_ID);
+                gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", BASE_EPOCH_MS + 120_000L);
+            });
 
             UnauthorisedActionException connectedEx = assertThrows(UnauthorisedActionException.class,
-                    () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
+                    () -> withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host")));
             assertTrue(connectedEx.getMessage().toLowerCase().contains("claim"));
 
-            gameLifecycleService.abandonGameDueToInactivity(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.abandonGameDueToInactivity(ROOM_ID));
             BadRequestException abandonedEx = assertThrows(BadRequestException.class,
-                    () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
+                    () -> withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host")));
             assertEquals("GAME_ABANDONED", abandonedEx.actionErrorCode());
         }
 
@@ -849,7 +887,7 @@ class PlayerDepartureHandlerTest {
                 GameStateService realState = new GameStateService(roomService, messagingTemplate, mutableClock);
                 wireLifecycle(realState);
 
-                gameLifecycleService.createGameFromRoom(gameId);
+                withRoomLock(gameId, () -> gameLifecycleService.createGameFromRoom(gameId));
                 Game game = getGameLocked(gameId);
                 Player smallBlind = game.getPlayers().stream()
                         .filter(player -> player.getPlayerId().equals(game.getSmallBlindPlayerId()))
@@ -879,20 +917,22 @@ class PlayerDepartureHandlerTest {
                         PlayerAction.CALL, 0, bigBlind.getPlayerId()));
                 assertEquals(1020, game.getPot());
 
-                if (!ending.equals("leave")) {
-                    gameLifecycleService.markPlayerDisconnected(
-                            gameId, smallBlind.getName(), BASE_EPOCH_MS + 60_000L);
-                }
-                if (ending.equals("leave")) {
-                    gameLifecycleService.removePlayers(gameId, List.of(smallBlind.getName()));
-                } else if (ending.equals("claim")) {
-                    gameLifecycleService.claimWin(gameId, bigBlind.getName());
-                } else {
-                    long sbDeadline = BASE_EPOCH_MS - 100;
-                    smallBlind.setDisconnectDeadlineEpochMs(sbDeadline);
-                    gameLifecycleService.removeDisconnectedPlayer(
-                            gameId, smallBlind.getName(), room.getMembershipId(smallBlind.getName()), sbDeadline);
-                }
+                withRoomLock(gameId, () -> {
+                    if (!ending.equals("leave")) {
+                        gameLifecycleService.markPlayerDisconnected(
+                                gameId, smallBlind.getName(), BASE_EPOCH_MS + 60_000L);
+                    }
+                    if (ending.equals("leave")) {
+                        gameLifecycleService.removePlayers(gameId, List.of(smallBlind.getName()));
+                    } else if (ending.equals("claim")) {
+                        gameLifecycleService.claimWin(gameId, bigBlind.getName());
+                    } else {
+                        long sbDeadline = BASE_EPOCH_MS - 100;
+                        smallBlind.setDisconnectDeadlineEpochMs(sbDeadline);
+                        gameLifecycleService.removeDisconnectedPlayer(
+                                gameId, smallBlind.getName(), room.getMembershipId(smallBlind.getName()), sbDeadline);
+                    }
+                });
 
                 ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
                 verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + gameId), captor.capture());
@@ -924,11 +964,13 @@ class PlayerDepartureHandlerTest {
         void removeDisconnectedPlayer_ValidExpiryPaths_DepartAsExpected() {
             // Active game expired player departs
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
             long deadline = BASE_EPOCH_MS - 100;
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
-            String p2MembershipId = testRoom.getMembershipId("Player2");
-            gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", p2MembershipId, deadline);
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.createGameFromRoom(ROOM_ID);
+                gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", deadline);
+                String p2MembershipId = testRoom.getMembershipId("Player2");
+                gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", p2MembershipId, deadline);
+            });
             verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
 
             // Lobby host expired destroys room
@@ -937,8 +979,8 @@ class PlayerDepartureHandlerTest {
             when(roomService.getRoom("lobby-1")).thenReturn(lobbyHost);
             when(roomService.getCurrentHost("lobby-1")).thenReturn("Host");
             lobbyHost.setAbsenceDeadline("Host", deadline);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    "lobby-1", "Host", lobbyHost.getMembershipId("Host"), deadline);
+            withRoomLock("lobby-1", () -> gameLifecycleService.removeDisconnectedPlayer(
+                    "lobby-1", "Host", lobbyHost.getMembershipId("Host"), deadline));
             verify(roomService).leaveRoom("lobby-1", "Host");
 
             // Lobby guest expired releases seat
@@ -948,8 +990,8 @@ class PlayerDepartureHandlerTest {
             when(roomService.getRoom("lobby-2")).thenReturn(lobbyGuest);
             when(roomService.getCurrentHost("lobby-2")).thenReturn("Host");
             lobbyGuest.setAbsenceDeadline("Guest", deadline);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    "lobby-2", "Guest", lobbyGuest.getMembershipId("Guest"), deadline);
+            withRoomLock("lobby-2", () -> gameLifecycleService.removeDisconnectedPlayer(
+                    "lobby-2", "Guest", lobbyGuest.getMembershipId("Guest"), deadline));
             verify(roomService).leavePlayersBatch("lobby-2", List.of("Guest"), "Host");
 
             // Busted room member expires even though playerExistsInGame is false
@@ -959,16 +1001,18 @@ class PlayerDepartureHandlerTest {
             bustedRoom.addPlayer("Player2");
             bustedRoom.addPlayer("Player3");
             when(roomService.getRoom(bustedRoomId)).thenReturn(bustedRoom);
-            gameLifecycleService.createGameFromRoom(bustedRoomId);
-            Game bustedGame = getGameLocked(bustedRoomId);
-            Player p3 = findGamePlayer(bustedGame, "Player3");
-            setPlayerChips(p3, 0);
-            p3.setIsOut();
-            assertFalse(gameLifecycleService.playerExistsInGame(bustedRoomId, "Player3"));
-            p3.setDisconnected(true);
-            p3.setDisconnectDeadlineEpochMs(deadline);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    bustedRoomId, "Player3", bustedRoom.getMembershipId("Player3"), deadline);
+            withRoomLock(bustedRoomId, () -> {
+                gameLifecycleService.createGameFromRoom(bustedRoomId);
+                Game bustedGame = gameLifecycleService.getGame(bustedRoomId);
+                Player p3 = findGamePlayer(bustedGame, "Player3");
+                setPlayerChips(p3, 0);
+                p3.setIsOut();
+                assertFalse(gameLifecycleService.playerExistsInGame(bustedRoomId, "Player3"));
+                p3.setDisconnected(true);
+                p3.setDisconnectDeadlineEpochMs(deadline);
+                gameLifecycleService.removeDisconnectedPlayer(
+                        bustedRoomId, "Player3", bustedRoom.getMembershipId("Player3"), deadline);
+            });
             verify(roomService).leavePlayersBatch(eq(bustedRoomId), eq(List.of("Player3")), any());
 
             // Room-only spectator expired while active game runs leaves room only
@@ -977,28 +1021,33 @@ class PlayerDepartureHandlerTest {
             specRoom.addPlayer("Host");
             specRoom.addPlayer("Player2");
             when(roomService.getRoom(specRoomId)).thenReturn(specRoom);
-            gameLifecycleService.createGameFromRoom(specRoomId);
-            specRoom.addPlayer("Spectator");
-            specRoom.setAbsenceDeadline("Spectator", deadline);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    specRoomId, "Spectator", specRoom.getMembershipId("Spectator"), deadline);
+            withRoomLock(specRoomId, () -> {
+                gameLifecycleService.createGameFromRoom(specRoomId);
+                specRoom.addPlayer("Spectator");
+                specRoom.setAbsenceDeadline("Spectator", deadline);
+                gameLifecycleService.removeDisconnectedPlayer(
+                        specRoomId, "Spectator", specRoom.getMembershipId("Spectator"), deadline);
+            });
             verify(roomService).leavePlayersBatch(eq(specRoomId), eq(List.of("Spectator")), any());
             assertEquals(2, getGameLocked(specRoomId).getPlayers().size());
         }
 
         @Test
         void removeDisconnectedPlayer_NullAndLobbyNoOpGuards() {
-            gameLifecycleService.removeDisconnectedPlayer(null, "Player2", "membership", 1L);
-            gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, null, "membership", 1L);
-            gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", null, 1L);
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, null, "membership", 1L);
+                gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", null, 1L);
+            });
             verifyNoInteractions(roomService);
 
             when(roomService.getRoom(ROOM_ID)).thenReturn(null);
-            gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "membership", BASE_EPOCH_MS - 100);
+            withRoomLock(ROOM_ID, () ->
+                    gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "membership", BASE_EPOCH_MS - 100));
             verifyNobodyRemovedFromRoom();
 
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Stranger", "membership", BASE_EPOCH_MS - 100);
+            withRoomLock(ROOM_ID, () ->
+                    gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Stranger", "membership", BASE_EPOCH_MS - 100));
             verifyNobodyRemovedFromRoom();
 
             Room lobby = new Room("lobby-3", "Lobby", "Host", 4, 10, 20, 1000, null);
@@ -1011,66 +1060,69 @@ class PlayerDepartureHandlerTest {
             lobby.setAbsenceDeadline("Guest", pastDeadline);
             RoomGameSnapshot beforeObsolete = snapshotRoomAndGame(lobby, null);
             clearInvocations(gameStateService);
-            gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", "obsolete-id", pastDeadline);
+            withRoomLock("lobby-3", () ->
+                    gameLifecycleService.removeDisconnectedPlayer("lobby-3", "Guest", "obsolete-id", pastDeadline));
             assertNoOpDisconnect(beforeObsolete, lobby, null);
 
             // Reconnected
             lobby.setPlayerConnected("Guest", true);
             RoomGameSnapshot beforeReconn = snapshotRoomAndGame(lobby, null);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    "lobby-3", "Guest", lobby.getMembershipId("Guest"), pastDeadline);
+            withRoomLock("lobby-3", () -> gameLifecycleService.removeDisconnectedPlayer(
+                    "lobby-3", "Guest", lobby.getMembershipId("Guest"), pastDeadline));
             assertNoOpDisconnect(beforeReconn, lobby, null);
 
             // No deadline
             lobby.setPlayerConnected("Guest", false);
             lobby.setAbsenceDeadline("Guest", null);
             RoomGameSnapshot beforeNull = snapshotRoomAndGame(lobby, null);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    "lobby-3", "Guest", lobby.getMembershipId("Guest"), pastDeadline);
+            withRoomLock("lobby-3", () -> gameLifecycleService.removeDisconnectedPlayer(
+                    "lobby-3", "Guest", lobby.getMembershipId("Guest"), pastDeadline));
             assertNoOpDisconnect(beforeNull, lobby, null);
 
             // Deadline mismatch
             lobby.setAbsenceDeadline("Guest", pastDeadline);
             RoomGameSnapshot beforeMismatch = snapshotRoomAndGame(lobby, null);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    "lobby-3", "Guest", lobby.getMembershipId("Guest"), pastDeadline - 5_000L);
+            withRoomLock("lobby-3", () -> gameLifecycleService.removeDisconnectedPlayer(
+                    "lobby-3", "Guest", lobby.getMembershipId("Guest"), pastDeadline - 5_000L));
             assertNoOpDisconnect(beforeMismatch, lobby, null);
 
             // Before deadline
             long futureDeadline = BASE_EPOCH_MS + 60_000L;
             lobby.setAbsenceDeadline("Guest", futureDeadline);
             RoomGameSnapshot beforeFuture = snapshotRoomAndGame(lobby, null);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    "lobby-3", "Guest", lobby.getMembershipId("Guest"), futureDeadline);
+            withRoomLock("lobby-3", () -> gameLifecycleService.removeDisconnectedPlayer(
+                    "lobby-3", "Guest", lobby.getMembershipId("Guest"), futureDeadline));
             assertNoOpDisconnect(beforeFuture, lobby, null);
         }
 
         @Test
         void removeDisconnectedPlayer_ActiveGameNoOpGuardsPreserveFullSnapshot() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             long pastDeadline = BASE_EPOCH_MS - 100;
             long futureDeadline = BASE_EPOCH_MS + 60_000L;
 
             // Obsolete membership id
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", pastDeadline);
+            withRoomLock(ROOM_ID, () ->
+                    gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", pastDeadline));
             RoomGameSnapshot s1 = snapshotRoomAndGame(testRoom, game);
             clearInvocations(gameStateService);
-            gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "obsolete-id", pastDeadline);
+            withRoomLock(ROOM_ID, () ->
+                    gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "obsolete-id", pastDeadline));
             assertNoOpDisconnect(s1, testRoom, game);
 
             // Deadline mismatch
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline - 5_000L);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline - 5_000L));
             assertNoOpDisconnect(s1, testRoom, game);
 
             // Reconnected before timer fired
-            gameLifecycleService.markPlayerReconnected(ROOM_ID, "Player2");
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReconnected(ROOM_ID, "Player2"));
             RoomGameSnapshot s2 = snapshotRoomAndGame(testRoom, game);
             clearInvocations(gameStateService);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline));
             assertFalse(findGamePlayer(game, "Player2").getIsDisconnected());
             assertNoOpDisconnect(s2, testRoom, game);
 
@@ -1080,42 +1132,43 @@ class PlayerDepartureHandlerTest {
             p2.setDisconnectDeadlineEpochMs(null);
             RoomGameSnapshot s3 = snapshotRoomAndGame(testRoom, game);
             clearInvocations(gameStateService);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline));
             assertNoOpDisconnect(s3, testRoom, game);
 
             // Future deadline
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", futureDeadline);
+            withRoomLock(ROOM_ID, () ->
+                    gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", futureDeadline));
             RoomGameSnapshot s4 = snapshotRoomAndGame(testRoom, game);
             clearInvocations(gameStateService);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), futureDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), futureDeadline));
             assertNoOpDisconnect(s4, testRoom, game);
 
             // Room-only spectator guards: no deadline, mismatch, future, connected
             testRoom.addPlayer("Spectator");
             RoomGameSnapshot specNoDeadline = snapshotRoomAndGame(testRoom, game);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline));
             assertNoOpDisconnect(specNoDeadline, testRoom, game);
 
             testRoom.setAbsenceDeadline("Spectator", pastDeadline);
             RoomGameSnapshot specMismatch = snapshotRoomAndGame(testRoom, game);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline - 5_000L);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline - 5_000L));
             assertNoOpDisconnect(specMismatch, testRoom, game);
 
             testRoom.setAbsenceDeadline("Spectator", futureDeadline);
             RoomGameSnapshot specFuture = snapshotRoomAndGame(testRoom, game);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), futureDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), futureDeadline));
             assertNoOpDisconnect(specFuture, testRoom, game);
 
             testRoom.setPlayerConnected("Spectator", true);
             testRoom.setAbsenceDeadline("Spectator", pastDeadline);
             RoomGameSnapshot specConnected = snapshotRoomAndGame(testRoom, game);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline));
             assertNoOpDisconnect(specConnected, testRoom, game);
         }
 
@@ -1131,44 +1184,45 @@ class PlayerDepartureHandlerTest {
             p2.setDisconnectDeadlineEpochMs(null);
             RoomGameSnapshot sNoDeadline = snapshotRoomAndGame(testRoom, game);
             clearInvocations(gameStateService);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline));
             assertNoOpDisconnect(sNoDeadline, testRoom, game);
 
             // Obsolete membership
             p2.setDisconnectDeadlineEpochMs(pastDeadline);
             RoomGameSnapshot sObsolete = snapshotRoomAndGame(testRoom, game);
             clearInvocations(gameStateService);
-            gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "obsolete-id", pastDeadline);
+            withRoomLock(ROOM_ID, () ->
+                    gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", "obsolete-id", pastDeadline));
             assertNoOpDisconnect(sObsolete, testRoom, game);
 
             // Deadline mismatch
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline - 5_000L);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline - 5_000L));
             assertNoOpDisconnect(sObsolete, testRoom, game);
 
             // Game player deadline wins over room deadline
             long roomDeadline = pastDeadline - 5_000L;
             testRoom.setAbsenceDeadline("Player2", roomDeadline);
             RoomGameSnapshot sGameWins = snapshotRoomAndGame(testRoom, game);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), roomDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), roomDeadline));
             assertNoOpDisconnect(sGameWins, testRoom, game);
 
             // Before deadline -> no-op
             testRoom.setAbsenceDeadline("Player2", null);
             p2.setDisconnectDeadlineEpochMs(futureDeadline);
             RoomGameSnapshot sFuture = snapshotRoomAndGame(testRoom, game);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), futureDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), futureDeadline));
             assertNoOpDisconnect(sFuture, testRoom, game);
 
             // Not disconnected -> no-op
             p2.setDisconnected(false);
             p2.setDisconnectDeadlineEpochMs(pastDeadline);
             RoomGameSnapshot sConnected = snapshotRoomAndGame(testRoom, game);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline));
             assertNoOpDisconnect(sConnected, testRoom, game);
 
             // Room-only spectator connected -> no-op even if a deadline is present
@@ -1176,22 +1230,22 @@ class PlayerDepartureHandlerTest {
             testRoom.setPlayerConnected("Spectator", true);
             testRoom.setAbsenceDeadline("Spectator", pastDeadline);
             RoomGameSnapshot sSpecConn = snapshotRoomAndGame(testRoom, game);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline));
             assertNoOpDisconnect(sSpecConn, testRoom, game);
 
             // Room-only spectator expired -> leaves room
             testRoom.setPlayerConnected("Spectator", false);
             testRoom.setAbsenceDeadline("Spectator", pastDeadline);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Spectator", testRoom.getMembershipId("Spectator"), pastDeadline));
             verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Spectator")), any());
 
             // Expired game-player deadline -> leaves room, retains frozen roster
             p2.setDisconnected(true);
             p2.setDisconnectDeadlineEpochMs(pastDeadline);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline));
             verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
             assertTrue(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Player2")));
 
@@ -1200,15 +1254,15 @@ class PlayerDepartureHandlerTest {
             testRoom.setAbsenceDeadline("Player2", pastDeadline);
             reset(roomService);
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, "Player2", testRoom.getMembershipId("Player2"), pastDeadline));
             verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
         }
 
         @Test
         void removeDisconnectedPlayer_SettledGameDecided_FinalizesGame() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             Player busted = game.getPlayers().get(0);
             busted.setIsOut();
@@ -1220,8 +1274,8 @@ class PlayerDepartureHandlerTest {
             busted.setDisconnected(true);
             busted.setDisconnectDeadlineEpochMs(deadline);
 
-            gameLifecycleService.removeDisconnectedPlayer(
-                    ROOM_ID, busted.getName(), testRoom.getMembershipId(busted.getName()), deadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
+                    ROOM_ID, busted.getName(), testRoom.getMembershipId(busted.getName()), deadline));
 
             verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of(busted.getName())), any());
             assertTrue(game.isGameOver());
@@ -1238,7 +1292,7 @@ class PlayerDepartureHandlerTest {
         void removePlayers_ConcurrentWithPlayerAction_NonCurrentDisconnect_PreservesTurnIndex()
                 throws Exception {
             PlayerActionService playerActionService = new PlayerActionService(
-                    gameLifecycleService, gameStateService, roomCoordinator, mutableClock);
+                    gameLifecycleService, gameStateService, mutableClock);
             ConcurrentHashMap<String, Room> roomsById = new ConcurrentHashMap<>();
             when(roomService.getRoom(anyString())).thenAnswer(inv -> roomsById.get(inv.<String>getArgument(0)));
 
@@ -1255,7 +1309,7 @@ class PlayerDepartureHandlerTest {
                     room.addPlayer(p3);
                     roomsById.put(roomId, room);
 
-                    gameLifecycleService.createGameFromRoom(roomId);
+                    withRoomLock(roomId, () -> gameLifecycleService.createGameFromRoom(roomId));
                     Game game = getGameLocked(roomId);
                     Player currentPlayer = game.getCurrentPlayer();
                     Player leavingPlayer = game.getPlayers().stream()
@@ -1266,13 +1320,14 @@ class PlayerDepartureHandlerTest {
                     CyclicBarrier barrier = new CyclicBarrier(2);
                     Future<?> fold = executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
-                        playerActionService.processPlayerAction(
-                                roomId, new PlayerActionRequest(PlayerAction.FOLD, null), currentPlayer.getName());
+                        withRoomLock(roomId, () -> playerActionService.processPlayerAction(
+                                roomId, new PlayerActionRequest(PlayerAction.FOLD, null), currentPlayer.getName()));
                         return null;
                     });
                     Future<?> leave = executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
-                        gameLifecycleService.removePlayers(roomId, List.of(leavingPlayer.getName()));
+                        withRoomLock(roomId, () ->
+                                gameLifecycleService.removePlayers(roomId, List.of(leavingPlayer.getName())));
                         return null;
                     });
                     fold.get(5, TimeUnit.SECONDS);
@@ -1291,7 +1346,7 @@ class PlayerDepartureHandlerTest {
             testRoom.addPlayer("Player3");
             testRoom.addPlayer("Player4");
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
 
             Game game = getGameLocked(ROOM_ID);
             List<Player> departing = game.getPlayers().stream()
@@ -1308,7 +1363,8 @@ class PlayerDepartureHandlerTest {
                 for (Player player : departing) {
                     futures.add(executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
-                        gameLifecycleService.removePlayers(ROOM_ID, List.of(player.getName()));
+                        withRoomLock(ROOM_ID, () ->
+                                gameLifecycleService.removePlayers(ROOM_ID, List.of(player.getName())));
                         return null;
                     }));
                 }
@@ -1325,7 +1381,7 @@ class PlayerDepartureHandlerTest {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             reset(gameStateService);
             stubGameEndCapture();
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
 
             Game game = getGameLocked(ROOM_ID);
             Player p1 = game.getPlayers().get(0);
@@ -1341,7 +1397,8 @@ class PlayerDepartureHandlerTest {
                 for (Player leaver : List.of(p1, p2)) {
                     futures.add(executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
-                        gameLifecycleService.removePlayers(ROOM_ID, List.of(leaver.getName()));
+                        withRoomLock(ROOM_ID, () ->
+                                gameLifecycleService.removePlayers(ROOM_ID, List.of(leaver.getName())));
                         return null;
                     }));
                 }
@@ -1377,7 +1434,7 @@ class PlayerDepartureHandlerTest {
                     game.postBlinds();
 
                     when(roomService.getRoom(roomId)).thenReturn(room);
-                    gameLifecycleService.restoreGame(game);
+                    withRoomLock(roomId, () -> gameLifecycleService.restoreGame(game));
 
                     CyclicBarrier barrier = new CyclicBarrier(2);
                     Future<?> endFuture = executor.submit(() -> {
@@ -1389,7 +1446,7 @@ class PlayerDepartureHandlerTest {
                     });
                     Future<?> leaveFuture = executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
-                        gameLifecycleService.removePlayers(roomId, List.of("Player2"));
+                        withRoomLock(roomId, () -> gameLifecycleService.removePlayers(roomId, List.of("Player2")));
                         return null;
                     });
 
@@ -1444,7 +1501,7 @@ class PlayerDepartureHandlerTest {
                     Future<Throwable> startResult = executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
                         try {
-                            gameLifecycleService.createGameFromRoom(roomId);
+                            withRoomLock(roomId, () -> gameLifecycleService.createGameFromRoom(roomId));
                             return null;
                         } catch (Throwable t) {
                             return t;
@@ -1452,7 +1509,7 @@ class PlayerDepartureHandlerTest {
                     });
                     Future<?> leaveResult = executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
-                        gameLifecycleService.removePlayers(roomId, List.of("Guest"));
+                        withRoomLock(roomId, () -> gameLifecycleService.removePlayers(roomId, List.of("Guest")));
                         return null;
                     });
                     Throwable startError = startResult.get(5, TimeUnit.SECONDS);
@@ -1460,7 +1517,7 @@ class PlayerDepartureHandlerTest {
 
                     Game game = getGameLocked(roomId);
                     if (game != null) {
-                        assertFalse(gameLifecycleService.playerExistsInGame(roomId, "Guest"));
+                        assertFalse(withRoomLock(roomId, () -> gameLifecycleService.playerExistsInGame(roomId, "Guest")));
                         assertFalse(room.hasPlayer("Guest"));
                     } else {
                         assertNotNull(startError);
@@ -1480,7 +1537,7 @@ class PlayerDepartureHandlerTest {
                     Future<Throwable> startResult = executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
                         try {
-                            gameLifecycleService.createGameFromRoom(roomId);
+                            withRoomLock(roomId, () -> gameLifecycleService.createGameFromRoom(roomId));
                             return null;
                         } catch (Throwable t) {
                             return t;
@@ -1488,7 +1545,7 @@ class PlayerDepartureHandlerTest {
                     });
                     Future<?> leaveResult = executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
-                        gameLifecycleService.removePlayers(roomId, List.of("Host"));
+                        withRoomLock(roomId, () -> gameLifecycleService.removePlayers(roomId, List.of("Host")));
                         return null;
                     });
                     Throwable startError = startResult.get(5, TimeUnit.SECONDS);
@@ -1516,17 +1573,17 @@ class PlayerDepartureHandlerTest {
                             new Player("Player3", "p3", 1000)), 6, 10, 20, handEvaluator);
                     game.dealHoleCards();
                     game.postBlinds();
-                    gameLifecycleService.restoreGame(game);
+                    withRoomLock(roomId, () -> gameLifecycleService.restoreGame(game));
 
                     CyclicBarrier barrier = new CyclicBarrier(2);
                     Future<?> hostLeave = executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
-                        gameLifecycleService.removePlayers(roomId, List.of("Host"));
+                        withRoomLock(roomId, () -> gameLifecycleService.removePlayers(roomId, List.of("Host")));
                         return null;
                     });
                     Future<?> succLeave = executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
-                        gameLifecycleService.removePlayers(roomId, List.of("Successor"));
+                        withRoomLock(roomId, () -> gameLifecycleService.removePlayers(roomId, List.of("Successor")));
                         return null;
                     });
                     hostLeave.get(5, TimeUnit.SECONDS);

@@ -46,6 +46,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -188,27 +189,42 @@ class GameLifecycleServiceTest {
         }
     }
 
-    private Game getGameLocked(String roomId) {
+    private <T> T withRoomLock(String roomId, Supplier<T> action) {
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            return gameLifecycleService.getGame(roomId);
+            return action.get();
         }
+    }
+
+    private void withRoomLock(String roomId, Runnable action) {
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
+            action.run();
+        }
+    }
+
+    private Game getGameLocked(String roomId) {
+        return withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId));
     }
 
     private Game createShowdownGame() {
         when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-        gameLifecycleService.createGameFromRoom(ROOM_ID);
-        Game game = getGameLocked(ROOM_ID);
-        game.conductShowdown();
-        return game;
+        return withRoomLock(ROOM_ID, () -> {
+            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            Game game = gameLifecycleService.getGame(ROOM_ID);
+            game.conductShowdown();
+            return game;
+        });
     }
 
     private Game gameWithReadyCountdown() {
-        if (getGameLocked(ROOM_ID) != null) {
-            gameLifecycleService.evictGame(ROOM_ID);
-        }
+        withRoomLock(ROOM_ID, () -> {
+            if (gameLifecycleService.getGame(ROOM_ID) != null) {
+                gameLifecycleService.evictGame(ROOM_ID);
+            }
+        });
         Game game = createShowdownGame();
         clearInvocations(gameStateService, taskScheduler);
-        gameLifecycleService.applyTurnOutcome(ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false);
+        withRoomLock(ROOM_ID, () ->
+                gameLifecycleService.applyTurnOutcome(ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
         clearInvocations(gameStateService, taskScheduler);
         return game;
     }
@@ -231,8 +247,8 @@ class GameLifecycleServiceTest {
             Game game = createShowdownGame();
             clearInvocations(gameStateService);
 
-            gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
+                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true));
 
             assertTrue(game.isReadyCountdownActive());
             assertEquals(game.getReadyCountdownDeadlineEpochMs(),
@@ -250,8 +266,8 @@ class GameLifecycleServiceTest {
             stubGameEndCapture();
             Game game = createShowdownGame();
 
-            gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
+                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true));
 
             assertFalse(game.isReadyCountdownActive());
             assertEquals(BASE_EPOCH_MS + 2_500L,
@@ -267,8 +283,8 @@ class GameLifecycleServiceTest {
             setPlayerChips(game.getPlayers().getLast(), 0);
             assertTrue(game.isGameDecided());
 
-            gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
+                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true));
 
             assertFalse(game.isReadyCountdownActive());
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
@@ -282,12 +298,12 @@ class GameLifecycleServiceTest {
         void createGameFromRoom_ValidRoom_StartsHandAndEmitsEvents() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
 
-            String gameId = gameLifecycleService.createGameFromRoom(ROOM_ID);
+            String gameId = withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
 
             assertEquals(ROOM_ID, gameId);
             Game game = getGameLocked(ROOM_ID);
             assertNotNull(game);
-            assertTrue(gameLifecycleService.gameExists(ROOM_ID));
+            assertTrue(withRoomLock(ROOM_ID, () -> gameLifecycleService.gameExists(ROOM_ID)));
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertTrue(game.getCommunityCards().isEmpty());
             assertNotNull(game.getCurrentPlayer());
@@ -306,7 +322,7 @@ class GameLifecycleServiceTest {
         void createGameFromRoom_ValidationFailures() {
             when(roomService.getRoom("missing")).thenReturn(null);
             assertThrows(ResourceNotFoundException.class,
-                    () -> gameLifecycleService.createGameFromRoom("missing"));
+                    () -> withRoomLock("missing", () -> gameLifecycleService.createGameFromRoom("missing")));
 
             Room expiredLobby = new Room("expired", "Expired", "Host", 6, 5, 10, 100, null);
             expiredLobby.addPlayer("Host");
@@ -314,21 +330,21 @@ class GameLifecycleServiceTest {
             when(roomService.getRoom("expired")).thenReturn(expiredLobby);
             when(roomService.isLobbyExpired(expiredLobby)).thenReturn(true);
             assertThrows(BadRequestException.class,
-                    () -> gameLifecycleService.createGameFromRoom("expired"));
+                    () -> withRoomLock("expired", () -> gameLifecycleService.createGameFromRoom("expired")));
             verify(roomService, never()).checkAndCloseIfExpired("expired");
 
             Room onePlayerRoom = new Room("one", "One", "Host", 6, 5, 10, 100, null);
             onePlayerRoom.addPlayer("Host");
             when(roomService.getRoom("one")).thenReturn(onePlayerRoom);
             UnauthorisedActionException fewEx = assertThrows(UnauthorisedActionException.class,
-                    () -> gameLifecycleService.createGameFromRoom("one"));
+                    () -> withRoomLock("one", () -> gameLifecycleService.createGameFromRoom("one")));
             assertEquals("Need at least 2 players to start game. Please wait for more players to join.",
                     fewEx.getMessage());
 
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             BadRequestException startedEx = assertThrows(BadRequestException.class,
-                    () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
+                    () -> withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID)));
             assertEquals("Game has already started for this room.", startedEx.getMessage());
         }
 
@@ -346,7 +362,7 @@ class GameLifecycleServiceTest {
                 return null;
             }).when(roomService).broadcastGameStarted(ROOM_ID);
 
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
 
             Game game = getGameLocked(ROOM_ID);
             Player host = game.findPlayerByName("Host");
@@ -371,7 +387,8 @@ class GameLifecycleServiceTest {
             headsUp.addPlayer("Host");
             headsUp.addPlayer("Player2");
             when(roomService.getRoom(headsUp.getRoomId())).thenReturn(headsUp);
-            gameLifecycleService.createGameFromRoom(headsUp.getRoomId());
+            withRoomLock(headsUp.getRoomId(), () ->
+                    gameLifecycleService.createGameFromRoom(headsUp.getRoomId()));
             Game runout = getGameLocked(headsUp.getRoomId());
             runout.conductShowdown();
             runout.getPlayers().forEach(player -> setPlayerChips(player, 5));
@@ -381,8 +398,8 @@ class GameLifecycleServiceTest {
             reset(gameStateService);
             stubGameEndCapture();
 
-            gameLifecycleService.executeScheduledTask(
-                    headsUp.getRoomId(), ScheduledGameTask.NEW_HAND, nextHandDeadline, runout.getHandNumber(), nextHandGen);
+            withRoomLock(headsUp.getRoomId(), () -> gameLifecycleService.executeScheduledTask(
+                    headsUp.getRoomId(), ScheduledGameTask.NEW_HAND, nextHandDeadline, runout.getHandNumber(), nextHandGen));
 
             assertTrue(runout.getActivePlayers().stream().allMatch(Player::getIsAllIn));
             assertEquals(5, runout.getCurrentHighestBet());
@@ -394,7 +411,8 @@ class GameLifecycleServiceTest {
             threeHanded.addPlayer("Player2");
             threeHanded.addPlayer("Player3");
             when(roomService.getRoom(threeHanded.getRoomId())).thenReturn(threeHanded);
-            gameLifecycleService.createGameFromRoom(threeHanded.getRoomId());
+            withRoomLock(threeHanded.getRoomId(), () ->
+                    gameLifecycleService.createGameFromRoom(threeHanded.getRoomId()));
             Game callHand = getGameLocked(threeHanded.getRoomId());
             callHand.conductShowdown();
             int playerCount = callHand.getActivePlayers().size();
@@ -410,8 +428,8 @@ class GameLifecycleServiceTest {
             reset(gameStateService);
             stubGameEndCapture();
 
-            gameLifecycleService.executeScheduledTask(
-                    threeHanded.getRoomId(), ScheduledGameTask.NEW_HAND, nextHandDeadline, callHand.getHandNumber(), callGen);
+            withRoomLock(threeHanded.getRoomId(), () -> gameLifecycleService.executeScheduledTask(
+                    threeHanded.getRoomId(), ScheduledGameTask.NEW_HAND, nextHandDeadline, callHand.getHandNumber(), callGen));
 
             Player actor = callHand.getCurrentPlayer();
             assertNotNull(actor);
@@ -429,26 +447,30 @@ class GameLifecycleServiceTest {
             for (String name : List.of("A", "B", "C", "D")) {
                 room.addPlayer(name);
             }
-            when(roomService.getRoom(room.getRoomId())).thenReturn(room);
-            gameLifecycleService.createGameFromRoom(room.getRoomId());
-            Game game = getGameLocked(room.getRoomId());
+            String roomId = room.getRoomId();
+            when(roomService.getRoom(roomId)).thenReturn(room);
+            withRoomLock(roomId, () -> gameLifecycleService.createGameFromRoom(roomId));
+            Game game = getGameLocked(roomId);
             game.conductShowdown();
             game.getPlayers().forEach(player -> setPlayerChips(player, 100));
             HandSettlementResult settled = game.getLastSettlementResult();
-            gameLifecycleService.applyTurnOutcome(
-                    room.getRoomId(), game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false);
+            withRoomLock(roomId, () -> {
+                gameLifecycleService.applyTurnOutcome(
+                        roomId, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false);
+            });
             long readyDeadline = game.getReadyCountdownDeadlineEpochMs();
-            gameLifecycleService.markPlayerReadyForNextHand(room.getRoomId(), "A");
-            gameLifecycleService.markPlayerReadyForNextHand(room.getRoomId(), "B");
-
-            gameLifecycleService.removePlayers(room.getRoomId(), List.of("D"));
+            withRoomLock(roomId, () -> {
+                gameLifecycleService.markPlayerReadyForNextHand(roomId, "A");
+                gameLifecycleService.markPlayerReadyForNextHand(roomId, "B");
+                gameLifecycleService.removePlayers(roomId, List.of("D"));
+            });
 
             assertTrue(game.isReadyCountdownActive());
             assertEquals(readyDeadline, game.getReadyCountdownDeadlineEpochMs());
             assertSame(settled, game.getLastSettlementResult());
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
 
-            gameLifecycleService.markPlayerReadyForNextHand(room.getRoomId(), "C");
+            withRoomLock(roomId, () -> gameLifecycleService.markPlayerReadyForNextHand(roomId, "C"));
 
             assertFalse(game.isReadyCountdownActive());
             assertNull(game.getLastSettlementResult());
@@ -456,7 +478,7 @@ class GameLifecycleServiceTest {
             assertEquals(15, game.getPot(), "One hand start posts one set of blinds");
             assertEquals(285, game.getActivePlayers().stream().mapToInt(Player::getChips).sum());
             assertThrows(UnauthorisedActionException.class,
-                    () -> gameLifecycleService.markPlayerReadyForNextHand(room.getRoomId(), "A"));
+                    () -> withRoomLock(roomId, () -> gameLifecycleService.markPlayerReadyForNextHand(roomId, "A")));
         }
 
         @Test
@@ -464,15 +486,15 @@ class GameLifecycleServiceTest {
             wireLifecycle(DEFAULT_GAME_END_DISPLAY_MS, DEFAULT_ROUND_END_DISPLAY_MS, 60_000L);
             stubGameEndCapture();
             Game game = createShowdownGame();
-            gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
+                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
             long currentDeadline = game.getReadyCountdownDeadlineEpochMs();
             long hand = game.getHandNumber();
             long gen = game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT);
 
             // Stale deadline ignored
-            gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, currentDeadline - 1_000L, hand, gen);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
+                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, currentDeadline - 1_000L, hand, gen));
             assertTrue(game.isReadyCountdownActive());
             assertEquals(currentDeadline, game.getReadyCountdownDeadlineEpochMs());
 
@@ -480,11 +502,12 @@ class GameLifecycleServiceTest {
             int hostChipsBefore = game.findPlayerByName("Host").getChips();
             int p2ChipsBefore = game.findPlayerByName("Player2").getChips();
             int potBefore = game.getPot();
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Host", BASE_EPOCH_MS + 120_000L);
-            assertTrue(game.isReadyCountdownActive());
-
-            gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, currentDeadline, hand, gen);
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Host", BASE_EPOCH_MS + 120_000L);
+                assertTrue(game.isReadyCountdownActive());
+                gameLifecycleService.executeScheduledTask(
+                        ROOM_ID, ScheduledGameTask.READY_TIMEOUT, currentDeadline, hand, gen);
+            });
 
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, game.getReadyGateState());
             assertFalse(game.isReadyCountdownActive());
@@ -495,13 +518,13 @@ class GameLifecycleServiceTest {
             assertEquals(potBefore, game.getPot());
 
             // Reconnect opens gate; matching READY_TIMEOUT starts next hand
-            gameLifecycleService.markPlayerReconnected(ROOM_ID, "Host");
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReconnected(ROOM_ID, "Host"));
             assertTrue(game.isReadyCountdownActive());
             long reopenedDeadline = game.getReadyCountdownDeadlineEpochMs();
             long reopenedGen = game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT);
 
-            gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, reopenedDeadline, hand, reopenedGen);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
+                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, reopenedDeadline, hand, reopenedGen));
 
             assertEquals(hand + 1, game.getHandNumber());
             assertNull(game.getReadyCountdownDeadlineEpochMs());
@@ -511,56 +534,56 @@ class GameLifecycleServiceTest {
         @Test
         void readyEligibilityAndRejectionContracts() {
             assertThrows(ResourceNotFoundException.class,
-                    () -> gameLifecycleService.markPlayerReadyForNextHand("nonexistent-id", "Host"));
+                    () -> withRoomLock("nonexistent-id", () -> gameLifecycleService.markPlayerReadyForNextHand("nonexistent-id", "Host")));
             assertThrows(ResourceNotFoundException.class,
-                    () -> gameLifecycleService.unmarkPlayerReadyForNextHand("nonexistent-id", "Host"));
+                    () -> withRoomLock("nonexistent-id", () -> gameLifecycleService.unmarkPlayerReadyForNextHand("nonexistent-id", "Host")));
 
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game liveGame = getGameLocked(ROOM_ID);
             liveGame.findPlayerByName("Host").setReadyForNextHand(true);
             clearInvocations(gameStateService);
 
             UnauthorisedActionException unmarkInactive = assertThrows(UnauthorisedActionException.class,
-                    () -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host"));
+                    () -> withRoomLock(ROOM_ID, () -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host")));
             assertEquals("Ready countdown is not active.", unmarkInactive.getMessage());
             assertTrue(liveGame.findPlayerByName("Host").getIsReadyForNextHand());
 
             liveGame.findPlayerByName("Host").setReadyForNextHand(false);
             UnauthorisedActionException markInactive = assertThrows(UnauthorisedActionException.class,
-                    () -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host"));
+                    () -> withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host")));
             assertEquals("Ready countdown is not active.", markInactive.getMessage());
 
             Game readyGame = gameWithReadyCountdown();
-            assertReadyRejected(() -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Stranger"),
+            assertReadyRejected(() -> withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Stranger")),
                     "You are no longer part of this game.", readyGame);
-            assertReadyRejected(() -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Stranger"),
+            assertReadyRejected(() -> withRoomLock(ROOM_ID, () -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Stranger")),
                     "You are no longer part of this game.", readyGame);
 
             Player host = readyGame.findPlayerByName("Host");
             host.setIsOut();
-            assertReadyRejected(() -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host"),
+            assertReadyRejected(() -> withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host")),
                     "You are out of this game.", readyGame);
             host.setReadyForNextHand(true);
-            assertReadyRejected(() -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host"),
+            assertReadyRejected(() -> withRoomLock(ROOM_ID, () -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host")),
                     "You are out of this game.", readyGame);
 
             Game disconnectedGame = gameWithReadyCountdown();
             Player dcHost = disconnectedGame.findPlayerByName("Host");
             dcHost.setDisconnected(true);
-            assertReadyRejected(() -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host"),
+            assertReadyRejected(() -> withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host")),
                     "Reconnect before marking ready.", disconnectedGame);
             dcHost.setReadyForNextHand(true);
-            assertReadyRejected(() -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host"),
+            assertReadyRejected(() -> withRoomLock(ROOM_ID, () -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host")),
                     "You are not eligible to change readiness.", disconnectedGame);
 
             Game bustedGame = gameWithReadyCountdown();
             Player bustedHost = bustedGame.findPlayerByName("Host");
             setPlayerChips(bustedHost, 0);
-            assertReadyRejected(() -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host"),
+            assertReadyRejected(() -> withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host")),
                     "Players without chips cannot mark ready.", bustedGame);
             bustedHost.setReadyForNextHand(true);
-            assertReadyRejected(() -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host"),
+            assertReadyRejected(() -> withRoomLock(ROOM_ID, () -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host")),
                     "You are not eligible to change readiness.", bustedGame);
         }
     }
@@ -575,15 +598,23 @@ class GameLifecycleServiceTest {
         void gameAndPlayerQueriesRespectMissingAndOutPlayers() {
             assertNull(getGameLocked("missing"));
             assertThrows(IllegalStateException.class, () -> gameLifecycleService.getGame("missing"));
-            assertFalse(gameLifecycleService.gameExists("missing"));
+            assertThrows(IllegalStateException.class, () -> gameLifecycleService.gameExists("missing"));
+            assertThrows(IllegalStateException.class, () -> gameLifecycleService.playerExistsInGame("missing", "Host"));
+            assertThrows(IllegalStateException.class, () -> gameLifecycleService.isGameInactivityExpired("missing"));
+            assertThrows(IllegalStateException.class, () -> gameLifecycleService.getGameReview("missing", "Host"));
+            assertThrows(IllegalStateException.class,
+                    () -> gameLifecycleService.validatePlayerMembership("missing", "Host", "mem-1"));
+            assertFalse(withRoomLock("missing", () -> gameLifecycleService.gameExists("missing")));
             assertFalse(gameLifecycleService.playerExistsInGame(null, "Host"));
             assertFalse(gameLifecycleService.playerExistsInGame(ROOM_ID, null));
 
             Game nullPlayersGame = mock(Game.class);
             when(nullPlayersGame.getGameId()).thenReturn("mock-null-players");
             when(nullPlayersGame.getPlayers()).thenReturn(null);
-            gameLifecycleService.restoreGame(nullPlayersGame);
-            assertFalse(gameLifecycleService.playerExistsInGame("mock-null-players", "Host"));
+            withRoomLock("mock-null-players", () -> {
+                gameLifecycleService.restoreGame(nullPlayersGame);
+                assertFalse(gameLifecycleService.playerExistsInGame("mock-null-players", "Host"));
+            });
 
             Player active = new Player("Alice", "p1", 100);
             Player out = new Player("Bob", "p2", 0);
@@ -604,17 +635,18 @@ class GameLifecycleServiceTest {
             Game lockedGame = mock(Game.class);
             when(lockedGame.getGameId()).thenReturn("mock-locked");
             when(lockedGame.getPlayers()).thenReturn(verifiedList);
-            gameLifecycleService.restoreGame(lockedGame);
-
-            assertTrue(gameLifecycleService.playerExistsInGame("mock-locked", "Alice"));
-            assertFalse(gameLifecycleService.playerExistsInGame("mock-locked", "Bob"));
-            assertFalse(gameLifecycleService.playerExistsInGame("mock-locked", "Charlie"));
+            withRoomLock("mock-locked", () -> {
+                gameLifecycleService.restoreGame(lockedGame);
+                assertTrue(gameLifecycleService.playerExistsInGame("mock-locked", "Alice"));
+                assertFalse(gameLifecycleService.playerExistsInGame("mock-locked", "Bob"));
+                assertFalse(gameLifecycleService.playerExistsInGame("mock-locked", "Charlie"));
+            });
         }
 
         @Test
         void evictGame_RemovesGameAndTimersWhilePreservingRoomContainer() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             @SuppressWarnings("unchecked")
             ScheduledFuture<Object> turnFuture = mock(ScheduledFuture.class);
             doReturn(turnFuture).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
@@ -622,10 +654,10 @@ class GameLifecycleServiceTest {
             testRoom.setTerminal(true);
 
             gameLifecycleService.evictGame(null);
-            gameLifecycleService.evictGame(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.evictGame(ROOM_ID));
 
             assertNull(getGameLocked(ROOM_ID));
-            assertFalse(gameLifecycleService.gameExists(ROOM_ID));
+            assertFalse(withRoomLock(ROOM_ID, () -> gameLifecycleService.gameExists(ROOM_ID)));
             assertFalse(testRoom.isGameStarted());
             assertFalse(testRoom.isTerminal());
             verify(turnFuture).cancel(false);
@@ -637,15 +669,17 @@ class GameLifecycleServiceTest {
             testRoom.setMembershipId("Host", "mem-1");
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
 
-            assertDoesNotThrow(() -> gameLifecycleService.validatePlayerMembership(ROOM_ID, "Host", "mem-1"));
-            assertThrows(AccessDeniedException.class,
-                    () -> gameLifecycleService.validatePlayerMembership(ROOM_ID, "Host", "wrong"));
-            assertThrows(AccessDeniedException.class,
-                    () -> gameLifecycleService.validatePlayerMembership(ROOM_ID, "Host", " "));
+            withRoomLock(ROOM_ID, () -> {
+                assertDoesNotThrow(() -> gameLifecycleService.validatePlayerMembership(ROOM_ID, "Host", "mem-1"));
+                assertThrows(AccessDeniedException.class,
+                        () -> gameLifecycleService.validatePlayerMembership(ROOM_ID, "Host", "wrong"));
+                assertThrows(AccessDeniedException.class,
+                        () -> gameLifecycleService.validatePlayerMembership(ROOM_ID, "Host", " "));
+                assertThrows(AccessDeniedException.class,
+                        () -> gameLifecycleService.validatePlayerMembership(ROOM_ID, "", "mem-1"));
+            });
             assertThrows(AccessDeniedException.class,
                     () -> gameLifecycleService.validatePlayerMembership(null, "Host", "mem-1"));
-            assertThrows(AccessDeniedException.class,
-                    () -> gameLifecycleService.validatePlayerMembership(ROOM_ID, "", "mem-1"));
         }
 
         @Test
@@ -667,25 +701,27 @@ class GameLifecycleServiceTest {
             game.openOrWaitReadyGate(BASE_EPOCH_MS + 10_000L);
             // Force recovered ready countdown missing deadline and verify resume repairs and schedules it
             game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
-            gameLifecycleService.restoreGame(game);
-            testRoom.setInactivityDeadlineEpochMs(BASE_EPOCH_MS + 50_000L);
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.restoreGame(game);
+                testRoom.setInactivityDeadlineEpochMs(BASE_EPOCH_MS + 50_000L);
 
-            gameLifecycleService.resumeRecoveredTimers(ROOM_ID);
-            assertEquals(BASE_EPOCH_MS + 10_000L,
-                    game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
-            verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 10_000L)));
+                gameLifecycleService.resumeRecoveredTimers(ROOM_ID);
+                assertEquals(BASE_EPOCH_MS + 10_000L,
+                        game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+                verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 10_000L)));
 
-            gameLifecycleService.cancelTimers(ROOM_ID, false);
-            verify(recoveredReadyFuture).cancel(false);
+                gameLifecycleService.cancelTimers(ROOM_ID, false);
+                verify(recoveredReadyFuture).cancel(false);
 
-            clearInvocations(taskScheduler);
-            gameLifecycleService.resumeRollbackTimers(ROOM_ID);
-            verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 10_000L)));
-            verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 50_000L)));
+                clearInvocations(taskScheduler);
+                gameLifecycleService.resumeRollbackTimers(ROOM_ID);
+                verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 10_000L)));
+                verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 50_000L)));
 
-            gameLifecycleService.cancelTimers(ROOM_ID, false);
-            verify(rollbackReadyFuture).cancel(false);
-            verify(rollbackInactivityFuture).cancel(false);
+                gameLifecycleService.cancelTimers(ROOM_ID, false);
+                verify(rollbackReadyFuture).cancel(false);
+                verify(rollbackInactivityFuture).cancel(false);
+            });
         }
     }
 
@@ -698,7 +734,7 @@ class GameLifecycleServiceTest {
         @Test
         void executeScheduledTask_AutoAdvanceInShowdown_DoesNotRedistribute() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             when(handEvaluator.getBestHand(any(), any()))
                     .thenReturn(new HandEvaluationResult(List.of(new Card(Rank.ACE, Suit.SPADES)), HandRank.HIGH_CARD));
@@ -711,8 +747,8 @@ class GameLifecycleServiceTest {
             reset(gameStateService);
             stubGameEndCapture();
 
-            gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, deadline, game.getHandNumber(), gen);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
+                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, deadline, game.getHandNumber(), gen));
 
             assertEquals(chipsHostBefore, game.getPlayers().get(0).getChips());
             assertEquals(chipsP2Before, game.getPlayers().get(1).getChips());
@@ -727,7 +763,7 @@ class GameLifecycleServiceTest {
                     .thenAnswer(_ -> mock(ScheduledFuture.class));
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
 
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             long deadline = testRoom.getInactivityDeadlineEpochMs();
             assertNotNull(deadline);
@@ -735,12 +771,12 @@ class GameLifecycleServiceTest {
 
             // First scheduled timer is the game inactivity callback; early trigger must not abandon
             Runnable inactivityCallback = callbackCaptor.getAllValues().getFirst();
-            gameLifecycleService.abandonGameIfInactive(ROOM_ID, deadline);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.abandonGameIfInactive(ROOM_ID, deadline));
             assertFalse(game.isGameOver(), "Early check before deadline must not abandon");
 
             mutableClock.setMillis(deadline);
-            assertTrue(gameLifecycleService.isGameInactivityExpired(ROOM_ID));
-            inactivityCallback.run();
+            assertTrue(withRoomLock(ROOM_ID, () -> gameLifecycleService.isGameInactivityExpired(ROOM_ID)));
+            withRoomLock(ROOM_ID, inactivityCallback);
 
             assertTrue(game.isGameOver());
             assertTrue(game.getGameEndResult().abandoned());
@@ -756,19 +792,19 @@ class GameLifecycleServiceTest {
             });
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
 
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             long initialDeadline = testRoom.getInactivityDeadlineEpochMs();
             Runnable initialCallback = callbacks.getFirst();
 
             Game game = getGameLocked(ROOM_ID);
             game.conductShowdown();
-            gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
+                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
 
             // Advance clock 5s and mark first player ready -> extends inactivity deadline & schedules replacement
             mutableClock.setMillis(BASE_EPOCH_MS + 5_000L);
             callbacks.clear();
-            gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host");
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host"));
             long replacedDeadline = testRoom.getInactivityDeadlineEpochMs();
             assertEquals(BASE_EPOCH_MS + 5_000L + Room.GAME_INACTIVITY_ALLOWANCE_MS, replacedDeadline);
             assertEquals(1, callbacks.size());
@@ -777,7 +813,7 @@ class GameLifecycleServiceTest {
             // Mark second player ready -> next hand starts and keeps the extended inactivity deadline
             mutableClock.setMillis(BASE_EPOCH_MS + 6_000L);
             callbacks.clear();
-            gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Player2");
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Player2"));
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertEquals(2L, game.getHandNumber());
             long hand2Deadline = testRoom.getInactivityDeadlineEpochMs();
@@ -785,12 +821,12 @@ class GameLifecycleServiceTest {
 
             // Firing initial callback at initialDeadline is ignored because deadline changed
             mutableClock.setMillis(initialDeadline);
-            initialCallback.run();
+            withRoomLock(ROOM_ID, initialCallback);
             assertFalse(game.isGameOver(), "Superseded inactivity callback must not abandon active hand 2");
 
             // Firing the replacement callback at hand 2 deadline abandons the game
             mutableClock.setMillis(hand2Deadline);
-            hand2Callback.run();
+            withRoomLock(ROOM_ID, hand2Callback);
             assertTrue(game.isGameOver());
             assertTrue(game.getGameEndResult().abandoned());
         }
@@ -800,8 +836,8 @@ class GameLifecycleServiceTest {
             wireLifecycle(DEFAULT_GAME_END_DISPLAY_MS, DEFAULT_ROUND_END_DISPLAY_MS, 5_000L);
             stubGameEndCapture();
             Game game = createShowdownGame();
-            gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
+                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
             long deadline = game.getReadyCountdownDeadlineEpochMs();
             long oldGen = game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT);
 
@@ -810,8 +846,8 @@ class GameLifecycleServiceTest {
             game.openOrWaitReadyGate(deadline);
             assertEquals(oldGen + 1, game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT));
 
-            gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, deadline, game.getHandNumber(), oldGen);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
+                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, deadline, game.getHandNumber(), oldGen));
 
             assertTrue(game.isReadyCountdownActive());
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
@@ -822,10 +858,10 @@ class GameLifecycleServiceTest {
         void departedAllInDuringAutoAdvanceMakesCapturedCallbackStale() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             testRoom.addPlayer("Player3");
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
-            gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.AUTO_ADVANCING, null), true);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
+                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.AUTO_ADVANCING, null), true));
             long capturedDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE);
             long capturedHand = game.getHandNumber();
             long capturedGen = game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
@@ -834,13 +870,13 @@ class GameLifecycleServiceTest {
                     .filter(p -> !p.equals(game.getCurrentPlayer()))
                     .findFirst()
                     .orElseThrow();
-            gameLifecycleService.removePlayers(ROOM_ID, List.of(nonCurrent.getName()));
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of(nonCurrent.getName())));
             // Subsequent outcome or progression advances/invalidates generation
             game.invalidateProgressionTasks();
             clearInvocations(gameStateService);
 
-            gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, capturedDeadline, capturedHand, capturedGen);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
+                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, capturedDeadline, capturedHand, capturedGen));
 
             verifyNoInteractions(gameStateService);
         }
@@ -849,11 +885,13 @@ class GameLifecycleServiceTest {
         void claimWin_AndCleanupExecution_WorkThroughServiceBoundary() {
             testRoom.addPlayer("Player3");
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", BASE_EPOCH_MS + 60_000L);
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", BASE_EPOCH_MS + 60_000L);
+            withRoomLock(ROOM_ID, () -> {
+                gameLifecycleService.createGameFromRoom(ROOM_ID);
+                gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", BASE_EPOCH_MS + 60_000L);
+                gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", BASE_EPOCH_MS + 60_000L);
+            });
 
-            GameEndResponse claimed = gameLifecycleService.claimWin(ROOM_ID, "Host");
+            GameEndResponse claimed = withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
             assertEquals("Host", claimed.winner());
             assertTrue(claimed.isForfeit());
 
@@ -862,8 +900,8 @@ class GameLifecycleServiceTest {
             long cleanupGen = game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP);
             assertNotNull(cleanupDeadline);
 
-            gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.CLEANUP, cleanupDeadline, game.getHandNumber(), cleanupGen);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
+                    ROOM_ID, ScheduledGameTask.CLEANUP, cleanupDeadline, game.getHandNumber(), cleanupGen));
 
             assertNull(getGameLocked(ROOM_ID));
             verify(roomService).destroyRoom(ROOM_ID);
@@ -879,15 +917,18 @@ class GameLifecycleServiceTest {
         @Test
         void playerLookupWaitsForRosterMutationOnSameGame() throws Exception {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             Player departing = game.getPlayers().getLast();
-            assertTrue(gameLifecycleService.playerExistsInGame(ROOM_ID, departing.getName()));
+            assertTrue(withRoomLock(ROOM_ID, () -> gameLifecycleService.playerExistsInGame(ROOM_ID, departing.getName())));
+            assertThrows(IllegalStateException.class,
+                    () -> gameLifecycleService.playerExistsInGame(ROOM_ID, departing.getName()));
 
             try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
                 Future<Boolean> lookup;
                 try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                    lookup = executor.submit(() -> gameLifecycleService.playerExistsInGame(ROOM_ID, departing.getName()));
+                    lookup = executor.submit(() -> withRoomLock(ROOM_ID,
+                            () -> gameLifecycleService.playerExistsInGame(ROOM_ID, departing.getName())));
                     Awaitility.await().atMost(Duration.ofSeconds(5))
                             .until(() -> roomCoordinator.lockReservationCount(ROOM_ID) >= 2);
                     game.removePlayer(departing);
@@ -910,12 +951,13 @@ class GameLifecycleServiceTest {
 
             try (ExecutorService executor = Executors.newFixedThreadPool(roomIds.size())) {
                 List<Future<String>> creations = roomIds.stream()
-                        .map(roomId -> executor.submit(() -> gameLifecycleService.createGameFromRoom(roomId)))
+                        .map(roomId -> executor.submit(() -> withRoomLock(roomId,
+                                () -> gameLifecycleService.createGameFromRoom(roomId))))
                         .toList();
                 for (int index = 0; index < roomIds.size(); index++) {
                     String gameId = creations.get(index).get(10, TimeUnit.SECONDS);
                     assertEquals(roomIds.get(index), gameId);
-                    assertTrue(gameLifecycleService.gameExists(gameId));
+                    assertTrue(withRoomLock(gameId, () -> gameLifecycleService.gameExists(gameId)));
                     assertNotNull(getGameLocked(gameId));
                 }
             }
@@ -924,7 +966,7 @@ class GameLifecycleServiceTest {
         @Test
         void concurrentRegistryReadsReturnRegisteredGame() throws Exception {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game expected = getGameLocked(ROOM_ID);
             assertNotNull(expected);
 
@@ -942,7 +984,7 @@ class GameLifecycleServiceTest {
         @Test
         void concurrentAutoAdvanceSchedulingSerializesUpdatesOnRoomLease() throws Exception {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             ScheduledGameTask task = ScheduledGameTask.AUTO_ADVANCE;
             long generationBefore = game.getScheduledTaskGeneration(task);
@@ -953,10 +995,10 @@ class GameLifecycleServiceTest {
                 Future<?> secondSchedule;
                 try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                     TurnOutcome autoAdvance = new TurnOutcome(TurnOutcomeType.AUTO_ADVANCING, null);
-                    firstSchedule = executor.submit(
-                            () -> gameLifecycleService.applyTurnOutcome(ROOM_ID, game, autoAdvance, false));
-                    secondSchedule = executor.submit(
-                            () -> gameLifecycleService.applyTurnOutcome(ROOM_ID, game, autoAdvance, false));
+                    firstSchedule = executor.submit(() -> withRoomLock(ROOM_ID,
+                            () -> gameLifecycleService.applyTurnOutcome(ROOM_ID, game, autoAdvance, false)));
+                    secondSchedule = executor.submit(() -> withRoomLock(ROOM_ID,
+                            () -> gameLifecycleService.applyTurnOutcome(ROOM_ID, game, autoAdvance, false)));
                     Awaitility.await().atMost(Duration.ofSeconds(5))
                             .until(() -> roomCoordinator.lockReservationCount(ROOM_ID) == 3);
                     assertEquals(generationBefore, game.getScheduledTaskGeneration(task));

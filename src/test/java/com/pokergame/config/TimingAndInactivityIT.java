@@ -472,11 +472,10 @@ class TimingAndInactivityIT {
 
             lifecycle.abandonGameIfInactive(roomId, initialDeadline);
 
-            withRoomLock(roomCoordinator, roomId, () -> {
+            GameEndResponse review = withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
-                return null;
+                return lifecycle.getGameReview(roomId, actor);
             });
-            GameEndResponse review = lifecycle.getGameReview(roomId, actor);
             assertThat(review.abandoned()).isTrue();
             assertThat(review.reason()).isEqualTo("INACTIVITY");
             assertThat(review.winner()).isNull();
@@ -500,11 +499,10 @@ class TimingAndInactivityIT {
 
             lifecycle.executeScheduledTask(roomId, ScheduledGameTask.TURN_TIMEOUT, timerMeta[0], timerMeta[1], timerMeta[2]);
 
-            withRoomLock(roomCoordinator, roomId, () -> {
+            GameEndResponse review = withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
-                return null;
+                return lifecycle.getGameReview(roomId, "Host");
             });
-            GameEndResponse review = lifecycle.getGameReview(roomId, "Host");
             assertThat(review.abandoned()).isTrue();
             assertThat(review.reason()).isEqualTo("INACTIVITY");
             assertThat(review.winner()).isNull();
@@ -532,11 +530,10 @@ class TimingAndInactivityIT {
 
             lifecycle.abandonGameIfInactive(roomId, inactivityDeadline);
 
-            withRoomLock(roomCoordinator, roomId, () -> {
+            GameEndResponse review = withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
-                return null;
+                return lifecycle.getGameReview(roomId, "Host");
             });
-            GameEndResponse review = lifecycle.getGameReview(roomId, "Host");
             assertThat(review.abandoned()).isTrue();
             assertThat(review.winner()).isNull();
         }
@@ -550,11 +547,10 @@ class TimingAndInactivityIT {
 
             lifecycle.abandonGameDueToInactivity(roomId);
 
-            withRoomLock(roomCoordinator, roomId, () -> {
+            GameEndResponse review = withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
-                return null;
+                return lifecycle.getGameReview(roomId, "Host");
             });
-            GameEndResponse review = lifecycle.getGameReview(roomId, "Host");
             assertThat(review.abandoned()).isTrue();
             assertThat(review.reason()).isEqualTo("INACTIVITY");
             assertThat(review.winner()).isNull();
@@ -609,13 +605,13 @@ class TimingAndInactivityIT {
             lifecycle.executeScheduledTask(
                     roomId, ScheduledGameTask.TURN_TIMEOUT, meta.deadline(), meta.hand(), meta.generation());
 
+            String survivor = "Host".equals(meta.actor()) ? "Guest" : "Host";
             withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(rooms.getRoom(roomId).hasPlayer(meta.actor())).isFalse();
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
+                assertThat(lifecycle.getGameReview(roomId, survivor).winner()).isEqualTo(survivor);
                 return null;
             });
-            String survivor = "Host".equals(meta.actor()) ? "Guest" : "Host";
-            assertThat(lifecycle.getGameReview(roomId, survivor).winner()).isEqualTo(survivor);
         }
 
         @Test

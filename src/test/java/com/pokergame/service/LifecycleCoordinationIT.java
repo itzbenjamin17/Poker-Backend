@@ -152,8 +152,38 @@ class LifecycleCoordinationIT {
             assertThatThrownBy(() -> gameLifecycleService.getGame(roomId))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("does not hold room lock for room: " + roomId);
+            assertThatThrownBy(() -> gameLifecycleService.gameExists(roomId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not hold room lock for room: " + roomId);
+            assertThatThrownBy(() -> gameLifecycleService.playerExistsInGame(roomId, "Host"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not hold room lock for room: " + roomId);
+            assertThatThrownBy(() -> gameLifecycleService.validatePlayerMembership(roomId, "Host", "mem"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not hold room lock for room: " + roomId);
+            assertThatThrownBy(() -> gameLifecycleService.isGameInactivityExpired(roomId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not hold room lock for room: " + roomId);
+            assertThatThrownBy(() -> gameLifecycleService.getGameReview(roomId, "Host"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not hold room lock for room: " + roomId);
 
             assertThatThrownBy(() -> roomService.getRoom(roomId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not hold room lock for room: " + roomId);
+            assertThatThrownBy(() -> roomService.getRoomData(roomId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not hold room lock for room: " + roomId);
+            assertThatThrownBy(() -> roomService.isRoomHost(roomId, "Host"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not hold room lock for room: " + roomId);
+            assertThatThrownBy(() -> roomService.getCurrentHost(roomId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not hold room lock for room: " + roomId);
+            assertThatThrownBy(() -> roomService.checkAndCloseIfExpired(roomId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not hold room lock for room: " + roomId);
+            assertThatThrownBy(() -> roomService.evictRoom(roomId))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("does not hold room lock for room: " + roomId);
 
@@ -552,7 +582,7 @@ class LifecycleCoordinationIT {
 
             gameLifecycleService.removeDisconnectedPlayer(roomId, "Alice", aliceMid, staleDeadline);
             assertThat(withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId).hasPlayer("Alice"))).isTrue();
-            assertThat(gameLifecycleService.playerExistsInGame(roomId, "Alice")).isTrue();
+            assertThat(withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.playerExistsInGame(roomId, "Alice"))).isTrue();
 
             long freshDeadline = System.currentTimeMillis() + 60_000L;
             gameLifecycleService.markPlayerDisconnected(roomId, "Alice", freshDeadline);
@@ -563,7 +593,7 @@ class LifecycleCoordinationIT {
 
             gameLifecycleService.removeDisconnectedPlayer(roomId, "Alice", aliceMid, staleDeadline);
             assertThat(withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId).hasPlayer("Alice"))).isTrue();
-            assertThat(gameLifecycleService.playerExistsInGame(roomId, "Alice")).isTrue();
+            assertThat(withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.playerExistsInGame(roomId, "Alice"))).isTrue();
         }
 
         @Test
@@ -649,8 +679,8 @@ class LifecycleCoordinationIT {
             playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), actor);
             gameLifecycleService.abandonGameIfInactive(roomId, originalDeadline);
 
-            assertThat(gameLifecycleService.gameExists(roomId)).isTrue();
             withRoomLock(roomCoordinator, roomId, () -> {
+                assertThat(gameLifecycleService.gameExists(roomId)).isTrue();
                 assertThat(gameLifecycleService.getGame(roomId).isGameOver()).isFalse();
                 assertThat(roomService.getRoom(roomId).isTerminal()).isFalse();
                 return null;
@@ -712,8 +742,11 @@ class LifecycleCoordinationIT {
 
             // Attempt cleanup while active -> no-op
             gameLifecycleService.executeScheduledTask(roomId, ScheduledGameTask.CLEANUP, 999_999L, 1L, 0L);
-            assertThat(gameLifecycleService.gameExists(roomId)).isTrue();
-            assertThat(withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId))).isNotNull();
+            withRoomLock(roomCoordinator, roomId, () -> {
+                assertThat(gameLifecycleService.gameExists(roomId)).isTrue();
+                assertThat(roomService.getRoom(roomId)).isNotNull();
+                return null;
+            });
 
             gameLifecycleService.abandonGameDueToInactivity(roomId);
             long cleanupDeadline = withRoomLock(roomCoordinator, roomId, () -> {
@@ -729,8 +762,11 @@ class LifecycleCoordinationIT {
             gameLifecycleService.executeScheduledTask(
                     roomId, ScheduledGameTask.CLEANUP, cleanupDeadline, hand, generation);
 
-            assertThat(gameLifecycleService.gameExists(roomId)).isFalse();
-            assertThat(withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId))).isNull();
+            withRoomLock(roomCoordinator, roomId, () -> {
+                assertThat(gameLifecycleService.gameExists(roomId)).isFalse();
+                assertThat(roomService.getRoom(roomId)).isNull();
+                return null;
+            });
         }
     }
 

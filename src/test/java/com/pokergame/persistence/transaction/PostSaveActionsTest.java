@@ -135,18 +135,21 @@ class PostSaveActionsTest {
     private static RoomService roomServiceWithRoom(String roomId, ApplicationEventPublisher publisher) {
         @SuppressWarnings("unchecked")
         ObjectProvider<RoomService> selfProvider = mock(ObjectProvider.class);
+        RoomCoordinator coordinator = new RoomCoordinator();
         RoomService rooms = new RoomService(
                 mock(SimpMessagingTemplate.class),
                 publisher,
                 mock(PasswordEncoder.class),
-                new RoomCoordinator(),
+                coordinator,
                 Clock.systemUTC(),
                 mock(TaskScheduler.class),
                 new RoomTimingProperties(60_000L),
                 selfProvider);
         Room room = new Room(roomId, "Lobby", "Host", 6, 5, 10, 1000, null);
         room.addPlayer("Host");
-        rooms.restoreRoom(room, "Host");
+        try (var _ = coordinator.acquire(roomId)) {
+            rooms.restoreRoom(room, "Host");
+        }
         return rooms;
     }
 

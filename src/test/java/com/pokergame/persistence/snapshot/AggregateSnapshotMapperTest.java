@@ -618,9 +618,8 @@ class AggregateSnapshotMapperTest {
                 Mockito.mock(TaskScheduler.class),
                 new RoomTimingProperties(60_000L),
                 Mockito.mock(ObjectProvider.class));
-        roomService.restoreRoom(recovered.room(), recovered.currentHost());
-
         try (LockLease _ = coordinator.acquire("mem-room")) {
+            roomService.restoreRoom(recovered.room(), recovered.currentHost());
             assertEquals(aliceMemId, roomService.getRoom("mem-room").getMembershipId("Alice"));
             assertEquals(bobMemId, roomService.getRoom("mem-room").getMembershipId("Bob"));
         }
@@ -636,8 +635,8 @@ class AggregateSnapshotMapperTest {
                 .buyIn(500)
                 .playersWithJoinTime(room.getPlayersWithJoinTimeSnapshot())
                 .build();
-        roomService.restoreRoom(legacyRestored, "Alice");
         try (LockLease _ = coordinator.acquire("mem-room")) {
+            roomService.restoreRoom(legacyRestored, "Alice");
             assertEquals(aliceMemId, roomService.getRoom("mem-room").getMembershipId("Alice"),
                     "Existing in-memory membershipId must be preserved if restored room lacks persisted membershipIds");
             assertEquals(bobMemId, roomService.getRoom("mem-room").getMembershipId("Bob"));

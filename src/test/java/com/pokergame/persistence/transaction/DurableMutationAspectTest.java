@@ -769,26 +769,28 @@ class DurableMutationAspectTest {
         originalRoom.setPlayerConnected("Alice", true);
         originalRoom.setAbsenceDeadline("Bob", 123456789L);
 
-        realRoomService.restoreRoom(originalRoom, "Alice");
-        assertEquals("Alice", realRoomService.getCurrentHost(roomId));
-        assertTrue(realRoomService.isRoomHost(roomId, "Alice"));
+        try (var _ = roomCoordinator.acquire(roomId)) {
+            realRoomService.restoreRoom(originalRoom, "Alice");
+            assertEquals("Alice", realRoomService.getCurrentHost(roomId));
+            assertTrue(realRoomService.isRoomHost(roomId, "Alice"));
 
-        // Now restore with a host that does not exist in the room
-        Room restoredRoom = new Room(roomId, "Restore Test", "Alice", 6, 10, 20, 1000, null);
-        restoredRoom.addPlayer("Alice");
-        restoredRoom.addPlayer("Bob");
+            // Now restore with a host that does not exist in the room
+            Room restoredRoom = new Room(roomId, "Restore Test", "Alice", 6, 10, 20, 1000, null);
+            restoredRoom.addPlayer("Alice");
+            restoredRoom.addPlayer("Bob");
 
-        realRoomService.restoreRoom(restoredRoom, "NonExistentStranger");
-        // Must reconcile to valid room host/player, not leak NonExistentStranger
-        assertEquals("Alice", realRoomService.getCurrentHost(roomId));
-        assertFalse(realRoomService.isRoomHost(roomId, "NonExistentStranger"));
-        assertTrue(restoredRoom.isPlayerConnected("Alice"));
-        assertEquals(123456789L, restoredRoom.getAbsenceDeadline("Bob"));
+            realRoomService.restoreRoom(restoredRoom, "NonExistentStranger");
+            // Must reconcile to valid room host/player, not leak NonExistentStranger
+            assertEquals("Alice", realRoomService.getCurrentHost(roomId));
+            assertFalse(realRoomService.isRoomHost(roomId, "NonExistentStranger"));
+            assertTrue(restoredRoom.isPlayerConnected("Alice"));
+            assertEquals(123456789L, restoredRoom.getAbsenceDeadline("Bob"));
 
-        // Host succession to Bob
-        realRoomService.restoreRoom(restoredRoom, "Bob");
-        assertEquals("Bob", realRoomService.getCurrentHost(roomId));
-        assertTrue(realRoomService.isRoomHost(roomId, "Bob"));
+            // Host succession to Bob
+            realRoomService.restoreRoom(restoredRoom, "Bob");
+            assertEquals("Bob", realRoomService.getCurrentHost(roomId));
+            assertTrue(realRoomService.isRoomHost(roomId, "Bob"));
+        }
     }
 
     private EncryptedWalStore failingStore(AtomicBoolean unavailable) {
