@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 @Tag("e2e")
 @DisplayName("Gameplay lifecycle E2E")
-class GameplayLifecycleE2E extends AbstractE2ETest {
+class GameplayLifecycleE2E extends AbstractE2ESupport {
 
     private static final String HOST_NAME = "ActionHost";
     private static final String OTHER_NAME = "ActionOther";

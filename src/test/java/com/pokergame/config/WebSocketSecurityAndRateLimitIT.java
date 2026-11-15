@@ -13,7 +13,6 @@ import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
-import com.pokergame.util.LockLease;
 import org.awaitility.Awaitility;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
@@ -70,8 +69,8 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Supplier;
 
+import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -166,7 +165,7 @@ class WebSocketSecurityAndRateLimitIT {
         }
         trackedClients.clear();
         for (String roomId : List.copyOf(trackedRoomIds)) {
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 gameLifecycleService.evictGame(roomId);
                 roomService.destroyRoom(roomId);
                 return null;
@@ -178,12 +177,6 @@ class WebSocketSecurityAndRateLimitIT {
 
     private static String uniqueName(String prefix) {
         return prefix + "-" + UNIQUE_COUNTER.incrementAndGet();
-    }
-
-    private <T> T withRoomLock(String roomId, Supplier<T> action) {
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            return action.get();
-        }
     }
 
     private JsonNode createRoom(String roomName, String hostName, int maxPlayers) throws Exception {
@@ -381,7 +374,7 @@ class WebSocketSecurityAndRateLimitIT {
             };
             outboundChannel.addInterceptor(capture);
             try {
-                withRoomLock(roomId, () -> {
+                withRoomLock(roomCoordinator, roomId, () -> {
                     gameStateService.broadcastGameState(gameLifecycleService.getGame(roomId));
                     return null;
                 });

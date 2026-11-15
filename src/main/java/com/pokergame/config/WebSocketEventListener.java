@@ -30,7 +30,6 @@ import java.security.Principal;
 import java.time.Instant;
 import com.pokergame.service.RoomCoordinator;
 import com.pokergame.util.LockLease;
-import com.pokergame.util.VisibleForTesting;
 
 import java.util.Objects;
 import java.util.Set;
@@ -648,51 +647,5 @@ public class WebSocketEventListener {
         if (!hasActiveSession(compositeName)) {
             rateLimitService.cleanUpWs(compositeName);
         }
-    }
-
-    /**
-     * Returns the number of active WebSocket sessions currently tracked for {@code compositeKey}.
-     *
-     * @param compositeKey player/room key ({@code playerName:roomId})
-     * @return active session count for {@code compositeKey}
-     */
-    @VisibleForTesting
-    public int activeSessionCount(String compositeKey) {
-        if (compositeKey == null) {
-            return 0;
-        }
-        Set<String> sessions = activeSessionsByUser.get(compositeKey);
-        return sessions == null ? 0 : sessions.size();
-    }
-
-    /**
-     * Returns whether a pending disconnect grace timer is registered for {@code compositeKey}.
-     *
-     * @param compositeKey player/room key ({@code playerName:roomId})
-     * @return {@code true} if a disconnect cleanup is pending
-     */
-    @VisibleForTesting
-    public boolean hasPendingDisconnect(String compositeKey) {
-        return compositeKey != null && pendingDisconnects.containsKey(compositeKey);
-    }
-
-    /**
-     * Returns the total number of pending disconnect registrations currently tracked.
-     *
-     * @return pending disconnect count
-     */
-    @VisibleForTesting
-    public int pendingDisconnectCount() {
-        return pendingDisconnects.size();
-    }
-
-    /**
-     * Returns the total number of active session-to-principal mappings currently tracked.
-     *
-     * @return session mapping count
-     */
-    @VisibleForTesting
-    public int sessionMappingCount() {
-        return sessionToPrincipal.size();
     }
 }

@@ -19,7 +19,7 @@ import static org.awaitility.Awaitility.await;
  */
 @Tag("e2e")
 @DisplayName("Player reconnect E2E")
-class PlayerReconnectE2E extends AbstractE2ETest {
+class PlayerReconnectE2E extends AbstractE2ESupport {
 
     @Test
     @DisplayName("should allow a player to reconnect and continue acting in a game")

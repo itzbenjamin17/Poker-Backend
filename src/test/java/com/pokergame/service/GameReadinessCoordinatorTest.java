@@ -12,6 +12,7 @@ import com.pokergame.model.Game;
 import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
+import com.pokergame.testutil.MutableClock;
 import com.pokergame.util.LockLease;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -24,12 +25,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.TaskScheduler;
 
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -64,8 +62,7 @@ class GameReadinessCoordinatorTest {
     @Mock
     private ObjectProvider<GameLifecycleService> lifecycleProvider;
 
-    private AtomicLong clockEpochMs;
-    private Clock mutableClock;
+    private MutableClock mutableClock;
     private RoomCoordinator roomCoordinator;
     private ActiveGameRegistry activeGames;
     private GameTimerRegistry timerRegistry;
@@ -77,23 +74,7 @@ class GameReadinessCoordinatorTest {
 
     @BeforeEach
     void setUp() {
-        clockEpochMs = new AtomicLong(BASE_EPOCH_MS);
-        mutableClock = new Clock() {
-            @Override
-            public ZoneOffset getZone() {
-                return ZoneOffset.UTC;
-            }
-
-            @Override
-            public Clock withZone(java.time.ZoneId zone) {
-                return this;
-            }
-
-            @Override
-            public Instant instant() {
-                return Instant.ofEpochMilli(clockEpochMs.get());
-            }
-        };
+        mutableClock = new MutableClock(BASE_EPOCH_MS);
 
         LifecycleTimingProperties timings = new LifecycleTimingProperties(30_000L, 4_000L, READY_COUNTDOWN_MS);
         roomCoordinator = new RoomCoordinator();
@@ -263,7 +244,7 @@ class GameReadinessCoordinatorTest {
             long initialInactivity = room.getInactivityDeadlineEpochMs();
 
             // Host marks ready -> resets inactivity and broadcasts without starting
-            clockEpochMs.set(BASE_EPOCH_MS + 1_000L);
+            mutableClock.setMillis(BASE_EPOCH_MS + 1_000L);
             clearInvocations(gameStateService);
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Host");
@@ -275,14 +256,14 @@ class GameReadinessCoordinatorTest {
 
             // Idempotent re-mark does NOT extend inactivity again
             long afterFirstReady = room.getInactivityDeadlineEpochMs();
-            clockEpochMs.set(BASE_EPOCH_MS + 2_000L);
+            mutableClock.setMillis(BASE_EPOCH_MS + 2_000L);
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Host");
             }
             assertEquals(afterFirstReady, room.getInactivityDeadlineEpochMs());
 
             // Unmark extends inactivity since ready state changed back to false
-            clockEpochMs.set(BASE_EPOCH_MS + 3_000L);
+            mutableClock.setMillis(BASE_EPOCH_MS + 3_000L);
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Host");
             }
@@ -309,7 +290,7 @@ class GameReadinessCoordinatorTest {
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 readinessCoordinator.openReadyGate(GAME_ID);
             }
-            clockEpochMs.set(room.getInactivityDeadlineEpochMs());
+            mutableClock.setMillis(room.getInactivityDeadlineEpochMs());
 
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 BadRequestException ex = assertThrows(BadRequestException.class,

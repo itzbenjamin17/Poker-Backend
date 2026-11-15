@@ -15,7 +15,7 @@ import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
 import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
-import com.pokergame.util.LockLease;
+import com.pokergame.testutil.MutableClock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -34,16 +34,12 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Supplier;
 
+import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -100,14 +96,14 @@ class TimingAndInactivityIT {
 
     @BeforeEach
     void setUp() {
-        clock.now = T0;
+        clock.setMillis(T0);
         restClient = RestClient.builder().baseUrl("http://localhost:" + port).build();
     }
 
     @AfterEach
     void tearDown() {
         for (String roomId : List.copyOf(trackedRoomIds)) {
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 lifecycle.evictGame(roomId);
                 rooms.destroyRoom(roomId);
                 return null;
@@ -121,42 +117,12 @@ class TimingAndInactivityIT {
         @Bean
         @Primary
         MutableClock timingTestClock() {
-            return new MutableClock();
-        }
-    }
-
-    static class MutableClock extends Clock {
-        volatile long now = T0;
-
-        @Override
-        public ZoneId getZone() {
-            return ZoneOffset.UTC;
-        }
-
-        @Override
-        public Clock withZone(ZoneId zone) {
-            return this;
-        }
-
-        @Override
-        public Instant instant() {
-            return Instant.ofEpochMilli(now);
-        }
-
-        @Override
-        public long millis() {
-            return now;
+            return new MutableClock(T0);
         }
     }
 
     private static String uniqueName(String prefix) {
         return prefix + "-" + UNIQUE_COUNTER.incrementAndGet();
-    }
-
-    private <T> T withRoomLock(String roomId, Supplier<T> action) {
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            return action.get();
-        }
     }
 
     private JsonNode createRoom(String roomName, String hostName, int maxPlayers) throws Exception {
@@ -226,7 +192,7 @@ class TimingAndInactivityIT {
 
     private void reachShowdownReadyGateByFolding(String roomId) {
         for (int i = 0; i < 4; i++) {
-            String actor = withRoomLock(roomId, () -> {
+            String actor = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 return Boolean.TRUE.equals(states.getPublicGameStateSnapshot(game).isReadyCountdownActive())
                         ? null
@@ -262,7 +228,7 @@ class TimingAndInactivityIT {
             String hostToken = created.path("token").asText();
 
             long joinTime = T0 + 10 * 60_000L;
-            clock.now = joinTime;
+            clock.setMillis(joinTime);
             joinRoom(roomName, "Guest");
 
             JsonNode room = getRoom(roomId, hostToken);
@@ -278,11 +244,11 @@ class TimingAndInactivityIT {
             String roomId = created.path("roomId").asText();
             String hostToken = created.path("token").asText();
 
-            clock.now = T0 + 5 * 60_000L;
+            clock.setMillis(T0 + 5 * 60_000L);
             String guestToken = joinRoom(roomName, "Guest").path("token").asText();
 
             long leaveTime = T0 + 15 * 60_000L;
-            clock.now = leaveTime;
+            clock.setMillis(leaveTime);
             leaveRoom(roomId, guestToken);
 
             JsonNode room = getRoom(roomId, hostToken);
@@ -311,7 +277,7 @@ class TimingAndInactivityIT {
             String roomId = created.path("roomId").asText();
             String hostToken = created.path("token").asText();
 
-            clock.now = T0 + 10 * 60_000L;
+            clock.setMillis(T0 + 10 * 60_000L);
             assertThatThrownBy(() -> joinRoom(roomName, "Host"))
                     .isInstanceOf(HttpClientErrorException.BadRequest.class);
 
@@ -326,7 +292,7 @@ class TimingAndInactivityIT {
             String roomId = created.path("roomId").asText();
             String hostToken = created.path("token").asText();
 
-            clock.now = T0 + THIRTY_MINUTES_MS + 1L;
+            clock.setMillis(T0 + THIRTY_MINUTES_MS + 1L);
 
             assertThatThrownBy(() -> getRoom(roomId, hostToken))
                     .isInstanceOf(HttpClientErrorException.NotFound.class);
@@ -340,7 +306,7 @@ class TimingAndInactivityIT {
             String roomId = created.path("roomId").asText();
             String hostToken = created.path("token").asText();
 
-            clock.now = T0 + THIRTY_MINUTES_MS + 5_000L;
+            clock.setMillis(T0 + THIRTY_MINUTES_MS + 5_000L);
 
             assertThatThrownBy(() -> joinRoom(roomName, "LateGuest"))
                     .isInstanceOf(HttpClientErrorException.class);
@@ -357,10 +323,10 @@ class TimingAndInactivityIT {
             String hostToken = created.path("token").asText();
 
             long joinTime = T0 + 60_000L;
-            clock.now = joinTime;
+            clock.setMillis(joinTime);
             joinRoom(roomName, "Guest");
 
-            clock.now = joinTime + THIRTY_MINUTES_MS + 5_000L;
+            clock.setMillis(joinTime + THIRTY_MINUTES_MS + 5_000L);
 
             assertThatThrownBy(() -> startGame(roomId, hostToken))
                     .isInstanceOf(HttpClientErrorException.class);
@@ -377,10 +343,10 @@ class TimingAndInactivityIT {
             String hostToken = created.path("token").asText();
             joinRoom(roomName, "Guest");
 
-            clock.now = T0 + 2 * 60_000L;
+            clock.setMillis(T0 + 2 * 60_000L);
             startGame(roomId, hostToken);
 
-            clock.now = T0 + THIRTY_MINUTES_MS + 60_000L;
+            clock.setMillis(T0 + THIRTY_MINUTES_MS + 60_000L);
             JsonNode room = getRoom(roomId, hostToken);
             assertThat(room.path("gameStarted").asBoolean()).isTrue();
             assertThat(room.path("inactivityDeadlineEpochMs").asLong())
@@ -402,10 +368,10 @@ class TimingAndInactivityIT {
             String hostToken = host.path("token").asText();
 
             long startTime = clock.millis() + 5 * 60_000L;
-            clock.now = startTime;
+            clock.setMillis(startTime);
             startGame(roomId, hostToken);
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(rooms.getRoom(roomId).getInactivityDeadlineEpochMs())
                         .isEqualTo(startTime + FIFTEEN_MINUTES_MS);
                 var snapshot = states.getPublicGameStateSnapshot(lifecycle.getGame(roomId));
@@ -419,11 +385,11 @@ class TimingAndInactivityIT {
         void deliberatePokerActionResetsInactivityDeadline() throws Exception {
             String roomId = createStartedAndConnectedGame("ActionReset", "Guest");
 
-            String actor = withRoomLock(roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
-            long actionTime = clock.now + 30_000L;
-            clock.now = actionTime;
+            String actor = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
+            long actionTime = clock.millis() + 30_000L;
+            clock.setMillis(actionTime);
 
-            PlayerAction legalAction = withRoomLock(roomId, () -> {
+            PlayerAction legalAction = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 return game.getLegalActionsFor(game.getCurrentPlayer()).contains(PlayerAction.CHECK)
                         ? PlayerAction.CHECK
@@ -431,7 +397,7 @@ class TimingAndInactivityIT {
             });
             playerActionService.processPlayerAction(roomId, new PlayerActionRequest(legalAction, 0), actor);
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(rooms.getRoom(roomId).getInactivityDeadlineEpochMs())
                         .isEqualTo(actionTime + FIFTEEN_MINUTES_MS);
                 assertThat(states.getPublicGameStateSnapshot(lifecycle.getGame(roomId)).inactivityDeadlineEpochMs())
@@ -446,21 +412,21 @@ class TimingAndInactivityIT {
             String roomId = createStartedAndConnectedGame("ReadyReset", "Guest", "Guest2");
 
             reachShowdownReadyGateByFolding(roomId);
-            clock.now = clock.now + 5 * 60_000L;
+            clock.advanceByMillis(5 * 60_000L);
 
-            long markReadyTime = clock.now + 2 * 60_000L;
-            clock.now = markReadyTime;
+            long markReadyTime = clock.millis() + 2 * 60_000L;
+            clock.setMillis(markReadyTime);
             lifecycle.markPlayerReadyForNextHand(roomId, "Host");
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(rooms.getRoom(roomId).getInactivityDeadlineEpochMs())
                         .isEqualTo(markReadyTime + FIFTEEN_MINUTES_MS);
                 return null;
             });
 
-            long unmarkReadyTime = clock.now + 2 * 60_000L;
-            clock.now = unmarkReadyTime;
+            long unmarkReadyTime = clock.millis() + 2 * 60_000L;
+            clock.setMillis(unmarkReadyTime);
             lifecycle.unmarkPlayerReadyForNextHand(roomId, "Host");
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(rooms.getRoom(roomId).getInactivityDeadlineEpochMs())
                         .isEqualTo(unmarkReadyTime + FIFTEEN_MINUTES_MS);
                 return null;
@@ -474,13 +440,13 @@ class TimingAndInactivityIT {
 
             reachShowdownReadyGateByFolding(roomId);
 
-            clock.now = clock.now + 60_000L;
+            clock.advanceByMillis(60_000L);
             lifecycle.markPlayerReadyForNextHand(roomId, "Host");
-            long deadline1 = withRoomLock(roomId, () -> rooms.getRoom(roomId).getInactivityDeadlineEpochMs());
+            long deadline1 = withRoomLock(roomCoordinator, roomId, () -> rooms.getRoom(roomId).getInactivityDeadlineEpochMs());
 
-            clock.now = clock.now + 3 * 60_000L;
+            clock.advanceByMillis(3 * 60_000L);
             lifecycle.markPlayerReadyForNextHand(roomId, "Host");
-            long deadline2 = withRoomLock(roomId, () -> rooms.getRoom(roomId).getInactivityDeadlineEpochMs());
+            long deadline2 = withRoomLock(roomCoordinator, roomId, () -> rooms.getRoom(roomId).getInactivityDeadlineEpochMs());
 
             assertThat(deadline2).isEqualTo(deadline1);
         }
@@ -489,17 +455,17 @@ class TimingAndInactivityIT {
         @DisplayName("late activity at or after inactivity deadline is rejected and abandons game")
         void lateActivityAtOrAfterInactivityDeadlineIsRejectedAndAbandonsGame() throws Exception {
             String roomId = createStartedAndConnectedGame("LateActivity", "Guest");
-            String actor = withRoomLock(roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
-            long initialDeadline = withRoomLock(roomId, () -> rooms.getRoom(roomId).getInactivityDeadlineEpochMs());
+            String actor = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
+            long initialDeadline = withRoomLock(roomCoordinator, roomId, () -> rooms.getRoom(roomId).getInactivityDeadlineEpochMs());
 
-            clock.now = initialDeadline;
+            clock.setMillis(initialDeadline);
 
             assertThatThrownBy(() ->
                     playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, 0), actor))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("inactivity");
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
                 return null;
             });
@@ -513,10 +479,10 @@ class TimingAndInactivityIT {
         @DisplayName("inactivity abandonment takes precedence over turn timeout")
         void inactivityAbandonmentTakesPrecedenceOverTurnTimeout() throws Exception {
             String roomId = createStartedAndConnectedGame("Precedence", "Guest");
-            long inactivityDeadline = withRoomLock(roomId, () -> rooms.getRoom(roomId).getInactivityDeadlineEpochMs());
-            clock.now = inactivityDeadline + 5_000L;
+            long inactivityDeadline = withRoomLock(roomCoordinator, roomId, () -> rooms.getRoom(roomId).getInactivityDeadlineEpochMs());
+            clock.setMillis(inactivityDeadline + 5_000L);
 
-            long[] timerMeta = withRoomLock(roomId, () -> {
+            long[] timerMeta = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 return new long[]{
                         game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT),
@@ -527,7 +493,7 @@ class TimingAndInactivityIT {
 
             lifecycle.executeScheduledTask(roomId, ScheduledGameTask.TURN_TIMEOUT, timerMeta[0], timerMeta[1], timerMeta[2]);
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
                 return null;
             });
@@ -541,18 +507,18 @@ class TimingAndInactivityIT {
         @DisplayName("claim-win rejected when inactivity expired and game abandons instead")
         void claimWinRejectedWhenInactivityExpired() throws Exception {
             String roomId = createStartedAndConnectedGame("ClaimExpired", "Guest");
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 lifecycle.getGame(roomId).findPlayerByName("Guest").setDisconnected(true);
                 return null;
             });
 
-            long inactivityDeadline = withRoomLock(roomId, () -> rooms.getRoom(roomId).getInactivityDeadlineEpochMs());
-            clock.now = inactivityDeadline;
+            long inactivityDeadline = withRoomLock(roomCoordinator, roomId, () -> rooms.getRoom(roomId).getInactivityDeadlineEpochMs());
+            clock.setMillis(inactivityDeadline);
 
             assertThatThrownBy(() -> lifecycle.claimWin(roomId, "Host"))
                     .isInstanceOf(BadRequestException.class);
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
                 return null;
             });
@@ -565,12 +531,12 @@ class TimingAndInactivityIT {
         @DisplayName("abandonment preserves completed payouts, leaves pot unawarded, hides cards, and schedules cleanup")
         void abandonmentPreservesCompletedPayoutsLeavesPotUnawardedHidesCards() throws Exception {
             String roomId = createStartedAndConnectedGame("AbandonmentPreservation", "Guest");
-            int potBefore = withRoomLock(roomId, () -> lifecycle.getGame(roomId).getPot());
+            int potBefore = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getPot());
             assertThat(potBefore).isGreaterThan(0);
 
             lifecycle.abandonGameDueToInactivity(roomId);
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
                 return null;
             });
@@ -586,9 +552,9 @@ class TimingAndInactivityIT {
                 assertThat(p.isWinner()).isFalse();
             }
 
-            Long cleanupDeadline = withRoomLock(roomId, () ->
+            Long cleanupDeadline = withRoomLock(roomCoordinator, roomId, () ->
                     lifecycle.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
-            assertThat(cleanupDeadline).isEqualTo(clock.now + lifecycleTimingProperties.gameEndDisplayDelayMs());
+            assertThat(cleanupDeadline).isEqualTo(clock.millis() + lifecycleTimingProperties.gameEndDisplayDelayMs());
         }
     }
 
@@ -606,7 +572,7 @@ class TimingAndInactivityIT {
             String roomId = host.path("roomId").asText();
             startGame(roomId, host.path("token").asText());
 
-            var state = withRoomLock(roomId, () -> states.getPublicGameStateSnapshot(lifecycle.getGame(roomId)));
+            var state = withRoomLock(roomCoordinator, roomId, () -> states.getPublicGameStateSnapshot(lifecycle.getGame(roomId)));
             assertThat(state.turnDeadlineEpochMs()).isBetween(before + 60_000, clock.millis() + 60_000);
         }
 
@@ -616,7 +582,7 @@ class TimingAndInactivityIT {
             String roomId = createStartedAndConnectedGame("TurnRemoval", "Guest");
 
             record TurnMeta(String actor, long deadline, long hand, long generation) {}
-            TurnMeta meta = withRoomLock(roomId, () -> {
+            TurnMeta meta = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 return new TurnMeta(
                         game.getCurrentPlayer().getName(),
@@ -625,11 +591,11 @@ class TimingAndInactivityIT {
                         game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT));
             });
 
-            clock.now = meta.deadline();
+            clock.setMillis(meta.deadline());
             lifecycle.executeScheduledTask(
                     roomId, ScheduledGameTask.TURN_TIMEOUT, meta.deadline(), meta.hand(), meta.generation());
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(rooms.getRoom(roomId).hasPlayer(meta.actor())).isFalse();
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
                 return null;
@@ -643,19 +609,19 @@ class TimingAndInactivityIT {
         void actionJustBeforeExpiryIsAcceptedAndResetsDeadline() throws Exception {
             String roomId = createStartedAndConnectedGame("TurnTimely", "Guest1", "Guest2");
 
-            String actor1 = withRoomLock(roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
-            long deadline1 = withRoomLock(roomId, () ->
+            String actor1 = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
+            long deadline1 = withRoomLock(roomCoordinator, roomId, () ->
                     states.getPublicGameStateSnapshot(lifecycle.getGame(roomId)).turnDeadlineEpochMs());
 
-            clock.now = deadline1 - 1;
+            clock.setMillis(deadline1 - 1);
             playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), actor1);
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 String nextActor = game.getCurrentPlayer().getName();
                 assertThat(nextActor).isNotEqualTo(actor1);
                 long deadline2 = states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs();
-                assertThat(deadline2).isEqualTo(clock.now + 60_000);
+                assertThat(deadline2).isEqualTo(clock.millis() + 60_000);
                 return null;
             });
         }
@@ -665,17 +631,17 @@ class TimingAndInactivityIT {
         void actionAtOrAfterExpiryIsRejected() throws Exception {
             String roomId = createStartedAndConnectedGame("TurnLate", "Guest");
 
-            String actor = withRoomLock(roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
-            long deadline = withRoomLock(roomId, () ->
+            String actor = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
+            long deadline = withRoomLock(roomCoordinator, roomId, () ->
                     states.getPublicGameStateSnapshot(lifecycle.getGame(roomId)).turnDeadlineEpochMs());
 
-            clock.now = deadline;
+            clock.setMillis(deadline);
             assertThatThrownBy(() ->
                     playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), actor))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("Turn deadline expired");
 
-            clock.now = deadline + 1_000L;
+            clock.setMillis(deadline + 1_000L);
             assertThatThrownBy(() ->
                     playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), actor))
                     .isInstanceOf(BadRequestException.class)
@@ -688,7 +654,7 @@ class TimingAndInactivityIT {
             String roomId = createStartedAndConnectedGame("TurnMulti", "Guest1", "Guest2");
 
             record TurnMeta(String actor, int pot, long deadline, long hand, long generation) {}
-            TurnMeta meta = withRoomLock(roomId, () -> {
+            TurnMeta meta = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 return new TurnMeta(
                         game.getCurrentPlayer().getName(),
@@ -698,11 +664,11 @@ class TimingAndInactivityIT {
                         game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT));
             });
 
-            clock.now = meta.deadline();
+            clock.setMillis(meta.deadline());
             lifecycle.executeScheduledTask(
                     roomId, ScheduledGameTask.TURN_TIMEOUT, meta.deadline(), meta.hand(), meta.generation());
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 assertThat(rooms.getRoom(roomId).hasPlayer(meta.actor())).isFalse();
                 assertThat(game.isGameOver()).isFalse();
@@ -712,7 +678,7 @@ class TimingAndInactivityIT {
                 assertThat(nextActor).isNotNull();
                 assertThat(nextActor.getName()).isNotEqualTo(meta.actor());
                 assertThat(states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs())
-                        .isEqualTo(clock.now + 60_000);
+                        .isEqualTo(clock.millis() + 60_000);
                 return null;
             });
         }
@@ -723,7 +689,7 @@ class TimingAndInactivityIT {
             String roomId = createStartedAndConnectedGame("TurnStale", "Guest1", "Guest2");
 
             record TurnMeta(String actor, long deadline, long hand, long generation) {}
-            TurnMeta stale = withRoomLock(roomId, () -> {
+            TurnMeta stale = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 return new TurnMeta(
                         game.getCurrentPlayer().getName(),
@@ -732,17 +698,17 @@ class TimingAndInactivityIT {
                         game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT));
             });
 
-            clock.now += 5_000L;
+            clock.advanceByMillis(5_000L);
             playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), stale.actor());
 
-            String actor2 = withRoomLock(roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
+            String actor2 = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
             assertThat(actor2).isNotEqualTo(stale.actor());
 
-            clock.now = stale.deadline();
+            clock.setMillis(stale.deadline());
             lifecycle.executeScheduledTask(
                     roomId, ScheduledGameTask.TURN_TIMEOUT, stale.deadline(), stale.hand(), stale.generation());
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(rooms.getRoom(roomId).hasPlayer(actor2)).isTrue();
                 assertThat(lifecycle.getGame(roomId).getCurrentPlayer().getName()).isEqualTo(actor2);
                 return null;
@@ -754,19 +720,19 @@ class TimingAndInactivityIT {
         void raiseReturningToPlayerReceivesFreshSixtySeconds() throws Exception {
             String roomId = createStartedAndConnectedGame("TurnRaise", "Guest");
 
-            String firstActor = withRoomLock(roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
-            clock.now += 20_000L;
+            String firstActor = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
+            clock.advanceByMillis(20_000L);
             playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), firstActor);
 
-            String secondActor = withRoomLock(roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
-            clock.now += 15_000L;
+            String secondActor = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
+            clock.advanceByMillis(15_000L);
             playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.RAISE, 40), secondActor);
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 assertThat(game.getCurrentPlayer().getName()).isEqualTo(firstActor);
                 assertThat(states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs())
-                        .isEqualTo(clock.now + 60_000);
+                        .isEqualTo(clock.millis() + 60_000);
                 return null;
             });
         }
@@ -775,10 +741,10 @@ class TimingAndInactivityIT {
         @DisplayName("no turn deadline is published during showdown")
         void noTurnDeadlineDuringShowdown() throws Exception {
             String roomId = createStartedAndConnectedGame("TurnShowdown", "Guest");
-            String firstActor = withRoomLock(roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
+            String firstActor = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
             playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, null), firstActor);
 
-            var state = withRoomLock(roomId, () -> states.getPublicGameStateSnapshot(lifecycle.getGame(roomId)));
+            var state = withRoomLock(roomCoordinator, roomId, () -> states.getPublicGameStateSnapshot(lifecycle.getGame(roomId)));
             assertThat(state.turnDeadlineEpochMs()).isNull();
         }
     }

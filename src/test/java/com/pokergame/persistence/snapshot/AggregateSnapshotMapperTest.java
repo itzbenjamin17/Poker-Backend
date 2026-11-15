@@ -441,8 +441,8 @@ class AggregateSnapshotMapperTest {
     }
 
     @Test
-    @DisplayName("captureStateImage acquires monitors in Room -> Game order and JSON serialization occurs outside monitors")
-    void captureStateImage_AcquiresMonitorsInOrderAndEncodesOutsideMonitors() {
+    @DisplayName("captureStateImage copies state into an immutable snapshot detached from live mutations")
+    void captureStateImage_DetachesSnapshotFromLiveMutation() {
         HandEvaluatorService evaluator = new HandEvaluatorService();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build(), evaluator);
@@ -455,25 +455,17 @@ class AggregateSnapshotMapperTest {
         Player p2 = new Player("Bob", "p2", 1000);
         Game game = new Game("room-order", List.of(p1, p2), 6, 10, 20, evaluator);
 
-        // Capture state image
+        // Capture and serialize state image before mutating live game
         AggregateStateImage stateImage = mapper.captureStateImage(room, "Alice", game);
         assertNotNull(stateImage);
         assertNotNull(stateImage.room());
         assertNotNull(stateImage.game());
 
-        // Verify that JSON serialization occurs outside aggregate monitors
-        assertFalse(Thread.holdsLock(room), "Room monitor must not be held after captureStateImage");
-        assertFalse(Thread.holdsLock(game), "Game monitor must not be held after captureStateImage");
-
         byte[] jsonBytes = mapper.serialize(stateImage);
         assertNotNull(jsonBytes);
-        assertFalse(Thread.holdsLock(room), "Room monitor must not be held during JSON serialization");
-        assertFalse(Thread.holdsLock(game), "Game monitor must not be held during JSON serialization");
 
         // Mutating live game after capture does not alter captured image or serialization
-        synchronized (game) {
-            p1.payChips(0, 500);
-        }
+        p1.payChips(0, 500);
         RecoveredAggregate recovered = mapper.deserialize(jsonBytes);
         assertEquals(1000, recovered.game().getPlayers().get(0).getChips(),
                 "Captured snapshot must be independent from post-capture live game mutations");

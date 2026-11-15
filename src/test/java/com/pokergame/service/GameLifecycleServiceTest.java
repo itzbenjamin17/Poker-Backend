@@ -31,13 +31,11 @@ import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
+import com.pokergame.testutil.MutableClock;
 import com.pokergame.util.LockLease;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -47,7 +45,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
@@ -91,8 +88,7 @@ class GameLifecycleServiceTest {
     @Mock
     private TaskScheduler taskScheduler;
 
-    private AtomicLong clockEpochMs;
-    private Clock mutableClock;
+    private MutableClock mutableClock;
     private RoomCoordinator roomCoordinator;
     private ActiveGameRegistry activeGames;
     private GameTimerRegistry timerRegistry;
@@ -106,8 +102,7 @@ class GameLifecycleServiceTest {
 
     @BeforeEach
     void setUp() {
-        clockEpochMs = new AtomicLong(BASE_EPOCH_MS);
-        mutableClock = createMutableClock(clockEpochMs);
+        mutableClock = new MutableClock(BASE_EPOCH_MS);
         testRoom = new Room(ROOM_ID, "Test Room", "Host", 6, 5, 10, 100, null);
         testRoom.addPlayer("Host");
         testRoom.addPlayer("Player2");
@@ -149,25 +144,6 @@ class GameLifecycleServiceTest {
         lifecycleRef.set(gameLifecycleService);
     }
 
-    private static Clock createMutableClock(AtomicLong epochMs) {
-        return new Clock() {
-            @Override
-            public ZoneId getZone() {
-                return ZoneOffset.UTC;
-            }
-
-            @Override
-            public Clock withZone(ZoneId zone) {
-                return this;
-            }
-
-            @Override
-            public Instant instant() {
-                return Instant.ofEpochMilli(epochMs.get());
-            }
-        };
-    }
-
     private void stubGameEndCapture() {
         Answer<GameEndResponse> buildResponse = invocation -> {
             Game game = invocation.getArgument(0);
@@ -185,7 +161,7 @@ class GameLifecycleServiceTest {
                     maxPlayers, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(),
                     players, null, null, List.of(winner.getName()), null, false, null, false, null,
                     false, null, true, null, List.of(), null, null, 1, ReadyGateState.CLOSED,
-                    clockEpochMs.get(), game != null ? game.getStateRevision() : 1);
+                    mutableClock.millis(), game != null ? game.getStateRevision() : 1);
             return new GameEndResponse(
                     "GAME_END", game != null ? game.getGameId() : ROOM_ID,
                     winner.getName(), winner.getChips(), forfeit,
@@ -652,7 +628,7 @@ class GameLifecycleServiceTest {
             assertFalse(gameLifecycleService.gameExists(ROOM_ID));
             assertFalse(testRoom.isGameStarted());
             assertFalse(testRoom.isTerminal());
-            assertEquals(0, timerRegistry.activeTaskCount(ROOM_ID));
+            verify(turnFuture).cancel(false);
             verify(roomService, never()).destroyRoom(ROOM_ID);
         }
 
@@ -675,12 +651,21 @@ class GameLifecycleServiceTest {
         @Test
         void restoreAndResumeRecoveredAndRollbackTimers() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+            @SuppressWarnings("unchecked")
+            ScheduledFuture<Object> recoveredReadyFuture = mock(ScheduledFuture.class);
+            @SuppressWarnings("unchecked")
+            ScheduledFuture<Object> rollbackReadyFuture = mock(ScheduledFuture.class);
+            @SuppressWarnings("unchecked")
+            ScheduledFuture<Object> rollbackInactivityFuture = mock(ScheduledFuture.class);
+            doReturn(recoveredReadyFuture, rollbackReadyFuture, rollbackInactivityFuture)
+                    .when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
+
             Game game = new Game(ROOM_ID,
                     List.of(new Player("Host", "h", 100), new Player("Player2", "p2", 100)),
                     6, 5, 10, handEvaluator);
             game.conductShowdown();
             game.openOrWaitReadyGate(BASE_EPOCH_MS + 10_000L);
-            // Force recovered ready countdown missing deadline via restore builder? Clear task deadline only:
+            // Force recovered ready countdown missing deadline and verify resume repairs and schedules it
             game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
             gameLifecycleService.restoreGame(game);
             testRoom.setInactivityDeadlineEpochMs(BASE_EPOCH_MS + 50_000L);
@@ -688,14 +673,19 @@ class GameLifecycleServiceTest {
             gameLifecycleService.resumeRecoveredTimers(ROOM_ID);
             assertEquals(BASE_EPOCH_MS + 10_000L,
                     game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
-            assertTrue(timerRegistry.activeTaskCount(ROOM_ID) >= 1);
+            verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 10_000L)));
 
             gameLifecycleService.cancelTimers(ROOM_ID, false);
-            assertEquals(0, timerRegistry.activeTaskCount(ROOM_ID));
+            verify(recoveredReadyFuture).cancel(false);
 
+            clearInvocations(taskScheduler);
             gameLifecycleService.resumeRollbackTimers(ROOM_ID);
-            assertEquals(2, timerRegistry.activeTaskCount(ROOM_ID),
-                    "Rollback recovery must re-register READY_TIMEOUT and room inactivity timer");
+            verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 10_000L)));
+            verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 50_000L)));
+
+            gameLifecycleService.cancelTimers(ROOM_ID, false);
+            verify(rollbackReadyFuture).cancel(false);
+            verify(rollbackInactivityFuture).cancel(false);
         }
     }
 
@@ -748,7 +738,7 @@ class GameLifecycleServiceTest {
             gameLifecycleService.abandonGameIfInactive(ROOM_ID, deadline);
             assertFalse(game.isGameOver(), "Early check before deadline must not abandon");
 
-            clockEpochMs.set(deadline);
+            mutableClock.setMillis(deadline);
             assertTrue(gameLifecycleService.isGameInactivityExpired(ROOM_ID));
             inactivityCallback.run();
 
@@ -776,7 +766,7 @@ class GameLifecycleServiceTest {
                     ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false);
 
             // Advance clock 5s and mark first player ready -> extends inactivity deadline & schedules replacement
-            clockEpochMs.set(BASE_EPOCH_MS + 5_000L);
+            mutableClock.setMillis(BASE_EPOCH_MS + 5_000L);
             callbacks.clear();
             gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host");
             long replacedDeadline = testRoom.getInactivityDeadlineEpochMs();
@@ -785,7 +775,7 @@ class GameLifecycleServiceTest {
             Runnable replacementCallback = callbacks.getFirst();
 
             // Mark second player ready -> next hand starts and keeps the extended inactivity deadline
-            clockEpochMs.set(BASE_EPOCH_MS + 6_000L);
+            mutableClock.setMillis(BASE_EPOCH_MS + 6_000L);
             callbacks.clear();
             gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Player2");
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
@@ -794,12 +784,12 @@ class GameLifecycleServiceTest {
             Runnable hand2Callback = callbacks.stream().findFirst().orElse(replacementCallback);
 
             // Firing initial callback at initialDeadline is ignored because deadline changed
-            clockEpochMs.set(initialDeadline);
+            mutableClock.setMillis(initialDeadline);
             initialCallback.run();
             assertFalse(game.isGameOver(), "Superseded inactivity callback must not abandon active hand 2");
 
             // Firing the replacement callback at hand 2 deadline abandons the game
-            clockEpochMs.set(hand2Deadline);
+            mutableClock.setMillis(hand2Deadline);
             hand2Callback.run();
             assertTrue(game.isGameOver());
             assertTrue(game.getGameEndResult().abandoned());

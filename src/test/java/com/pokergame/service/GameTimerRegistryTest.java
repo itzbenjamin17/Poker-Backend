@@ -63,11 +63,11 @@ class GameTimerRegistryTest {
         runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline, () -> executed.set(true));
 
         assertEquals(Instant.ofEpochMilli(deadline), instantCaptor.getValue());
-        assertEquals(1, runtimeTimers.activeTaskCount(ROOM_ID));
 
         runnableCaptor.getValue().run();
         assertTrue(executed.get());
-        assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
+        runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.NEW_HAND);
+        verify(future, never()).cancel(false);
     }
 
     @Test
@@ -80,7 +80,8 @@ class GameTimerRegistryTest {
         runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, FIXED_NOW.toEpochMilli() - 5_000L, () -> {});
 
         verify(taskScheduler).schedule(any(Runnable.class), eq(FIXED_NOW));
-        assertEquals(1, runtimeTimers.activeTaskCount(ROOM_ID));
+        runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT);
+        verify(future).cancel(false);
     }
 
     @Test
@@ -101,16 +102,17 @@ class GameTimerRegistryTest {
                 () -> secondRan.set(true));
 
         verify(future1).cancel(false);
-        assertEquals(1, runtimeTimers.activeTaskCount(ROOM_ID));
+        verify(future2, never()).cancel(false);
 
         // Stale first callback captured before replacement must be a no-op
         callbacks.getAllValues().getFirst().run();
         assertFalse(firstRan.get());
-        assertEquals(1, runtimeTimers.activeTaskCount(ROOM_ID));
+        verify(future2, never()).cancel(false);
 
         callbacks.getAllValues().getLast().run();
         assertTrue(secondRan.get());
-        assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
+        runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.NEW_HAND);
+        verify(future2, never()).cancel(false);
     }
 
     @Test
@@ -124,10 +126,10 @@ class GameTimerRegistryTest {
         runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, FIXED_NOW.toEpochMilli() + 1000L, () -> {
             throw new IllegalStateException("boom");
         });
-        assertEquals(1, runtimeTimers.activeTaskCount(ROOM_ID));
 
         assertDoesNotThrow(() -> callbackCaptor.getValue().run());
-        assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
+        runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.AUTO_ADVANCE);
+        verify(future, never()).cancel(false);
     }
 
     @Test
@@ -149,11 +151,11 @@ class GameTimerRegistryTest {
 
         verify(first).cancel(false);
         verifyNoInteractions(replacement, replacementCallback);
-        assertEquals(1, runtimeTimers.activeTaskCount(ROOM_ID));
 
         runtimeTimers.cancelAllForGame(ROOM_ID, true);
         verify(replacement).cancel(false);
-        assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
+        runtimeTimers.cancelAllForGame(ROOM_ID, true);
+        verifyNoMoreInteractions(replacement);
     }
 
     @Test
@@ -185,14 +187,12 @@ class GameTimerRegistryTest {
         Runnable expire = mock(Runnable.class);
 
         runtimeTimers.scheduleInactivity(ROOM_ID, FIXED_NOW.toEpochMilli() + 100L, FIXED_NOW.toEpochMilli(), expire);
-        assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
         callbacks.getValue().run();
         verifyNoInteractions(expire);
 
         assertSame(schedulerFailure, assertThrows(RuntimeException.class, () ->
                 runtimeTimers.scheduleInactivity(
                         ROOM_ID, FIXED_NOW.toEpochMilli() + 100L, FIXED_NOW.toEpochMilli(), expire)));
-        assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
         callbacks.getValue().run();
         verifyNoInteractions(expire);
     }
@@ -205,7 +205,6 @@ class GameTimerRegistryTest {
         runtimeTimers.cancelInactivity(null);
 
         verifyNoInteractions(taskScheduler);
-        assertEquals(0, runtimeTimers.activeTaskCount(null));
     }
 
     @Test
@@ -216,11 +215,11 @@ class GameTimerRegistryTest {
         doReturn(future).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
 
         runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, FIXED_NOW.toEpochMilli() + 10_000L, () -> {});
-        assertEquals(1, runtimeTimers.activeTaskCount(ROOM_ID));
 
         runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.CLEANUP);
         verify(future).cancel(false);
-        assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
+        runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.CLEANUP);
+        verifyNoMoreInteractions(future);
     }
 
     @Test
@@ -249,17 +248,16 @@ class GameTimerRegistryTest {
             verify(futures.get(task)).cancel(false);
         }
         verifyNoInteractions(inactivity, futures.get(ScheduledGameTask.CLEANUP), futures.get(ScheduledGameTask.GAME_END));
-        assertEquals(3, runtimeTimers.activeTaskCount(ROOM_ID));
 
         runtimeTimers.cancelAllForGame(ROOM_ID, true);
         verify(inactivity).cancel(false);
         verify(futures.get(ScheduledGameTask.GAME_END)).cancel(false);
         verifyNoInteractions(futures.get(ScheduledGameTask.CLEANUP));
-        assertEquals(1, runtimeTimers.activeTaskCount(ROOM_ID));
 
         runtimeTimers.cancelAllForGame(ROOM_ID, false);
         verify(futures.get(ScheduledGameTask.CLEANUP)).cancel(false);
-        assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
+        runtimeTimers.cancelAllForGame(ROOM_ID, false);
+        verifyNoMoreInteractions(inactivity, futures.get(ScheduledGameTask.GAME_END), futures.get(ScheduledGameTask.CLEANUP));
     }
 
     @Test
@@ -274,15 +272,14 @@ class GameTimerRegistryTest {
 
         runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.NEW_HAND, FIXED_NOW.toEpochMilli() + 5_000L, () -> {});
         runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, FIXED_NOW.toEpochMilli() + 60_000L, () -> {});
-        assertEquals(2, runtimeTimers.activeTaskCount(ROOM_ID));
 
         runtimeTimers.cancelAllForGame(ROOM_ID, true);
         verify(newHandFuture).cancel(false);
         verify(cleanupFuture, never()).cancel(false);
-        assertEquals(1, runtimeTimers.activeTaskCount(ROOM_ID));
 
         runtimeTimers.cancelAllForGame(ROOM_ID, false);
         verify(cleanupFuture).cancel(false);
-        assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
+        runtimeTimers.cancelAllForGame(ROOM_ID, false);
+        verifyNoMoreInteractions(newHandFuture, cleanupFuture);
     }
 }

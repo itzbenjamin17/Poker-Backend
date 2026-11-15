@@ -556,8 +556,8 @@ public class RoomService {
             Room room = rooms.remove(roomId);
             if (room != null) {
                 logger.info("Room destroyed: {} (ID: {})", room.getRoomName(), roomId);
+                PostSaveActions.runAfterSave(() -> eventPublisher.publishEvent(new RoomDestroyed(roomId)));
             }
-            PostSaveActions.runAfterSave(() -> eventPublisher.publishEvent(new RoomDestroyed(roomId)));
         }
     }
 

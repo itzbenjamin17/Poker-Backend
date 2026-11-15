@@ -154,7 +154,7 @@ class PersistenceAvailabilityTransportIT {
                 // Best-effort client stop on teardown.
             }
         }
-        durableMutationAspect.retryPendingSaves();
+        awaitPendingSavesFlushed();
         if (createdRoomId != null) {
             try (LockLease _ = roomCoordinator.acquire(createdRoomId)) {
                 gameLifecycleService.evictGame(createdRoomId);
@@ -163,7 +163,15 @@ class PersistenceAvailabilityTransportIT {
             walStore.delete(createdRoomId);
             createdRoomId = null;
         }
-        durableMutationAspect.retryPendingSaves();
+        awaitPendingSavesFlushed();
+    }
+
+    private void awaitPendingSavesFlushed() {
+        Awaitility.await().atMost(TIMEOUT).untilAsserted(() -> {
+            durableMutationAspect.retryPendingSaves();
+            assertThat(walStore.isHealthy()).isTrue();
+            assertThat(walStore.unsavedRoomCount()).isZero();
+        });
     }
 
     @Test
@@ -241,9 +249,7 @@ class PersistenceAvailabilityTransportIT {
         }
 
         UNAVAILABLE_STORAGE.set(false);
-        durableMutationAspect.retryPendingSaves();
-        Awaitility.await().atMost(TIMEOUT).until(walStore::isHealthy);
-        assertThat(walStore.unsavedRoomCount()).isZero();
+        awaitPendingSavesFlushed();
     }
 
     private StompSession connectStomp(String token) throws Exception {

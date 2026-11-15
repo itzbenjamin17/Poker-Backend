@@ -484,7 +484,9 @@ class DurableMutationAspectTest {
 
         // A failed creation must not leave an uncommitted aggregate in the active registry
         verify(gameLifecycleService).evictGame(roomId);
-        verify(roomService).destroyRoom(roomId);
+        verify(roomService).cancelLobbyInactivity(roomId);
+        verify(roomService).evictRoom(roomId);
+        verify(roomService, never()).destroyRoom(roomId);
         verify(gameLifecycleService, never()).restoreGame(any());
         verify(snapshotMapper, never()).deserialize(any());
     }
@@ -517,7 +519,9 @@ class DurableMutationAspectTest {
         assertThrows(RuntimeException.class, () -> aspect.persist(joinPoint, validMutation()));
 
         // Verify no old WAL room is resurrected into the live registry
-        verify(roomService).destroyRoom(roomId);
+        verify(roomService).cancelLobbyInactivity(roomId);
+        verify(roomService).evictRoom(roomId);
+        verify(roomService, never()).destroyRoom(roomId);
     }
 
     /**
@@ -669,6 +673,76 @@ class DurableMutationAspectTest {
         assertEquals(0, store.unsavedRoomCount());
         assertTrue(store.recoverLatest(roomId).isEmpty(), "The retry checkpoints and removes the deleted room's WAL");
         verify(joinPoint, times(1)).proceed();
+    }
+
+    @Test
+    void prepareFailureBeforeRejectedMutationQueuesRetryForExistingRoom() throws Throwable {
+        String roomId = "room-prepare-rejected-retry";
+        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), new HandEvaluatorService());
+        AtomicBoolean failPrepare = new AtomicBoolean(true);
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, (point, id) -> {
+            if (failPrepare.get() && point == WalFaultPoint.BEFORE_PREPARE_WRITE) {
+                throw new PersistenceException("injected prepare outage");
+            }
+        });
+        Room existingRoom = new Room(roomId, "Retry Prepare Room", "Alice", 6, 10, 20, 1000, null);
+        existingRoom.addPlayer("Alice");
+        when(roomServiceProvider.getObject()).thenReturn(roomService);
+        when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
+        when(roomService.getRoom(roomId)).thenReturn(existingRoom);
+        when(roomService.getCurrentHost(roomId)).thenReturn("Alice");
+        when(gameLifecycleService.getGame(roomId)).thenReturn(null);
+
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, realMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
+        ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
+            throw new IllegalStateException("rejected mutation");
+        });
+
+        assertThrows(IllegalStateException.class, () -> aspect.persist(joinPoint, validMutation()));
+        verify(roomService).restoreRoom(any(Room.class), eq("Alice"));
+        assertFalse(store.isHealthy());
+        assertEquals(1, store.unsavedRoomCount());
+
+        failPrepare.set(false);
+        aspect.retryPendingSaves();
+
+        assertTrue(store.isHealthy(), "Retry checkpoints and clears failedRooms for the existing room");
+        assertEquals(0, store.unsavedRoomCount());
+        assertTrue(store.recoverLatest(roomId).isPresent());
+    }
+
+    @Test
+    void missingRoomRejectedMutationDuringPrepareOutageDoesNotDegradeStore() throws Throwable {
+        String roomId = "room-missing-prepare-outage";
+        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), new HandEvaluatorService());
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, (point, id) -> {
+            if (point == WalFaultPoint.BEFORE_PREPARE_WRITE
+                    || point == WalFaultPoint.BEFORE_COMMIT_WRITE
+                    || point == WalFaultPoint.BEFORE_FLUSH
+                    || point == WalFaultPoint.BEFORE_DELETE) {
+                throw new PersistenceException("injected write outage");
+            }
+        });
+        when(roomServiceProvider.getObject()).thenReturn(roomService);
+        when(roomService.getRoom(roomId)).thenReturn(null);
+
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, realMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
+        ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
+            throw new IllegalStateException("missing room");
+        });
+
+        assertThrows(IllegalStateException.class, () -> aspect.persist(joinPoint, validMutation()));
+        assertTrue(store.isHealthy());
+        assertEquals(0, store.unsavedRoomCount());
+        verify(roomService, never()).destroyRoom(roomId);
     }
 
     /**

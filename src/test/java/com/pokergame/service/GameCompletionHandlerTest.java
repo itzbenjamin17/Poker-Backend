@@ -16,6 +16,7 @@ import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
+import com.pokergame.testutil.MutableClock;
 import com.pokergame.util.LockLease;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -30,14 +31,11 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
 
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
@@ -73,8 +71,7 @@ class GameCompletionHandlerTest {
     @Mock
     private ObjectProvider<GameLifecycleService> lifecycleProvider;
 
-    private AtomicLong clockEpochMs;
-    private Clock mutableClock;
+    private MutableClock mutableClock;
     private RoomCoordinator roomCoordinator;
     private ActiveGameRegistry activeGames;
     private GameTimerRegistry runtimeTimers;
@@ -85,23 +82,7 @@ class GameCompletionHandlerTest {
 
     @BeforeEach
     void setUp() {
-        clockEpochMs = new AtomicLong(BASE_EPOCH_MS);
-        mutableClock = new Clock() {
-            @Override
-            public ZoneOffset getZone() {
-                return ZoneOffset.UTC;
-            }
-
-            @Override
-            public Clock withZone(java.time.ZoneId zone) {
-                return this;
-            }
-
-            @Override
-            public Instant instant() {
-                return Instant.ofEpochMilli(clockEpochMs.get());
-            }
-        };
+        mutableClock = new MutableClock(BASE_EPOCH_MS);
 
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);
@@ -299,7 +280,6 @@ class GameCompletionHandlerTest {
 
             runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 90_000L, () -> {});
             runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 10_000L, () -> {});
-            assertEquals(2, runtimeTimers.activeTaskCount(ROOM_ID));
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 completion.handleGameEnd(ROOM_ID);
@@ -307,6 +287,7 @@ class GameCompletionHandlerTest {
 
             verify(turnFuture).cancel(false);
             verify(cleanupFuture).cancel(false); // replaced by scheduleGameCleanup inside handleGameEnd
+            verify(endCleanupFuture, never()).cancel(false);
             assertEquals(BASE_EPOCH_MS + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
                     game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
         }
@@ -340,7 +321,7 @@ class GameCompletionHandlerTest {
             }
 
             // Clock reaches deadline -> abandons
-            clockEpochMs.set(BASE_EPOCH_MS + 50_000L);
+            mutableClock.setMillis(BASE_EPOCH_MS + 50_000L);
             clearInvocations(messagingTemplate);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 completion.abandonGameIfInactive(ROOM_ID, BASE_EPOCH_MS + 50_000L);
@@ -398,7 +379,7 @@ class GameCompletionHandlerTest {
                 assertDoesNotThrow(() -> completion.rejectExpiredActivity(ROOM_ID, testRoom));
             }
 
-            clockEpochMs.set(BASE_EPOCH_MS + 1000L);
+            mutableClock.setMillis(BASE_EPOCH_MS + 1000L);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 BadRequestException ex = assertThrows(BadRequestException.class,
                         () -> completion.rejectExpiredActivity(ROOM_ID, testRoom));
@@ -491,13 +472,16 @@ class GameCompletionHandlerTest {
             createAndRegisterStartedGame(List.of(
                     new Player("Host", "host", 100),
                     new Player("Player2", "p2", 100)));
+            @SuppressWarnings("unchecked")
+            ScheduledFuture<Object> cleanupFuture = mock(ScheduledFuture.class);
+            doReturn(cleanupFuture).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
             runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 10_000L, () -> {});
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 completion.deleteGameAndRoom(ROOM_ID);
                 assertNull(activeGames.get(ROOM_ID));
             }
-            assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
+            verify(cleanupFuture).cancel(false);
             verify(roomService).destroyRoom(ROOM_ID);
         }
 
@@ -507,6 +491,9 @@ class GameCompletionHandlerTest {
             Game game = createAndRegisterStartedGame(List.of(
                     new Player("Host", "host", 100),
                     new Player("Player2", "p2", 100)));
+            @SuppressWarnings("unchecked")
+            ScheduledFuture<Object> cleanupFuture = mock(ScheduledFuture.class);
+            doReturn(cleanupFuture).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
             runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 10_000L, () -> {});
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
@@ -526,7 +513,7 @@ class GameCompletionHandlerTest {
                 completion.cleanupAbandonedGameIfRoomEmpty(ROOM_ID, testRoom, game);
                 assertNull(activeGames.get(ROOM_ID));
             }
-            assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
+            verify(cleanupFuture).cancel(false);
         }
     }
 }

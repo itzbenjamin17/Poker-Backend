@@ -124,11 +124,14 @@ public final class DurableMutationAspect {
                     // Snapshot trouble must not refuse an otherwise valid in-memory command.
                     recordStorageFailure(roomId, captureFailure);
                 }
+                boolean hasPreExistingRoom = beforeMutation != null && beforeMutation.image() != null;
+                boolean prepareFailed = false;
                 WalTransaction transaction = null;
-                if (store.isHealthy() && !store.requiresCheckpoint(roomId)) {
+                if (hasPreExistingRoom && store.isHealthy() && !store.requiresCheckpoint(roomId)) {
                     try {
                         transaction = store.prepare(roomId);
                     } catch (RuntimeException failure) {
+                        prepareFailed = true;
                         recordStorageFailure(roomId, failure);
                     }
                 }
@@ -138,7 +141,7 @@ public final class DurableMutationAspect {
                 } catch (Throwable failure) {
                     logger.debug("Durable mutation discarded due to failure: class={} roomId={}", failure.getClass().getSimpleName(), roomId);
                     PostSaveActions.clear();
-                    rollbackOrEvictAggregate(roomId, beforeMutation);
+                    rollbackOrEvictAggregate(roomId, beforeMutation, prepareFailed, transaction != null);
                     throw failure;
                 }
 
@@ -252,7 +255,7 @@ public final class DurableMutationAspect {
      * Restores the independent pre-mutation RAM image after a rejection. Disk may lag
      * accepted gameplay, so WAL bytes are never a safe rollback source.
      */
-    private void rollbackOrEvictAggregate(String roomId, RollbackState beforeMutation) {
+    private void rollbackOrEvictAggregate(String roomId, RollbackState beforeMutation, boolean prepareFailed, boolean prepared) {
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
             try {
                 if (beforeMutation != null && beforeMutation.image() != null) {
@@ -266,6 +269,7 @@ public final class DurableMutationAspect {
                             aggregate.room().setAbsenceDeadline(player, state.absenceDeadline());
                         });
                         if (aggregate.game() != null) gameLifecycleService.getObject().resumeRollbackTimers(roomId);
+                        if (prepareFailed) queuePrepareRecoverySaveIfNeeded(roomId);
                     }
                 } else {
                     // A captured absence is itself accepted state: retain its pending tombstone.
@@ -281,8 +285,19 @@ public final class DurableMutationAspect {
                 recordStorageFailure(roomId, restoreFailure instanceof RuntimeException re ? re
                         : new PersistenceException("Failed to restore aggregate for room " + roomId, restoreFailure));
             } finally {
-                cleanupAbortedCreation(roomId);
+                cleanupAbortedCreation(roomId, prepared);
             }
+        }
+    }
+
+    /** Ensures a pre-mutation WAL prepare failure on an existing room is retried later. */
+    private void queuePrepareRecoverySaveIfNeeded(String roomId) {
+        if (pendingSaves.containsKey(roomId)) return;
+        try {
+            pendingSaves.put(roomId, captureState(roomId));
+        } catch (RuntimeException captureFailure) {
+            pendingSaves.putIfAbsent(roomId, new PendingSave(null, false));
+            recordStorageFailure(roomId, captureFailure);
         }
     }
 
@@ -319,21 +334,24 @@ public final class DurableMutationAspect {
         try {
             RoomService rooms = roomService.getObject();
             if (rooms != null) {
-                rooms.destroyRoom(roomId);
+                rooms.cancelLobbyInactivity(roomId);
+                rooms.evictRoom(roomId);
             }
         } catch (Exception e) {
-            logger.warn("Error destroying room {} during eviction", roomId, e);
+            logger.warn("Error evicting room {} during rollback cleanup", roomId, e);
         }
     }
 
-    /** Removes an uncommitted creation WAL only when no accepted room remains. */
-    private void cleanupAbortedCreation(String roomId) {
+    /** Removes an uncommitted creation WAL only when prepare ran and no accepted room remains. */
+    private void cleanupAbortedCreation(String roomId, boolean prepared) {
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
             try {
-                recordsSinceCompaction.remove(roomId);
                 RoomService rooms = roomService.getObject();
-                if ((rooms == null || rooms.getRoom(roomId) == null) && store.recoverLatest(roomId).isEmpty()) {
-                    store.delete(roomId);
+                if (rooms == null || rooms.getRoom(roomId) == null) {
+                    recordsSinceCompaction.remove(roomId);
+                    if (prepared && store.isHealthy() && store.recoverLatest(roomId).isEmpty()) {
+                        store.delete(roomId);
+                    }
                 }
             } catch (Exception cleanupError) {
                 logger.error("Failed to clean up aborted WAL for room {}", roomId, cleanupError);

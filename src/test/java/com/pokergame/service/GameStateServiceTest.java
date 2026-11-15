@@ -16,7 +16,6 @@ import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.Suit;
 import com.pokergame.model.*;
 import com.pokergame.security.PlayerPrincipal;
-import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -44,11 +43,6 @@ import java.util.UUID;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -1785,40 +1779,37 @@ class GameStateServiceTest {
     }
 
     @Test
-    void privateProjectionWhileHoldingGameDoesNotWaitForRoomMonitor() throws Exception {
-        Room room = new Room("room", "Room", "Alice", 6, 5, 10, 100, null);
-        room.addPlayer("Alice");
+    void broadcastGameStatePublishesRoomInactivityDeadlineAndActiveMemberPrivateState() {
+        Room room = new Room("room", "Room", "Host", 6, 5, 10, 100, null);
+        String hostMembership = room.addPlayer("Host");
+        String aliceMembership = room.addPlayer("Alice");
+        room.setInactivityDeadlineEpochMs(1_750_000_000_000L);
+
         RoomService rooms = mock(RoomService.class);
         when(rooms.getRoom("room")).thenReturn(room);
-        GameStateService projections = new GameStateService(rooms, mock(SimpMessagingTemplate.class), FIXED_CLOCK);
+        SimpMessagingTemplate template = mock(SimpMessagingTemplate.class);
+        GameStateService projections = new GameStateService(rooms, template, FIXED_CLOCK);
         Game game = new Game("room", List.of(
                 new Player("Alice", "alice-id", 100),
                 new Player("Host", "host-id", 100)), 6, 5, 10, handEvaluator);
+        game.dealHoleCards();
 
-        AtomicBoolean roomMonitorEntered = new AtomicBoolean(false);
-        AtomicBoolean releaseRoomMonitor = new AtomicBoolean(false);
+        projections.broadcastGameState(game);
 
-        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
-            executor.submit(() -> {
-                synchronized (room) {
-                    roomMonitorEntered.set(true);
-                    Awaitility.await().atMost(5, TimeUnit.SECONDS).untilTrue(releaseRoomMonitor);
-                }
-            });
+        ArgumentCaptor<PublicGameStateResponse> publicCaptor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+        verify(template).convertAndSend(eq("/game/room"), publicCaptor.capture());
+        PublicGameStateResponse publicResponse = publicCaptor.getValue();
+        assertEquals(1_750_000_000_000L, publicResponse.inactivityDeadlineEpochMs());
+        assertEquals(FIXED_CLOCK.millis(), publicResponse.serverTimeEpochMs());
 
-            Awaitility.await().atMost(2, TimeUnit.SECONDS).untilTrue(roomMonitorEntered);
-
-            Future<?> publish = executor.submit(() -> {
-                synchronized (game) {
-                    projections.broadcastGameState(game);
-                }
-            });
-
-            try {
-                assertDoesNotThrow(() -> publish.get(2, TimeUnit.SECONDS));
-            } finally {
-                releaseRoomMonitor.set(true);
-            }
+        for (Player player : game.getPlayers()) {
+            String membership = player.getName().equals("Alice") ? aliceMembership : hostMembership;
+            ArgumentCaptor<PrivatePlayerState> privateCaptor = ArgumentCaptor.forClass(PrivatePlayerState.class);
+            verify(template).convertAndSendToUser(
+                    eq(new PlayerPrincipal(player.getName(), "room", membership).getName()),
+                    eq("/queue/private"),
+                    privateCaptor.capture());
+            assertEquals(player.getHoleCards(), privateCaptor.getValue().holeCards());
         }
     }
 

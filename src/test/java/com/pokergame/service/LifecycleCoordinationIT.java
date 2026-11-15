@@ -23,13 +23,13 @@ import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.security.RateLimitService;
+import com.pokergame.testutil.TestRoomFixtures;
 import com.pokergame.util.LockLease;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -37,22 +37,24 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.messaging.Message;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.web.socket.messaging.SessionDisconnectEvent;
 
+import static com.pokergame.testutil.TestRoomFixtures.stompSubscription;
+import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -92,9 +94,6 @@ class LifecycleCoordinationIT {
     private RoomCoordinator roomCoordinator;
 
     @Autowired
-    private GameTimerRegistry gameTimerRegistry;
-
-    @Autowired
     private GameController gameController;
 
     @Autowired
@@ -110,11 +109,17 @@ class LifecycleCoordinationIT {
     private RateLimitService rateLimitService;
 
     private final Set<String> trackedRoomIds = new HashSet<>();
+    private TestRoomFixtures roomFixtures;
+
+    @BeforeEach
+    void setUpFixtures() {
+        roomFixtures = new TestRoomFixtures(roomService, roomCoordinator, trackedRoomIds);
+    }
 
     @AfterEach
     void cleanUpTrackedRooms() {
         for (String roomId : List.copyOf(trackedRoomIds)) {
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 gameLifecycleService.evictGame(roomId);
                 roomService.destroyRoom(roomId);
                 return null;
@@ -122,44 +127,6 @@ class LifecycleCoordinationIT {
         }
         trackedRoomIds.clear();
         rateLimitService.reset();
-    }
-
-    private <T> T withRoomLock(String roomId, Supplier<T> action) {
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            return action.get();
-        }
-    }
-
-    private String createAndConnectRoom(String roomName, String hostName, int buyIn, String... guests) {
-        String roomId = UUID.randomUUID().toString();
-        trackedRoomIds.add(roomId);
-        roomService.createRoom(roomId, new CreateRoomRequest(roomName, hostName, 6, 5, 10, buyIn, null));
-        for (String guest : guests) {
-            roomService.joinRoom(roomId, new JoinRoomRequest(roomName, guest, null));
-        }
-        withRoomLock(roomId, () -> {
-            Room room = roomService.getRoom(roomId);
-            room.setPlayerConnected(hostName, true);
-            for (String guest : guests) {
-                room.setPlayerConnected(guest, true);
-            }
-            return null;
-        });
-        return roomId;
-    }
-
-    private PlayerPrincipal principalFor(String roomId, String playerName) {
-        return withRoomLock(roomId, () -> {
-            Room room = roomService.getRoom(roomId);
-            return new PlayerPrincipal(playerName, roomId, room.getMembershipId(playerName));
-        });
-    }
-
-    private Message<byte[]> stompSubscription(PlayerPrincipal principal) {
-        StompHeaderAccessor headers = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
-        headers.setDestination("/room/" + principal.roomId());
-        headers.setUser(principal);
-        return MessageBuilder.createMessage(new byte[0], headers.getMessageHeaders());
     }
 
     @Nested
@@ -173,13 +140,13 @@ class LifecycleCoordinationIT {
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("does not hold room lock for room: uncoordinated-room");
 
-            withRoomLock("owned-room", () -> {
+            withRoomLock(roomCoordinator, "owned-room", () -> {
                 assertThatCode(() -> roomCoordinator.assertHeldByCurrentThread("owned-room"))
                         .doesNotThrowAnyException();
                 return null;
             });
 
-            String roomId = createAndConnectRoom("Ownership Room", "Host", 1000, "Guest");
+            String roomId = roomFixtures.createAndConnectRoom("Ownership Room", "Host", 1000, "Guest");
             gameLifecycleService.createGameFromRoom(roomId);
 
             assertThatThrownBy(() -> gameLifecycleService.getGame(roomId))
@@ -194,12 +161,12 @@ class LifecycleCoordinationIT {
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("does not hold room lock for room: " + roomId);
 
-            String actorName = withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
+            String actorName = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
             assertThatCode(() -> playerActionService.processPlayerAction(
                     roomId, new PlayerActionRequest(PlayerAction.CALL, null), actorName))
                     .doesNotThrowAnyException();
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThatCode(() -> roomService.broadcastGameStarted(roomId)).doesNotThrowAnyException();
                 roomService.leavePlayersBatch(roomId, List.of("Guest"), "Host");
                 assertThat(roomService.getRoom(roomId).getPlayers()).containsExactly("Host");
@@ -208,7 +175,7 @@ class LifecycleCoordinationIT {
 
             // @DurableMutation public service entry points also acquire the room lock when called directly
             assertThatCode(() -> roomService.destroyRoom(roomId)).doesNotThrowAnyException();
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(roomService.getRoom(roomId)).isNull();
                 return null;
             });
@@ -244,8 +211,8 @@ class LifecycleCoordinationIT {
         @Test
         @DisplayName("public and private projections return deeply immutable collections")
         void projectionsReturnDeeplyImmutableCollections() {
-            String roomId = createAndConnectRoom("Immutable Room", "Host", 1000, "Alice");
-            PlayerPrincipal hostPrincipal = principalFor(roomId, "Host");
+            String roomId = roomFixtures.createAndConnectRoom("Immutable Room", "Host", 1000, "Alice");
+            PlayerPrincipal hostPrincipal = roomFixtures.principalFor(roomId, "Host");
             roomController.startGame(roomId, hostPrincipal);
 
             PublicGameStateResponse publicState = gameController.getGameState(roomId, hostPrincipal).getBody();
@@ -289,11 +256,11 @@ class LifecycleCoordinationIT {
         void commandsRacingWithDeparturePreserveChipsAndStateRevision() throws Exception {
             int buyIn = 1000;
             int totalInitialChips = 4 * buyIn;
-            String roomId = createAndConnectRoom("Race Room", "Host", buyIn, "Alice", "Bob", "Charlie");
+            String roomId = roomFixtures.createAndConnectRoom("Race Room", "Host", buyIn, "Alice", "Bob", "Charlie");
 
-            PlayerPrincipal hostPrincipal = principalFor(roomId, "Host");
-            PlayerPrincipal alicePrincipal = principalFor(roomId, "Alice");
-            PlayerPrincipal charliePrincipal = principalFor(roomId, "Charlie");
+            PlayerPrincipal hostPrincipal = roomFixtures.principalFor(roomId, "Host");
+            PlayerPrincipal alicePrincipal = roomFixtures.principalFor(roomId, "Alice");
+            PlayerPrincipal charliePrincipal = roomFixtures.principalFor(roomId, "Charlie");
             roomController.startGame(roomId, hostPrincipal);
 
             PublicGameStateResponse initialSnapshot = gameController.getGameState(roomId, hostPrincipal).getBody();
@@ -359,10 +326,10 @@ class LifecycleCoordinationIT {
         void commandsRacingWithGameCompletionPreserveSettlementAndChips() throws Exception {
             int buyIn = 1000;
             int totalChips = 2 * buyIn;
-            String roomId = createAndConnectRoom("Forfeit Room", "Host", buyIn, "Alice");
+            String roomId = roomFixtures.createAndConnectRoom("Forfeit Room", "Host", buyIn, "Alice");
 
-            PlayerPrincipal hostPrincipal = principalFor(roomId, "Host");
-            PlayerPrincipal alicePrincipal = principalFor(roomId, "Alice");
+            PlayerPrincipal hostPrincipal = roomFixtures.principalFor(roomId, "Host");
+            PlayerPrincipal alicePrincipal = roomFixtures.principalFor(roomId, "Alice");
             roomController.startGame(roomId, hostPrincipal);
 
             AtomicReference<PublicGameStateResponse> snapshotRead = new AtomicReference<>();
@@ -404,8 +371,8 @@ class LifecycleCoordinationIT {
         @Test
         @DisplayName("queued retired-membership requests reject after replacement across REST and STOMP")
         void queuedRetiredMembershipRequestsRejectReplacementMembership() throws Exception {
-            String roomId = createAndConnectRoom("Queued Room", "Host", 1000, "Alice");
-            PlayerPrincipal retiredPrincipal = principalFor(roomId, "Alice");
+            String roomId = roomFixtures.createAndConnectRoom("Queued Room", "Host", 1000, "Alice");
+            PlayerPrincipal retiredPrincipal = roomFixtures.principalFor(roomId, "Alice");
 
             try (ExecutorService executor = Executors.newFixedThreadPool(4)) {
                 Future<Throwable> privateReadFuture;
@@ -467,8 +434,8 @@ class LifecycleCoordinationIT {
                 assertThat(actionFuture.get(5, TimeUnit.SECONDS)).isInstanceOf(AccessDeniedException.class);
                 assertThat(stompSubFuture.get(5, TimeUnit.SECONDS)).isInstanceOf(AccessDeniedException.class);
 
-                PlayerPrincipal replacementPrincipal = principalFor(roomId, "Alice");
-                assertThat(withRoomLock(roomId, () -> roomService.getRoom(roomId).hasPlayer("Alice"))).isTrue();
+                PlayerPrincipal replacementPrincipal = roomFixtures.principalFor(roomId, "Alice");
+                assertThat(withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId).hasPlayer("Alice"))).isTrue();
                 PrivatePlayerState replacementState = gameController.getPrivateState(roomId, replacementPrincipal).getBody();
                 assertThat(replacementState).isNotNull();
                 assertThat(replacementState.holeCards()).hasSize(2);
@@ -484,11 +451,11 @@ class LifecycleCoordinationIT {
         @Test
         @DisplayName("stale turn callback firing during a new turn or hand is a no-op")
         void staleTurnCallbackDuringNewTurnOrHandIsNoOp() {
-            String roomId = createAndConnectRoom("Turn Stale Room", "Host", 1000, "Alice", "Bob");
+            String roomId = roomFixtures.createAndConnectRoom("Turn Stale Room", "Host", 1000, "Alice", "Bob");
             gameLifecycleService.createGameFromRoom(roomId);
 
             record TurnSnapshot(String actor, Long deadline, long hand, long generation) {}
-            TurnSnapshot turn1 = withRoomLock(roomId, () -> {
+            TurnSnapshot turn1 = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = gameLifecycleService.getGame(roomId);
                 return new TurnSnapshot(
                         game.getCurrentPlayer().getName(),
@@ -500,7 +467,7 @@ class LifecycleCoordinationIT {
             playerActionService.processPlayerAction(
                     roomId, new PlayerActionRequest(PlayerAction.CALL, null), turn1.actor());
 
-            TurnSnapshot turn2 = withRoomLock(roomId, () -> {
+            TurnSnapshot turn2 = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = gameLifecycleService.getGame(roomId);
                 return new TurnSnapshot(
                         game.getCurrentPlayer().getName(),
@@ -514,7 +481,7 @@ class LifecycleCoordinationIT {
             gameLifecycleService.executeScheduledTask(
                     roomId, ScheduledGameTask.TURN_TIMEOUT, turn1.deadline(), turn1.hand(), turn1.generation());
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 Room room = roomService.getRoom(roomId);
                 Game game = gameLifecycleService.getGame(roomId);
                 assertThat(room.hasPlayer(turn2.actor())).isTrue();
@@ -528,12 +495,12 @@ class LifecycleCoordinationIT {
             // Fold remaining players to complete hand 1 -> opens ready gate
             playerActionService.processPlayerAction(
                     roomId, new PlayerActionRequest(PlayerAction.FOLD, null), turn2.actor());
-            String turn3Actor = withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
+            String turn3Actor = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
             playerActionService.processPlayerAction(
                     roomId, new PlayerActionRequest(PlayerAction.FOLD, null), turn3Actor);
 
             // Start hand 2 via READY_TIMEOUT expiry
-            TurnSnapshot readyTimer = withRoomLock(roomId, () -> {
+            TurnSnapshot readyTimer = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = gameLifecycleService.getGame(roomId);
                 return new TurnSnapshot(
                         null,
@@ -544,7 +511,7 @@ class LifecycleCoordinationIT {
             gameLifecycleService.executeScheduledTask(
                     roomId, ScheduledGameTask.READY_TIMEOUT, readyTimer.deadline(), readyTimer.hand(), readyTimer.generation());
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(gameLifecycleService.getGame(roomId).getHandNumber()).isGreaterThan(turn1.hand());
                 return null;
             });
@@ -553,7 +520,7 @@ class LifecycleCoordinationIT {
             gameLifecycleService.executeScheduledTask(
                     roomId, ScheduledGameTask.TURN_TIMEOUT, turn1.deadline(), turn1.hand(), turn1.generation());
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = gameLifecycleService.getGame(roomId);
                 assertThat(game.isGameOver()).isFalse();
                 assertThat(game.getPlayers()).hasSize(3);
@@ -564,59 +531,59 @@ class LifecycleCoordinationIT {
         @Test
         @DisplayName("stale disconnect grace expiry firing after reconnect or renewed deadline is a no-op")
         void staleDisconnectGraceExpiryAfterReconnectOrRenewalIsNoOp() {
-            String roomId = createAndConnectRoom("Grace Room", "Host", 1000, "Alice");
+            String roomId = roomFixtures.createAndConnectRoom("Grace Room", "Host", 1000, "Alice");
             gameLifecycleService.createGameFromRoom(roomId);
-            String aliceMid = withRoomLock(roomId, () -> roomService.getRoom(roomId).getMembershipId("Alice"));
+            String aliceMid = withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId).getMembershipId("Alice"));
 
             long staleDeadline = System.currentTimeMillis() - 1_000L;
             gameLifecycleService.markPlayerDisconnected(roomId, "Alice", staleDeadline);
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 roomService.getRoom(roomId).setAbsenceDeadline("Alice", staleDeadline);
                 assertThat(gameLifecycleService.getGame(roomId).findPlayerByName("Alice").getIsDisconnected()).isTrue();
                 return null;
             });
 
             gameLifecycleService.markPlayerReconnected(roomId, "Alice");
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 roomService.getRoom(roomId).setPlayerConnected("Alice", true);
                 assertThat(gameLifecycleService.getGame(roomId).findPlayerByName("Alice").getIsDisconnected()).isFalse();
                 return null;
             });
 
             gameLifecycleService.removeDisconnectedPlayer(roomId, "Alice", aliceMid, staleDeadline);
-            assertThat(withRoomLock(roomId, () -> roomService.getRoom(roomId).hasPlayer("Alice"))).isTrue();
+            assertThat(withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId).hasPlayer("Alice"))).isTrue();
             assertThat(gameLifecycleService.playerExistsInGame(roomId, "Alice")).isTrue();
 
             long freshDeadline = System.currentTimeMillis() + 60_000L;
             gameLifecycleService.markPlayerDisconnected(roomId, "Alice", freshDeadline);
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 roomService.getRoom(roomId).setAbsenceDeadline("Alice", freshDeadline);
                 return null;
             });
 
             gameLifecycleService.removeDisconnectedPlayer(roomId, "Alice", aliceMid, staleDeadline);
-            assertThat(withRoomLock(roomId, () -> roomService.getRoom(roomId).hasPlayer("Alice"))).isTrue();
+            assertThat(withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId).hasPlayer("Alice"))).isTrue();
             assertThat(gameLifecycleService.playerExistsInGame(roomId, "Alice")).isTrue();
         }
 
         @Test
         @DisplayName("turn timer racing with action and state reads preserves chip conservation")
         void timerRacesWithActionsAndReadsPreserveInvariants() throws Exception {
-            String roomId = createAndConnectRoom("Timer Race Room", "Host", 1000, "Alice", "Bob");
-            PlayerPrincipal hostPrincipal = principalFor(roomId, "Host");
-            PlayerPrincipal alicePrincipal = principalFor(roomId, "Alice");
-            PlayerPrincipal bobPrincipal = principalFor(roomId, "Bob");
+            String roomId = roomFixtures.createAndConnectRoom("Timer Race Room", "Host", 1000, "Alice", "Bob");
+            PlayerPrincipal hostPrincipal = roomFixtures.principalFor(roomId, "Host");
+            PlayerPrincipal alicePrincipal = roomFixtures.principalFor(roomId, "Alice");
+            PlayerPrincipal bobPrincipal = roomFixtures.principalFor(roomId, "Bob");
             gameLifecycleService.createGameFromRoom(roomId);
 
             PublicGameStateResponse initialSnapshot = gameController.getGameState(roomId, hostPrincipal).getBody();
             assertThat(initialSnapshot).isNotNull();
             long initialRevision = initialSnapshot.stateRevision();
 
-            String currentActor = withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
-            Long turnDeadline = withRoomLock(roomId, () ->
+            String currentActor = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
+            Long turnDeadline = withRoomLock(roomCoordinator, roomId, () ->
                     gameLifecycleService.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
-            long handNumber = withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
-            long generation = withRoomLock(roomId, () ->
+            long handNumber = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
+            long generation = withRoomLock(roomCoordinator, roomId, () ->
                     gameLifecycleService.getGame(roomId).getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT));
 
             try (ExecutorService executor = Executors.newFixedThreadPool(3)) {
@@ -672,18 +639,18 @@ class LifecycleCoordinationIT {
         @Test
         @DisplayName("stale inactivity callback firing after player activity is a no-op")
         void staleInactivityCallbackAfterActivityIsNoOp() {
-            String roomId = createAndConnectRoom("Inactivity Stale Room", "Host", 1000, "Alice");
+            String roomId = roomFixtures.createAndConnectRoom("Inactivity Stale Room", "Host", 1000, "Alice");
             gameLifecycleService.createGameFromRoom(roomId);
 
-            long originalDeadline = withRoomLock(roomId, () ->
+            long originalDeadline = withRoomLock(roomCoordinator, roomId, () ->
                     roomService.getRoom(roomId).getInactivityDeadlineEpochMs());
-            String actor = withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
+            String actor = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
 
             playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), actor);
             gameLifecycleService.abandonGameIfInactive(roomId, originalDeadline);
 
             assertThat(gameLifecycleService.gameExists(roomId)).isTrue();
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(gameLifecycleService.getGame(roomId).isGameOver()).isFalse();
                 assertThat(roomService.getRoom(roomId).isTerminal()).isFalse();
                 return null;
@@ -693,17 +660,17 @@ class LifecycleCoordinationIT {
         @Test
         @DisplayName("last ready confirmation racing ready timeout starts exactly one hand")
         void lastReadyRacingTimeoutStartsExactlyOneHand() throws Exception {
-            String roomId = createAndConnectRoom("Ready Race Room", "Host", 1000, "Alice");
+            String roomId = roomFixtures.createAndConnectRoom("Ready Race Room", "Host", 1000, "Alice");
             gameLifecycleService.createGameFromRoom(roomId);
 
-            long hand = withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
-            String firstActor = withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
+            long hand = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
+            String firstActor = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
             playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, null), firstActor);
 
             gameLifecycleService.markPlayerReadyForNextHand(roomId, "Host");
-            long deadline = withRoomLock(roomId, () ->
+            long deadline = withRoomLock(roomCoordinator, roomId, () ->
                     gameLifecycleService.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
-            long generation = withRoomLock(roomId, () ->
+            long generation = withRoomLock(roomCoordinator, roomId, () ->
                     gameLifecycleService.getGame(roomId).getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT));
 
             try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
@@ -727,7 +694,7 @@ class LifecycleCoordinationIT {
                 timeout.get(5, TimeUnit.SECONDS);
             }
 
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 Game nextHand = gameLifecycleService.getGame(roomId);
                 assertThat(nextHand.getHandNumber()).isEqualTo(hand + 1);
                 assertThat(nextHand.getReadyCountdownDeadlineEpochMs()).isNull();
@@ -740,30 +707,30 @@ class LifecycleCoordinationIT {
         @Test
         @DisplayName("terminal cleanup on active game is a no-op and removes both game and room after abandonment")
         void terminalCleanupOnActiveGameIsNoOpAndRemovesAfterAbandonment() {
-            String roomId = createAndConnectRoom("Cleanup Lifecycle Room", "Host", 1000, "Alice");
+            String roomId = roomFixtures.createAndConnectRoom("Cleanup Lifecycle Room", "Host", 1000, "Alice");
             gameLifecycleService.createGameFromRoom(roomId);
 
             // Attempt cleanup while active -> no-op
             gameLifecycleService.executeScheduledTask(roomId, ScheduledGameTask.CLEANUP, 999_999L, 1L, 0L);
             assertThat(gameLifecycleService.gameExists(roomId)).isTrue();
-            assertThat(withRoomLock(roomId, () -> roomService.getRoom(roomId))).isNotNull();
+            assertThat(withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId))).isNotNull();
 
             gameLifecycleService.abandonGameDueToInactivity(roomId);
-            long cleanupDeadline = withRoomLock(roomId, () -> {
+            long cleanupDeadline = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = gameLifecycleService.getGame(roomId);
                 assertThat(game.isGameOver()).isTrue();
                 assertThat(roomService.getRoom(roomId).isTerminal()).isTrue();
                 return game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
             });
-            long hand = withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
-            long generation = withRoomLock(roomId, () ->
+            long hand = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
+            long generation = withRoomLock(roomCoordinator, roomId, () ->
                     gameLifecycleService.getGame(roomId).getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
 
             gameLifecycleService.executeScheduledTask(
                     roomId, ScheduledGameTask.CLEANUP, cleanupDeadline, hand, generation);
 
             assertThat(gameLifecycleService.gameExists(roomId)).isFalse();
-            assertThat(withRoomLock(roomId, () -> roomService.getRoom(roomId))).isNull();
+            assertThat(withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId))).isNull();
         }
     }
 
@@ -776,10 +743,10 @@ class LifecycleCoordinationIT {
         void repeatedCyclesLeaveNoRegistrationsOrLocks() {
             String host = "Host1";
             String guest = "Guest1";
-            String roomId = createAndConnectRoom("Cleanup Room 1", host, 1000, guest);
+            String roomId = roomFixtures.createAndConnectRoom("Cleanup Room 1", host, 1000, guest);
 
-            PlayerPrincipal hostPrincipal = principalFor(roomId, host);
-            PlayerPrincipal guestPrincipal = principalFor(roomId, guest);
+            PlayerPrincipal hostPrincipal = roomFixtures.principalFor(roomId, host);
+            PlayerPrincipal guestPrincipal = roomFixtures.principalFor(roomId, guest);
             webSocketEventListener.registerSession(hostPrincipal, "session-host-1");
             webSocketEventListener.registerSession(guestPrincipal, "session-guest-1");
 
@@ -796,35 +763,35 @@ class LifecycleCoordinationIT {
             gameLifecycleService.removePlayers(roomId, List.of(guest));
             await().atMost(ASYNC_TIMEOUT).untilAsserted(() -> {
                 assertThat(rateLimitService.hasWsBucket(guestKey)).isFalse();
-                assertThat(webSocketEventListener.activeSessionCount(guestKey)).isZero();
-                assertThat(webSocketEventListener.hasPendingDisconnect(guestKey)).isFalse();
+                assertThat(rateLimitService.hasWsBucket(hostKey)).isTrue();
             });
+            StompHeaderAccessor staleGuestHeaders = StompHeaderAccessor.create(StompCommand.DISCONNECT);
+            staleGuestHeaders.setSessionId("session-guest-1");
+            webSocketEventListener.handleWebSocketDisconnectListener(new SessionDisconnectEvent(
+                    this, MessageBuilder.createMessage(new byte[0], staleGuestHeaders.getMessageHeaders()),
+                    "session-guest-1", null));
+            assertThat(rateLimitService.hasWsBucket(guestKey)).isFalse();
 
-            // Host departs during retained review: CLEANUP timer remains registered
+            // Host departs during retained review: CLEANUP timer remains scheduled and retired host session has no effect
             gameLifecycleService.removePlayers(roomId, List.of(host));
-            await().atMost(ASYNC_TIMEOUT).untilAsserted(() -> {
-                assertThat(webSocketEventListener.activeSessionCount(hostKey)).isZero();
-                assertThat(webSocketEventListener.hasPendingDisconnect(hostKey)).isFalse();
-                assertThat(rateLimitService.hasWsBucket(hostKey)).isFalse();
-                assertThat(webSocketEventListener.pendingDisconnectCount()).isZero();
-                assertThat(webSocketEventListener.sessionMappingCount()).isZero();
-            });
+            await().atMost(ASYNC_TIMEOUT).untilAsserted(() ->
+                    assertThat(rateLimitService.hasWsBucket(hostKey)).isFalse());
+            assertThat(withRoomLock(roomCoordinator, roomId,
+                    () -> gameLifecycleService.getGame(roomId))).isNotNull();
 
-            assertThat(gameTimerRegistry.activeTaskCount(roomId)).isEqualTo(1);
-
-            long cleanupDeadline = withRoomLock(roomId, () ->
+            long cleanupDeadline = withRoomLock(roomCoordinator, roomId, () ->
                     gameLifecycleService.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
-            long hand = withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
-            long generation = withRoomLock(roomId, () ->
+            assertThat(cleanupDeadline).isPositive();
+            long hand = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
+            long generation = withRoomLock(roomCoordinator, roomId, () ->
                     gameLifecycleService.getGame(roomId).getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
 
             gameLifecycleService.executeScheduledTask(
                     roomId, ScheduledGameTask.CLEANUP, cleanupDeadline, hand, generation);
 
             await().atMost(ASYNC_TIMEOUT).untilAsserted(() -> {
-                assertThat(gameTimerRegistry.activeTaskCount(roomId)).isZero();
-                assertThat(withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId))).isNull();
-                assertThat(withRoomLock(roomId, () -> roomService.getRoom(roomId))).isNull();
+                assertThat(withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId))).isNull();
+                assertThat(withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId))).isNull();
                 assertThat(roomCoordinator.lockReservationCount(roomId)).isZero();
             });
         }

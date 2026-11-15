@@ -39,12 +39,14 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.awaitility.Awaitility;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -111,7 +113,7 @@ class PersistenceAvailabilityIT {
     @AfterEach
     void cleanUp() {
         UNAVAILABLE_STORAGE.set(false);
-        durableMutationAspect.retryPendingSaves();
+        awaitPendingSavesFlushed();
         for (String roomId : List.copyOf(trackedRoomIds)) {
             try (LockLease _ = roomCoordinator.acquire(roomId)) {
                 gameLifecycleService.evictGame(roomId);
@@ -119,8 +121,16 @@ class PersistenceAvailabilityIT {
             }
             walStore.delete(roomId);
         }
-        durableMutationAspect.retryPendingSaves();
+        awaitPendingSavesFlushed();
         trackedRoomIds.clear();
+    }
+
+    private void awaitPendingSavesFlushed() {
+        Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            durableMutationAspect.retryPendingSaves();
+            assertThat(walStore.isHealthy()).isTrue();
+            assertThat(walStore.unsavedRoomCount()).isZero();
+        });
     }
 
     @Test
@@ -174,10 +184,7 @@ class PersistenceAvailabilityIT {
         }
 
         UNAVAILABLE_STORAGE.set(false);
-        durableMutationAspect.retryPendingSaves();
-
-        assertThat(walStore.isHealthy()).isTrue();
-        assertThat(walStore.unsavedRoomCount()).isZero();
+        awaitPendingSavesFlushed();
         RecoveredAggregate recovered = snapshotMapper.deserialize(walStore.recoverLatest(roomId).orElseThrow());
         assertThat(recovered.game().getStateRevision()).isEqualTo(liveRevision);
     }

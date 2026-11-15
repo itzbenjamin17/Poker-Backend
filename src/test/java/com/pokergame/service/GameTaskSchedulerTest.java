@@ -5,6 +5,7 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.service.GameTaskScheduler.ScheduledTimer;
+import com.pokergame.testutil.MutableClock;
 import com.pokergame.util.LockLease;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -17,12 +18,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.TaskScheduler;
 
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -56,8 +54,7 @@ class GameTaskSchedulerTest {
     @Mock
     private GameLifecycleService gameLifecycleService;
 
-    private AtomicLong clockEpochMs;
-    private Clock mutableClock;
+    private MutableClock mutableClock;
     private RoomCoordinator roomCoordinator;
     private ActiveGameRegistry activeGames;
     private GameTimerRegistry timerRegistry;
@@ -66,23 +63,7 @@ class GameTaskSchedulerTest {
 
     @BeforeEach
     void setUp() {
-        clockEpochMs = new AtomicLong(BASE_EPOCH_MS);
-        mutableClock = new Clock() {
-            @Override
-            public ZoneOffset getZone() {
-                return ZoneOffset.UTC;
-            }
-
-            @Override
-            public Clock withZone(java.time.ZoneId zone) {
-                return this;
-            }
-
-            @Override
-            public Instant instant() {
-                return Instant.ofEpochMilli(clockEpochMs.get());
-            }
-        };
+        mutableClock = new MutableClock(BASE_EPOCH_MS);
 
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);
@@ -149,7 +130,7 @@ class GameTaskSchedulerTest {
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             scheduler.registerTimer(missingGameTimer);
         }
-        assertEquals(0, timerRegistry.activeTaskCount(GAME_ID));
+        verifyNoInteractions(springScheduler);
 
         Game game = createAndRegisterGame();
         game.scheduleTask(ScheduledGameTask.NEW_HAND, BASE_EPOCH_MS + 5000L);
@@ -164,7 +145,6 @@ class GameTaskSchedulerTest {
             scheduler.registerTimer(new ScheduledTimer(GAME_ID, ScheduledGameTask.NEW_HAND, deadline + 1, hand, gen));
         }
 
-        assertEquals(0, timerRegistry.activeTaskCount(GAME_ID));
         verifyNoInteractions(springScheduler);
     }
 
@@ -183,7 +163,6 @@ class GameTaskSchedulerTest {
         }
 
         verify(springScheduler).schedule(callbackCaptor.capture(), eq(Instant.ofEpochMilli(deadline)));
-        assertEquals(1, timerRegistry.activeTaskCount(GAME_ID));
 
         callbackCaptor.getValue().run();
         verify(gameLifecycleService).executeScheduledTask(
@@ -194,6 +173,7 @@ class GameTaskSchedulerTest {
     @DisplayName("scheduleReadyCountdownOpen opens immediately when delay is zero and schedules when positive")
     void scheduleReadyCountdownOpen_DelaySemantics() {
         Game game = createAndRegisterGame();
+        clearInvocations(springScheduler);
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             assertTrue(scheduler.scheduleReadyCountdownOpen(GAME_ID, 0L));
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
@@ -205,7 +185,8 @@ class GameTaskSchedulerTest {
             assertThrows(IllegalArgumentException.class, () -> scheduler.scheduleGameCleanup(GAME_ID, -5L));
             assertThrows(IllegalArgumentException.class, () -> scheduler.scheduleGameEnd(GAME_ID, -10L));
         }
-        assertEquals(1, timerRegistry.activeTaskCount(GAME_ID));
+        verify(springScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 3_500L)));
+        verifyNoMoreInteractions(springScheduler);
     }
 
     @Test
@@ -227,6 +208,7 @@ class GameTaskSchedulerTest {
         }
 
         game.setForfeitPending(false);
+        clearInvocations(springScheduler);
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             scheduler.scheduleTurnTimeout(GAME_ID);
             scheduler.scheduleAutoAdvance(GAME_ID);
@@ -239,7 +221,11 @@ class GameTaskSchedulerTest {
                 game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
         assertEquals(BASE_EPOCH_MS + 12_000L,
                 game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
-        assertEquals(3, timerRegistry.activeTaskCount(GAME_ID));
+        verify(springScheduler).schedule(any(Runnable.class),
+                eq(Instant.ofEpochMilli(BASE_EPOCH_MS + GameTaskScheduler.TURN_ALLOWANCE_MS)));
+        verify(springScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 4_000L)));
+        verify(springScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 12_000L)));
+        verifyNoMoreInteractions(springScheduler);
     }
 
     @Test
@@ -264,7 +250,7 @@ class GameTaskSchedulerTest {
 
         // Once game is over, resetGameInactivity is a no-op
         game.markGameOver();
-        clockEpochMs.set(BASE_EPOCH_MS + 5_000L);
+        mutableClock.setMillis(BASE_EPOCH_MS + 5_000L);
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             scheduler.resetGameInactivity(GAME_ID, game);
         }
@@ -306,6 +292,7 @@ class GameTaskSchedulerTest {
         game.markGameOver();
         assertFalse(scheduler.claimTimer(game, ScheduledGameTask.TURN_TIMEOUT, secondDeadline, hand, secondGen));
         verify(turnFuture).cancel(false);
-        assertEquals(0, timerRegistry.activeTaskCount(GAME_ID));
+        timerRegistry.cancelTask(GAME_ID, ScheduledGameTask.TURN_TIMEOUT);
+        verifyNoMoreInteractions(turnFuture);
     }
 }

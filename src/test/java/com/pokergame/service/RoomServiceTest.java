@@ -32,11 +32,8 @@ import com.pokergame.model.Room;
 import com.pokergame.service.event.RoomDestroyed;
 import com.pokergame.service.event.RoomMemberRegistered;
 import com.pokergame.service.event.RoomMembershipRetired;
+import com.pokergame.testutil.MutableClock;
 import com.pokergame.util.LockLease;
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
@@ -50,7 +47,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
@@ -85,16 +81,14 @@ class RoomServiceTest {
     @Mock
     private TaskScheduler taskScheduler;
 
-    private AtomicLong clockEpochMs;
-    private Clock clock;
+    private MutableClock clock;
     private RoomCoordinator roomCoordinator;
     private RoomService roomService;
     private CreateRoomRequest validCreateRequest;
 
     @BeforeEach
     void setUp() {
-        clockEpochMs = new AtomicLong(1_900_000_000_000L);
-        clock = mutableClock(clockEpochMs);
+        clock = new MutableClock(1_900_000_000_000L);
         roomCoordinator = new RoomCoordinator();
         roomService = newService(eventPublisher, new BCryptPasswordEncoder(), roomCoordinator);
         validCreateRequest = new CreateRoomRequest("Test Room", "HostPlayer", 6, 5, 10, 100, null);
@@ -113,30 +107,6 @@ class RoomServiceTest {
                 taskScheduler,
                 new RoomTimingProperties(DISCONNECT_GRACE_MS),
                 null);
-    }
-
-    private static Clock mutableClock(AtomicLong epochMs) {
-        return new Clock() {
-            @Override
-            public ZoneId getZone() {
-                return ZoneOffset.UTC;
-            }
-
-            @Override
-            public Clock withZone(ZoneId zone) {
-                return this;
-            }
-
-            @Override
-            public Instant instant() {
-                return Instant.ofEpochMilli(epochMs.get());
-            }
-
-            @Override
-            public long millis() {
-                return epochMs.get();
-            }
-        };
     }
 
     private static RoomEntryResult createRoom(RoomService service, CreateRoomRequest request) {
@@ -938,7 +908,7 @@ class RoomServiceTest {
             Long deadline = roomBefore.getInactivityDeadlineEpochMs();
             assertThat(deadline).isNotNull();
 
-            clockEpochMs.set(deadline + 10_000L);
+            clock.setMillis(deadline + 10_000L);
             assertThat(roomService.isLobbyExpired(roomBefore)).isTrue();
 
             Room roomLookedUp = coordinatedGetRoom(roomId);
@@ -967,7 +937,7 @@ class RoomServiceTest {
             assertThat(roomService.checkAndCloseIfExpired(roomId)).isFalse();
             assertThat(coordinatedGetRoom(roomId)).isNotNull();
 
-            clockEpochMs.set(deadline + 5_000L);
+            clock.setMillis(deadline + 5_000L);
 
             assertThat(roomService.checkAndCloseIfExpired(roomId)).isTrue();
             assertThat(coordinatedGetRoom(roomId)).isNull();
@@ -1050,6 +1020,14 @@ class RoomServiceTest {
         roomService.destroyRoom(roomId);
 
         verify(eventPublisher).publishEvent(new RoomDestroyed(roomId));
+    }
+
+    @Test
+    @DisplayName("destroyRoom on a missing room does not publish room destruction")
+    void destroyRoom_MissingRoom_DoesNotPublishRoomDestroyed() {
+        roomService.destroyRoom("missing-room");
+
+        verify(eventPublisher, never()).publishEvent(any(RoomDestroyed.class));
     }
 
     @Test

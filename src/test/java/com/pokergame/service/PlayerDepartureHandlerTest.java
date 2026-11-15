@@ -28,11 +28,9 @@ import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.testutil.MutableClock;
 import com.pokergame.util.LockLease;
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -47,7 +45,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
@@ -94,8 +91,7 @@ class PlayerDepartureHandlerTest {
     @Mock
     private TaskScheduler taskScheduler;
 
-    private AtomicLong clockEpochMs;
-    private Clock mutableClock;
+    private MutableClock mutableClock;
     private RoomCoordinator roomCoordinator;
     private ActiveGameRegistry activeGames;
     private GameTimerRegistry timerRegistry;
@@ -109,8 +105,7 @@ class PlayerDepartureHandlerTest {
 
     @BeforeEach
     void setUp() {
-        clockEpochMs = new AtomicLong(BASE_EPOCH_MS);
-        mutableClock = createMutableClock(clockEpochMs);
+        mutableClock = new MutableClock(BASE_EPOCH_MS);
         testRoom = new Room(ROOM_ID, "Test Room", "Host", 6, 5, 10, 100, null);
         testRoom.addPlayer("Host");
         testRoom.addPlayer("Player2");
@@ -150,25 +145,6 @@ class PlayerDepartureHandlerTest {
         lifecycleRef.set(gameLifecycleService);
     }
 
-    private static Clock createMutableClock(AtomicLong epochMs) {
-        return new Clock() {
-            @Override
-            public ZoneId getZone() {
-                return ZoneOffset.UTC;
-            }
-
-            @Override
-            public Clock withZone(ZoneId zone) {
-                return this;
-            }
-
-            @Override
-            public Instant instant() {
-                return Instant.ofEpochMilli(epochMs.get());
-            }
-        };
-    }
-
     private void stubGameEndCapture() {
         Answer<GameEndResponse> buildResponse = invocation -> {
             Game game = invocation.getArgument(0);
@@ -186,7 +162,7 @@ class PlayerDepartureHandlerTest {
                     maxPlayers, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(),
                     players, null, null, List.of(winner.getName()), null, false, null, false, null,
                     false, null, true, null, List.of(), null, null, 1, ReadyGateState.CLOSED,
-                    clockEpochMs.get(), game != null ? game.getStateRevision() : 1);
+                    mutableClock.millis(), game != null ? game.getStateRevision() : 1);
             return new GameEndResponse(
                     "GAME_END", game != null ? game.getGameId() : ROOM_ID,
                     winner.getName(), winner.getChips(), forfeit,
@@ -779,7 +755,7 @@ class PlayerDepartureHandlerTest {
             when(roomService.getRoom(inactiveRoomId)).thenReturn(inactiveRoom);
             gameLifecycleService.createGameFromRoom(inactiveRoomId);
             Game inactiveGame = getGameLocked(inactiveRoomId);
-            clockEpochMs.set(inactiveRoom.getInactivityDeadlineEpochMs());
+            mutableClock.setMillis(inactiveRoom.getInactivityDeadlineEpochMs());
             reset(roomService);
             when(roomService.getRoom(inactiveRoomId)).thenReturn(inactiveRoom);
 

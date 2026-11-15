@@ -42,8 +42,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Supplier;
 
+import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -97,7 +97,7 @@ class HttpSecurityIT {
     @AfterEach
     void tearDown() {
         for (String roomId : List.copyOf(trackedRoomIds)) {
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 gameLifecycleService.evictGame(roomId);
                 roomService.destroyRoom(roomId);
                 return null;
@@ -109,12 +109,6 @@ class HttpSecurityIT {
 
     private static String uniqueName(String prefix) {
         return prefix + "-" + UNIQUE_COUNTER.incrementAndGet();
-    }
-
-    private <T> T withRoomLock(String roomId, Supplier<T> action) {
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            return action.get();
-        }
     }
 
     private JsonNode createRoom(String roomName, String hostName, int maxPlayers) throws Exception {
@@ -275,7 +269,7 @@ class HttpSecurityIT {
             roomService.createRoom(roomId, new CreateRoomRequest(
                     uniqueName("SecureLeave"), "TestHost", 6, 10, 20, 1000, null));
             trackedRoomIds.add(roomId);
-            String membershipId = withRoomLock(roomId, () -> roomService.getRoom(roomId).getMembershipId("TestHost"));
+            String membershipId = withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId).getMembershipId("TestHost"));
             String validToken = jwtService.generateToken("TestHost", roomId, membershipId);
 
             HttpClientErrorException invalid = assertThrows(HttpClientErrorException.class, () -> restClient.post()
@@ -523,7 +517,7 @@ class HttpSecurityIT {
                 }
 
                 assertThat(lateJoin.get(5, TimeUnit.SECONDS)).isInstanceOf(BadRequestException.class);
-                withRoomLock(roomId, () -> {
+                withRoomLock(roomCoordinator, roomId, () -> {
                     Room room = roomService.getRoom(roomId);
                     Game game = gameLifecycleService.getGame(roomId);
                     assertThat(room.isGameStarted()).isTrue();
@@ -544,7 +538,7 @@ class HttpSecurityIT {
             String roomId = UUID.randomUUID().toString();
             roomService.createRoom(roomId, new CreateRoomRequest(roomName, "Host", 6, 10, 20, 1000, null));
             trackedRoomIds.add(roomId);
-            String hostMembership = withRoomLock(roomId, () -> roomService.getRoom(roomId).getMembershipId("Host"));
+            String hostMembership = withRoomLock(roomCoordinator, roomId, () -> roomService.getRoom(roomId).getMembershipId("Host"));
 
             try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
                 Future<Throwable> start;
@@ -567,7 +561,7 @@ class HttpSecurityIT {
                 }
 
                 assertThat(start.get(5, TimeUnit.SECONDS)).isNull();
-                withRoomLock(roomId, () -> {
+                withRoomLock(roomCoordinator, roomId, () -> {
                     Room room = roomService.getRoom(roomId);
                     Game game = gameLifecycleService.getGame(roomId);
                     assertThat(room.isGameStarted()).isTrue();

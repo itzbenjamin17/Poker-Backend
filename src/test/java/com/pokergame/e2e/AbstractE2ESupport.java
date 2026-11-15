@@ -8,7 +8,7 @@ import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
-import com.pokergame.util.LockLease;
+import com.pokergame.testutil.TestRoomLocks;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -67,7 +67,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
                 "poker.lifecycle.game-end-display-delay-ms=1000"
         })
 @ActiveProfiles("test")
-public abstract class AbstractE2ETest {
+public abstract class AbstractE2ESupport {
 
     protected static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(15);
     protected static final String FRONTEND_ORIGIN = "http://localhost:5173";
@@ -145,9 +145,7 @@ public abstract class AbstractE2ETest {
     }
 
     protected <T> T withRoomLock(String roomId, Supplier<T> action) {
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            return action.get();
-        }
+        return TestRoomLocks.withRoomLock(roomCoordinator, roomId, action);
     }
 
     protected JsonNode createRoom(String roomName, String hostName, int maxPlayers) throws Exception {

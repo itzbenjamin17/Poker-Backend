@@ -21,7 +21,6 @@ import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
 import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
-import com.pokergame.util.LockLease;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -47,8 +46,8 @@ import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
-import java.util.function.Supplier;
 
+import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
@@ -86,13 +85,6 @@ class PersistenceRestartIT {
                         "--poker.persistence.current-key-id=current",
                         "--poker.persistence.keys.current=" + key,
                         "--poker.rate-limiting.enabled=false");
-    }
-
-    private <T> T withRoomLock(ConfigurableApplicationContext context, String roomId, Supplier<T> action) {
-        RoomCoordinator coordinator = context.getBean(RoomCoordinator.class);
-        try (LockLease _ = coordinator.acquire(roomId)) {
-            return action.get();
-        }
     }
 
     private SessionConnectEvent connectEvent(

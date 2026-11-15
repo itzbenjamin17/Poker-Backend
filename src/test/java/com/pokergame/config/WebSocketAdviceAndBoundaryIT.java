@@ -15,7 +15,6 @@ import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
-import com.pokergame.util.LockLease;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -58,9 +57,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Supplier;
 import java.util.stream.Stream;
 
+import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -133,19 +132,13 @@ class WebSocketAdviceAndBoundaryIT {
         }
         trackedClients.clear();
         for (String roomId : List.copyOf(trackedRoomIds)) {
-            withRoomLock(roomId, () -> {
+            withRoomLock(roomCoordinator, roomId, () -> {
                 gameLifecycleService.evictGame(roomId);
                 roomService.destroyRoom(roomId);
                 return null;
             });
         }
         trackedRoomIds.clear();
-    }
-
-    private <T> T withRoomLock(String roomId, Supplier<T> action) {
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            return action.get();
-        }
     }
 
     private StartedGameSession createStartedGame() {
@@ -155,7 +148,7 @@ class WebSocketAdviceAndBoundaryIT {
         roomService.createRoom(roomId, new CreateRoomRequest(roomName, HOST_NAME, 6, 10, 20, 1000, null));
         roomService.joinRoom(roomId, new JoinRoomRequest(roomName, OTHER_NAME, null));
 
-        StartedGameSession sessionInfo = withRoomLock(roomId, () -> {
+        StartedGameSession sessionInfo = withRoomLock(roomCoordinator, roomId, () -> {
             Room room = roomService.getRoom(roomId);
             room.setPlayerConnected(HOST_NAME, true);
             room.setPlayerConnected(OTHER_NAME, true);
@@ -170,7 +163,7 @@ class WebSocketAdviceAndBoundaryIT {
     }
 
     private String currentPlayerName(String roomId) {
-        return withRoomLock(roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
+        return withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
     }
 
     private JsonNode readGameState(String gameId, String token) throws Exception {
@@ -387,7 +380,7 @@ class WebSocketAdviceAndBoundaryIT {
             assertThat(error.action()).isEqualTo(RejectedAction.RAISE);
             assertThat(error.message()).isEqualTo("Amount cannot exceed 10,000,000");
 
-            withRoomLock(gameSession.roomId(), () -> {
+            withRoomLock(roomCoordinator, gameSession.roomId(), () -> {
                 Game game = gameLifecycleService.getGame(gameSession.roomId());
                 assertThat(game.getCurrentPlayer().getName()).isEqualTo(currentPlayer);
                 return null;

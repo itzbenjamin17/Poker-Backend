@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 @Tag("e2e")
 @DisplayName("Room lobby E2E")
-class RoomLobbyE2E extends AbstractE2ETest {
+class RoomLobbyE2E extends AbstractE2ESupport {
 
     @Nested
     @DisplayName("room lifecycle")

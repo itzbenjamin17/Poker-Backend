@@ -1,6 +1,7 @@
 package com.pokergame.persistence.transaction;
 
 import com.pokergame.config.RoomTimingProperties;
+import com.pokergame.model.Room;
 import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.service.event.RoomDestroyed;
@@ -64,17 +65,7 @@ class PostSaveActionsTest {
     @Test
     void roomDestroyedEventPublishesOnlyAfterSaveExecutesAll() {
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
-        @SuppressWarnings("unchecked")
-        ObjectProvider<RoomService> selfProvider = mock(ObjectProvider.class);
-        RoomService rooms = new RoomService(
-                mock(SimpMessagingTemplate.class),
-                publisher,
-                mock(PasswordEncoder.class),
-                new RoomCoordinator(),
-                Clock.systemUTC(),
-                mock(TaskScheduler.class),
-                new RoomTimingProperties(60_000L),
-                selfProvider);
+        RoomService rooms = roomServiceWithRoom("room-1", publisher);
 
         PostSaveActions.begin("room-1");
         rooms.destroyRoom("room-1");
@@ -88,6 +79,17 @@ class PostSaveActionsTest {
     @Test
     void discardedSaveDropsQueuedRoomDestroyedEvent() {
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        RoomService rooms = roomServiceWithRoom("room-1", publisher);
+
+        PostSaveActions.begin("room-1");
+        rooms.destroyRoom("room-1");
+        PostSaveActions.clear();
+
+        assertThat(PostSaveActions.currentRoomId()).isNull();
+        verifyNoInteractions(publisher);
+    }
+
+    private static RoomService roomServiceWithRoom(String roomId, ApplicationEventPublisher publisher) {
         @SuppressWarnings("unchecked")
         ObjectProvider<RoomService> selfProvider = mock(ObjectProvider.class);
         RoomService rooms = new RoomService(
@@ -99,12 +101,9 @@ class PostSaveActionsTest {
                 mock(TaskScheduler.class),
                 new RoomTimingProperties(60_000L),
                 selfProvider);
-
-        PostSaveActions.begin("room-1");
-        rooms.destroyRoom("room-1");
-        PostSaveActions.clear();
-
-        assertThat(PostSaveActions.currentRoomId()).isNull();
-        verifyNoInteractions(publisher);
+        Room room = new Room(roomId, "Lobby", "Host", 6, 5, 10, 1000, null);
+        room.addPlayer("Host");
+        rooms.restoreRoom(room, "Host");
+        return rooms;
     }
 }

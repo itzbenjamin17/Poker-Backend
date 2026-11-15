@@ -1,7 +1,6 @@
 package com.pokergame.service;
 
 import com.pokergame.enums.ScheduledGameTask;
-import com.pokergame.util.VisibleForTesting;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Map;
@@ -112,26 +111,6 @@ class GameTimerRegistry {
                 registration.cancel();
             }
         });
-    }
-
-    /**
-     * Returns the number of active runtime timer registrations currently tracked for {@code gameId}.
-     *
-     * @param gameId the room/game ID
-     * @return active scheduled entry count for {@code gameId}
-     */
-    @VisibleForTesting
-    int activeTaskCount(String gameId) {
-        if (gameId == null) {
-            return 0;
-        }
-        int count = 0;
-        for (RuntimeTaskKey key : runtimeTasks.keySet()) {
-            if (gameId.equals(key.gameId())) {
-                count++;
-            }
-        }
-        return count;
     }
 
     private void register(RuntimeTaskKey key, Instant executionTime, Runnable callback) {
