@@ -137,7 +137,7 @@ final class TableSeating {
                 continue;
             }
             Player candidate = activePlayers.get(activeIndex);
-            if (!candidate.getHasFolded() && !candidate.getIsAllIn() && !candidate.getIsOut()) {
+            if (candidate.canAct()) {
                 currentPlayerPosition = activeIndex;
                 return;
             }

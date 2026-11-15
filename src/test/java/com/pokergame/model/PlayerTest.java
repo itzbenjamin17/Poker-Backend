@@ -8,6 +8,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import com.pokergame.exception.BadRequestException;
 import java.util.HashSet;
 import java.util.List;
@@ -347,5 +349,42 @@ class PlayerTest {
         assertTrue(restored.getIsDisconnected());
         assertEquals(123456789L, restored.getDisconnectDeadlineEpochMs());
         assertTrue(restored.getIsReadyForNextHand());
+    }
+
+    @ParameterizedTest(name = "hasFolded={0}, isOut={1}, isAllIn={2} -> isInHand={3}, canAct={4}")
+    @CsvSource({
+            "false, false, false, true,  true",
+            "false, false, true,  true,  false",
+            "false, true,  false, false, false",
+            "false, true,  true,  false, false",
+            "true,  false, false, false, false",
+            "true,  false, true,  false, false",
+            "true,  true,  false, false, false",
+            "true,  true,  true,  false, false"
+    })
+    void testIsInHandAndCanActFlagCombinations(
+            boolean hasFolded,
+            boolean isOut,
+            boolean isAllIn,
+            boolean expectedInHand,
+            boolean expectedCanAct) {
+        Player candidate = Player.restoreBuilder()
+                .name("Alice")
+                .playerId("p1")
+                .holeCards(List.of())
+                .bestHand(List.of())
+                .handRank(HandRank.NO_HAND)
+                .chips(isAllIn ? 0 : 500)
+                .currentBet(0)
+                .hasFolded(hasFolded)
+                .allIn(isAllIn)
+                .out(isOut)
+                .disconnected(false)
+                .disconnectDeadlineEpochMs(null)
+                .readyForNextHand(false)
+                .build();
+
+        assertEquals(expectedInHand, candidate.isInHand());
+        assertEquals(expectedCanAct, candidate.canAct());
     }
 }

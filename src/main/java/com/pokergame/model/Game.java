@@ -456,7 +456,7 @@ public class Game {
         currentPhase = GamePhase.SHOWDOWN;
 
         List<Player> showdownPlayers = activePlayers.stream()
-                .filter(p -> !p.getHasFolded() && !p.getIsOut())
+                .filter(Player::isInHand)
                 .toList();
 
         logger.info("Showdown players: {}, Current pot: {}",
@@ -1035,7 +1035,7 @@ public class Game {
     }
 
     private boolean isHandOver() {
-        return activePlayers.stream().filter(p -> !p.getHasFolded() && !p.getIsOut()).count() <= 1;
+        return activePlayers.stream().filter(Player::isInHand).count() <= 1;
     }
 
     private List<Player> distributeSidePotsAtShowdown(List<Player> showdownPlayers) {

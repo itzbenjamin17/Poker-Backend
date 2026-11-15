@@ -77,7 +77,7 @@ final class ShowdownResolver {
                     .findFirst()
                     .orElse(null);
 
-            if (player == null || player.getHasFolded() || player.getIsOut() || entry.getValue() <= 0) {
+            if (player == null || !player.isInHand() || entry.getValue() <= 0) {
                 continue;
             }
 

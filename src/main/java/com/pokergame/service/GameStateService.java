@@ -156,7 +156,7 @@ public class GameStateService {
 
         List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
             boolean isWinner = winnerIds.contains(player.getPlayerId());
-            boolean isActive = !player.getHasFolded() && !player.getIsOut();
+            boolean isActive = player.isInHand();
             return toPublicPlayerState(
                     player,
                     false,
@@ -463,7 +463,7 @@ public class GameStateService {
         boolean contestedShowdown = game.getCurrentPhase() == GamePhase.SHOWDOWN
                 && handSettled
                 && game.getActivePlayers().stream()
-                        .filter(player -> !player.getHasFolded() && !player.getIsOut())
+                        .filter(Player::isInHand)
                         .count() > 1;
         boolean revealHoleCards = !isForfeit && contestedShowdown;
 
@@ -472,7 +472,7 @@ public class GameStateService {
 
         List<PublicPlayerState> playerStates = game.getPlayers().stream().map(player -> {
             boolean isWinner = winner.equals(player);
-            boolean isActive = !player.getHasFolded() && !player.getIsOut();
+            boolean isActive = player.isInHand();
             return toPublicPlayerState(
                     player,
                     false,
@@ -551,7 +551,7 @@ public class GameStateService {
 
         List<PublicPlayerState> playerStates = new ArrayList<>();
         for (Player player : game.getPlayers()) {
-            boolean isActive = !player.getHasFolded() && !player.getIsOut();
+            boolean isActive = player.isInHand();
             Boolean isWinner = handSettled ? settledWinnerIds.contains(player.getPlayerId()) : null;
             Integer chipsWon = handSettled
                     ? settledAwards.getOrDefault(player.getPlayerId(), 0)

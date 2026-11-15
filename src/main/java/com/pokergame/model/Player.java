@@ -345,6 +345,24 @@ public class Player {
     }
 
     /**
+     * Returns whether the player is still contesting the current hand (has not folded and is not out).
+     *
+     * @return {@code true} if the player is still in the hand
+     */
+    public boolean isInHand() {
+        return !hasFolded && !isOut;
+    }
+
+    /**
+     * Returns whether the player can still take betting actions in the current hand (in the hand and not all-in).
+     *
+     * @return {@code true} if the player can still act
+     */
+    public boolean canAct() {
+        return isInHand() && !isAllIn;
+    }
+
+    /**
      * Returns whether the player is currently disconnected and waiting to
      * reconnect.
      *

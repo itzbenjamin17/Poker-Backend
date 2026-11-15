@@ -112,7 +112,7 @@ final class BettingRound {
         PlayerDecision actualDecision = decision;
         String conversionMessage = null;
 
-        if (player == null || player.getHasFolded() || player.getIsOut() || player.getIsAllIn()) {
+        if (player == null || !player.canAct()) {
             throw new UnauthorisedActionException(
                     "Player cannot act in the current hand", "ACTION_NOT_AVAILABLE", "Player is not eligible to act");
         }
@@ -252,11 +252,11 @@ final class BettingRound {
      */
     void reconcileHighestBetAfterRemoval(List<Player> activePlayers) {
         long actionable = activePlayers.stream()
-                .filter(p -> !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn() && p.getChips() > 0)
+                .filter(p -> p.canAct() && p.getChips() > 0)
                 .count();
         if (actionable <= 1) {
             currentHighestBet = activePlayers.stream()
-                    .filter(p -> !p.getHasFolded() && !p.getIsOut())
+                    .filter(Player::isInHand)
                     .mapToInt(Player::getCurrentBet)
                     .max()
                     .orElse(0);
@@ -335,9 +335,7 @@ final class BettingRound {
             int bigBlind) {
         if (player == null
                 || !players.contains(player)
-                || player.getHasFolded()
-                || player.getIsOut()
-                || player.getIsAllIn()
+                || !player.canAct()
                 || phase == GamePhase.SHOWDOWN
                 || activePlayers.isEmpty()) {
             return List.of();
@@ -368,7 +366,7 @@ final class BettingRound {
      * @return {@code true} if turn rotation should advance past this player
      */
     static boolean needsNextActor(Player player) {
-        return player.getHasFolded() || player.getIsOut() || player.getIsAllIn();
+        return !player.canAct();
     }
 
     /**
@@ -383,7 +381,7 @@ final class BettingRound {
             return false;
         }
         return activePlayers.stream()
-                .anyMatch(p -> !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn() && p.getCurrentBet() < highestBet);
+                .anyMatch(p -> p.canAct() && p.getCurrentBet() < highestBet);
     }
 
     int getCurrentHighestBet() {
@@ -412,14 +410,14 @@ final class BettingRound {
 
     private boolean allActionablePlayersActed(List<Player> activePlayers) {
         List<Player> actionable = activePlayers.stream()
-                .filter(p -> !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn())
+                .filter(Player::canAct)
                 .toList();
         return !actionable.isEmpty() && actionable.stream().allMatch(p -> actedPlayersInRound.contains(p.getPlayerId()));
     }
 
     private boolean shouldAutoRunout(List<Player> activePlayers) {
         long actionable = activePlayers.stream()
-                .filter(p -> !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn())
+                .filter(Player::canAct)
                 .count();
         return actionable <= 1 && !hasActionablePlayerOwingCall(activePlayers, currentHighestBet);
     }
@@ -427,7 +425,7 @@ final class BettingRound {
     private boolean isComplete(List<Player> activePlayers) {
         boolean owed = hasActionablePlayerOwingCall(activePlayers, currentHighestBet);
         long actionable = activePlayers.stream()
-                .filter(p -> !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn())
+                .filter(Player::canAct)
                 .count();
         return (actionable <= 1 || allPlayersHadInitialTurn) && !owed;
     }
@@ -443,7 +441,7 @@ final class BettingRound {
 
     private static boolean hasOtherActionableOpponent(List<Player> activePlayers, Player player) {
         return activePlayers.stream()
-                .anyMatch(p -> p != player && !p.getHasFolded() && !p.getIsOut() && !p.getIsAllIn() && p.getChips() > 0);
+                .anyMatch(p -> p != player && p.canAct() && p.getChips() > 0);
     }
 
     /** Outcome of normalizing a requested player decision against stack and bet limits. */

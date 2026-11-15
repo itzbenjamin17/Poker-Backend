@@ -82,7 +82,7 @@ final class PotCalculator {
         List<Player> safeActivePlayers = (activePlayers == null) ? List.of() : activePlayers;
         List<Player> contenders = (eligibleHandContenders != null && !eligibleHandContenders.isEmpty())
                 ? eligibleHandContenders
-                : safeActivePlayers.stream().filter(p -> !p.getHasFolded() && !p.getIsOut()).toList();
+                : safeActivePlayers.stream().filter(Player::isInHand).toList();
 
         Map<String, Integer> contributions = ledger.entrySet().stream()
                 .filter(entry -> entry.getValue() != null && entry.getValue() > 0)
@@ -123,7 +123,7 @@ final class PotCalculator {
                 if (contributorIds.size() == 1) {
                     String ownerId = contributorIds.getFirst();
                     Player owner = allPlayers.stream()
-                            .filter(p -> p.getPlayerId().equals(ownerId) && !p.getHasFolded() && !p.getIsOut())
+                            .filter(p -> p.getPlayerId().equals(ownerId) && p.isInHand())
                             .findFirst()
                             .orElse(null);
                     if (owner != null) {
@@ -137,7 +137,7 @@ final class PotCalculator {
                 }
 
                 List<Player> eligiblePlayers = participants.stream()
-                        .filter(player -> !player.getHasFolded() && !player.getIsOut())
+                        .filter(Player::isInHand)
                         .toList();
 
                 if (!eligiblePlayers.isEmpty()) {
@@ -162,7 +162,7 @@ final class PotCalculator {
         }
         if (carryOverPot > 0) {
             List<Player> eligible = safeActivePlayers.stream()
-                    .filter(p -> !p.getHasFolded() && !p.getIsOut())
+                    .filter(Player::isInHand)
                     .toList();
             if (eligible.isEmpty() && !contenders.isEmpty()) {
                 eligible = contenders;
@@ -233,12 +233,12 @@ final class PotCalculator {
         if (BettingRound.hasActionablePlayerOwingCall(safeActivePlayers, currentHighestBet)) {
             int maxAllInCap = safeContributions.entrySet().stream()
                     .filter(entry -> safeActivePlayers.stream().anyMatch(player -> player.getPlayerId().equals(entry.getKey())
-                            && player.getIsAllIn() && !player.getHasFolded() && !player.getIsOut()))
+                            && player.getIsAllIn() && player.isInHand()))
                     .mapToInt(Map.Entry::getValue)
                     .max()
                     .orElse(0);
-            boolean owingBelowCap = safeActivePlayers.stream().anyMatch(player -> !player.getHasFolded()
-                    && !player.getIsOut() && !player.getIsAllIn() && currentHighestBet > player.getCurrentBet()
+            boolean owingBelowCap = safeActivePlayers.stream().anyMatch(player -> player.canAct()
+                    && currentHighestBet > player.getCurrentBet()
                     && safeContributions.getOrDefault(player.getPlayerId(), 0) < maxAllInCap);
             if (owingBelowCap || maxAllInCap == 0) {
                 return List.of(pot);
@@ -246,7 +246,7 @@ final class PotCalculator {
 
             List<Integer> caps = safeContributions.entrySet().stream()
                     .filter(entry -> safeActivePlayers.stream().anyMatch(player -> player.getPlayerId().equals(entry.getKey())
-                            && player.getIsAllIn() && !player.getHasFolded() && !player.getIsOut()))
+                            && player.getIsAllIn() && player.isInHand()))
                     .map(Map.Entry::getValue)
                     .distinct()
                     .sorted()
@@ -370,7 +370,7 @@ final class PotCalculator {
             List<Player> tablePlayers,
             String gameId) {
         List<Player> eligibleContenders = activePlayers.stream()
-                .filter(p -> !p.getHasFolded() && !p.getIsOut())
+                .filter(Player::isInHand)
                 .toList();
         return computePotAllocationsAndUncalled(
                 pot, carryOverPot, handContributions, activePlayers, tablePlayers, eligibleContenders, gameId);
