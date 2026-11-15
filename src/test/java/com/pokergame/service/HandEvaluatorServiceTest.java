@@ -3,7 +3,6 @@ package com.pokergame.service;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
-import com.pokergame.exception.BadRequestException;
 import com.pokergame.model.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -305,8 +304,8 @@ class HandEvaluatorServiceTest {
                                 new Card(Rank.ACE, Suit.SPADES),
                                 new Card(Rank.KING, Suit.HEARTS));
 
-                BadRequestException exception = assertThrows(
-                                BadRequestException.class,
+                IllegalStateException exception = assertThrows(
+                                IllegalStateException.class,
                                 () -> service.evaluateHand(tooFewCards));
                 assertTrue(exception.getMessage().contains("Invalid number of cards"));
         }

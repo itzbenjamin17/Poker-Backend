@@ -6,7 +6,6 @@ import com.pokergame.enums.Suit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import com.pokergame.exception.BadRequestException;
 import java.util.ArrayList;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
@@ -76,10 +75,10 @@ class HandEvaluationResultTest {
          */
         @Test
         void testNullBestHandThrowsException() {
-                BadRequestException exception = assertThrows(
-                                BadRequestException.class,
+                IllegalStateException exception = assertThrows(
+                                IllegalStateException.class,
                                 () -> new HandEvaluationResult(null, HandRank.HIGH_CARD));
-                assertEquals("An error occured evaluating hand. Please try again.", exception.getMessage());
+                assertEquals("An error occurred evaluating hand. Please try again.", exception.getMessage());
         }
 
         /**
@@ -91,10 +90,10 @@ class HandEvaluationResultTest {
                                 new Card(Rank.ACE, Suit.SPADES),
                                 new Card(Rank.KING, Suit.HEARTS));
 
-                BadRequestException exception = assertThrows(
-                                BadRequestException.class,
+                IllegalStateException exception = assertThrows(
+                                IllegalStateException.class,
                                 () -> new HandEvaluationResult(hand, null));
-                assertEquals("An error occured evaluating hand. Please try again.", exception.getMessage());
+                assertEquals("An error occurred evaluating hand. Please try again.", exception.getMessage());
         }
 
         /**
@@ -103,7 +102,7 @@ class HandEvaluationResultTest {
         @Test
         void testBothNullThrowsException() {
                 assertThrows(
-                                BadRequestException.class,
+                                IllegalStateException.class,
                                 () -> new HandEvaluationResult(null, null));
         }
 

@@ -77,6 +77,20 @@ class RoomControllerIT {
         verifyNoInteractions(roomService);
     }
 
+    /** Invalid blind/buy-in ratios return HTTP 400 at validation before service invocation. */
+    @Test
+    void invalidBlindAndBuyInRatiosReturnBadRequestBeforeServiceInvocation() throws Exception {
+        mockMvc.perform(post("/api/room/create").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateRoomRequest(
+                                "Room", "Host", 4, 10, 15, 100, null))))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/room/create").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateRoomRequest(
+                                "Room", "Host", 4, 10, 50, 30, null))))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(roomService);
+    }
+
     @Autowired
     private MockMvc mockMvc;
 

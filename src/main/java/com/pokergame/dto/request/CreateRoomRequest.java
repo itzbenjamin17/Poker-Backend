@@ -163,6 +163,28 @@ public class CreateRoomRequest {
     }
 
     /**
+     * Reports whether the big blind is at least twice the small blind.
+     *
+     * @return {@code true} when either blind is missing or {@code bigBlind >= 2 * smallBlind}
+     */
+    @JsonIgnore
+    @AssertTrue(message = "Big blind must be at least twice the small blind.")
+    public boolean isBigBlindAtLeastTwiceSmallBlind() {
+        return smallBlind == null || bigBlind == null || bigBlind >= 2L * smallBlind;
+    }
+
+    /**
+     * Reports whether the buy-in covers at least one big blind.
+     *
+     * @return {@code true} when either value is missing or {@code buyIn >= bigBlind}
+     */
+    @JsonIgnore
+    @AssertTrue(message = "Buy-in must be at least the big blind amount.")
+    public boolean isBuyInAtLeastBigBlind() {
+        return bigBlind == null || buyIn == null || buyIn >= bigBlind;
+    }
+
+    /**
      * Reports whether the request protects the room with a non-blank password.
      *
      * @return {@code true} when a password was supplied

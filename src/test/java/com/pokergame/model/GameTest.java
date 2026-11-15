@@ -227,37 +227,47 @@ class GameTest {
 
         @Test
         void testGameCreationValidationRejectsInvalidInputs() {
-            BadRequestException nullId = assertThrows(BadRequestException.class,
+            IllegalStateException nullId = assertThrows(IllegalStateException.class,
                     () -> new Game(null, players, 3, 10, 20, mockHandEvaluator));
             assertEquals("Game ID cannot be null or empty", nullId.getMessage());
 
-            BadRequestException blankId = assertThrows(BadRequestException.class,
+            IllegalStateException blankId = assertThrows(IllegalStateException.class,
                     () -> new Game("   ", players, 3, 10, 20, mockHandEvaluator));
             assertEquals("Game ID cannot be null or empty", blankId.getMessage());
 
             List<Player> onePlayer = List.of(new Player("Solo", "p1", 1000));
-            BadRequestException tooFew = assertThrows(BadRequestException.class,
+            IllegalStateException tooFew = assertThrows(IllegalStateException.class,
                     () -> new Game("game123", onePlayer, 2, 10, 20, mockHandEvaluator));
             assertEquals("At least 2 players are required to start a game", tooFew.getMessage());
 
-            BadRequestException nullList = assertThrows(BadRequestException.class,
+            IllegalStateException nullList = assertThrows(IllegalStateException.class,
                     () -> new Game("game123", null, 2, 10, 20, mockHandEvaluator));
             assertEquals("At least 2 players are required to start a game", nullList.getMessage());
 
             List<Player> playersWithNull = new ArrayList<>();
             playersWithNull.add(new Player("Player1", "p1", 1000));
             playersWithNull.add(null);
-            BadRequestException nullElement = assertThrows(BadRequestException.class,
+            IllegalStateException nullElement = assertThrows(IllegalStateException.class,
                     () -> new Game("game123", playersWithNull, 2, 10, 20, mockHandEvaluator));
             assertEquals("Invalid players list. Please try again.", nullElement.getMessage());
 
-            BadRequestException lowMax = assertThrows(BadRequestException.class,
+            IllegalStateException lowMax = assertThrows(IllegalStateException.class,
                     () -> new Game("game123", players, 1, 10, 20, mockHandEvaluator));
             assertEquals("Max players must be between 2 and 10.", lowMax.getMessage());
 
-            BadRequestException highMax = assertThrows(BadRequestException.class,
+            IllegalStateException highMax = assertThrows(IllegalStateException.class,
                     () -> new Game("game123", players, 11, 10, 20, mockHandEvaluator));
             assertEquals("Max players must be between 2 and 10.", highMax.getMessage());
+        }
+
+        @Test
+        void processPlayerDecisionRejectsNullDecisionWithIllegalStateException() {
+            game.postBlinds();
+            Player player = game.getActivePlayers().getFirst();
+
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> game.processPlayerDecision(player, null));
+            assertEquals("Invalid player action", ex.getMessage());
         }
 
         @Test
@@ -607,16 +617,17 @@ class GameTest {
             invalidRaiseGame.postBlinds();
             Player badRaiser = invalidRaiseGame.getActivePlayers().getFirst();
             badRaiser.doAction(PlayerAction.BET, 10, 0);
-            assertThrows(UnauthorisedActionException.class, () ->
+            BadRequestException nonIncreasing = assertThrows(BadRequestException.class, () ->
                     invalidRaiseGame.processPlayerDecision(
                             badRaiser, new PlayerDecision(PlayerAction.RAISE, 5, badRaiser.getPlayerId())));
+            assertEquals("MIN_RAISE", nonIncreasing.actionErrorCode());
         }
 
         @Test
         void nonIncreasingRaiseReportsFullIncrementalMinimum() {
             game.postBlinds();
             Player player = game.getActivePlayers().getFirst();
-            UnauthorisedActionException exception = assertThrows(UnauthorisedActionException.class, () ->
+            BadRequestException exception = assertThrows(BadRequestException.class, () ->
                     game.processPlayerDecision(player, new PlayerDecision(PlayerAction.RAISE, 1, player.getPlayerId())));
             assertEquals("MIN_RAISE", exception.actionErrorCode());
             assertEquals("Min raise: 40; yours: 1", exception.actionErrorMessage());
@@ -636,7 +647,7 @@ class GameTest {
             assertEquals(80, hand.getMinimumRaiseAmount(b));
 
             int bChipsBefore = b.getChips();
-            UnauthorisedActionException tooSmall = assertThrows(UnauthorisedActionException.class, () ->
+            BadRequestException tooSmall = assertThrows(BadRequestException.class, () ->
                     hand.processPlayerDecision(b, new PlayerDecision(PlayerAction.RAISE, 10, "b")));
             assertEquals("MIN_RAISE", tooSmall.actionErrorCode());
             assertEquals(bChipsBefore, b.getChips());

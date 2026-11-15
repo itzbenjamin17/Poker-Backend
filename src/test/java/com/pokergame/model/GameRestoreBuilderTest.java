@@ -4,7 +4,6 @@ import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.*;
-import com.pokergame.exception.BadRequestException;
 import com.pokergame.service.HandEvaluatorService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -192,7 +191,7 @@ class GameRestoreBuilderTest {
                 .players(List.of(p1, p2))
                 .activePlayerIds(List.of("p1", "unknown-player-id"));
 
-        BadRequestException ex = assertThrows(BadRequestException.class, builder::build);
+        IllegalStateException ex = assertThrows(IllegalStateException.class, builder::build);
         assertEquals("Snapshot references an unknown active player", ex.getMessage());
     }
 
@@ -209,7 +208,7 @@ class GameRestoreBuilderTest {
                 .players(List.of(p1, p2))
                 .activePlayerIds(List.of("p1", "p2"));
 
-        BadRequestException ex = assertThrows(BadRequestException.class, builder::build);
+        IllegalStateException ex = assertThrows(IllegalStateException.class, builder::build);
         assertEquals("Game ID cannot be null or empty", ex.getMessage());
     }
 
@@ -225,7 +224,7 @@ class GameRestoreBuilderTest {
                 .players(playersWithNull)
                 .activePlayerIds(List.of("p1"));
 
-        BadRequestException ex = assertThrows(BadRequestException.class, builder::build);
+        IllegalStateException ex = assertThrows(IllegalStateException.class, builder::build);
         assertEquals("Invalid players list. Please try again.", ex.getMessage());
     }
 
@@ -678,7 +677,7 @@ class GameRestoreBuilderTest {
             // Mutate list before calling build() by injecting a null
             players.add(null);
 
-            BadRequestException ex = assertThrows(BadRequestException.class, builder::build);
+            IllegalStateException ex = assertThrows(IllegalStateException.class, builder::build);
             assertEquals("Invalid players list. Please try again.", ex.getMessage());
         }
 
@@ -719,7 +718,7 @@ class GameRestoreBuilderTest {
         // =========================================================================
 
         @Test
-        @DisplayName("activePlayerIds_UnknownId_ThrowsBadRequestException")
+        @DisplayName("activePlayerIds_UnknownId_ThrowsIllegalStateException")
         void testActivePlayerIds_UnknownIdThrows() {
             Player p1 = player("p1", "Alice", 1000);
             Player p2 = player("p2", "Bob", 1000);
@@ -728,12 +727,12 @@ class GameRestoreBuilderTest {
                     .players(List.of(p1, p2))
                     .activePlayerIds(List.of("p1", "p_NON_EXISTENT"));
 
-            BadRequestException ex = assertThrows(BadRequestException.class, builder::build);
+            IllegalStateException ex = assertThrows(IllegalStateException.class, builder::build);
             assertEquals("Snapshot references an unknown active player", ex.getMessage());
         }
 
         @Test
-        @DisplayName("activePlayerIds_NullElement_ThrowsBadRequestException")
+        @DisplayName("activePlayerIds_NullElement_ThrowsIllegalStateException")
         void testActivePlayerIds_NullElementThrows() {
             Player p1 = player("p1", "Alice", 1000);
             Player p2 = player("p2", "Bob", 1000);
@@ -746,7 +745,7 @@ class GameRestoreBuilderTest {
                     .players(List.of(p1, p2))
                     .activePlayerIds(activeWithNull);
 
-            BadRequestException ex = assertThrows(BadRequestException.class, builder::build);
+            IllegalStateException ex = assertThrows(IllegalStateException.class, builder::build);
             assertEquals("Snapshot references an unknown active player", ex.getMessage());
         }
 
@@ -824,8 +823,8 @@ class GameRestoreBuilderTest {
                     .remainingDeck(List.of())
                     .build();
             assertTrue(emptyDeckGame.getRemainingDeckSnapshot().isEmpty());
-            // Attempting to deal card from empty deck must throw BadRequestException
-            assertThrows(BadRequestException.class, emptyDeckGame::dealTurn);
+            // Attempting to deal card from empty deck must throw IllegalStateException
+            assertThrows(IllegalStateException.class, emptyDeckGame::dealTurn);
 
             // Deck with 1 card
             Card singleCard = new Card(Rank.SEVEN, Suit.DIAMONDS);
@@ -844,7 +843,7 @@ class GameRestoreBuilderTest {
             assertTrue(singleCardGame.getRemainingDeckSnapshot().isEmpty());
 
             // Second deal must fail
-            assertThrows(BadRequestException.class, singleCardGame::dealRiver);
+            assertThrows(IllegalStateException.class, singleCardGame::dealRiver);
         }
 
         @Test

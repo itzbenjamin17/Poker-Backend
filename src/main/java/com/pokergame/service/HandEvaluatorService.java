@@ -10,7 +10,6 @@ import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
-import com.pokergame.exception.BadRequestException;
 
 import org.springframework.stereotype.Service;
 
@@ -77,12 +76,11 @@ public class HandEvaluatorService {
      *
      * @param cards the 5-card hand sorted by ascending card value
      * @return the evaluated {@link HandRank}
-     * @throws BadRequestException if {@code cards} does not contain exactly 5 cards
+     * @throws IllegalStateException if {@code cards} does not contain exactly 5 cards
      */
     public HandRank evaluateHand(List<Card> cards) {
         if (cards.size() != 5) {
-            logger.error("Invalid hand size: {}, expected 5", cards.size());
-            throw new BadRequestException("Invalid number of cards: " + cards.size());
+            throw new IllegalStateException("Invalid number of cards: " + cards.size());
         }
 
         if (isRoyalFlush(cards))

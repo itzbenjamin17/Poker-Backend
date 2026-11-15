@@ -106,8 +106,8 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithNullRoomId() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room(null, "Room", "Host", 6, 10, 20, 1000, null));
         assertEquals("Room ID cannot be null or empty.", exception.getMessage());
     }
@@ -117,8 +117,8 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithEmptyRoomId() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("   ", "Room", "Host", 6, 10, 20, 1000, null));
         assertEquals("Room ID cannot be null or empty.", exception.getMessage());
     }
@@ -128,8 +128,8 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithNullRoomName() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("room123", null, "Host", 6, 10, 20, 1000, null));
         assertEquals("Room name cannot be null or empty.", exception.getMessage());
     }
@@ -139,8 +139,8 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithEmptyRoomName() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("room123", "   ", "Host", 6, 10, 20, 1000, null));
         assertEquals("Room name cannot be null or empty.", exception.getMessage());
     }
@@ -150,8 +150,8 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithNullHostName() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("room123", "Room", null, 6, 10, 20, 1000, null));
         assertEquals("Host name cannot be null or empty.", exception.getMessage());
     }
@@ -161,8 +161,8 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithEmptyHostName() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("room123", "Room", "   ", 6, 10, 20, 1000, null));
         assertEquals("Host name cannot be null or empty.", exception.getMessage());
     }
@@ -172,8 +172,8 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithTooFewPlayers() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("room123", "Room", "Host", 1, 10, 20, 1000, null));
         assertEquals("Max players must be between 2 and 10.", exception.getMessage());
     }
@@ -183,8 +183,8 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithTooManyPlayers() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("room123", "Room", "Host", 11, 10, 20, 1000, null));
         assertEquals("Max players must be between 2 and 10.", exception.getMessage());
     }
@@ -212,8 +212,8 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithInvalidSmallBlind() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("room123", "Room", "Host", 6, 0, 20, 1000, null));
         assertEquals("Small blind must be at least 1.", exception.getMessage());
     }
@@ -223,8 +223,8 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithNegativeSmallBlind() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("room123", "Room", "Host", 6, -5, 20, 1000, null));
         assertEquals("Small blind must be at least 1.", exception.getMessage());
     }
@@ -234,8 +234,8 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithBigBlindLessThanSmallBlind() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("room123", "Room", "Host", 6, 20, 10, 1000, null));
         assertEquals("Big blind must be at least twice the small blind.", exception.getMessage());
     }
@@ -245,7 +245,7 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithBigBlindEqualToSmallBlind() {
-        assertThrows(BadRequestException.class, () -> new Room("room123", "Room", "Host", 6, 10, 10, 1000, null));
+        assertThrows(IllegalStateException.class, () -> new Room("room123", "Room", "Host", 6, 10, 10, 1000, null));
     }
 
     /**
@@ -524,8 +524,8 @@ class RoomTest {
      */
     @Test
     void testRoomRejectsZeroBuyIn() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("free", "Free Game", "Host", 6, 10, 20, 0, null));
 
         assertEquals("Buy-in must be at least the big blind amount.", exception.getMessage());
@@ -536,8 +536,8 @@ class RoomTest {
      */
     @Test
     void testRoomRejectsNegativeBuyIn() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Room("negative", "Negative Buy-in", "Host", 6, 10, 20, -100, null));
 
         assertEquals("Buy-in must be at least the big blind amount.", exception.getMessage());

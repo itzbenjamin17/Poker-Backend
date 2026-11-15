@@ -2,10 +2,7 @@ package com.pokergame.model;
 
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
-import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,7 +20,6 @@ import java.util.Objects;
  *
  */
 public class Player {
-    private static final Logger logger = LoggerFactory.getLogger(Player.class);
     private final String name;
     private final String playerId;
     private List<Card> holeCards;
@@ -44,19 +40,17 @@ public class Player {
      * @param name the player's name
      * @param playerId stable player identity
      * @param chips the starting number of chips for the player
+     * @throws IllegalStateException if {@code name}, {@code playerId}, or {@code chips} is invalid
      */
     public Player(String name, String playerId, int chips) {
         if (name == null || name.trim().isEmpty()) {
-            logger.error("Invalid player name: '{}'", name);
-            throw new BadRequestException("Player name required");
+            throw new IllegalStateException("Player name required");
         }
         if (chips < 0) {
-            logger.error("Invalid chips: {}", chips);
-            throw new BadRequestException("Chips cannot be negative");
+            throw new IllegalStateException("Chips cannot be negative");
         }
         if (playerId == null || playerId.trim().isEmpty()) {
-            logger.error("Invalid player ID: {}", playerId);
-            throw new BadRequestException("Player ID cannot be empty");
+            throw new IllegalStateException("Player ID cannot be empty");
         }
 
         this.name = name;
@@ -253,14 +247,15 @@ public class Player {
      * @param pot    the current pot value
      * @param amount the amount of chips to pay
      * @return the updated pot value
+     * @throws IllegalStateException if {@code amount} is negative or exceeds available chips
      */
     public int payChips(int pot, int amount) {
         if (amount < 0) {
-            throw new BadRequestException("Chip amount cannot be negative");
+            throw new IllegalStateException("Chip amount cannot be negative");
         }
 
         if (amount > this.chips) {
-            throw new BadRequestException("Insufficient chips for this action");
+            throw new IllegalStateException("Insufficient chips for this action");
         }
 
         this.chips -= amount;

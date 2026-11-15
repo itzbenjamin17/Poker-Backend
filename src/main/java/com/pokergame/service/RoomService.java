@@ -103,13 +103,22 @@ public class RoomService {
      * @param roomId  the unique ID assigned to the new room
      * @param request the validated room configuration and host details
      * @return the room ID, canonical sanitized host name, and host membership ID
-     * @throws BadRequestException if the room name is already taken or the password is invalid
+     * @throws BadRequestException if the room name is already taken, the password is invalid,
+     *                             or the blind/buy-in ratios are invalid
      */
     @DurableMutation(roomId = "#roomId")
     public RoomEntryResult createRoom(String roomId, CreateRoomRequest request) {
         requireNonNull(roomId, "roomId must not be null");
         requireNonNull(request, "request must not be null");
         RoomPasswordPolicy.validateLength(request.getPassword());
+        if (request.getSmallBlind() != null && request.getBigBlind() != null
+                && request.getBigBlind() < 2L * request.getSmallBlind()) {
+            throw new BadRequestException("Big blind must be at least twice the small blind.");
+        }
+        if (request.getBigBlind() != null && request.getBuyIn() != null
+                && request.getBuyIn() < request.getBigBlind()) {
+            throw new BadRequestException("Buy-in must be at least the big blind amount.");
+        }
         String sanitizedRoomName = InputSanitizer.sanitize(request.getRoomName());
         String sanitizedPlayerName = InputSanitizer.sanitize(request.getPlayerName());
 

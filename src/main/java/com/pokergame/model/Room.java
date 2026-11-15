@@ -1,8 +1,6 @@
 package com.pokergame.model;
 
 import com.pokergame.exception.BadRequestException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -32,7 +30,6 @@ import java.util.UUID;
  * </p>
  */
 public class Room {
-    private static final Logger logger = LoggerFactory.getLogger(Room.class);
     public static final long GAME_INACTIVITY_ALLOWANCE_MS = 15 * 60_000L;
     private final String roomId;
     private final String roomName;
@@ -92,7 +89,7 @@ public class Room {
      * @param buyIn      the buy-in amount for joining the game
      * @param password   optional password for room access (null or empty for public
      *                   rooms)
-     * @throws BadRequestException if any validation fails
+     * @throws IllegalStateException if any configuration invariant fails
      */
     public Room(String roomId, String roomName, String hostName, int maxPlayers,
             int smallBlind, int bigBlind, int buyIn, String password) {
@@ -112,37 +109,31 @@ public class Room {
      * @param buyIn      buy-in amount
      * @param password   optional password for private rooms
      * @param createdAt  persisted creation timestamp
+     * @throws IllegalStateException if any configuration invariant fails
      */
     Room(String roomId, String roomName, String hostName, int maxPlayers,
             int smallBlind, int bigBlind, int buyIn, String password, LocalDateTime createdAt) {
 
         if (roomId == null || roomId.trim().isEmpty()) {
-            logger.error("Invalid roomId: '{}'", roomId);
-            throw new BadRequestException("Room ID cannot be null or empty.");
+            throw new IllegalStateException("Room ID cannot be null or empty.");
         }
         if (roomName == null || roomName.trim().isEmpty()) {
-            logger.error("Invalid roomName: '{}'", roomName);
-            throw new BadRequestException("Room name cannot be null or empty.");
+            throw new IllegalStateException("Room name cannot be null or empty.");
         }
         if (hostName == null || hostName.trim().isEmpty()) {
-            logger.error("Invalid hostName: '{}'", hostName);
-            throw new BadRequestException("Host name cannot be null or empty.");
+            throw new IllegalStateException("Host name cannot be null or empty.");
         }
         if (maxPlayers < 2 || maxPlayers > 10) {
-            logger.error("Invalid maxPlayers: {}", maxPlayers);
-            throw new BadRequestException("Max players must be between 2 and 10.");
+            throw new IllegalStateException("Max players must be between 2 and 10.");
         }
         if (smallBlind < 1) {
-            logger.error("Invalid smallBlind: {}", smallBlind);
-            throw new BadRequestException("Small blind must be at least 1.");
+            throw new IllegalStateException("Small blind must be at least 1.");
         }
         if (bigBlind < 2 * smallBlind) {
-            logger.error("Invalid bigBlind: {}, smallBlind: {}", bigBlind, smallBlind);
-            throw new BadRequestException("Big blind must be at least twice the small blind.");
+            throw new IllegalStateException("Big blind must be at least twice the small blind.");
         }
         if (buyIn < bigBlind) {
-            logger.error("Invalid buyIn: {}, bigBlind: {}", buyIn, bigBlind);
-            throw new BadRequestException(
+            throw new IllegalStateException(
                     "Buy-in must be at least the big blind amount.");
         }
 

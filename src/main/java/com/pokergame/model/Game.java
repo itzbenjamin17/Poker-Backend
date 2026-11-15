@@ -65,7 +65,7 @@ public class Game {
      * @param smallBlind    small blind amount
      * @param bigBlind      big blind amount
      * @param handEvaluator service used to evaluate five-card poker hands
-     * @throws BadRequestException if {@code gameId}, {@code maxPlayers}, or {@code players} is invalid
+     * @throws IllegalStateException if {@code gameId}, {@code maxPlayers}, or {@code players} is invalid
      */
     public Game(
             String gameId,
@@ -75,21 +75,16 @@ public class Game {
             int bigBlind,
             HandEvaluatorService handEvaluator) {
         if (gameId == null || gameId.trim().isEmpty()) {
-            logger.error("[Game] Invalid gameId: '{}'", gameId);
-            throw new BadRequestException("Game ID cannot be null or empty");
+            throw new IllegalStateException("Game ID cannot be null or empty");
         }
         if (players == null || players.size() < 2) {
-            logger.error("[Game] Invalid players list: null or too few players (size: {})",
-                    players == null ? 0 : players.size());
-            throw new BadRequestException("At least 2 players are required to start a game");
+            throw new IllegalStateException("At least 2 players are required to start a game");
         }
         if (players.stream().anyMatch(Objects::isNull)) {
-            logger.error("[Game] Players list contains null element(s)");
-            throw new BadRequestException("Invalid players list. Please try again.");
+            throw new IllegalStateException("Invalid players list. Please try again.");
         }
         if (maxPlayers < 2 || maxPlayers > 10) {
-            logger.error("[Game] Invalid maxPlayers: {}", maxPlayers);
-            throw new BadRequestException("Max players must be between 2 and 10.");
+            throw new IllegalStateException("Max players must be between 2 and 10.");
         }
 
         this.gameId = gameId;
@@ -122,19 +117,16 @@ public class Game {
      * clamping {@code maxPlayers} and restoring collaborator state without running live hand setup.
      *
      * @param builder populated snapshot builder
-     * @throws BadRequestException   if {@code gameId} or {@code players} are invalid
-     * @throws IllegalStateException if the snapshot has no deck, because a fresh deck would deal cards
-     *                               that players or the board already hold
+     * @throws IllegalStateException if {@code gameId} or {@code players} are invalid, an active
+     *                               player ID is unknown, or the snapshot has no deck
      */
     Game(GameRestoreBuilder builder) {
         if (builder.getGameId() == null || builder.getGameId().trim().isEmpty()) {
-            logger.error("[Game][Restore] Invalid gameId: '{}'", builder.getGameId());
-            throw new BadRequestException("Game ID cannot be null or empty");
+            throw new IllegalStateException("Game ID cannot be null or empty");
         }
         List<Player> builderPlayers = builder.getPlayers();
         if (builderPlayers == null || builderPlayers.stream().anyMatch(Objects::isNull)) {
-            logger.error("[Game] Players list contains null element(s) or is null");
-            throw new BadRequestException("Invalid players list. Please try again.");
+            throw new IllegalStateException("Invalid players list. Please try again.");
         }
 
         this.gameId = builder.getGameId();
@@ -151,7 +143,7 @@ public class Game {
             for (String playerId : activeIds) {
                 Player player = playersById.get(playerId);
                 if (player == null) {
-                    throw new BadRequestException("Snapshot references an unknown active player");
+                    throw new IllegalStateException("Snapshot references an unknown active player");
                 }
                 this.activePlayers.add(player);
             }
@@ -159,7 +151,6 @@ public class Game {
 
         List<Card> remainingDeck = builder.getRemainingDeck();
         if (remainingDeck == null) {
-            logger.error("[Game][Restore] Snapshot for game {} has no deck", this.gameId);
             throw new IllegalStateException("Saved game " + this.gameId + " has no deck");
         }
         this.deck = Deck.restore(remainingDeck);
@@ -297,11 +288,11 @@ public class Game {
      * Deducts the small and big blinds from the assigned blind players, going all-in when a
      * player's stack is smaller than the blind.
      *
-     * @throws BadRequestException if fewer than two active players are seated
+     * @throws IllegalStateException if fewer than two active players are seated
      */
     public void postBlinds() {
         if (activePlayers.size() < 2) {
-            throw new BadRequestException(
+            throw new IllegalStateException(
                     String.format("Trying to post blinds for a game %s which has less than 2 players", gameId));
         }
         seating.assignBlindsForHand(activePlayers);
@@ -350,18 +341,16 @@ public class Game {
      * @param player   the acting player
      * @param decision the requested action and chip amount
      * @return a {@link TurnOutcome} describing the resulting progression
-     * @throws BadRequestException         if {@code decision} is missing or has a negative amount
-     * @throws UnauthorisedActionException if the action or raise size is illegal
+     * @throws IllegalStateException       if {@code decision} is missing or has a negative amount
+     * @throws BadRequestException         if the wager amount violates bet or raise sizing rules
+     * @throws UnauthorisedActionException if the action is not available to {@code player}
      */
     public TurnOutcome processPlayerDecision(Player player, PlayerDecision decision) {
         if (decision == null || decision.action() == null) {
-            throw new BadRequestException("Invalid player action");
+            throw new IllegalStateException("Invalid player action");
         }
         if (decision.amount() < 0) {
-            throw new BadRequestException(
-                    "Action amount cannot be negative",
-                    "NEGATIVE_AMOUNT",
-                    "Amount must be positive; yours: " + decision.amount());
+            throw new IllegalStateException("Action amount cannot be negative");
         }
 
         logger.debug(

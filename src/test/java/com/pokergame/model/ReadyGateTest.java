@@ -11,12 +11,15 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -223,6 +226,58 @@ class ReadyGateTest {
             assertThrows(UnauthorisedActionException.class, () -> activeGate.setPlayerReady("Carol", false));
             assertThrows(UnauthorisedActionException.class, () -> activeGate.setPlayerReady("Bob", true));
             assertThrows(UnauthorisedActionException.class, () -> activeGate.setPlayerReady("Bob", false));
+        }
+
+        @ParameterizedTest(name = "[{index}] {0}")
+        @MethodSource("playerFacingReadyRuleErrors")
+        void setPlayerReady_PinsExactExceptionTypeAndMessageForAllRuleErrors(
+                String scenario,
+                ReadyGateState gateState,
+                String playerName,
+                boolean ready,
+                String expectedMessage) {
+            List<Player> roster = List.of(
+                    player("p1", "Alice", 1000),
+                    player("p2", "Bob", 0),
+                    player("p3", "Carol", 1000, false, true, false),
+                    player("p4", "Dave", 1000, true, false, false));
+            ReadyGate gate = new ReadyGate(
+                    roster,
+                    gateState,
+                    gateState == ReadyGateState.COUNTING_DOWN,
+                    gateState == ReadyGateState.COUNTING_DOWN ? 50_000L : null);
+
+            UnauthorisedActionException error = assertThrows(
+                    UnauthorisedActionException.class,
+                    () -> gate.setPlayerReady(playerName, ready),
+                    scenario);
+            assertEquals(expectedMessage, error.getMessage(), scenario);
+            assertNull(error.actionErrorCode(), scenario);
+        }
+
+        private static Stream<Arguments> playerFacingReadyRuleErrors() {
+            return Stream.of(
+                    Arguments.of("closed gate ready=true", ReadyGateState.CLOSED, "Alice", true,
+                            "Ready countdown is not active."),
+                    Arguments.of("closed gate ready=false", ReadyGateState.CLOSED, "Alice", false,
+                            "Ready countdown is not active."),
+                    Arguments.of("waiting gate ready=true", ReadyGateState.WAITING_FOR_PLAYERS, "Alice", true,
+                            "Ready countdown is not active."),
+                    Arguments.of("unknown player", ReadyGateState.COUNTING_DOWN, "Unknown", true,
+                            "You are no longer part of this game."),
+                    Arguments.of("out player ready=true", ReadyGateState.COUNTING_DOWN, "Dave", true,
+                            "You are out of this game."),
+                    Arguments.of("out player ready=false", ReadyGateState.COUNTING_DOWN, "Dave", false,
+                            "You are out of this game."),
+                    Arguments.of("disconnected player ready=true", ReadyGateState.COUNTING_DOWN, "Carol", true,
+                            "Reconnect before marking ready."),
+                    Arguments.of("zero chips player ready=true", ReadyGateState.COUNTING_DOWN, "Bob", true,
+                            "Players without chips cannot mark ready."),
+                    Arguments.of("disconnected player ready=false", ReadyGateState.COUNTING_DOWN, "Carol", false,
+                            "You are not eligible to change readiness."),
+                    Arguments.of("zero chips player ready=false", ReadyGateState.COUNTING_DOWN, "Bob", false,
+                            "You are not eligible to change readiness.")
+            );
         }
     }
 

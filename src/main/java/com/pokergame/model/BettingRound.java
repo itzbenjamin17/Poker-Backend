@@ -156,7 +156,7 @@ final class BettingRound {
             if (totalBetAfterRaise <= currentHighestBet) {
                 logger.warn("[Game] Invalid raise: player {} tried to raise to {}, current highest bet is {}",
                         player.getName(), totalBetAfterRaise, currentHighestBet);
-                throw new UnauthorisedActionException(
+                throw new BadRequestException(
                         "Raise amount must result in a bet higher than current highest bet of " + currentHighestBet
                                 + ". Your current bet is " + player.getCurrentBet()
                                 + ", so the minimum incremental raise is " + minimumRaise,

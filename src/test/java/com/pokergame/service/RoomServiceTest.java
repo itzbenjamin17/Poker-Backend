@@ -274,6 +274,26 @@ class RoomServiceTest {
                     .isInstanceOf(BadRequestException.class)
                     .hasMessage("Invalid password");
         }
+
+        @Test
+        @DisplayName("should reject big blind smaller than twice small blind with BadRequestException")
+        void createRoom_RejectsBigBlindBelowTwiceSmallBlind() {
+            CreateRoomRequest request = new CreateRoomRequest("Test Room", "Alice", 6, 10, 15, 1000, null);
+
+            assertThatThrownBy(() -> createRoom(roomService, request))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Big blind must be at least twice the small blind.");
+        }
+
+        @Test
+        @DisplayName("should reject buy-in smaller than big blind with BadRequestException")
+        void createRoom_RejectsBuyInBelowBigBlind() {
+            CreateRoomRequest request = new CreateRoomRequest("Test Room", "Alice", 6, 10, 50, 30, null);
+
+            assertThatThrownBy(() -> createRoom(roomService, request))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Buy-in must be at least the big blind amount.");
+        }
     }
 
     /** Groups test scenarios for join room. */

@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import com.pokergame.exception.BadRequestException;
 import java.util.HashSet;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
@@ -45,26 +44,39 @@ class PlayerTest {
 
     @Test
     void testPlayerCreationWithNullName() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Player(null, "player789", 1000));
         assertEquals("Player name required", exception.getMessage());
     }
 
     @Test
     void testPlayerCreationWithEmptyName() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Player("   ", "player789", 1000));
         assertEquals("Player name required", exception.getMessage());
     }
 
     @Test
     void testPlayerCreationWithNegativeChips() {
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
                 () -> new Player("Cheater", "player999", -100));
         assertEquals("Chips cannot be negative", exception.getMessage());
+    }
+
+    @Test
+    void testPlayerCreationWithBlankPlayerId() {
+        IllegalStateException nullId = assertThrows(
+                IllegalStateException.class,
+                () -> new Player("Alice", null, 1000));
+        assertEquals("Player ID cannot be empty", nullId.getMessage());
+
+        IllegalStateException blankId = assertThrows(
+                IllegalStateException.class,
+                () -> new Player("Alice", "   ", 1000));
+        assertEquals("Player ID cannot be empty", blankId.getMessage());
     }
 
     @Test
@@ -161,6 +173,19 @@ class PlayerTest {
         assertEquals(0, shortStack.getChips());
         assertTrue(shortStack.getIsAllIn());
         assertEquals(50, shortStack.getCurrentBet());
+    }
+
+    @Test
+    void testPayChipsRejectsNegativeAndInsufficientAmounts() {
+        IllegalStateException negative = assertThrows(
+                IllegalStateException.class,
+                () -> player.payChips(100, -1));
+        assertEquals("Chip amount cannot be negative", negative.getMessage());
+
+        IllegalStateException insufficient = assertThrows(
+                IllegalStateException.class,
+                () -> player.payChips(100, 1001));
+        assertEquals("Insufficient chips for this action", insufficient.getMessage());
     }
 
     @Test

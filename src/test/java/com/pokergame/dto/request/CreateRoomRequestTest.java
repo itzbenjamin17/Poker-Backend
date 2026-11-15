@@ -120,4 +120,38 @@ class CreateRoomRequestTest {
         assertTrue(rendered.contains("hasPassword=true"));
         assertFalse(rendered.contains(secret));
     }
+
+    @Test
+    @DisplayName("Rejects big blind smaller than twice the small blind")
+    void rejectsBigBlindSmallerThanTwiceSmallBlind() {
+        CreateRoomRequest request = new CreateRoomRequest("High Rollers", "Alice", 6, 10, 15, 1000, null);
+
+        Set<ConstraintViolation<CreateRoomRequest>> violations = validator.validate(request);
+
+        assertEquals(1, violations.size());
+        assertEquals("Big blind must be at least twice the small blind.", violations.iterator().next().getMessage());
+    }
+
+    @Test
+    @DisplayName("Rejects buy-in smaller than big blind")
+    void rejectsBuyInSmallerThanBigBlind() {
+        CreateRoomRequest request = new CreateRoomRequest("High Rollers", "Alice", 6, 10, 50, 30, null);
+
+        Set<ConstraintViolation<CreateRoomRequest>> violations = validator.validate(request);
+
+        assertEquals(1, violations.size());
+        assertEquals("Buy-in must be at least the big blind amount.", violations.iterator().next().getMessage());
+    }
+
+    @Test
+    @DisplayName("Null blinds or buy-in only trigger NotNull without cross-field AssertTrue noise")
+    void nullBlindsOrBuyInDoNotTriggerCrossFieldAssertTrue() {
+        CreateRoomRequest request = new CreateRoomRequest("High Rollers", "Alice", 6, null, null, null, null);
+
+        Set<ConstraintViolation<CreateRoomRequest>> violations = validator.validate(request);
+
+        assertEquals(3, violations.size());
+        assertFalse(violations.stream().anyMatch(v -> v.getMessage().contains("twice the small blind")));
+        assertFalse(violations.stream().anyMatch(v -> v.getMessage().contains("at least the big blind")));
+    }
 }

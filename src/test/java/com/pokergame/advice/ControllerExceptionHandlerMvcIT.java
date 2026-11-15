@@ -166,6 +166,18 @@ class ControllerExceptionHandlerMvcIT {
                         org.hamcrest.Matchers.containsString("hunter2"))));
     }
 
+    @Test
+    @DisplayName("Internal IllegalStateException maps to 500 and hides internal invariant detail")
+    void illegalStateException_Returns500WithoutLeakingDetail() throws Exception {
+        mockMvc.perform(get("/probe/illegal-state"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.status").value(500))
+                .andExpect(jsonPath("$.error").value("Internal Server Error"))
+                .andExpect(jsonPath("$.message").value("An unexpected error occurred"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("internal invariant secret"))));
+    }
+
     /** Minimal probe endpoints that raise each representative exception at the MVC boundary. */
     @RestController
     static class ProbeController {
@@ -214,6 +226,11 @@ class ControllerExceptionHandlerMvcIT {
         @GetMapping("/probe/boom")
         void boom() {
             throw new RuntimeException("database password is hunter2");
+        }
+
+        @GetMapping("/probe/illegal-state")
+        void illegalState() {
+            throw new IllegalStateException("internal invariant secret");
         }
     }
 }

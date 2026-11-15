@@ -307,8 +307,9 @@ class PlayerActionServiceTest {
         int invalidRaiseAmount = 1;
         PlayerActionRequest request = new PlayerActionRequest(PlayerAction.RAISE, invalidRaiseAmount);
 
-        assertThrows(UnauthorisedActionException.class,
+        BadRequestException ex = assertThrows(BadRequestException.class,
                 () -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
+        assertEquals("MIN_RAISE", ex.actionErrorCode());
     }
 
     /**
