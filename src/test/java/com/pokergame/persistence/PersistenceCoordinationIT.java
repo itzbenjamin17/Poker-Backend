@@ -29,6 +29,7 @@ import com.pokergame.persistence.wal.WalFaultInjector;
 import com.pokergame.persistence.wal.WalFaultPoint;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
 import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
@@ -173,6 +174,9 @@ class PersistenceCoordinationIT {
 
     @MockitoSpyBean
     private SimpMessagingTemplate messagingTemplate;
+
+    @MockitoSpyBean
+    private GameStateService gameStateService;
 
     private final Set<String> trackedRoomIds = new HashSet<>();
     private TestRoomFixtures roomFixtures;
@@ -717,6 +721,59 @@ class PersistenceCoordinationIT {
                 .isInstanceOf(BadRequestException.class)
                 .satisfies(ex -> assertThat(((BadRequestException) ex).actionErrorCode()).isEqualTo("GAME_EXPIRED"));
         awaitGameAbandoned(claimRoomId);
+    }
+
+    @Test
+    @DisplayName("Failed post-action applyTurnOutcome throws, rolls back game state, and suppresses broadcasts")
+    void failedApplyTurnOutcomeThrowsAndRollsBackGameState() {
+        String roomId = roomFixtures.createAndConnectRoom("Action Rollback Room", "Host", "Alice", "Bob");
+        gameLifecycleService.createGameFromRoom(roomId);
+
+        record PreActionSnapshot(
+                String actorName,
+                int actorChips,
+                int actorBet,
+                boolean actorFolded,
+                int pot,
+                long stateRevision,
+                Long turnDeadline) {}
+        PreActionSnapshot before = withRoomLock(roomCoordinator, roomId, () -> {
+            Game game = gameLifecycleService.getGame(roomId);
+            Player actor = game.getCurrentPlayer();
+            return new PreActionSnapshot(
+                    actor.getName(),
+                    actor.getChips(),
+                    actor.getCurrentBet(),
+                    actor.getHasFolded(),
+                    game.getPot(),
+                    game.getStateRevision(),
+                    game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+        });
+        assertThat(before.turnDeadline()).isNotNull();
+        Mockito.clearInvocations(messagingTemplate);
+
+        Mockito.doThrow(new IllegalStateException("Simulated applyTurnOutcome failure"))
+                .when(gameStateService)
+                .broadcastGameState(Mockito.argThat(g -> g != null && roomId.equals(g.getGameId())));
+
+        assertThatThrownBy(() -> playerActionService.processPlayerAction(
+                roomId, new PlayerActionRequest(PlayerAction.CALL, null), before.actorName()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Simulated applyTurnOutcome failure");
+
+        withRoomLock(roomCoordinator, roomId, () -> {
+            Game game = gameLifecycleService.getGame(roomId);
+            Player actor = game.findPlayerByName(before.actorName());
+            assertThat(game.getCurrentPlayer().getName()).isEqualTo(before.actorName());
+            assertThat(actor.getChips()).isEqualTo(before.actorChips());
+            assertThat(actor.getCurrentBet()).isEqualTo(before.actorBet());
+            assertThat(actor.getHasFolded()).isEqualTo(before.actorFolded());
+            assertThat(game.getPot()).isEqualTo(before.pot());
+            assertThat(game.getStateRevision()).isEqualTo(before.stateRevision());
+            assertThat(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(before.turnDeadline());
+            return null;
+        });
+        Mockito.verifyNoInteractions(messagingTemplate);
     }
 
     private void awaitGameAbandoned(String roomId) {

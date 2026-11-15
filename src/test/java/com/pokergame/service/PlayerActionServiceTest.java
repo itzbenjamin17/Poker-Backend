@@ -1016,36 +1016,55 @@ class PlayerActionServiceTest {
     // ==================== processPlayerAction - Post-processing Failures ====================
 
     @Test
-    @DisplayName("a post-processing failure re-broadcasts the game state and the action still succeeds")
-    void processPlayerAction_PostProcessingFails_ShouldRebroadcastAndSucceed() {
+    @DisplayName("a post-processing failure propagates without a fallback game-state broadcast")
+    void processPlayerAction_PostProcessingFails_ShouldPropagateWithoutRebroadcast() {
         Game spyGame = spy(testGame);
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(spyGame);
         doReturn(outcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING)).when(spyGame).processPlayerDecision(any(), any());
         doThrow(new IllegalStateException("scheduler unavailable")).when(gameLifecycleService)
                 .applyTurnOutcome(eq(GAME_ID), eq(spyGame), any(TurnOutcome.class), eq(true));
 
-        assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID,
-                new PlayerActionRequest(PlayerAction.FOLD, null), spyGame.getCurrentPlayer().getName()));
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID,
+                        new PlayerActionRequest(PlayerAction.FOLD, null), spyGame.getCurrentPlayer().getName()));
 
-        verify(gameStateService).broadcastGameState(spyGame);
+        assertEquals("scheduler unavailable", exception.getMessage());
+        verify(gameStateService, never()).broadcastGameState(any(Game.class));
         verify(gameStateService, never()).broadcastAutoAdvanceNotification(any(Game.class));
     }
 
     @Test
-    @DisplayName("a failing re-broadcast after a post-processing failure is swallowed and the action still succeeds")
-    void processPlayerAction_PostProcessingAndRebroadcastFail_ShouldStillSucceed() {
+    @DisplayName("a real decision whose post-processing fails propagates without fallback broadcast")
+    void processPlayerAction_RealDecisionPostProcessingFails_ShouldPropagateWithoutFallbackBroadcast() {
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
         doThrow(new IllegalStateException("progression failed")).when(gameLifecycleService)
                 .applyTurnOutcome(eq(GAME_ID), eq(testGame), any(TurnOutcome.class), eq(true));
-        doThrow(new IllegalStateException("broadcast failed")).when(gameStateService)
-                .broadcastGameState(any(Game.class));
 
         Player currentPlayer = testGame.getCurrentPlayer();
-        assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID,
-                new PlayerActionRequest(PlayerAction.FOLD, null), currentPlayer.getName()));
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID,
+                        new PlayerActionRequest(PlayerAction.FOLD, null), currentPlayer.getName()));
 
-        assertTrue(currentPlayer.getHasFolded());
-        verify(gameStateService).broadcastGameState(testGame);
+        assertEquals("progression failed", exception.getMessage());
+        verify(gameStateService, never()).broadcastGameState(any(Game.class));
+    }
+
+    @Test
+    @DisplayName("an invalid CHECK rejected by processPlayerDecision leaves TURN_TIMEOUT scheduled")
+    void processPlayerAction_InvalidCheckWhenCallOwed_ShouldKeepTurnTimeoutScheduled() {
+        long deadline = FIXED_INSTANT.toEpochMilli() + 60_000L;
+        testGame.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, deadline);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(testGame);
+        Player currentPlayer = testGame.getCurrentPlayer();
+
+        UnauthorisedActionException exception = assertThrows(UnauthorisedActionException.class,
+                () -> playerActionService.processPlayerAction(GAME_ID,
+                        new PlayerActionRequest(PlayerAction.CHECK, null), currentPlayer.getName()));
+
+        assertEquals("CHECK_NOT_AVAILABLE", exception.actionErrorCode());
+        assertEquals(deadline, testGame.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+        verify(gameLifecycleService, never()).cancelTurnTimeout(GAME_ID);
+        verifyNoInteractions(gameStateService);
     }
 
     // ==================== processPlayerAction - Rejection Paths ====================

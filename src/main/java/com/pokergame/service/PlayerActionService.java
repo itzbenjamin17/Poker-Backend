@@ -138,10 +138,9 @@ public class PlayerActionService {
                     currentPlayer.getPlayerId());
 
             logger.debug("Processing decision: {}", decision);
+            TurnOutcome outcome = game.processPlayerDecision(currentPlayer, decision);
             game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
             gameLifecycleService.cancelTurnTimeout(gameId);
-
-            TurnOutcome outcome = game.processPlayerDecision(currentPlayer, decision);
             logger.debug("Decision processed successfully");
             gameLifecycleService.resetGameInactivity(gameId);
 
@@ -152,18 +151,7 @@ public class PlayerActionService {
                         gameId, currentPlayer.getName(), outcome.conversionMessage(), ResponseMessage.PLAYER_NOTIFICATION);
             }
 
-            try {
-                gameLifecycleService.applyTurnOutcome(gameId, game, outcome, true);
-            } catch (Exception e) {
-                logger.error("Error in post-processing for game {} (action was successful): {}",
-                        gameId, e.getMessage(), e);
-                try {
-                    gameStateService.broadcastGameState(game);
-                } catch (Exception broadcastError) {
-                    logger.error("Failed to re-broadcast game state for game {}: {}",
-                            gameId, broadcastError.getMessage());
-                }
-            }
+            gameLifecycleService.applyTurnOutcome(gameId, game, outcome, true);
 
             logger.debug("Player action processing complete for game {}", gameId);
         }
