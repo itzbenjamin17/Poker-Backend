@@ -128,6 +128,8 @@ Preserve payload-size rejection, endpoint and STOMP throttling, validation, name
 
 When enabled, `@DurableMutation` advice attempts PREPARE, runs the authoritative mutation, captures an immutable versioned state image, and attempts authenticated COMMIT. When writes succeed, queued client messages and post-commit work are released after commit. Runtime storage failures keep accepted gameplay and effects in memory and retry saving without replaying the command. Nested durable calls join the same room transaction; cross-room nesting is rejected.
 
+**Check-first rule:** Validate everything before changing any state, so a throw never leaves a half-done change. With persistence off, nothing is rolled back.
+
 AES-256-GCM protects state images containing passwords, private cards, deck order, chips, and deadlines. Associated data binds the record and aggregate identity. Keep keys separate from WAL files.
 
 Recovery restores all aggregates, recreates process-local collaborators, treats old sockets as disconnected, grants reconnect grace, and resumes overdue/future work with guards. It restores exact state without replaying randomness or player commands.

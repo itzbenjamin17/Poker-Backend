@@ -1,5 +1,9 @@
 package com.pokergame.persistence.transaction;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.pokergame.config.RoomTimingProperties;
 import com.pokergame.model.Room;
 import com.pokergame.service.RoomCoordinator;
@@ -8,6 +12,7 @@ import com.pokergame.service.event.RoomDestroyed;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -40,6 +45,44 @@ class PostSaveActionsTest {
 
         assertThat(PostSaveActions.currentRoomId()).isNull();
         assertThat(executed).containsExactly("immediate");
+    }
+
+    @Test
+    void runsImmediatelyAndInOrderWhenNoSaveContextIsActive() {
+        List<String> executed = new ArrayList<>();
+
+        PostSaveActions.runAfterSave(() -> executed.add("first"));
+        assertThat(executed).containsExactly("first");
+
+        PostSaveActions.runAfterSave(() -> executed.add("second"));
+        assertThat(executed).containsExactly("first", "second");
+        assertThat(PostSaveActions.currentRoomId()).isNull();
+    }
+
+    @Test
+    void logsFailureWithStackTraceAndReturnsNormallyWhenNoSaveContextIsActive() {
+        assertLogsErrorWithStackTrace(
+                () -> PostSaveActions.runAfterSave(() -> {
+                    throw new IllegalStateException("broker down");
+                }),
+                IllegalStateException.class,
+                "broker down",
+                "IllegalStateException");
+        assertThat(PostSaveActions.currentRoomId()).isNull();
+    }
+
+    @Test
+    void executeAllLogsFailureWithStackTrace() {
+        PostSaveActions.begin("room-1");
+        PostSaveActions.runAfterSave(() -> {
+            throw new IllegalStateException("broker down");
+        });
+
+        assertLogsErrorWithStackTrace(
+                PostSaveActions::executeAll,
+                IllegalStateException.class,
+                "broker down",
+                "room-1", "IllegalStateException");
     }
 
     @Test
@@ -105,5 +148,32 @@ class PostSaveActionsTest {
         room.addPlayer("Host");
         rooms.restoreRoom(room, "Host");
         return rooms;
+    }
+
+    private static void assertLogsErrorWithStackTrace(
+            Runnable action,
+            Class<? extends Throwable> expectedException,
+            String expectedExceptionMessage,
+            String... expectedLogSubstrings) {
+        Logger logbackLogger = (Logger) LoggerFactory.getLogger(PostSaveActions.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logbackLogger.addAppender(appender);
+        try {
+            action.run();
+
+            assertThat(appender.list)
+                    .singleElement()
+                    .satisfies(event -> {
+                        assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                        assertThat(event.getFormattedMessage()).contains(expectedLogSubstrings);
+                        assertThat(event.getThrowableProxy()).isNotNull();
+                        assertThat(event.getThrowableProxy().getClassName()).isEqualTo(expectedException.getName());
+                        assertThat(event.getThrowableProxy().getMessage()).isEqualTo(expectedExceptionMessage);
+                    });
+        } finally {
+            logbackLogger.detachAppender(appender);
+            appender.stop();
+        }
     }
 }

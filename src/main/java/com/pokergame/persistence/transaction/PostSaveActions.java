@@ -25,7 +25,9 @@ public final class PostSaveActions {
     /**
      * Queues an action to run after the active room change succeeds and finishes saving.
      * If persistence falls back to memory-only mode after the change was accepted, queued actions
-     * still run once. If no room save is active on the current thread, the action runs immediately.
+     * still run once. If no room save is active on the current thread (for example, with
+     * persistence disabled), the action runs immediately, and any {@link RuntimeException} it
+     * throws is caught and logged instead of failing the caller.
      *
      * @param action the side effect to run after saving completes
      */
@@ -33,7 +35,7 @@ public final class PostSaveActions {
         requireNonNull(action, "action must not be null");
         Context context = CURRENT.get();
         if (context == null) {
-            action.run();
+            runSafely(null, action);
         } else {
             context.actions().add(action);
         }
@@ -68,12 +70,7 @@ public final class PostSaveActions {
         CURRENT.remove();
         if (context != null) {
             for (Runnable action : context.actions()) {
-                try {
-                    action.run();
-                } catch (RuntimeException failure) {
-                    logger.error("Post-save action failed for room {} ({})",
-                            context.roomId(), failure.getClass().getSimpleName());
-                }
+                runSafely(context.roomId(), action);
             }
         }
     }
@@ -83,6 +80,16 @@ public final class PostSaveActions {
      */
     static void clear() {
         CURRENT.remove();
+    }
+
+    private static void runSafely(String roomId, Runnable action) {
+        try {
+            action.run();
+        } catch (RuntimeException failure) {
+            String roomSuffix = roomId == null ? "" : " for room " + roomId;
+            logger.error("Post-save action failed{} ({})",
+                    roomSuffix, failure.getClass().getSimpleName(), failure);
+        }
     }
 
     /**
