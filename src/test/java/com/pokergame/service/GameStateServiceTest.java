@@ -1,15 +1,22 @@
 package com.pokergame.service;
 
+import com.pokergame.dto.response.ActionErrorResponse;
 import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PlayerNotificationResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.HandRank;
 import com.pokergame.enums.Rank;
+import com.pokergame.enums.ReadyGateState;
+import com.pokergame.enums.RejectedAction;
+import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.Suit;
 import com.pokergame.model.*;
-import com.pokergame.exception.BadRequestException;
+import com.pokergame.security.PlayerPrincipal;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -18,18 +25,35 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.messaging.simp.user.DefaultUserDestinationResolver;
+import org.springframework.messaging.simp.user.SimpSession;
+import org.springframework.messaging.simp.user.SimpUser;
+import org.springframework.messaging.simp.user.SimpUserRegistry;
+import org.springframework.messaging.support.MessageBuilder;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
-import com.pokergame.enums.HandRank;
-import java.util.stream.Collectors;
 
 /**
  * Unit tests for the GameStateService class.
@@ -57,15 +81,18 @@ class GameStateServiceTest {
     /**
      * Initializes the test fixtures before each scenario.
      */
+    private static final Instant FIXED_INSTANT = Instant.parse("2026-01-01T00:00:00Z");
+    private static final Clock FIXED_CLOCK = Clock.fixed(FIXED_INSTANT, ZoneOffset.UTC);
+
     @BeforeEach
     void setUp() {
-        gameStateService = new GameStateService(roomService, messagingTemplate);
+        gameStateService = new GameStateService(roomService, messagingTemplate, FIXED_CLOCK);
 
         testPlayers = new ArrayList<>();
         testPlayers.add(new Player("Player1", UUID.randomUUID().toString(), 100));
         testPlayers.add(new Player("Player2", UUID.randomUUID().toString(), 100));
 
-        testGame = new Game(GAME_ID, testPlayers, 5, 10, handEvaluator);
+        testGame = new Game(GAME_ID, testPlayers, 6, 5, 10, handEvaluator);
 
         testRoom = new Room(
                 GAME_ID,
@@ -83,11 +110,11 @@ class GameStateServiceTest {
     // ==================== broadcastGameState Tests ====================
 
     /**
-     * Protects the contract that broadcast game state with null game should not broadcast.
+     * Protects the contract that broadcast game state rejects a null game.
      */
     @Test
-    void broadcastGameState_WithNullGame_ShouldNotBroadcast() {
-        assertThrows(BadRequestException.class, () -> gameStateService.broadcastGameState(GAME_ID, null));
+    void broadcastGameState_WithNullGame_ThrowsNullPointerException() {
+        assertThrows(NullPointerException.class, () -> gameStateService.broadcastGameState(null));
 
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
@@ -103,7 +130,7 @@ class GameStateServiceTest {
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
 
         // The public channel receives a PublicGameStateResponse (not a bare Object) carrying the
         // game's state revision, and every player's hole cards are masked away before the flop.
@@ -126,7 +153,7 @@ class GameStateServiceTest {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         testGame.dealHoleCards();
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
 
         // Each private message must carry only its own owner's hole cards and identity, so one
         // player can never receive another's cards.
@@ -155,12 +182,12 @@ class GameStateServiceTest {
     @Test
     void broadcastGameState_WithThreePlayers_ShouldSendThreePrivateMessages() {
         testPlayers.add(new Player("Player3", UUID.randomUUID().toString(), 100));
-        testGame = new Game(GAME_ID, testPlayers, 5, 10, handEvaluator);
+        testGame = new Game(GAME_ID, testPlayers, 6, 5, 10, handEvaluator);
         testRoom.addPlayer("Player3");
 
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
 
         // 1 public message + 3 name-private via convertAndSendToUser
         verify(messagingTemplate, times(1)).convertAndSend(anyString(), any(Object.class));
@@ -177,7 +204,7 @@ class GameStateServiceTest {
         threePlayers.add(new Player("Player2", UUID.randomUUID().toString(), 100));
         threePlayers.add(new Player("Player3", UUID.randomUUID().toString(), 100));
 
-        Game game = new Game(GAME_ID, threePlayers, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, threePlayers, 6, 5, 10, handEvaluator);
         game.postBlinds();
 
         Room room = new Room(
@@ -197,9 +224,9 @@ class GameStateServiceTest {
 
         Player playerToRemove = game.getActivePlayers().get(1);
         assertNotEquals(playerToRemove, game.getCurrentPlayer());
-        game.removePlayerFromGame(playerToRemove);
+        game.removePlayer(playerToRemove);
 
-        assertDoesNotThrow(() -> gameStateService.broadcastGameState(GAME_ID, game));
+        assertDoesNotThrow(() -> gameStateService.broadcastGameState(game));
         verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
@@ -215,7 +242,7 @@ class GameStateServiceTest {
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         Object payload = captor.getValue();
@@ -246,7 +273,7 @@ class GameStateServiceTest {
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         Object payload = captor.getValue();
@@ -260,26 +287,36 @@ class GameStateServiceTest {
     // ==================== broadcastShowdownResults Tests ====================
 
     /**
-     * Protects the contract that broadcast showdown results with null game should not broadcast.
+     * Protects the contract that broadcast showdown results rejects a null game.
      */
     @Test
-    void broadcastShowdownResults_WithNullGame_ShouldNotBroadcast() {
-        gameStateService.broadcastShowdownResults(GAME_ID, null, List.of(), 0);
+    void broadcastShowdownResults_WithNullGame_ThrowsNullPointerException() {
+        assertThrows(NullPointerException.class, () -> gameStateService.broadcastShowdownResults(null));
 
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
 
     /**
-     * Protects the contract that broadcast showdown results with valid data should broadcast.
+     * Protects the contract that broadcast showdown results rejects an unsettled hand.
+     */
+    @Test
+    void broadcastShowdownResults_WhenUnsettled_ThrowsIllegalStateException() {
+        assertThrows(IllegalStateException.class, () -> gameStateService.broadcastShowdownResults(testGame));
+
+        verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
+    }
+
+    /**
+     * Protects the contract that broadcast showdown results with valid settled data broadcasts to game channel.
      */
     @Test
     void broadcastShowdownResults_WithValidData_ShouldBroadcast() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        List<Player> winners = List.of(testPlayers.getFirst());
+        Player winner = testPlayers.getFirst();
+        Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 50), Set.of(winner.getPlayerId()));
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
-        gameStateService.broadcastShowdownResults(GAME_ID, testGame, winners, 50);
+        gameStateService.broadcastShowdownResults(settled);
 
         // The showdown broadcast must be a PublicGameStateResponse naming the winner and carrying
         // the game's state revision, not merely some object on the right destination.
@@ -287,36 +324,45 @@ class GameStateServiceTest {
         Object payload = captor.getValue();
         assertInstanceOf(PublicGameStateResponse.class, payload);
         PublicGameStateResponse response = (PublicGameStateResponse) payload;
-        assertEquals(List.of(testPlayers.getFirst().getName()), response.winners(),
+        assertEquals(List.of(winner.getName()), response.winners(),
                 "The showdown projection must report the single winner");
-        assertEquals(testGame.getStateRevision(), response.stateRevision(),
+        assertEquals(settled.getStateRevision(), response.stateRevision(),
                 "The showdown broadcast must carry the game's current state revision");
     }
 
     /**
-     * Protects the contract that broadcast showdown results with no room should still broadcast.
+     * Protects the contract that broadcast showdown results with no room lookup still broadcasts.
      */
     @Test
     void broadcastShowdownResults_WithNoRoom_ShouldStillBroadcast() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(null);
-        List<Player> winners = List.of(testPlayers.getFirst());
+        Player winner = testPlayers.getFirst();
+        Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 50), Set.of(winner.getPlayerId()));
 
-        gameStateService.broadcastShowdownResults(GAME_ID, testGame, winners, 50);
+        gameStateService.broadcastShowdownResults(settled);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
     /**
-     * Protects the contract that broadcast showdown results with multiple winners should include all winners.
+     * Protects the contract that broadcast showdown results with multiple winners includes all winners.
      */
     @Test
     void broadcastShowdownResults_WithMultipleWinners_ShouldIncludeAllWinners() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        List<Player> winners = List.of(testPlayers.get(0), testPlayers.get(1));
+        Player p1 = testPlayers.get(0);
+        Player p2 = testPlayers.get(1);
+        Game settled = settledGame(
+                GAME_ID,
+                testPlayers,
+                Map.of(p1.getPlayerId(), 25, p2.getPlayerId(), 25),
+                Set.of(p1.getPlayerId(), p2.getPlayerId()));
 
-        gameStateService.broadcastShowdownResults(GAME_ID, testGame, winners, 25);
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        gameStateService.broadcastShowdownResults(settled);
 
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        PublicGameStateResponse response = (PublicGameStateResponse) captor.getValue();
+        assertEquals(List.of("Player1", "Player2"), response.winners());
+        assertEquals(25, response.winningsPerPlayer());
     }
 
     /**
@@ -327,11 +373,11 @@ class GameStateServiceTest {
      */
     @Test
     void broadcastShowdownResults_ShouldNotReportACurrentPlayer() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        List<Player> winners = List.of(testPlayers.getFirst());
+        Player winner = testPlayers.getFirst();
+        Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 50), Set.of(winner.getPlayerId()));
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        gameStateService.broadcastShowdownResults(GAME_ID, testGame, winners, 50);
+        gameStateService.broadcastShowdownResults(settled);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         PublicGameStateResponse response = (PublicGameStateResponse) captor.getValue();
@@ -345,11 +391,12 @@ class GameStateServiceTest {
     // ====================
 
     /**
-     * Protects the contract that broadcast game state with auto advance with null game should not broadcast.
+     * Protects the contract that broadcast game state with auto advance rejects a null game.
      */
     @Test
-    void broadcastGameStateWithAutoAdvance_WithNullGame_ShouldNotBroadcast() {
-        gameStateService.broadcastGameStateWithAutoAdvance(GAME_ID, null, "Auto-advancing...");
+    void broadcastGameStateWithAutoAdvance_WithNullGame_ThrowsNullPointerException() {
+        assertThrows(NullPointerException.class,
+                () -> gameStateService.broadcastGameStateWithAutoAdvance(null, "Auto-advancing..."));
 
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
@@ -359,9 +406,7 @@ class GameStateServiceTest {
      */
     @Test
     void broadcastGameStateWithAutoAdvance_WithValidData_ShouldBroadcast() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-
-        gameStateService.broadcastGameStateWithAutoAdvance(GAME_ID, testGame, "Auto-advancing...");
+        gameStateService.broadcastGameStateWithAutoAdvance(testGame, "Auto-advancing...");
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
@@ -370,11 +415,12 @@ class GameStateServiceTest {
     // ====================
 
     /**
-     * Protects the contract that broadcast auto advance notification with null game should not broadcast.
+     * Protects the contract that broadcast auto advance notification rejects a null game.
      */
     @Test
-    void broadcastAutoAdvanceNotification_WithNullGame_ShouldNotBroadcast() {
-        gameStateService.broadcastAutoAdvanceNotification(GAME_ID, null);
+    void broadcastAutoAdvanceNotification_WithNullGame_ThrowsNullPointerException() {
+        assertThrows(NullPointerException.class,
+                () -> gameStateService.broadcastAutoAdvanceNotification(null));
 
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
@@ -384,9 +430,8 @@ class GameStateServiceTest {
      */
     @Test
     void broadcastAutoAdvanceNotification_WithValidGame_ShouldBroadcast() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        gameStateService.broadcastAutoAdvanceNotification(GAME_ID, testGame);
+        gameStateService.broadcastAutoAdvanceNotification(testGame);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         assertInstanceOf(PublicGameStateResponse.class, captor.getValue());
@@ -401,11 +446,12 @@ class GameStateServiceTest {
     // ==================== broadcastAutoAdvanceComplete Tests ====================
 
     /**
-     * Protects the contract that broadcast auto advance complete with null game should not broadcast.
+     * Protects the contract that broadcast auto advance complete rejects a null game.
      */
     @Test
-    void broadcastAutoAdvanceComplete_WithNullGame_ShouldNotBroadcast() {
-        gameStateService.broadcastAutoAdvanceComplete(GAME_ID, null);
+    void broadcastAutoAdvanceComplete_WithNullGame_ThrowsNullPointerException() {
+        assertThrows(NullPointerException.class,
+                () -> gameStateService.broadcastAutoAdvanceComplete(null));
 
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
@@ -415,106 +461,120 @@ class GameStateServiceTest {
      */
     @Test
     void broadcastAutoAdvanceComplete_WithValidGame_ShouldBroadcast() {
-        gameStateService.broadcastAutoAdvanceComplete(GAME_ID, testGame);
+        gameStateService.broadcastAutoAdvanceComplete(testGame);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
 
-    // ==================== sendPlayerNotification Tests ====================
+    // ==================== Private Notification & Action Error Tests ====================
 
     /**
-     * Protects the contract that send player notification should broadcast to game channel.
+     * Protects the contract that private player notifications route to the active membership's user queue.
      */
     @Test
-    void sendPlayerNotification_ShouldBroadcastToGameChannel() {
-        gameStateService.sendPlayerNotification(GAME_ID, "Player1", "Test message");
-
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
-    }
-
-    /**
-     * Protects the contract that send player notification with different players should broadcast.
-     */
-    @Test
-    void sendPlayerNotification_WithDifferentPlayers_ShouldBroadcast() {
-        gameStateService.sendPlayerNotification(GAME_ID, "Player1", "Message 1");
-        gameStateService.sendPlayerNotification(GAME_ID, "Player2", "Message 2");
-
-        verify(messagingTemplate, times(2)).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
-    }
-
-    // ==================== broadcastGameEnd Tests ====================
-
-    /**
-     * Protects the contract that broadcast game end should broadcast winner info.
-     */
-    @Test
-    void broadcastGameEnd_ShouldBroadcastWinnerInfo() {
-        Player winner = testPlayers.getFirst();
-        winner.addChips(50); // Winner has more chips
+    void sendPrivatePlayerNotification_ShouldSendToPlayerPrivateQueue() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
+        gameStateService.sendPrivatePlayerNotification(
+                GAME_ID, "Player1", "Test message", ResponseMessage.PLAYER_NOTIFICATION);
+
+        String expectedUser = "Player1:" + GAME_ID + ":" + testRoom.getMembershipId("Player1");
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(messagingTemplate).convertAndSendToUser(eq(expectedUser), eq("/queue/private"), captor.capture());
+        PlayerNotificationResponse response = assertInstanceOf(PlayerNotificationResponse.class, captor.getValue());
+        assertEquals("Test message", response.message());
+        assertEquals(ResponseMessage.PLAYER_NOTIFICATION, response.type());
+        assertEquals("Player1", response.playerName());
+    }
 
-        gameStateService.broadcastGameEnd(GAME_ID, testGame, winner, false);
+    /**
+     * Protects the contract that principal-targeted private notifications and action errors target the originating session.
+     */
+    @Test
+    void sendPrivatePlayerNotificationAndActionError_WithOriginPrincipal_ShouldTargetOriginSession() {
+        PlayerPrincipal origin = new PlayerPrincipal("Player1", GAME_ID, "origin-membership");
 
+        gameStateService.sendPrivatePlayerNotification(origin, "Welcome back", ResponseMessage.PLAYER_NOTIFICATION);
+        gameStateService.sendActionError(origin, "INVALID_ACTION", RejectedAction.BET, "Minimum bet is 10");
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(messagingTemplate, times(2)).convertAndSendToUser(
+                eq(origin.getName()), eq("/queue/private"), captor.capture());
+        PlayerNotificationResponse notification = assertInstanceOf(
+                PlayerNotificationResponse.class, captor.getAllValues().get(0));
+        assertEquals("Welcome back", notification.message());
+        assertEquals(ResponseMessage.PLAYER_NOTIFICATION, notification.type());
+
+        ActionErrorResponse actionError = assertInstanceOf(
+                ActionErrorResponse.class, captor.getAllValues().get(1));
+        assertEquals("INVALID_ACTION", actionError.code());
+        assertEquals(RejectedAction.BET, actionError.action());
+        assertEquals("Minimum bet is 10", actionError.message());
+    }
+
+    // ==================== recordGameEnd / sendGameEnd Tests ====================
+
+    /**
+     * Protects the contract that recordGameEnd + sendGameEnd publishes winner info and increments stateRevision.
+     */
+    @Test
+    void recordGameEnd_AndSendGameEnd_ShouldPublishWinnerInfo() {
+        Player winner = testPlayers.getFirst();
+        winner.addChips(50);
+
+        GameEndResponse recorded = gameStateService.recordGameEnd(testGame, winner, false);
+        gameStateService.sendGameEnd(recorded);
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
 
-        Object captured = captor.getValue();
-        assertNotNull(captured);
-        assertInstanceOf(GameEndResponse.class, captured);
-
-        GameEndResponse gameEndResponse = (GameEndResponse) captured;
+        GameEndResponse gameEndResponse = assertInstanceOf(GameEndResponse.class, captor.getValue());
         assertEquals("GAME_END", gameEndResponse.type());
         assertEquals(winner.getName(), gameEndResponse.winner());
         assertEquals(winner.getChips(), gameEndResponse.winnerChips());
         assertEquals(GAME_ID, gameEndResponse.gameId());
+        assertEquals(1L, testGame.getStateRevision());
     }
 
     /**
-     * Protects the contract that broadcast game end message should contain winner name.
+     * Protects the contract that game-end messages name the winner.
      */
     @Test
-    void broadcastGameEnd_MessageShouldContainWinnerName() {
+    void buildGameEndResponse_MessageShouldContainWinnerName() {
         Player winner = testPlayers.getFirst();
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        gameStateService.broadcastGameEnd(GAME_ID, testGame, winner, false);
+        GameEndResponse gameEndResponse = gameStateService.buildGameEndResponse(testGame, winner, false);
 
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
-
-        GameEndResponse gameEndResponse = (GameEndResponse) captor.getValue();
         String message = gameEndResponse.message();
         assertTrue(message.contains(winner.getName()));
         assertTrue(message.contains("wins"));
     }
 
     /**
-     * Protects the contract that broadcast game end with null winner should not throw.
+     * Protects the contract that recordGameEnd and buildGameEndResponse reject null game or winner.
      */
     @Test
-    void broadcastGameEnd_WithNullWinner_ShouldNotThrow() {
-        assertDoesNotThrow(() -> gameStateService.broadcastGameEnd(GAME_ID, testGame, null, false));
+    void recordGameEnd_WithNullGameOrWinner_ThrowsNullPointerException() {
+        Player winner = testPlayers.getFirst();
+
+        assertThrows(NullPointerException.class, () -> gameStateService.recordGameEnd(null, winner, false));
+        assertThrows(NullPointerException.class, () -> gameStateService.recordGameEnd(testGame, null, false));
+        assertThrows(NullPointerException.class, () -> gameStateService.buildGameEndResponse(null, winner, false));
+        assertThrows(NullPointerException.class, () -> gameStateService.buildGameEndResponse(testGame, null, false));
+        assertDoesNotThrow(() -> gameStateService.sendGameEnd(null));
+        verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
 
     /**
-     * Protects the contract that a showdown game end reveals both players' hole cards
-     * and the full five-card community board in the final-state snapshot.
+     * Protects the contract that a fold-win game end keeps hole cards private.
      */
     @Test
-    void broadcastGameEnd_FoldWinKeepsHoleCardsPrivate() {
+    void recordGameEnd_FoldWinKeepsHoleCardsPrivate() {
         Player winner = testPlayers.getFirst();
         Player loser = testPlayers.get(1);
         loser.setIsOut();
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        gameStateService.broadcastGameEnd(GAME_ID, testGame, winner, false);
-
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
-
-        GameEndResponse gameEndResponse = (GameEndResponse) captor.getValue();
+        GameEndResponse gameEndResponse = gameStateService.recordGameEnd(testGame, winner, false);
         PublicGameStateResponse finalState = gameEndResponse.finalState();
         assertNotNull(finalState);
 
@@ -527,7 +587,7 @@ class GameStateServiceTest {
     }
 
     @Test
-    void broadcastGameEnd_ContestedShowdownRevealsWinnerCards() {
+    void recordGameEnd_ContestedShowdownRevealsWinnerCards() {
         Player winner = testPlayers.getFirst();
         Player other = testPlayers.get(1);
         List<Card> board = List.of(new Card(Rank.ACE, Suit.SPADES),
@@ -548,13 +608,9 @@ class GameStateServiceTest {
                         Set.of(winner.getPlayerId()), 0, true)).scheduledTaskDeadlines(Map.of())
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .handEvaluator(handEvaluator).build();
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
-        gameStateService.broadcastGameEnd(GAME_ID, contested, winner, false);
+        GameEndResponse event = gameStateService.recordGameEnd(contested, winner, false);
 
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
-        GameEndResponse event = (GameEndResponse) captor.getValue();
         assertNotNull(event.finalState().players().stream().filter(player -> player.name().equals(winner.getName()))
                 .findFirst().orElseThrow().holeCards());
     }
@@ -575,19 +631,20 @@ class GameStateServiceTest {
                 .handContributions(Map.of()).preHandCarryOver(10).lastSettlementResult(settled)
                 .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
-        terminal.completeGameSettlement(bb);
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        terminal.settleGameEnd(bb, Set.of());
 
-        gameStateService.broadcastGameEnd(GAME_ID, terminal, bb, true);
+        GameEndResponse result = gameStateService.recordGameEnd(terminal, bb, true);
+        gameStateService.sendGameEnd(result);
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
 
-        GameEndResponse result = (GameEndResponse) captor.getValue();
-        assertEquals(1010, result.winnerChips());
-        assertEquals(0, result.finalState().pot());
-        assertEquals(1010, result.finalState().players().stream().filter(PublicPlayerState::isWinner)
+        GameEndResponse sent = assertInstanceOf(GameEndResponse.class, captor.getValue());
+        assertEquals(1010, sent.winnerChips());
+        assertEquals(0, sent.finalState().pot());
+        assertEquals(1010, sent.finalState().players().stream().filter(PublicPlayerState::isWinner)
                 .findFirst().orElseThrow().chips());
-        terminal.completeGameSettlement(bb);
+        terminal.settleGameEnd(bb, Set.of());
         assertEquals(1010, bb.getChips());
     }
 
@@ -608,10 +665,9 @@ class GameStateServiceTest {
                 .lastSettlementResult(settlement).preHandCarryOver(0).readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                 .handEvaluator(handEvaluator).build();
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
-        gameStateService.broadcastShowdownResults(GAME_ID, settled, List.of(), 0);
+        gameStateService.broadcastShowdownResults(settled);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
 
         PublicGameStateResponse response = (PublicGameStateResponse) captor.getValue();
@@ -643,9 +699,9 @@ class GameStateServiceTest {
                 .thenReturn(new HandEvaluationResult(List.of(), HandRank.ONE_PAIR))
                 .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
 
-        List<Player> winners = settled.conductShowdown();
+        settled.conductShowdown();
         ArgumentCaptor<Object> initialCaptor = ArgumentCaptor.forClass(Object.class);
-        gameStateService.broadcastShowdownResults(GAME_ID, settled, winners, 0);
+        gameStateService.broadcastShowdownResults(settled);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), initialCaptor.capture());
         PublicGameStateResponse initial = (PublicGameStateResponse) initialCaptor.getValue();
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(settled);
@@ -743,7 +799,7 @@ class GameStateServiceTest {
                 .scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
-        gameStateService.broadcastShowdownResults(GAME_ID, settled, List.of(winner), 150);
+        gameStateService.broadcastShowdownResults(settled);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         PublicGameStateResponse initial = (PublicGameStateResponse) captor.getValue();
         PublicGameStateResponse ready = gameStateService.getPublicGameStateSnapshot(settled);
@@ -809,6 +865,7 @@ class GameStateServiceTest {
                 .handContributions(Map.of())
                 .preHandCarryOver(0)
                 .lastSettlementResult(null)
+                .readyGateState(ReadyGateState.COUNTING_DOWN)
                 .readyCountdownActive(true)
                 .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
                 .everyoneHasHadInitialTurn(true)
@@ -846,6 +903,7 @@ class GameStateServiceTest {
                 .handContributions(Map.of())
                 .preHandCarryOver(0)
                 .lastSettlementResult(null)
+                .readyGateState(ReadyGateState.COUNTING_DOWN)
                 .readyCountdownActive(true)
                 .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
                 .everyoneHasHadInitialTurn(true)
@@ -854,7 +912,7 @@ class GameStateServiceTest {
                 .handEvaluator(handEvaluator)
                 .build();
 
-        gameStateService.broadcastGameState(GAME_ID, showdownGame);
+        gameStateService.broadcastGameState(showdownGame);
 
         ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
@@ -925,7 +983,7 @@ class GameStateServiceTest {
 
         // 1. Initial ready toggle (Player 1 marks ready)
         winner.setReadyForNextHand(true);
-        gameStateService.broadcastGameState(GAME_ID, showdownGame);
+        gameStateService.broadcastGameState(showdownGame);
 
         ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
@@ -960,7 +1018,7 @@ class GameStateServiceTest {
         winner.setReadyForNextHand(false);
         reset(messagingTemplate);
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        gameStateService.broadcastGameState(GAME_ID, showdownGame);
+        gameStateService.broadcastGameState(showdownGame);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         PublicGameStateResponse unreadyResponse = captor.getValue();
@@ -1057,22 +1115,21 @@ class GameStateServiceTest {
         assertFalse(p2.isCurrentPlayer());
     }
 
-    @Test
-    void broadcastGameState_AfterBroadcastShowdownResultsWithoutGameLevelSettlement_PreservesSettlementAcrossReadyToggle() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        Player winner = testPlayers.getFirst();
-        winner.setHandRank(HandRank.STRAIGHT);
-        winner.getHoleCards().clear();
-        winner.getHoleCards().addAll(List.of(new Card(Rank.TEN, Suit.SPADES), new Card(Rank.NINE, Suit.HEARTS)));
-
-        Game gameWithoutSettlement = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
-                .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList())
+    private Game settledGame(
+            String gameId,
+            List<Player> players,
+            Map<String, Integer> contestedAwards,
+            Set<String> winnerIds) {
+        return Game.restoreBuilder()
+                .gameId(gameId)
+                .players(players)
+                .activePlayerIds(players.stream().map(Player::getPlayerId).toList())
                 .remainingDeck(List.of())
                 .communityCards(List.of())
-                .pot(100)
+                .pot(0)
                 .dealerPosition(0)
                 .smallBlindPosition(0)
-                .bigBlindPosition(1)
+                .bigBlindPosition(Math.min(1, players.size() - 1))
                 .currentPlayerPosition(0)
                 .currentHighestBet(0)
                 .currentPhase(GamePhase.SHOWDOWN)
@@ -1081,37 +1138,13 @@ class GameStateServiceTest {
                 .bigBlind(10)
                 .handContributions(Map.of())
                 .preHandCarryOver(0)
-                .lastSettlementResult(null)
-                .readyCountdownActive(true)
-                .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
+                .lastSettlementResult(new HandSettlementResult(contestedAwards, Map.of(), winnerIds, 0, true))
+                .readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 .handEvaluator(handEvaluator)
                 .build();
-
-        // Broadcast initial showdown results (which populates retained settlement for the game)
-        gameStateService.broadcastShowdownResults(GAME_ID, gameWithoutSettlement, List.of(winner), 100);
-
-        // Player marks ready and triggers broadcastGameState
-        winner.setReadyForNextHand(true);
-        reset(messagingTemplate);
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        gameStateService.broadcastGameState(GAME_ID, gameWithoutSettlement);
-
-        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
-        PublicGameStateResponse response = captor.getValue();
-
-        assertEquals(List.of("Player1"), response.winners());
-        assertEquals(100, response.winningsPerPlayer());
-        assertTrue(response.handSettled());
-        PublicPlayerState p1 = response.players().stream()
-                .filter(p -> p.id().equals(winner.getPlayerId())).findFirst().orElseThrow();
-        assertTrue(p1.isWinner());
-        assertEquals(100, p1.chipsWon());
-        assertEquals(winner.getHoleCards(), p1.holeCards());
-        assertTrue(p1.isReadyForNextHand());
     }
 
     private Player settledPlayer(String name, String id, int contribution) {
@@ -1126,16 +1159,10 @@ class GameStateServiceTest {
      * Protects the contract that a forfeit game end does not reveal any hole cards.
      */
     @Test
-    void broadcastGameEnd_ForfeitPath_ShouldNotRevealHoleCards() {
+    void recordGameEnd_ForfeitPath_ShouldNotRevealHoleCards() {
         Player winner = testPlayers.getFirst();
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        gameStateService.broadcastGameEnd(GAME_ID, testGame, winner, true);
-
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
-
-        GameEndResponse gameEndResponse = (GameEndResponse) captor.getValue();
+        GameEndResponse gameEndResponse = gameStateService.recordGameEnd(testGame, winner, true);
         assertTrue(gameEndResponse.isForfeit());
         PublicGameStateResponse finalState = gameEndResponse.finalState();
         assertNotNull(finalState);
@@ -1146,31 +1173,37 @@ class GameStateServiceTest {
     // ==================== Edge Case Tests ====================
 
     /**
-     * Protects the contract that broadcast showdown results with folded player should mark as folded.
+     * Protects the contract that broadcast showdown results with folded player marks them as FOLDED.
      */
     @Test
     void broadcastShowdownResults_WithFoldedPlayer_ShouldMarkAsFolded() {
         testPlayers.get(1).doAction(PlayerAction.FOLD, 0, 0);
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player winner = testPlayers.getFirst();
+        Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 100), Set.of(winner.getPlayerId()));
 
-        List<Player> winners = List.of(testPlayers.get(0));
-        gameStateService.broadcastShowdownResults(GAME_ID, testGame, winners, 100);
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        gameStateService.broadcastShowdownResults(settled);
 
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        PublicGameStateResponse response = assertInstanceOf(PublicGameStateResponse.class, captor.getValue());
+        assertEquals("FOLDED", response.players().get(1).status());
     }
 
     /**
-     * Protects the contract that broadcast showdown results with all in player should mark as all in.
+     * Protects the contract that broadcast showdown results with all-in player marks them as ALL_IN.
      */
     @Test
     void broadcastShowdownResults_WithAllInPlayer_ShouldMarkAsAllIn() {
         testPlayers.getFirst().doAction(PlayerAction.ALL_IN, 0, 0);
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        Player winner = testPlayers.getFirst();
+        Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 100), Set.of(winner.getPlayerId()));
 
-        List<Player> winners = List.of(testPlayers.getFirst());
-        gameStateService.broadcastShowdownResults(GAME_ID, testGame, winners, 100);
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        gameStateService.broadcastShowdownResults(settled);
 
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        PublicGameStateResponse response = assertInstanceOf(PublicGameStateResponse.class, captor.getValue());
+        assertEquals("ALL_IN", response.players().getFirst().status());
     }
 
     // ==================== GamePhase Tests ====================
@@ -1182,7 +1215,7 @@ class GameStateServiceTest {
     void broadcastGameState_DuringPreflop_ShouldBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
 
         verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
     }
@@ -1198,7 +1231,7 @@ class GameStateServiceTest {
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         Object payload = captor.getValue();
@@ -1222,7 +1255,7 @@ class GameStateServiceTest {
         testGame.postBlinds();
         testGame.dealFlop();
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
 
         verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
         assertEquals(3, testGame.getCommunityCards().size());
@@ -1240,7 +1273,7 @@ class GameStateServiceTest {
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         Object payload = captor.getValue();
@@ -1263,9 +1296,9 @@ class GameStateServiceTest {
     void multipleBroadcasts_ShouldAllSucceed() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
-        gameStateService.broadcastGameState(GAME_ID, testGame);
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
+        gameStateService.broadcastGameState(testGame);
+        gameStateService.broadcastGameState(testGame);
 
         // 3 public broadcasts via convertAndSend + 3*(2 name-private) via convertAndSendToUser
         verify(messagingTemplate, times(3)).convertAndSend(anyString(), any(Object.class));
@@ -1280,8 +1313,8 @@ class GameStateServiceTest {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
+        gameStateService.broadcastGameState(testGame);
 
         verify(messagingTemplate, times(2)).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         List<PublicGameStateResponse> responses = captor.getAllValues();
@@ -1298,7 +1331,7 @@ class GameStateServiceTest {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         testGame.getActivePlayers().clear();
 
-        assertDoesNotThrow(() -> gameStateService.broadcastGameState(GAME_ID, testGame));
+        assertDoesNotThrow(() -> gameStateService.broadcastGameState(testGame));
     }
 
     // ==================== Status Precedence Tests ====================
@@ -1464,7 +1497,7 @@ class GameStateServiceTest {
         Player player2 = new Player("Player2", UUID.randomUUID().toString(), 100);
 
         List<Player> players = List.of(player1, player2);
-        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
 
         PrivatePlayerState snapshot = gameStateService.getPrivatePlayerStateSnapshot(game, "Player1");
 
@@ -1480,7 +1513,7 @@ class GameStateServiceTest {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         testGame.resetForNewHand();
 
-        gameStateService.broadcastGameState(GAME_ID, testGame);
+        gameStateService.broadcastGameState(testGame);
 
         ArgumentCaptor<PrivatePlayerState> captor = ArgumentCaptor.forClass(PrivatePlayerState.class);
         for (Player player : testGame.getPlayers()) {
@@ -1497,109 +1530,369 @@ class GameStateServiceTest {
     }
 
     @Test
-    @DisplayName("captureGameEnd clamps maxPlayers to [2, 10] and never emits 0 when room is null")
-    void captureGameEnd_WhenRoomIsNull_ClampsMaxPlayersToValidRange() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(null);
-        Player winner = testPlayers.get(0);
-
-        GameEndResponse response = gameStateService.captureGameEnd(GAME_ID, testGame, winner, false, 0);
-
-        assertNotNull(response);
-        assertNotNull(response.finalState());
-        int maxPlayers = response.finalState().maxPlayers();
-        assertTrue(maxPlayers >= 2 && maxPlayers <= 10, "maxPlayers must be within [2, 10], got: " + maxPlayers);
-        assertEquals(2, maxPlayers, "Should resolve to retained player count (2) when room is null");
-        assertNotEquals(0, maxPlayers, "finalState.maxPlayers must never be 0");
-    }
-
-    @Test
-    @DisplayName("captureGameEnd clamps maxPlayers to retained count clamped at 10 when room is null")
-    void captureGameEnd_WhenRoomIsNullWithManyPlayers_ClampsMaxPlayersToRetainedCount() {
-        List<Player> fourPlayers = new ArrayList<>();
-        fourPlayers.add(new Player("P1", UUID.randomUUID().toString(), 100));
-        fourPlayers.add(new Player("P2", UUID.randomUUID().toString(), 100));
-        fourPlayers.add(new Player("P3", UUID.randomUUID().toString(), 100));
-        fourPlayers.add(new Player("P4", UUID.randomUUID().toString(), 100));
-        Game fourPlayerGame = new Game("four-player-game", fourPlayers, 5, 10, handEvaluator);
-        when(roomService.getRoom("four-player-game")).thenReturn(null);
-
-        GameEndResponse response = gameStateService.captureGameEnd("four-player-game", fourPlayerGame, fourPlayers.get(0), false, 0);
-
-        assertNotNull(response);
-        assertNotNull(response.finalState());
-        assertEquals(4, response.finalState().maxPlayers());
-    }
-
-    @Test
-    @DisplayName("captureGameEnd clamps maxPlayers out of bounds to [2, 10]")
-    void captureGameEnd_WhenConfiguredMaxPlayersOutOfBounds_ClampsToValidRange() {
-        Player winner = testPlayers.get(0);
-
-        // Negative maxPlayers
-        GameEndResponse responseNegative = gameStateService.captureGameEnd(GAME_ID, testGame, winner, false, -1);
-        assertNotNull(responseNegative.finalState());
-        assertTrue(responseNegative.finalState().maxPlayers() >= 2 && responseNegative.finalState().maxPlayers() <= 10);
-
-        // 1 player (below minimum 2)
-        GameEndResponse responseOne = gameStateService.captureGameEnd(GAME_ID, testGame, winner, false, 1);
-        assertNotNull(responseOne.finalState());
-        assertTrue(responseOne.finalState().maxPlayers() >= 2 && responseOne.finalState().maxPlayers() <= 10);
-
-        // Valid configured maxPlayers (6)
-        GameEndResponse responseSix = gameStateService.captureGameEnd(GAME_ID, testGame, winner, false, 6);
-        assertNotNull(responseSix.finalState());
-        assertEquals(6, responseSix.finalState().maxPlayers());
-    }
-
-    @Test
-    @DisplayName("broadcastGameEnd emits clamped maxPlayers in finalState when room is null")
-    void broadcastGameEnd_WhenRoomIsNull_EmitsClampedMaxPlayersInFinalState() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(null);
-        Player winner = testPlayers.get(0);
-
-        gameStateService.broadcastGameEnd(GAME_ID, testGame, winner, false);
-
-        GameEndResponse retained = testGame.getRetainedTerminalResult();
-        assertNotNull(retained);
-        assertNotNull(retained.finalState());
-        int maxPlayers = retained.finalState().maxPlayers();
-        assertTrue(maxPlayers >= 2 && maxPlayers <= 10, "maxPlayers must be within [2, 10], got: " + maxPlayers);
-        assertNotEquals(0, maxPlayers, "finalState.maxPlayers must never be 0 when room is null");
-
-        ArgumentCaptor<GameEndResponse> captor = ArgumentCaptor.forClass(GameEndResponse.class);
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
-        assertEquals(maxPlayers, captor.getValue().finalState().maxPlayers());
-    }
-
-    @Test
-    @DisplayName("clearRetainedSettlement evicts cached settlement entry for gameId")
-    void clearRetainedSettlement_EvictsCachedSettlementEntry() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        gameStateService.broadcastShowdownResults(GAME_ID, testGame, List.of(testPlayers.getFirst()), 100);
-        assertTrue(gameStateService.hasRetainedSettlement(GAME_ID));
-
-        gameStateService.clearRetainedSettlement(GAME_ID);
-
-        assertFalse(gameStateService.hasRetainedSettlement(GAME_ID));
-    }
-
-    @Test
-    @DisplayName("projectGameEnd does not increment stateRevision while captureGameEnd increments and clears retainedSettlements")
-    void projectGameEnd_DoesNotIncrementStateRevision_AndCaptureClearsRetainedSettlements() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+    @DisplayName("recordGameEnd preserves game's clamped [2, 10] capacity across restored out-of-range settings")
+    void recordGameEnd_PreservesClampedMaxPlayersFromGame() {
         Player winner = testPlayers.getFirst();
-        gameStateService.broadcastShowdownResults(GAME_ID, testGame, List.of(winner), 100);
-        assertTrue(gameStateService.hasRetainedSettlement(GAME_ID));
+        int[] outOfRangeValues = {
+                Integer.MIN_VALUE, -999999, -1, 0, 1, 11, 12, 100, 999999, Integer.MAX_VALUE
+        };
 
-        long revisionBefore = testGame.getStateRevision();
-        GameEndResponse projected = gameStateService.projectGameEnd(GAME_ID, testGame, winner, false, 6);
+        for (int val : outOfRangeValues) {
+            Game restored = Game.restoreBuilder()
+                    .gameId(GAME_ID)
+                    .maxPlayers(val)
+                    .players(testPlayers)
+                    .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList())
+                    .remainingDeck(List.of())
+                    .communityCards(List.of())
+                    .pot(0)
+                    .dealerPosition(0)
+                    .smallBlindPosition(0)
+                    .bigBlindPosition(1)
+                    .currentPlayerPosition(0)
+                    .currentHighestBet(0)
+                    .currentPhase(GamePhase.SHOWDOWN)
+                    .gameOver(true)
+                    .smallBlind(5)
+                    .bigBlind(10)
+                    .handContributions(Map.of())
+                    .preHandCarryOver(0)
+                    .readyCountdownActive(false)
+                    .everyoneHasHadInitialTurn(true)
+                    .actedPlayersInRound(Set.of())
+                    .scheduledTaskDeadlines(Map.of())
+                    .handEvaluator(handEvaluator)
+                    .build();
+
+            GameEndResponse response = gameStateService.buildGameEndResponse(restored, winner, false);
+            int maxPlayers = response.finalState().maxPlayers();
+            assertEquals(2, maxPlayers,
+                    "val=" + val + " should clamp to retained player count (2), got: " + maxPlayers);
+        }
+
+        Game validCapacityGame = new Game("four-player-game", List.of(
+                new Player("P1", "id-1", 100),
+                new Player("P2", "id-2", 100),
+                new Player("P3", "id-3", 100),
+                new Player("P4", "id-4", 100)), 8, 5, 10, handEvaluator);
+        GameEndResponse response = gameStateService.recordGameEnd(validCapacityGame, validCapacityGame.getPlayers().getFirst(), false);
+        assertEquals(8, response.finalState().maxPlayers());
+        assertEquals(FIXED_INSTANT.toEpochMilli(), response.finalState().serverTimeEpochMs());
+    }
+
+    @Test
+    @DisplayName("buildGameEndResponse does not increment stateRevision while recordGameEnd increments it")
+    void buildGameEndResponse_DoesNotIncrementStateRevision_WhileRecordGameEndDoes() {
+        Player winner = testPlayers.getFirst();
+        Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 100), Set.of(winner.getPlayerId()));
+
+        long revisionBefore = settled.getStateRevision();
+        GameEndResponse projected = gameStateService.buildGameEndResponse(settled, winner, false);
         assertNotNull(projected);
-        assertEquals(revisionBefore, testGame.getStateRevision(), "projectGameEnd must not increment stateRevision");
+        assertEquals(revisionBefore, settled.getStateRevision(), "buildGameEndResponse must not increment stateRevision");
         assertEquals(revisionBefore, projected.finalState().stateRevision());
 
-        GameEndResponse captured = gameStateService.captureGameEnd(GAME_ID, testGame, winner, false, 6);
-        assertNotNull(captured);
-        assertEquals(revisionBefore + 1, testGame.getStateRevision(), "captureGameEnd must increment stateRevision");
-        assertFalse(gameStateService.hasRetainedSettlement(GAME_ID), "captureGameEnd must clear retainedSettlements");
+        GameEndResponse recorded = gameStateService.recordGameEnd(settled, winner, false);
+        assertNotNull(recorded);
+        assertEquals(revisionBefore + 1, settled.getStateRevision(), "recordGameEnd must increment stateRevision");
+        assertEquals(revisionBefore + 1, recorded.finalState().stateRevision());
+    }
+
+    @Test
+    @DisplayName("recordAbandonment and buildAbandonmentResponse build INACTIVITY closure and increment revision only on record")
+    void recordAbandonment_AndBuildAbandonmentResponse_IncrementRevisionOnlyOnRecord() {
+        long revisionBefore = testGame.getStateRevision();
+        GameEndResponse preview = gameStateService.buildAbandonmentResponse(testGame);
+        assertEquals(revisionBefore, testGame.getStateRevision());
+        assertTrue(preview.abandoned());
+        assertEquals("INACTIVITY", preview.reason());
+        assertNull(preview.winner());
+
+        GameEndResponse recorded = gameStateService.recordAbandonment(testGame);
+        assertEquals(revisionBefore + 1, testGame.getStateRevision());
+        assertEquals(revisionBefore + 1, recorded.finalState().stateRevision());
+        assertTrue(recorded.abandoned());
+        assertEquals("INACTIVITY", recorded.reason());
+
+        gameStateService.sendGameEnd(recorded);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), eq(recorded));
+    }
+
+    @Test
+    @DisplayName("Repeated ready/unready toggling during showdown retains settlement and suppresses currentPlayer")
+    void readyFlapping_preservesSettlementIntegrity() {
+        String roomAId = "room-alpha";
+        Room roomA = new Room(roomAId, "Room A", "Alice", 6, 5, 10, 100, null);
+        roomA.addPlayer("Alice");
+        roomA.addPlayer("Bob");
+        roomA.addPlayer("Charlie");
+        when(roomService.getRoom(roomAId)).thenReturn(roomA);
+
+        Player p1 = createIsolationPlayer("Alice", "p-1", 500, false);
+        Player p2 = createIsolationPlayer("Bob", "p-2", 300, false);
+        Player p3Folded = createIsolationPlayer("Charlie", "p-3", 200, true);
+        p1.setHandRank(HandRank.FULL_HOUSE);
+        p2.setHandRank(HandRank.FLUSH);
+        p3Folded.setHandRank(HandRank.NO_HAND);
+
+        HandSettlementResult settlement = new HandSettlementResult(
+                Map.of("p-1", 450), Map.of(), Set.of("p-1"), 0, true);
+
+        Game game = Game.restoreBuilder()
+                .gameId(roomAId)
+                .players(List.of(p1, p2, p3Folded))
+                .activePlayerIds(List.of("p-1", "p-2"))
+                .remainingDeck(List.of())
+                .communityCards(List.of(
+                        new Card(Rank.TEN, Suit.DIAMONDS),
+                        new Card(Rank.TEN, Suit.CLUBS),
+                        new Card(Rank.TEN, Suit.SPADES)))
+                .pot(0)
+                .dealerPosition(0)
+                .smallBlindPosition(0)
+                .bigBlindPosition(1)
+                .currentPlayerPosition(1)
+                .currentHighestBet(0)
+                .currentPhase(GamePhase.SHOWDOWN)
+                .gameOver(false)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handContributions(Map.of())
+                .preHandCarryOver(0)
+                .lastSettlementResult(settlement)
+                .readyCountdownActive(true)
+                .readyCountdownDeadlineEpochMs(FIXED_INSTANT.toEpochMilli() + 10000)
+                .everyoneHasHadInitialTurn(true)
+                .actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of())
+                .handEvaluator(handEvaluator)
+                .build();
+
+        gameStateService.broadcastShowdownResults(game);
+
+        Random rng = new Random(42);
+        for (int i = 0; i < 100; i++) {
+            p1.setReadyForNextHand(rng.nextBoolean());
+            p2.setReadyForNextHand(rng.nextBoolean());
+
+            PublicGameStateResponse snapshot = gameStateService.getPublicGameStateSnapshot(game);
+
+            assertNull(snapshot.currentPlayerName(), "Iteration " + i + ": currentPlayerName must be null during showdown countdown");
+            assertNull(snapshot.currentPlayerId(), "Iteration " + i + ": currentPlayerId must be null during showdown countdown");
+            assertTrue(snapshot.legalActions().isEmpty(), "Iteration " + i + ": legalActions must be empty");
+
+            assertTrue(snapshot.handSettled(), "Iteration " + i + ": handSettled must remain true");
+            assertEquals(List.of("Alice"), snapshot.winners(), "Iteration " + i + ": winners must remain [Alice]");
+            assertEquals(450, snapshot.winningsPerPlayer(), "Iteration " + i + ": winningsPerPlayer must remain 450");
+
+            PublicPlayerState pubP1 = snapshot.players().stream().filter(p -> p.id().equals("p-1")).findFirst().orElseThrow();
+            PublicPlayerState pubP2 = snapshot.players().stream().filter(p -> p.id().equals("p-2")).findFirst().orElseThrow();
+            PublicPlayerState pubP3 = snapshot.players().stream().filter(p -> p.id().equals("p-3")).findFirst().orElseThrow();
+
+            assertFalse(pubP1.isCurrentPlayer());
+            assertFalse(pubP2.isCurrentPlayer());
+            assertFalse(pubP3.isCurrentPlayer());
+
+            assertTrue(pubP1.isWinner());
+            assertEquals(450, pubP1.chipsWon());
+            assertNotNull(pubP1.holeCards(), "Winner holeCards must be revealed");
+
+            assertFalse(pubP2.isWinner());
+            assertEquals(0, pubP2.chipsWon());
+            assertNotNull(pubP2.holeCards(), "Contender holeCards must be revealed");
+
+            assertFalse(pubP3.isWinner());
+            assertNull(pubP3.holeCards(), "Folded player holeCards must NEVER be revealed");
+        }
+    }
+
+    @Test
+    @DisplayName("Settled showdown in one room does not leak into an active hand in another room")
+    void multiRoomIsolation_noSettlementLeak() {
+        String roomBId = "room-beta";
+        Room roomB = new Room(roomBId, "Room B", "HostB", 4, 10, 20, 200, null);
+        roomB.addPlayer("Xavier");
+        roomB.addPlayer("Yvonne");
+        when(roomService.getRoom(roomBId)).thenReturn(roomB);
+
+        Player pA1 = createIsolationPlayer("Alice", "p-a1", 500, false);
+        Player pA2 = createIsolationPlayer("Bob", "p-a2", 300, false);
+        Game gameA = Game.restoreBuilder()
+                .gameId("room-alpha")
+                .players(List.of(pA1, pA2))
+                .activePlayerIds(List.of("p-a1", "p-a2"))
+                .remainingDeck(List.of())
+                .communityCards(List.of())
+                .pot(100)
+                .dealerPosition(0)
+                .smallBlindPosition(0)
+                .bigBlindPosition(1)
+                .currentPlayerPosition(0)
+                .currentHighestBet(0)
+                .currentPhase(GamePhase.SHOWDOWN)
+                .gameOver(false)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handContributions(Map.of())
+                .preHandCarryOver(0)
+                .lastSettlementResult(new HandSettlementResult(Map.of("p-a1", 100), Map.of(), Set.of("p-a1"), 0, true))
+                .readyCountdownActive(true)
+                .everyoneHasHadInitialTurn(true)
+                .actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of())
+                .handEvaluator(handEvaluator)
+                .build();
+
+        gameStateService.broadcastShowdownResults(gameA);
+
+        Player pB1 = createIsolationPlayer("Xavier", "p-b1", 400, false);
+        Player pB2 = createIsolationPlayer("Yvonne", "p-b2", 400, false);
+        Game gameB = Game.restoreBuilder()
+                .gameId(roomBId)
+                .players(List.of(pB1, pB2))
+                .activePlayerIds(List.of("p-b1", "p-b2"))
+                .remainingDeck(List.of())
+                .communityCards(List.of(
+                        new Card(Rank.TWO, Suit.CLUBS),
+                        new Card(Rank.THREE, Suit.DIAMONDS),
+                        new Card(Rank.FOUR, Suit.HEARTS)))
+                .pot(40)
+                .dealerPosition(0)
+                .smallBlindPosition(0)
+                .bigBlindPosition(1)
+                .currentPlayerPosition(0)
+                .currentHighestBet(20)
+                .currentPhase(GamePhase.FLOP)
+                .gameOver(false)
+                .smallBlind(10)
+                .bigBlind(20)
+                .handContributions(Map.of())
+                .preHandCarryOver(0)
+                .lastSettlementResult(null)
+                .readyCountdownActive(false)
+                .everyoneHasHadInitialTurn(true)
+                .actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of())
+                .handEvaluator(handEvaluator)
+                .build();
+
+        PublicGameStateResponse snapshotB = gameStateService.getPublicGameStateSnapshot(gameB);
+
+        assertFalse(snapshotB.handSettled(), "Room B must NOT be marked settled");
+        assertNull(snapshotB.winners(), "Room B must have no winners");
+        assertNotNull(snapshotB.currentPlayerName(), "Room B must have an active currentPlayer");
+        assertEquals("Xavier", snapshotB.currentPlayerName());
+    }
+
+    @Test
+    void privateProjectionWhileHoldingGameDoesNotWaitForRoomMonitor() throws Exception {
+        Room room = new Room("room", "Room", "Alice", 6, 5, 10, 100, null);
+        room.addPlayer("Alice");
+        RoomService rooms = mock(RoomService.class);
+        when(rooms.getRoom("room")).thenReturn(room);
+        GameStateService projections = new GameStateService(rooms, mock(SimpMessagingTemplate.class), FIXED_CLOCK);
+        Game game = new Game("room", List.of(
+                new Player("Alice", "alice-id", 100),
+                new Player("Host", "host-id", 100)), 6, 5, 10, handEvaluator);
+
+        AtomicBoolean roomMonitorEntered = new AtomicBoolean(false);
+        AtomicBoolean releaseRoomMonitor = new AtomicBoolean(false);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            executor.submit(() -> {
+                synchronized (room) {
+                    roomMonitorEntered.set(true);
+                    Awaitility.await().atMost(5, TimeUnit.SECONDS).untilTrue(releaseRoomMonitor);
+                }
+            });
+
+            Awaitility.await().atMost(2, TimeUnit.SECONDS).untilTrue(roomMonitorEntered);
+
+            Future<?> publish = executor.submit(() -> {
+                synchronized (game) {
+                    projections.broadcastGameState(game);
+                }
+            });
+
+            try {
+                assertDoesNotThrow(() -> publish.get(2, TimeUnit.SECONDS));
+            } finally {
+                releaseRoomMonitor.set(true);
+            }
+        }
+    }
+
+    @Test
+    void retiredSocketCannotReceivePrivateMessagesForReplacementMembership() {
+        PlayerPrincipal retired = new PlayerPrincipal("Alice", "room", "retired");
+        Room room = new Room("room", "Room", "Host", 6, 5, 10, 100, null);
+        room.addPlayer("Alice");
+        PlayerPrincipal replacement = new PlayerPrincipal("Alice", "room", room.getMembershipId("Alice"));
+        RoomService rooms = mock(RoomService.class);
+        when(rooms.getRoom("room")).thenReturn(room);
+        SimpMessagingTemplate publisher = mock(SimpMessagingTemplate.class);
+        GameStateService projections = new GameStateService(rooms, publisher, FIXED_CLOCK);
+
+        SimpUserRegistry registry = mock(SimpUserRegistry.class);
+        SimpUser retiredUser = simpUser("retired-socket");
+        SimpUser replacementUser = simpUser("replacement-socket", "replacement-second-tab");
+        when(registry.getUser(anyString())).thenAnswer(invocation -> {
+            String name = invocation.getArgument(0);
+            if (name.equals(retired.getName()) && name.equals(replacement.getName())) {
+                Set<SimpSession> combined = new HashSet<>(retiredUser.getSessions());
+                combined.addAll(replacementUser.getSessions());
+                SimpUser both = mock(SimpUser.class);
+                when(both.getSessions()).thenReturn(combined);
+                return both;
+            }
+            return name.equals(replacement.getName()) ? replacementUser : retiredUser;
+        });
+
+        Game game = new Game("room", List.of(
+                new Player("Alice", "alice-id", 100),
+                new Player("Host", "host-id", 100)), 6, 5, 10, handEvaluator);
+        projections.broadcastGameState(game);
+        ArgumentCaptor<String> recipient = ArgumentCaptor.forClass(String.class);
+        verify(publisher).convertAndSendToUser(recipient.capture(), eq("/queue/private"), any(PrivatePlayerState.class));
+
+        SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
+        headers.setDestination("/user/" + recipient.getValue() + "/queue/private");
+        var resolved = new DefaultUserDestinationResolver(registry).resolveDestination(
+                MessageBuilder.createMessage(new byte[0], headers.getMessageHeaders()));
+        assertNotNull(resolved);
+        assertEquals(Set.of("/queue/private-userreplacement-socket", "/queue/private-userreplacement-second-tab"),
+                resolved.getTargetDestinations());
+        assertNotEquals(retired.getName(), replacement.getName(),
+                "A replacement must have a distinct broker identity");
+    }
+
+    private Player createIsolationPlayer(String name, String id, int chips, boolean folded) {
+        return Player.restoreBuilder()
+                .name(name)
+                .playerId(id)
+                .chips(chips)
+                .holeCards(new ArrayList<>(List.of(
+                        new Card(Rank.ACE, Suit.SPADES),
+                        new Card(Rank.KING, Suit.HEARTS))))
+                .bestHand(new ArrayList<>())
+                .currentBet(0)
+                .hasFolded(folded)
+                .allIn(false)
+                .out(false)
+                .disconnected(false)
+                .readyForNextHand(false)
+                .build();
+    }
+
+    private static SimpUser simpUser(String... sessionIds) {
+        SimpUser user = mock(SimpUser.class);
+        Set<SimpSession> sessions = new HashSet<>();
+        for (String id : sessionIds) {
+            SimpSession session = mock(SimpSession.class);
+            lenient().when(session.getId()).thenReturn(id);
+            sessions.add(session);
+        }
+        lenient().when(user.getSessions()).thenReturn(sessions);
+        return user;
     }
 }

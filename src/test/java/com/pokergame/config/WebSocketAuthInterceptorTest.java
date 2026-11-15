@@ -4,13 +4,13 @@ import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.RoomService;
 import com.pokergame.service.RoomCoordinator;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessagingException;
@@ -25,7 +25,6 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.lenient;
 import com.pokergame.model.Room;
 
 /** Tests WebSocket auth interceptor behavior. */
@@ -39,14 +38,11 @@ class WebSocketAuthInterceptorTest {
     @Mock
     private RoomService roomService;
 
+    @Spy
+    private RoomCoordinator roomCoordinator = new RoomCoordinator();
+
     @InjectMocks
     private WebSocketAuthInterceptor interceptor;
-
-    /** Uses the same real coordination boundary for all membership checks in this fixture. */
-    @BeforeEach
-    void configureRoomCoordinator() {
-        lenient().when(roomService.getRoomCoordinator()).thenReturn(new RoomCoordinator());
-    }
 
     private static final String VALID_TOKEN = "valid.jwt.token";
     private static final String ROOM_ID = "room-123";
@@ -234,22 +230,6 @@ class WebSocketAuthInterceptorTest {
     }
 
     /**
-     * Protects the contract that SEND frames to /app/game/{roomId}/action with mismatched principal roomId are rejected.
-     */
-    @Test
-    @DisplayName("should reject SEND frame to /app/game/{roomId}/action with mismatched roomId")
-    void givenMismatchedRoom_whenSendToAppGameAction_thenThrowAccessDeniedException() {
-        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
-        accessor.setDestination("/app/game/other-room/action");
-        accessor.setUser(PRINCIPAL);
-        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
-
-        assertThatThrownBy(() -> interceptor.preSend(message, null))
-                .isInstanceOf(AccessDeniedException.class)
-                .hasMessageContaining("User not authorized for this room destination");
-    }
-
-    /**
      * Protects the contract that SEND frames to /app/{roomId}/action with mismatched principal roomId are rejected.
      */
     @Test
@@ -266,50 +246,19 @@ class WebSocketAuthInterceptorTest {
     }
 
     /**
-     * Protects the contract that SEND frames to /app/room/{roomId}/action with mismatched principal roomId are rejected.
-     */
-    @Test
-    @DisplayName("should reject SEND frame to /app/room/{roomId}/action with mismatched roomId")
-    void givenMismatchedRoom_whenSendToAppRoomPrefixAction_thenThrowAccessDeniedException() {
-        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
-        accessor.setDestination("/app/room/other-room/action");
-        accessor.setUser(PRINCIPAL);
-        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
-
-        assertThatThrownBy(() -> interceptor.preSend(message, null))
-                .isInstanceOf(AccessDeniedException.class)
-                .hasMessageContaining("User not authorized for this room destination");
-    }
-
-    /**
      * Protects the contract that unauthenticated SEND frames to room destinations are rejected.
      */
     @Test
     @DisplayName("should reject SEND frame to room destination when unauthenticated")
     void givenUnauthenticated_whenSendToRoomDestination_thenThrowAccessDeniedException() {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
-        accessor.setDestination("/app/game/" + ROOM_ID + "/action");
+        accessor.setDestination("/app/" + ROOM_ID + "/action");
         accessor.setUser(null);
         Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
 
         assertThatThrownBy(() -> interceptor.preSend(message, null))
                 .isInstanceOf(AccessDeniedException.class)
                 .hasMessageContaining("User not authorized for this room destination");
-    }
-
-    /**
-     * Protects the contract that SEND frames to /app/game/{roomId}/action with matching roomId succeed.
-     */
-    @Test
-    @DisplayName("should allow SEND frame to /app/game/{roomId}/action with matching roomId")
-    void givenMatchingRoom_whenSendToAppGameAction_thenAllow() {
-        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
-        accessor.setDestination("/app/game/" + ROOM_ID + "/action");
-        accessor.setUser(PRINCIPAL);
-        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
-
-        Message<?> result = interceptor.preSend(message, null);
-        assertThat(result).isNotNull();
     }
 
     /**
@@ -334,7 +283,7 @@ class WebSocketAuthInterceptorTest {
     @DisplayName("should allow SEND frame when principal is stored in session attributes")
     void givenSessionAttributesPrincipal_whenSendWithMatchingRoom_thenAllow() {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
-        accessor.setDestination("/app/game/" + ROOM_ID + "/action");
+        accessor.setDestination("/app/" + ROOM_ID + "/action");
         accessor.setUser(null);
         accessor.setSessionAttributes(Map.of("playerPrincipal", PRINCIPAL));
         Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
@@ -453,44 +402,13 @@ class WebSocketAuthInterceptorTest {
     }
 
     /**
-     * Protects the contract that SEND frames to /app/game/{roomId}/ready with matching roomId succeed.
-     */
-    @Test
-    @DisplayName("should allow SEND frame to /app/game/{roomId}/ready with matching roomId")
-    void givenMatchingRoom_whenSendToAppGameReadyDestination_thenAllow() {
-        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
-        accessor.setDestination("/app/game/" + ROOM_ID + "/ready");
-        accessor.setUser(PRINCIPAL);
-        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
-
-        Message<?> result = interceptor.preSend(message, null);
-        assertThat(result).isNotNull();
-    }
-
-    /**
-     * Protects the contract that SEND frames to /app/game/{roomId}/ready with mismatched roomId are rejected.
-     */
-    @Test
-    @DisplayName("should reject SEND frame to /app/game/{roomId}/ready with mismatched roomId")
-    void givenMismatchedRoom_whenSendToAppGameReadyDestination_thenThrowAccessDeniedException() {
-        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
-        accessor.setDestination("/app/game/other-room/ready");
-        accessor.setUser(PRINCIPAL);
-        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
-
-        assertThatThrownBy(() -> interceptor.preSend(message, null))
-                .isInstanceOf(AccessDeniedException.class)
-                .hasMessageContaining("User not authorized for this room destination");
-    }
-
-    /**
      * Protects the contract that URL-encoded room IDs matching the principal roomId succeed.
      */
     @Test
     @DisplayName("should allow SEND frame with URL-encoded roomId matching principal")
     void givenUrlEncodedMatchingRoom_whenSend_thenAllow() {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
-        accessor.setDestination("/app/game/room%2D123/action");
+        accessor.setDestination("/app/room%2D123/action");
         accessor.setUser(PRINCIPAL);
         Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
 
@@ -547,6 +465,19 @@ class WebSocketAuthInterceptorTest {
         Message<byte[]> validSendMsg = MessageBuilder.createMessage(new byte[0], validSendAccessor.getMessageHeaders());
 
         assertThat(interceptor.preSend(validSendMsg, null)).isNotNull();
+    }
+
+    @Test
+    @DisplayName("should reject SUBSCRIBE to user private queue when identity lacks membership")
+    void signedIdentityWithoutMembershipCannotSubscribeToPrivateQueue() {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        accessor.setUser(new PlayerPrincipal("Alice", "room"));
+        accessor.setDestination("/user/queue/private");
+        accessor.setLeaveMutable(true);
+
+        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+        assertThatThrownBy(() -> interceptor.preSend(message, null))
+                .isInstanceOf(AccessDeniedException.class);
     }
 
 }

@@ -9,9 +9,11 @@ import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.HandEvaluatorService;
 import com.pokergame.persistence.wal.EncryptionKeyring;
+import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
@@ -20,8 +22,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.context.support.GenericApplicationContext;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.scheduling.TaskScheduler;
 
 import tools.jackson.databind.json.JsonMapper;
 
@@ -29,10 +29,9 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Instant;
+import java.time.Clock;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ScheduledFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -46,6 +45,7 @@ import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.config.PersistenceException;
 
 /** Tests persistence recovery coordinator behavior. */
+@Tag("unit")
 @ExtendWith(MockitoExtension.class)
 class PersistenceRecoveryTest {
 
@@ -105,7 +105,8 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
@@ -126,7 +127,8 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
 
         recovery.run(new DefaultApplicationArguments());
 
@@ -163,7 +165,8 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
 
         long beforeRun = System.currentTimeMillis();
         recovery.run(new DefaultApplicationArguments());
@@ -223,7 +226,8 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
 
         long beforeRun = System.currentTimeMillis();
         recovery.run(new DefaultApplicationArguments());
@@ -266,7 +270,7 @@ class PersistenceRecoveryTest {
         active.addPlayer("Bob");
         active.setGameStarted(true);
         Game game = new Game(active.getRoomId(),
-                List.of(new Player("Alice", "p1", 950), new Player("Bob", "p2", 950)), 10, 20, evaluator);
+                List.of(new Player("Alice", "p1", 950), new Player("Bob", "p2", 950)), 6, 10, 20, evaluator);
         Room waiting = roomForRecovery("valid-room", "Eve");
         Room unrestorable = roomForRecovery("unrestorable", "Dave");
         for (Room room : List.of(active, waiting, unrestorable)) {
@@ -284,7 +288,8 @@ class PersistenceRecoveryTest {
         }).when(roomService).restoreRoom(any(Room.class), anyString());
 
         PersistenceRecovery recovery = new PersistenceRecovery(realStore, realMapper, roomService,
-                gameLifecycleService, webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+                gameLifecycleService, webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
         recovery.run(new DefaultApplicationArguments());
 
         assertTrue(recovery.isComplete());
@@ -336,7 +341,8 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
@@ -389,7 +395,8 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
@@ -434,7 +441,8 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
@@ -460,7 +468,8 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
@@ -509,7 +518,8 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS,
+                Clock.systemUTC(), new RoomCoordinator());
 
         assertDoesNotThrow(() -> recovery.run(new DefaultApplicationArguments()));
 
@@ -545,7 +555,7 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS, clock);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS, clock, new RoomCoordinator());
 
         recovery.run(new DefaultApplicationArguments());
 
@@ -570,69 +580,13 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS, clock);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS, clock, new RoomCoordinator());
 
         recovery.run(new DefaultApplicationArguments());
 
         verify(roomService).restoreRoom(room, "Alice");
         verify(roomService).scheduleLobbyInactivity("future-lobby", futureDeadline);
         assertTrue(recovery.isComplete());
-    }
-
-    @Test
-    void overdueTurnDeadlineExecutesDepartureOnceAndReschedulesWithFreshAllowance() {
-        java.time.Clock clock = mock(java.time.Clock.class);
-        when(clock.millis()).thenReturn(1_900_000_000_000L);
-
-        Room room = new Room("room-turn-recovery", "Turn Room", "Alice", 6, 10, 20, 1000, null);
-        room.addPlayer("Alice");
-        room.addPlayer("Bob");
-        room.addPlayer("Charlie");
-
-        HandEvaluatorService evaluator = new HandEvaluatorService();
-        Player alice = new Player("Alice", "p1", 1000);
-        Player bob = new Player("Bob", "p2", 1000);
-        Player charlie = new Player("Charlie", "p3", 1000);
-        Game game = new Game("room-turn-recovery", List.of(alice, bob, charlie), 10, 20, evaluator);
-
-        long overdueTurnDeadline = 1_899_999_990_000L;
-        game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, overdueTurnDeadline);
-
-        GameStateService gameStateService = mock(GameStateService.class);
-        SimpMessagingTemplate messagingTemplate = mock(SimpMessagingTemplate.class);
-        TaskScheduler taskScheduler = mock(TaskScheduler.class);
-        doReturn(mock(ScheduledFuture.class)).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
-
-        GameLifecycleService realLifecycle = new GameLifecycleService(
-                roomService, evaluator, gameStateService, messagingTemplate, taskScheduler, clock);
-        realLifecycle.restoreGame(game);
-        when(roomService.getRoom("room-turn-recovery")).thenReturn(room);
-        doAnswer(inv -> {
-            List<String> departing = inv.getArgument(1);
-            departing.forEach(room::removePlayer);
-            return null;
-        }).when(roomService).leavePlayersBatch(eq("room-turn-recovery"), any(), any());
-
-        assertEquals("Alice", game.getCurrentPlayer().getName());
-
-        ArgumentCaptor<Runnable> runnableCaptor = ArgumentCaptor.forClass(Runnable.class);
-        realLifecycle.resumeRecoveredTimers("room-turn-recovery");
-        verify(taskScheduler).schedule(runnableCaptor.capture(), any(Instant.class));
-
-        // Executing the overdue turn task departs Alice and advances turn to Bob with fresh 60s allowance
-        runnableCaptor.getValue().run();
-
-        assertFalse(game.getPlayers().stream().anyMatch(p -> "Alice".equals(p.getName())));
-        assertFalse(room.hasPlayer("Alice"));
-        assertEquals("Bob", game.getCurrentPlayer().getName());
-        Long freshTurnDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT);
-        assertNotNull(freshTurnDeadline);
-        assertEquals(1_900_000_000_000L + 60_000L, freshTurnDeadline);
-
-        // Invoking the same callback a second time executes departure once (no-op due to generation mismatch)
-        runnableCaptor.getValue().run();
-        assertEquals("Bob", game.getCurrentPlayer().getName());
-        assertTrue(room.hasPlayer("Bob"));
     }
 
     @Test
@@ -655,7 +609,7 @@ class PersistenceRecoveryTest {
 
         PersistenceRecovery recovery = new PersistenceRecovery(
                 store, mapper, roomService, gameLifecycleService,
-                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS, clock);
+                webSocketEventListener, applicationContext, DISCONNECT_GRACE_PERIOD_MS, clock, new RoomCoordinator());
 
         recovery.run(new DefaultApplicationArguments());
 

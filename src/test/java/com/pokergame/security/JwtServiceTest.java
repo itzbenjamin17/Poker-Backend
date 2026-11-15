@@ -1,6 +1,8 @@
 package com.pokergame.security;
 
 import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.io.Decoders;
+import io.jsonwebtoken.security.Keys;
 import io.jsonwebtoken.security.SignatureException;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.DisplayName;
@@ -27,6 +29,7 @@ import org.junit.jupiter.api.Assertions;
 class JwtServiceTest {
 
     private static final String TEST_SECRET = "Y2VudHVyeS1vbGQtc2VjcmV0LWtleS10aGF0LWlzLWRlZmluaXRlbHktbG9uZy1lbm91Z2gtZm9yLWhtYWMtc2hhLTUxMg==";
+    private static final SecretKey TEST_SIGNING_KEY = Keys.hmacShaKeyFor(Decoders.BASE64.decode(TEST_SECRET));
     private static final long DEFAULT_EXPIRATION_MILLIS = 3_600_000L;
     private static final Duration EXPIRATION_WAIT_TIMEOUT = Duration.ofSeconds(2);
 
@@ -95,7 +98,7 @@ class JwtServiceTest {
             // Manually build a token with missing roomId using Jwts
             String token = io.jsonwebtoken.Jwts.builder()
                     .subject("TestPlayer")
-                    .signWith((SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .signWith(TEST_SIGNING_KEY)
                     .compact();
 
             assertThat(jwtService.isTokenValid(token)).isFalse();
@@ -112,7 +115,7 @@ class JwtServiceTest {
             String token = io.jsonwebtoken.Jwts.builder()
                     .subject("TestPlayer")
                     .claim("roomId", "   ")
-                    .signWith((SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .signWith(TEST_SIGNING_KEY)
                     .compact();
 
             assertThat(jwtService.isTokenValid(token)).isFalse();
@@ -133,7 +136,7 @@ class JwtServiceTest {
             assertThat(jwtService.isTokenValid(token)).isTrue();
 
             var claims = io.jsonwebtoken.Jwts.parser()
-                    .verifyWith((SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .verifyWith(TEST_SIGNING_KEY)
                     .build()
                     .parseSignedClaims(token)
                     .getPayload();
@@ -162,7 +165,7 @@ class JwtServiceTest {
             String token = jwtService.generateToken("Player1", TEST_ROOM, "   ");
 
             var claims = io.jsonwebtoken.Jwts.parser()
-                    .verifyWith((SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .verifyWith(TEST_SIGNING_KEY)
                     .build()
                     .parseSignedClaims(token)
                     .getPayload();
@@ -380,7 +383,7 @@ class JwtServiceTest {
                     .subject("Alice")
                     .claim("roomId", TEST_ROOM)
                     .claim("mid", "legacy-mid-123")
-                    .signWith((SecretKey) ReflectionTestUtils.getField(jwtService, "secretKey"))
+                    .signWith(TEST_SIGNING_KEY)
                     .compact();
 
             PlayerPrincipal principal = jwtService.extractPrincipal(token);

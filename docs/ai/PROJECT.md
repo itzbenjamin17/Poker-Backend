@@ -16,9 +16,13 @@ Use Java 25 and the checked-in Maven wrapper. On Windows:
 
 | Command | Purpose |
 | --- | --- |
-| `.\mvnw.cmd test` | Run unit and integration tests. |
-| `.\mvnw.cmd test "-Dtest=GameLifecycleIntegrationTest"` | Run one test class. |
-| `.\mvnw.cmd clean package` | Test and package the application. |
+| `.\mvnw.cmd test` | Run Spring-free `@Tag("unit")` `*Test.java` unit tests (Surefire). |
+| `.\mvnw.cmd verify` | Run all three test tiers: unit (`*Test.java`), integration (`*IT.java`), and E2E (`*E2E.java`). |
+| `.\mvnw.cmd verify "-Dgroups=integration"` | Run `@Tag("integration")` suites via Failsafe. |
+| `.\mvnw.cmd verify "-Dgroups=e2e"` | Run `@Tag("e2e")` suites via Failsafe. |
+| `.\mvnw.cmd test "-Dtest=GameTest"` | Run one unit test class. |
+| `.\mvnw.cmd verify "-Dit.test=LifecycleCoordinationIT"` | Run one integration or E2E test class. |
+| `.\mvnw.cmd clean package` | Compile, run unit tests, and package the application. |
 | `.\mvnw.cmd spring-boot:run` | Run with local environment configuration. |
 | `.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=e2e"` | Run with browser-test feature/timing overrides. |
 
@@ -140,9 +144,9 @@ For bug fixes and game-rule changes, write a failing behavioral regression test 
 
 When running Maven checks, redirect full output to a local log file under `.scratch/` and report the command, pass/fail status, test counts, and log path. On failure, inspect only the relevant error and stack trace. Run the narrowest check covering changed behavior during iteration and the full suite once after integrated code changes. For documentation-only changes, use relevant documentation checks such as validating local links and inspecting the diff. Stage files explicitly by path (`git add <file>`), preserve unrelated working-tree changes, and push or create remote PRs/issues only when explicitly requested.
 
-Tests under `src/test/java/com/pokergame/` cover models, actions, lifecycle, controllers/advice, filters/interceptors, identity isolation, input hardening, reconnect behavior, STOMP actions/throttling, and durable mapping/WAL/restart recovery. Find relevant tests from those packages rather than rely on a cached test count.
+Tests under `src/test/java/com/pokergame/` follow a 3-tier pyramid: `@Tag("unit")` `*Test.java` unit tests mirroring production packages with zero Spring context; `@Tag("integration")` `*IT.java` slice, coordination, security, timing, and persistence suites; and `@Tag("e2e")` `*E2E.java` black-box REST + STOMP journeys under `com.pokergame.e2e`. Find relevant tests from those packages rather than rely on a cached test count.
 
-[The CI workflow](../../.github/workflows/deploy.yml) runs `./mvnw clean test` with Java 25 on pushes and pull requests targeting `main`. Successful pushes to `main` then build/push Docker images. The Dockerfile packages with tests skipped after that separate test job; a Docker build alone is not test evidence.
+[The CI workflow](../../.github/workflows/deploy.yml) runs `./mvnw clean verify` with Java 25 on pushes and pull requests targeting `main`. Successful pushes to `main` then build/push Docker images. The Dockerfile packages with tests skipped after that separate test job; a Docker build alone is not test evidence.
 
 ## Service Layout, Naming, And Null-Handling Conventions
 

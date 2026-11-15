@@ -31,8 +31,16 @@ import com.pokergame.enums.Rank;
 import com.pokergame.service.HandEvaluatorService;
 import com.pokergame.service.RoomCoordinator;
 import com.pokergame.service.GameStateService;
+import com.pokergame.util.LockLease;
+import org.awaitility.Awaitility;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -42,9 +50,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.nio.charset.StandardCharsets;
 
-import static com.pokergame.util.ConcurrentTestSupport.awaitBlockedOn;
-import static com.pokergame.util.ConcurrentTestSupport.stopExecutor;
 import static org.junit.jupiter.api.Assertions.*;
+import com.pokergame.config.RoomTimingProperties;
 import com.pokergame.enums.HandRank;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.persistence.config.PersistenceException;
@@ -70,6 +77,7 @@ import tools.jackson.databind.node.ObjectNode;
 import java.io.UncheckedIOException;
 
 /** Tests aggregate snapshot mapper behavior. */
+@Tag("unit")
 class AggregateSnapshotMapperTest {
 
     /**
@@ -84,7 +92,7 @@ class AggregateSnapshotMapperTest {
         room.setGameStarted(true);
         Game game = new Game("room-1", List.of(
                 new Player("Alice", "alice-id", 1000),
-                new Player("Bob", "bob-id", 1000)), 5, 10, evaluator);
+                new Player("Bob", "bob-id", 1000)), 6, 5, 10, evaluator);
         assertFalse(game.resetForNewHand());
         game.dealHoleCards();
         game.postBlinds();
@@ -104,7 +112,7 @@ class AggregateSnapshotMapperTest {
         game.dealFlop();
         recovered.game().dealFlop();
         assertEquals(game.getCommunityCards(), recovered.game().getCommunityCards());
-        assertEquals(game.getPreHandCarryOver(), recovered.game().getPreHandCarryOver());
+        assertEquals(game.getCarryOverPot(), recovered.game().getCarryOverPot());
         assertEquals(game.getHandSeatOrderSnapshot(), recovered.game().getHandSeatOrderSnapshot());
     }
 
@@ -118,7 +126,7 @@ class AggregateSnapshotMapperTest {
         room.setInactivityDeadlineEpochMs(deadline);
         Game game = new Game("room-1", List.of(
                 new Player("Alice", "alice-id", 1000),
-                new Player("Bob", "bob-id", 1000)), 5, 10, new HandEvaluatorService());
+                new Player("Bob", "bob-id", 1000)), 6, 5, 10, new HandEvaluatorService());
         AggregateSnapshotMapper mapper = newMapper();
 
         RecoveredAggregate restored = mapper.restoreStateImage(mapper.captureStateImage(room, "Alice", game));
@@ -153,28 +161,28 @@ class AggregateSnapshotMapperTest {
                 .handNumber(7).readyGateState(ReadyGateState.WAITING_FOR_PLAYERS).forfeitPending(true).stateRevision(19)
                 .handEvaluator(evaluator).build();
         game.markGameOver();
-        game.completeGameSettlement(players.getFirst());
+        game.settleGameEnd(players.getFirst(), Set.of());
         assertEquals(1033, players.getFirst().getChips());
         assertEquals(0, game.getPot());
-        assertTrue(game.isTerminalCarryOverSettled());
+        assertTrue(game.isFinalPotSettled());
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build(), evaluator);
 
         byte[] snapshot = mapper.serialize(room, "Alice", game);
         Game restored = mapper.deserialize(snapshot).game();
-        assertEquals(3, restored.getPreHandCarryOver());
+        assertEquals(3, restored.getCarryOverPot());
         assertEquals(game.getLastSettlementResult(), restored.getLastSettlementResult());
         assertEquals(Map.of("PRE_FLOP", 10), restored.getLastFullRaiseByStreetSnapshot());
         assertEquals(List.of("a", "b"), restored.getHandSeatOrderSnapshot());
-        assertTrue(restored.isTerminalCarryOverSettled());
+        assertTrue(restored.isFinalPotSettled());
         assertEquals(7, restored.getHandNumber());
-        assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, restored.getReadyGateState());
+        assertEquals(ReadyGateState.CLOSED, restored.getReadyGateState());
         assertEquals(9L, restored.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
         assertTrue(restored.isForfeitPending());
         assertEquals(19, restored.getStateRevision(), "Persisted same-hand public revision must survive restart");
         assertTrue(new String(snapshot, StandardCharsets.UTF_8).contains("\"stateRevision\":19"));
         assertTrue(new String(snapshot, StandardCharsets.UTF_8).contains("\"schemaVersion\":4"));
-        restored.completeGameSettlement(restored.getPlayers().getFirst());
+        restored.settleGameEnd(restored.getPlayers().getFirst(), Set.of());
         assertEquals(1033, restored.getPlayers().getFirst().getChips(),
                 "A recovered terminal marker prevents a second carry-over payout");
         assertEquals(0, restored.getPot());
@@ -264,8 +272,8 @@ class AggregateSnapshotMapperTest {
         assertTrue(json.contains("\"winnerChips\":2000"));
 
         Game restored = mapper.deserialize(snapshot).game();
-        assertNotNull(restored.getRetainedTerminalResult());
-        GameEndResponse restoredResult = restored.getRetainedTerminalResult();
+        assertNotNull(restored.getGameEndResult());
+        GameEndResponse restoredResult = restored.getGameEndResult();
         assertEquals("GAME_END", restoredResult.type());
         assertEquals("room-terminal", restoredResult.gameId());
         assertEquals("Alice", restoredResult.winner());
@@ -365,15 +373,16 @@ class AggregateSnapshotMapperTest {
         Game restored = mapper.deserialize(mapper.serialize(room, "A", game)).game();
         Player initialA = restored.getPlayers().getFirst();
         assertEquals(150, restored.getMinimumRaiseAmount(initialA));
-        assertFalse(restored.isRaiseOpenTo(initialA));
+        assertFalse(restored.getLegalActionsFor(initialA).contains(PlayerAction.RAISE));
         assertThrows(UnauthorisedActionException.class,
                 () -> restored.processPlayerDecision(initialA, new PlayerDecision(PlayerAction.RAISE, 150, "a")));
         Player restoredShort = restored.getPlayers().get(3);
         restored.processPlayerDecision(restoredShort, new PlayerDecision(PlayerAction.ALL_IN, 0, "s2"));
+        restored.processPlayerDecision(restored.getPlayers().get(1), new PlayerDecision(PlayerAction.CALL, 0, "b"));
         Game reopened = mapper.deserialize(mapper.serialize(room, "A", restored)).game();
         Player reopenedA = reopened.getPlayers().getFirst();
         assertEquals(200, reopened.getMinimumRaiseAmount(reopenedA));
-        assertTrue(reopened.isRaiseOpenTo(reopenedA));
+        assertTrue(reopened.getLegalActionsFor(reopenedA).contains(PlayerAction.RAISE));
         reopened.processPlayerDecision(reopenedA, new PlayerDecision(PlayerAction.RAISE, 200, "a"));
         assertEquals(300, reopened.getCurrentHighestBet());
     }
@@ -393,7 +402,7 @@ class AggregateSnapshotMapperTest {
                 Player.restoreBuilder().name("DepartedHost").playerId("departed-host-id").chips(0).out(true)
                         .holeCards(List.of()).bestHand(List.of()).build(),
                 new Player("BustedSpectator", "spectator-id", 0));
-        Game game = new Game("room-divergent", gamePlayers, 5, 10, evaluator);
+        Game game = new Game("room-divergent", gamePlayers, 6, 5, 10, evaluator);
 
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build(), evaluator);
@@ -444,7 +453,7 @@ class AggregateSnapshotMapperTest {
 
         Player p1 = new Player("Alice", "p1", 1000);
         Player p2 = new Player("Bob", "p2", 1000);
-        Game game = new Game("room-order", List.of(p1, p2), 10, 20, evaluator);
+        Game game = new Game("room-order", List.of(p1, p2), 6, 10, 20, evaluator);
 
         // Capture state image
         AggregateStateImage stateImage = mapper.captureStateImage(room, "Alice", game);
@@ -463,7 +472,7 @@ class AggregateSnapshotMapperTest {
 
         // Mutating live game after capture does not alter captured image or serialization
         synchronized (game) {
-            p1.setChips(500);
+            p1.payChips(0, 500);
         }
         RecoveredAggregate recovered = mapper.deserialize(jsonBytes);
         assertEquals(1000, recovered.game().getPlayers().get(0).getChips(),
@@ -483,23 +492,22 @@ class AggregateSnapshotMapperTest {
         room.addPlayer("Bob");
         Player alice = new Player("Alice", "p1", 1000);
         Player bob = new Player("Bob", "p2", 1000);
-        Game game = new Game(roomId, List.of(alice, bob), 10, 20, evaluator);
+        Game game = new Game(roomId, List.of(alice, bob), 6, 10, 20, evaluator);
         game.dealHoleCards();
         game.postBlinds();
         RoomCoordinator coordinator = new RoomCoordinator();
 
-        AtomicReference<Thread> reader = new AtomicReference<>();
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        try {
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
             Future<byte[]> capture;
-            try (var ignored = coordinator.acquire(roomId)) {
-                alice.setChips(alice.getChips() - 10);
+            try (LockLease _ = coordinator.acquire(roomId)) {
+                alice.payChips(0, 10);
                 capture = executor.submit(() -> {
-                    reader.set(Thread.currentThread());
-                    return coordinator.coordinate(roomId, () -> mapper.serialize(room, "Alice", game));
+                    try (LockLease _ = coordinator.acquire(roomId)) {
+                        return mapper.serialize(room, "Alice", game);
+                    }
                 });
-                awaitBlockedOn(reader, coordinator.getLockRegistry());
-                bob.setChips(bob.getChips() + 10);
+                Awaitility.await().until(() -> coordinator.lockReservationCount(roomId) >= 2);
+                bob.addChips(10);
                 game.incrementStateRevision();
             }
 
@@ -511,8 +519,6 @@ class AggregateSnapshotMapperTest {
             assertEquals(2000, restored.getPot() + restored.getPlayers().stream().mapToInt(Player::getChips).sum());
             assertEquals(game.getStateRevision(), restored.getStateRevision());
             assertEquals(game.getRemainingDeckSnapshot(), restored.getRemainingDeckSnapshot());
-        } finally {
-            stopExecutor(executor);
         }
     }
 
@@ -609,12 +615,23 @@ class AggregateSnapshotMapperTest {
         assertEquals(bobMemId, recovered.room().getMembershipId("Bob"),
                 "Bob membershipId must survive WAL snapshot round-trip");
 
+        RoomCoordinator coordinator = new RoomCoordinator();
+        @SuppressWarnings("unchecked")
         RoomService roomService = new RoomService(
-                Mockito.mock(SimpMessagingTemplate.class));
+                Mockito.mock(SimpMessagingTemplate.class),
+                Mockito.mock(ApplicationEventPublisher.class),
+                Mockito.mock(PasswordEncoder.class),
+                coordinator,
+                Clock.systemUTC(),
+                Mockito.mock(TaskScheduler.class),
+                new RoomTimingProperties(60_000L),
+                Mockito.mock(ObjectProvider.class));
         roomService.restoreRoom(recovered.room(), recovered.currentHost());
 
-        assertEquals(aliceMemId, roomService.getRoom("mem-room").getMembershipId("Alice"));
-        assertEquals(bobMemId, roomService.getRoom("mem-room").getMembershipId("Bob"));
+        try (LockLease _ = coordinator.acquire("mem-room")) {
+            assertEquals(aliceMemId, roomService.getRoom("mem-room").getMembershipId("Alice"));
+            assertEquals(bobMemId, roomService.getRoom("mem-room").getMembershipId("Bob"));
+        }
 
         // Verify fallback preservation when a restored room lacks persisted membershipIds for an existing player
         Room legacyRestored = Room.restoreBuilder()
@@ -628,9 +645,11 @@ class AggregateSnapshotMapperTest {
                 .playersWithJoinTime(room.getPlayersWithJoinTimeSnapshot())
                 .build();
         roomService.restoreRoom(legacyRestored, "Alice");
-        assertEquals(aliceMemId, roomService.getRoom("mem-room").getMembershipId("Alice"),
-                "Existing in-memory membershipId must be preserved if restored room lacks persisted membershipIds");
-        assertEquals(bobMemId, roomService.getRoom("mem-room").getMembershipId("Bob"));
+        try (LockLease _ = coordinator.acquire("mem-room")) {
+            assertEquals(aliceMemId, roomService.getRoom("mem-room").getMembershipId("Alice"),
+                    "Existing in-memory membershipId must be preserved if restored room lacks persisted membershipIds");
+            assertEquals(bobMemId, roomService.getRoom("mem-room").getMembershipId("Bob"));
+        }
     }
 
     private static final JsonMapper JSON = JsonMapper.builder().findAndAddModules().build();
@@ -1031,11 +1050,11 @@ class AggregateSnapshotMapperTest {
     void deserialize_ValidRetainedTerminalResult_Restores() {
         ObjectNode snapshot = validTerminalSnapshotTree();
         assertEquals("Alice", newMapper().deserialize(JSON.writeValueAsBytes(snapshot))
-                .game().getRetainedTerminalResult().winner());
+                .game().getGameEndResult().winner());
 
         playerOf((ObjectNode) snapshot.at("/game/retainedTerminalResult"), 1).set("holeCards", cardArray());
         RecoveredAggregate recovered = newMapper().deserialize(JSON.writeValueAsBytes(snapshot));
-        assertEquals(List.of(), recovered.game().getRetainedTerminalResult().finalState().players().get(1).holeCards());
+        assertEquals(List.of(), recovered.game().getGameEndResult().finalState().players().get(1).holeCards());
     }
 
     @Test
@@ -1047,19 +1066,22 @@ class AggregateSnapshotMapperTest {
         room.setGameStarted(true);
         Game game = new Game(room.getRoomId(), List.of(
                 new Player("Alice", "alice-id", 1000),
-                new Player("Bob", "bob-id", 1000)), 5, 10, evaluator);
+                new Player("Bob", "bob-id", 1000)), 6, 5, 10, evaluator);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
         game.markGameOver();
         game.closeReadyCountdown();
-        var projections = new GameStateService(null, null);
-        GameEndResponse result = projections.captureAbandonment(room.getRoomId(), game, room.getMaxPlayers());
-        game.setRetainedTerminalResult(result);
+        var projections = new GameStateService(
+                Mockito.mock(RoomService.class),
+                Mockito.mock(SimpMessagingTemplate.class),
+                Clock.systemUTC());
+        GameEndResponse result = projections.buildAbandonmentResponse(game);
+        game.setGameEndResult(result);
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(JSON, evaluator);
 
         GameEndResponse restored = mapper.deserialize(mapper.serialize(room, "Alice", game))
-                .game().getRetainedTerminalResult();
+                .game().getGameEndResult();
 
         assertEquals(result, restored);
         assertTrue(restored.abandoned());
@@ -1305,7 +1327,7 @@ class AggregateSnapshotMapperTest {
             List<Player> players = List.of(p1, p2, p3);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 10, 20, handEvaluator);
+            Game game = new Game(ROOM_ID, players, 6, 10, 20, handEvaluator);
             assertFalse(game.resetForNewHand());
             game.dealHoleCards();
             game.postBlinds();
@@ -1339,7 +1361,7 @@ class AggregateSnapshotMapperTest {
             assertEquals(game.getCurrentPlayer().getPlayerId(), restored.getCurrentPlayer().getPlayerId());
             assertEquals(game.getRemainingDeckSnapshot().size(), restored.getRemainingDeckSnapshot().size());
             assertEquals(game.getHandSeatOrderSnapshot(), restored.getHandSeatOrderSnapshot());
-            assertEquals(game.getDealerAnchorPlayerId(), restored.getDealerAnchorPlayerId());
+            assertEquals(game.getDealerPlayerId(), restored.getDealerPlayerId());
 
             // Verify hole cards match
             for (int i = 0; i < 3; i++) {
@@ -1360,7 +1382,7 @@ class AggregateSnapshotMapperTest {
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 10, 20, handEvaluator);
+            Game game = new Game(ROOM_ID, players, 6, 10, 20, handEvaluator);
             assertFalse(game.resetForNewHand());
             game.dealHoleCards();
             game.postBlinds();
@@ -1399,7 +1421,7 @@ class AggregateSnapshotMapperTest {
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 10, 20, handEvaluator);
+            Game game = new Game(ROOM_ID, players, 6, 10, 20, handEvaluator);
             assertFalse(game.resetForNewHand());
             game.dealHoleCards();
             game.postBlinds();
@@ -1438,7 +1460,7 @@ class AggregateSnapshotMapperTest {
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 10, 20, handEvaluator);
+            Game game = new Game(ROOM_ID, players, 6, 10, 20, handEvaluator);
             assertFalse(game.resetForNewHand());
             game.dealHoleCards();
             game.postBlinds();
@@ -1478,7 +1500,7 @@ class AggregateSnapshotMapperTest {
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 10, 20, handEvaluator);
+            Game game = new Game(ROOM_ID, players, 6, 10, 20, handEvaluator);
             assertFalse(game.resetForNewHand());
             game.dealHoleCards();
             game.postBlinds();
@@ -1698,6 +1720,51 @@ class AggregateSnapshotMapperTest {
             assertEquals(5L, restored.getHandNumber());
             assertEquals(deadlines, restored.getScheduledTaskDeadlinesSnapshot());
             assertEquals(generations, restored.getScheduledTaskGenerationsSnapshot());
+        }
+    }
+
+    @Test
+    void queuedSnapshotSeesCompleteMutationAndPriorSnapshotRemainsUnchanged() throws Exception {
+        HandEvaluatorService evaluator = new HandEvaluatorService();
+        AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), evaluator);
+        Player alice = new Player("Alice", "p1", 1000);
+        Player bob = new Player("Bob", "p2", 1000);
+        Player departing = new Player("Charlie", "p3", 1000);
+        Game game = new Game("snapshot-room", List.of(alice, bob, departing), 6, 10, 20, evaluator);
+        AggregateStateImage.GameState before = mapper.toState(game);
+        RoomCoordinator coordinator = new RoomCoordinator();
+
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+            Future<AggregateStateImage.GameState> capture;
+            try (LockLease _ = coordinator.acquire("snapshot-room")) {
+                alice.setDisconnected(true);
+                capture = executor.submit(() -> {
+                    try (LockLease _ = coordinator.acquire("snapshot-room")) {
+                        return mapper.toState(game);
+                    }
+                });
+                Awaitility.await().until(() -> coordinator.lockReservationCount("snapshot-room") >= 2);
+
+                bob.setReadyForNextHand(true);
+                game.removePlayer(departing);
+                game.incrementStateRevision();
+            }
+
+            AggregateStateImage.GameState after = capture.get(5, TimeUnit.SECONDS);
+            assertEquals(before.stateRevision() + 1, after.stateRevision());
+            assertEquals(List.of("p1", "p2"), after.activePlayerIds());
+            assertEquals(after.activePlayerIds(),
+                    after.players().stream().map(AggregateStateImage.PlayerState::playerId).toList());
+            assertTrue(after.players().get(0).disconnected());
+            assertTrue(after.players().get(1).readyForNextHand());
+
+            assertEquals(List.of("p1", "p2", "p3"), before.activePlayerIds());
+            assertEquals(before.activePlayerIds(),
+                    before.players().stream().map(AggregateStateImage.PlayerState::playerId).toList());
+            assertFalse(before.players().get(0).disconnected());
+            assertFalse(before.players().get(1).readyForNextHand());
+            assertThrows(UnsupportedOperationException.class, () -> after.players().clear());
         }
     }
 }

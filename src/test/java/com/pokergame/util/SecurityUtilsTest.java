@@ -3,6 +3,7 @@ package com.pokergame.util;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.security.PlayerPrincipal;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -13,6 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit tests for {@link SecurityUtils}. */
+@Tag("unit")
 class SecurityUtilsTest {
 
     private final PlayerPrincipal playerPrincipal = new PlayerPrincipal("Alice", "room-123");

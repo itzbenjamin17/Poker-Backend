@@ -1,5 +1,6 @@
 package com.pokergame.persistence.transaction;
 
+import com.pokergame.config.RoomTimingProperties;
 import com.pokergame.model.Room;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
@@ -7,16 +8,22 @@ import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 import javax.crypto.spec.SecretKeySpec;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,6 +54,7 @@ import org.mockito.Mockito;
 import tools.jackson.databind.json.JsonMapper;
 
 /** Tests durable mutation aspect transaction boundaries and SpEL resolution. */
+@Tag("unit")
 @ExtendWith(MockitoExtension.class)
 class DurableMutationAspectTest {
 
@@ -69,6 +77,7 @@ class DurableMutationAspectTest {
     private ObjectProvider<GameLifecycleService> gameLifecycleServiceProvider;
 
     private PersistenceProperties properties;
+    private RoomCoordinator roomCoordinator;
 
     public static class TestTarget {
         @DurableMutation(roomId = "#roomId")
@@ -83,6 +92,7 @@ class DurableMutationAspectTest {
     @BeforeEach
     void setUp() {
         properties = new PersistenceProperties();
+        roomCoordinator = new RoomCoordinator();
         AggregateStateImage mockImage = Mockito.mock(AggregateStateImage.class);
         Mockito.lenient().when(snapshotMapper.captureStateImage(any(), any(), any())).thenReturn(mockImage);
         Mockito.lenient().when(snapshotMapper.serialize(any(AggregateStateImage.class))).thenReturn(new byte[]{1, 2, 3});
@@ -91,7 +101,7 @@ class DurableMutationAspectTest {
 
     @AfterEach
     void tearDown() {
-        DurableTransactionContext.discard();
+        PostSaveActions.clear();
     }
 
     /**
@@ -103,7 +113,7 @@ class DurableMutationAspectTest {
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
         Method method = TestTarget.class.getMethod("validMutation", String.class);
         DurableMutation mutation = method.getAnnotation(DurableMutation.class);
@@ -114,21 +124,21 @@ class DurableMutationAspectTest {
         when(joinPoint.getSignature()).thenReturn(signature);
         when(joinPoint.getArgs()).thenReturn(new Object[]{"room-B"});
 
-        DurableTransactionContext.begin("room-A");
+        PostSaveActions.begin("room-A");
         try {
             PersistenceException ex = assertThrows(PersistenceException.class,
                     () -> aspect.persist(joinPoint, mutation));
             assertEquals("Nested durable mutations cannot cross room boundaries", ex.getMessage());
             verify(joinPoint, never()).proceed();
         } finally {
-            DurableTransactionContext.discard();
+            PostSaveActions.clear();
         }
     }
 
     @Test
     void nestedCrossRoomMutationThrowsIllegalStateExceptionWhenPersistenceDisabled() throws Throwable {
         DurableMutationAspect aspect = new DurableMutationAspect(
-                null, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+                null, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
         Method method = TestTarget.class.getMethod("validMutation", String.class);
         DurableMutation mutation = method.getAnnotation(DurableMutation.class);
@@ -139,7 +149,7 @@ class DurableMutationAspectTest {
         when(joinPoint.getSignature()).thenReturn(signature);
         when(joinPoint.getArgs()).thenReturn(new Object[]{"room-B"});
 
-        try (LockLease _ = aspect.getRoomCoordinator().acquire("room-A")) {
+        try (LockLease _ = roomCoordinator.acquire("room-A")) {
             IllegalStateException ex = assertThrows(IllegalStateException.class,
                     () -> aspect.persist(joinPoint, mutation));
             assertThat(ex.getMessage()).contains("room-B").contains("room-A");
@@ -153,7 +163,7 @@ class DurableMutationAspectTest {
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
         Method method = TestTarget.class.getMethod("validMutation", String.class);
         DurableMutation mutation = method.getAnnotation(DurableMutation.class);
@@ -164,7 +174,7 @@ class DurableMutationAspectTest {
         when(joinPoint.getSignature()).thenReturn(signature);
         when(joinPoint.getArgs()).thenReturn(new Object[]{"room-B"});
 
-        try (LockLease _ = aspect.getRoomCoordinator().acquire("room-A")) {
+        try (LockLease _ = roomCoordinator.acquire("room-A")) {
             IllegalStateException ex = assertThrows(IllegalStateException.class,
                     () -> aspect.persist(joinPoint, mutation));
             assertThat(ex.getMessage()).contains("room-B").contains("room-A");
@@ -175,7 +185,7 @@ class DurableMutationAspectTest {
     @Test
     void sameRoomNestedMutationSucceedsWhenPersistenceDisabled() throws Throwable {
         DurableMutationAspect aspect = new DurableMutationAspect(
-                null, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+                null, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
         Method method = TestTarget.class.getMethod("validMutation", String.class);
         DurableMutation mutation = method.getAnnotation(DurableMutation.class);
@@ -187,13 +197,13 @@ class DurableMutationAspectTest {
         when(joinPoint.getArgs()).thenReturn(new Object[]{"room-A"});
         when(joinPoint.proceed()).thenReturn("success");
 
-        try (LockLease _ = aspect.getRoomCoordinator().acquire("room-A")) {
+        try (LockLease _ = roomCoordinator.acquire("room-A")) {
             Object result = aspect.persist(joinPoint, mutation);
             assertThat(result).isEqualTo("success");
             verify(joinPoint).proceed();
-            assertThat(aspect.getRoomCoordinator().isHeldByCurrentThread("room-A")).isTrue();
+            assertThat(roomCoordinator.isHeldByCurrentThread("room-A")).isTrue();
         }
-        assertThat(aspect.getRoomCoordinator().isHeldByCurrentThread("room-A")).isFalse();
+        assertThat(roomCoordinator.isHeldByCurrentThread("room-A")).isFalse();
     }
 
     /**
@@ -215,7 +225,7 @@ class DurableMutationAspectTest {
                 });
 
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
         Method method = TestTarget.class.getMethod("validMutation", String.class);
         DurableMutation mutation = method.getAnnotation(DurableMutation.class);
@@ -229,8 +239,8 @@ class DurableMutationAspectTest {
         List<String> effects = new ArrayList<>();
         when(joinPoint.proceed()).thenAnswer(invocation -> {
             int move = moves.incrementAndGet();
-            DurableTransactionContext.afterCommit(() -> effects.add("state-" + move));
-            DurableTransactionContext.afterCommit(() -> effects.add("timer-" + move));
+            PostSaveActions.runAfterSave(() -> effects.add("state-" + move));
+            PostSaveActions.runAfterSave(() -> effects.add("timer-" + move));
             return "ok";
         });
 
@@ -245,8 +255,8 @@ class DurableMutationAspectTest {
         assertEquals(2, moves.get(), "Later accepted commands still run");
         assertEquals(2, effects.stream().filter(value -> value.startsWith("state-")).count());
         aspect.retryPendingSaves();
-        assertNull(DurableTransactionContext.currentRoomId(),
-                "Thread-local DurableTransactionContext should be null after commit failure");
+        assertNull(PostSaveActions.currentRoomId(),
+                "Thread-local PostSaveActions should be null after commit failure");
     }
 
     /**
@@ -258,7 +268,7 @@ class DurableMutationAspectTest {
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
         Method method = TestTarget.class.getMethod("invalidSpelMutation", String.class);
         DurableMutation mutation = method.getAnnotation(DurableMutation.class);
@@ -273,7 +283,7 @@ class DurableMutationAspectTest {
                 () -> aspect.persist(joinPoint, mutation));
         assertEquals("Durable mutation did not resolve a room ID", ex.getMessage());
         verify(joinPoint, never()).proceed();
-        assertNull(DurableTransactionContext.currentRoomId());
+        assertNull(PostSaveActions.currentRoomId());
     }
 
     /** A prepare outage must still allow the domain mutation and its effects. */
@@ -300,7 +310,7 @@ class DurableMutationAspectTest {
         List<String> effects = new ArrayList<>();
         ProceedingJoinPoint joinPoint = mutationPoint("room-serialize", () -> {
             int move = moves.incrementAndGet();
-            DurableTransactionContext.afterCommit(() -> effects.add("effect-" + move));
+            PostSaveActions.runAfterSave(() -> effects.add("effect-" + move));
             return move;
         });
         when(snapshotMapper.serialize(any(AggregateStateImage.class))).thenThrow(new PersistenceException("injected serialization failure"));
@@ -319,13 +329,13 @@ class DurableMutationAspectTest {
         DurableMutationAspect aspect = aspectForRoom(store, "room-invalid");
         List<String> published = new ArrayList<>();
         ProceedingJoinPoint joinPoint = mutationPoint("room-invalid", () -> {
-            DurableTransactionContext.afterCommit(() -> published.add("invalid"));
+            PostSaveActions.runAfterSave(() -> published.add("invalid"));
             throw new IllegalArgumentException("invalid action");
         });
 
         assertThrows(IllegalArgumentException.class, () -> aspect.persist(joinPoint, validMutation()));
         assertTrue(published.isEmpty());
-        assertNull(DurableTransactionContext.currentRoomId());
+        assertNull(PostSaveActions.currentRoomId());
         verify(snapshotMapper, never()).serialize(any(), any(), any());
         verify(snapshotMapper, never()).serialize(any(AggregateStateImage.class));
     }
@@ -343,32 +353,33 @@ class DurableMutationAspectTest {
                 JsonMapper.builder().findAndAddModules().build(),
                 new HandEvaluatorService()));
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, realMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
-        RoomCoordinator coordinator = aspect.getRoomCoordinator();
+                store, realMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
         Room room = spy(new Room("room-capture", "Capture Room", "Host", 6, 10, 20, 1000, null));
         room.addPlayer("Host");
         room.addPlayer("Guest");
-        Game game = spy(new Game("room-capture", List.of(new Player("Host", "p1", 1000), new Player("Guest", "p2", 1000)), 10, 20, new HandEvaluatorService()));
+        Game game = spy(new Game("room-capture",
+                List.of(new Player("Host", "p1", 1000), new Player("Guest", "p2", 1000)),
+                6, 10, 20, new HandEvaluatorService()));
 
         when(roomService.getRoom("room-capture")).thenReturn(room);
         when(gameLifecycleService.getGame("room-capture")).thenReturn(game);
         when(roomService.getCurrentHost("room-capture")).thenReturn("Host");
 
         doAnswer(inv -> {
-            assertTrue(coordinator.isHeldByCurrentThread("room-capture"),
+            assertTrue(roomCoordinator.isHeldByCurrentThread("room-capture"),
                     "Room state must be read under the room coordination boundary");
             return inv.callRealMethod();
         }).when(room).getPlayersWithJoinTimeSnapshot();
 
         doAnswer(inv -> {
-            assertTrue(coordinator.isHeldByCurrentThread("room-capture"),
+            assertTrue(roomCoordinator.isHeldByCurrentThread("room-capture"),
                     "Game state must be read under the room coordination boundary");
             return inv.callRealMethod();
         }).when(game).getPlayers();
 
         doAnswer(inv -> {
-            assertTrue(coordinator.isHeldByCurrentThread("room-capture"),
+            assertTrue(roomCoordinator.isHeldByCurrentThread("room-capture"),
                     "Encoding must retain the established room coordination boundary");
             return inv.callRealMethod();
         }).when(realMapper).serialize(any(AggregateStateImage.class));
@@ -389,8 +400,8 @@ class DurableMutationAspectTest {
         when(snapshotMapper.serialize(any(AggregateStateImage.class))).thenReturn(new byte[]{1});
         List<String> effects = new ArrayList<>();
         ProceedingJoinPoint joinPoint = mutationPoint("room-callback", () -> {
-            DurableTransactionContext.afterCommit(() -> { throw new IllegalStateException("broker unavailable"); });
-            DurableTransactionContext.afterCommit(() -> effects.add("scheduled"));
+            PostSaveActions.runAfterSave(() -> { throw new IllegalStateException("broker unavailable"); });
+            PostSaveActions.runAfterSave(() -> effects.add("scheduled"));
             return "accepted";
         });
 
@@ -409,7 +420,7 @@ class DurableMutationAspectTest {
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
         when(roomServiceProvider.getObject()).thenReturn(roomService);
         when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
@@ -421,7 +432,7 @@ class DurableMutationAspectTest {
 
         Player alice = new Player("Alice", "p1", 1000);
         Player bob = new Player("Bob", "p2", 1000);
-        Game originalGame = new Game(roomId, List.of(alice, bob), 10, 20, new HandEvaluatorService());
+        Game originalGame = new Game(roomId, List.of(alice, bob), 6, 10, 20, new HandEvaluatorService());
 
         byte[] committedPayload = new byte[]{42, 43, 44};
         store.checkpoint(roomId, committedPayload);
@@ -434,7 +445,7 @@ class DurableMutationAspectTest {
 
         ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
             // Simulate dirty uncommitted mutation before throwing
-            bob.setChips(500);
+            bob.payChips(0, 500);
             throw new RuntimeException("Simulated domain action failure");
         });
 
@@ -456,7 +467,7 @@ class DurableMutationAspectTest {
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
         when(roomServiceProvider.getObject()).thenReturn(roomService);
         when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
@@ -488,7 +499,7 @@ class DurableMutationAspectTest {
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
         when(roomServiceProvider.getObject()).thenReturn(roomService);
         when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
@@ -524,7 +535,7 @@ class DurableMutationAspectTest {
         room.addPlayer("Guest");
         Player host = new Player("Host", "p1", 1000);
         Player guest = new Player("Guest", "p2", 1000);
-        Game game = new Game("room-pending-rollback", List.of(host, guest), 10, 20, new HandEvaluatorService());
+        Game game = new Game("room-pending-rollback", List.of(host, guest), 6, 10, 20, new HandEvaluatorService());
 
         when(roomService.getRoom("room-pending-rollback")).thenReturn(room);
         when(gameLifecycleService.getGame("room-pending-rollback")).thenReturn(game);
@@ -568,7 +579,7 @@ class DurableMutationAspectTest {
         List<String> effects = new ArrayList<>();
         ProceedingJoinPoint joinPoint1 = mutationPoint("room-serialize-safe", () -> {
             int move = moves.incrementAndGet();
-            DurableTransactionContext.afterCommit(() -> effects.add("effect-" + move));
+            PostSaveActions.runAfterSave(() -> effects.add("effect-" + move));
             return move;
         });
 
@@ -583,7 +594,7 @@ class DurableMutationAspectTest {
         // Second mutation succeeds and serializes cleanly without corruption
         ProceedingJoinPoint joinPoint2 = mutationPoint("room-serialize-safe", () -> {
             int move = moves.incrementAndGet();
-            DurableTransactionContext.afterCommit(() -> effects.add("effect-" + move));
+            PostSaveActions.runAfterSave(() -> effects.add("effect-" + move));
             return move;
         });
 
@@ -604,7 +615,7 @@ class DurableMutationAspectTest {
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring);
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
 
         when(roomServiceProvider.getObject()).thenReturn(roomService);
         when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
@@ -630,14 +641,53 @@ class DurableMutationAspectTest {
         verify(roomService, never()).destroyRoom(roomId);
     }
 
+    @Test
+    void failedDeletionSaveRetainsAndRetriesDeletionTombstone() throws Throwable {
+        String roomId = "room-deletion-retry";
+        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+                JsonMapper.builder().findAndAddModules().build(), new HandEvaluatorService());
+        AtomicBoolean failCommit = new AtomicBoolean(true);
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, (point, id) -> {
+            if (failCommit.get() && point == WalFaultPoint.BEFORE_COMMIT_WRITE) {
+                throw new PersistenceException("injected deletion commit failure");
+            }
+        });
+        when(roomServiceProvider.getObject()).thenReturn(roomService);
+        when(roomService.getRoom(roomId)).thenReturn(null);
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, realMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
+        ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> null);
+
+        aspect.persist(joinPoint, validMutation());
+        assertEquals(1, store.unsavedRoomCount(), "The failed deletion remains marked unsaved");
+
+        failCommit.set(false);
+        aspect.retryPendingSaves();
+
+        assertEquals(0, store.unsavedRoomCount());
+        assertTrue(store.recoverLatest(roomId).isEmpty(), "The retry checkpoints and removes the deleted room's WAL");
+        verify(joinPoint, times(1)).proceed();
+    }
+
     /**
      * RoomService.restoreRoom reconciles inconsistent host mappings
      * and preserves legitimate player state under lock.
      */
     @Test
+    @SuppressWarnings("unchecked")
     @DisplayName("RoomService.restoreRoom reconciles inconsistent host mappings and preserves connected players")
     void roomServiceRestoreRoomReconcilesInconsistentHostAndPreservesConnectedPlayers() {
-        RoomService realRoomService = new RoomService(null);
+        RoomService realRoomService = new RoomService(
+                mock(SimpMessagingTemplate.class),
+                mock(ApplicationEventPublisher.class),
+                mock(PasswordEncoder.class),
+                roomCoordinator,
+                Clock.systemUTC(),
+                mock(TaskScheduler.class),
+                new RoomTimingProperties(60_000L),
+                mock(ObjectProvider.class));
         String roomId = "room-restore-test";
         Room originalRoom = new Room(roomId, "Restore Test", "Alice", 6, 10, 20, 1000, null);
         originalRoom.addPlayer("Alice");
@@ -679,7 +729,8 @@ class DurableMutationAspectTest {
         lenient().when(roomServiceProvider.getObject()).thenReturn(roomService);
         lenient().when(gameLifecycleServiceProvider.getObject()).thenReturn(gameLifecycleService);
         lenient().when(roomService.getRoom(roomId)).thenReturn(mock(Room.class));
-        return new DurableMutationAspect(store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties);
+        return new DurableMutationAspect(
+                store, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, properties, roomCoordinator);
     }
 
     private DurableMutation validMutation() throws Exception {

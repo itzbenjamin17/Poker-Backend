@@ -1,48 +1,62 @@
 package com.pokergame.service;
 
+import com.pokergame.config.LifecycleTimingProperties;
 import com.pokergame.dto.response.GameEndResponse;
-import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
-import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
+import com.pokergame.model.GameEligibility;
 import com.pokergame.model.HandEvaluationResult;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
+import com.pokergame.util.LockLease;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.stubbing.Answer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicLong;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit and integration tests for {@link GameCompletionHandler}, terminal state helper
- * methods on {@link Game}, and migrated terminal settlement lifecycle tests.
+ * Unit tests for {@link GameCompletionHandler} terminal settlement, inactivity abandonment,
+ * post-game review recovery/authorization, and cleanup behavior.
  */
+@Tag("unit")
 @ExtendWith(MockitoExtension.class)
-@DisplayName("GameCompletionHandler & Terminal State Management")
+@DisplayName("GameCompletionHandler unit tests")
 class GameCompletionHandlerTest {
+
+    private static final String ROOM_ID = "test-room-id";
+    private static final long BASE_EPOCH_MS = Instant.parse("2026-01-01T00:00:00Z").toEpochMilli();
+    private static final LifecycleTimingProperties DEFAULT_TIMINGS =
+            new LifecycleTimingProperties(30_000L, 4_000L, 10_000L);
 
     @Mock
     private TaskScheduler taskScheduler;
@@ -54,266 +68,183 @@ class GameCompletionHandlerTest {
     private HandEvaluatorService handEvaluator;
 
     @Mock
-    private GameStateService gameStateService;
-
-    @Mock
     private SimpMessagingTemplate messagingTemplate;
 
-    private GameLifecycleService gameLifecycleService;
+    @Mock
+    private ObjectProvider<GameLifecycleService> lifecycleProvider;
+
+    private AtomicLong clockEpochMs;
+    private Clock mutableClock;
+    private RoomCoordinator roomCoordinator;
+    private ActiveGameRegistry activeGames;
+    private GameTimerRegistry runtimeTimers;
+    private GameTaskScheduler taskSchedulerFacade;
+    private GameStateService realGameStateService;
     private GameCompletionHandler completion;
     private Room testRoom;
-    private static final String ROOM_ID = "test-room-id";
 
     @BeforeEach
     void setUp() {
-        Clock clock = Clock.systemUTC();
-        GameTimerRegistry runtimeTimers = new GameTimerRegistry(taskScheduler);
-        RoomCoordinator coordinator = new RoomCoordinator();
+        clockEpochMs = new AtomicLong(BASE_EPOCH_MS);
+        mutableClock = new Clock() {
+            @Override
+            public ZoneOffset getZone() {
+                return ZoneOffset.UTC;
+            }
 
-        gameLifecycleService = new GameLifecycleService(roomService, handEvaluator, gameStateService, messagingTemplate,
-                taskScheduler, coordinator);
+            @Override
+            public Clock withZone(java.time.ZoneId zone) {
+                return this;
+            }
 
-        ActiveGameRegistry activeGames = new ActiveGameRegistry();
-        GameTaskScheduler scheduling = new GameTaskScheduler(activeGames, runtimeTimers, coordinator, roomService,
-                clock, (id, task, deadline, hand, generation) -> {}, (id, deadline) -> {});
+            @Override
+            public Instant instant() {
+                return Instant.ofEpochMilli(clockEpochMs.get());
+            }
+        };
 
-        completion = new GameCompletionHandler(activeGames, roomService, gameStateService, runtimeTimers,
-                scheduling, coordinator, clock, gameLifecycleService.getGameEndDisplayDelayMs());
+        roomCoordinator = new RoomCoordinator();
+        activeGames = new ActiveGameRegistry(roomCoordinator);
+        runtimeTimers = new GameTimerRegistry(taskScheduler, mutableClock);
+        taskSchedulerFacade = new GameTaskScheduler(
+                activeGames, runtimeTimers, roomService, mutableClock, lifecycleProvider);
+        realGameStateService = new GameStateService(roomService, messagingTemplate, mutableClock);
+        completion = new GameCompletionHandler(
+                activeGames, roomService, realGameStateService, runtimeTimers,
+                taskSchedulerFacade, mutableClock, DEFAULT_TIMINGS);
 
         lenient().when(handEvaluator.getBestHand(anyList(), anyList()))
                 .thenReturn(new HandEvaluationResult(List.of(), HandRank.HIGH_CARD));
+        lenient().when(taskScheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenAnswer(_ -> mock(ScheduledFuture.class));
 
-        testRoom = new Room(
-                ROOM_ID,
-                "Test Room",
-                "Host",
-                6,
-                5,
-                10,
-                100,
-                null);
+        testRoom = new Room(ROOM_ID, "Test Room", "Host", 6, 5, 10, 100, null);
         testRoom.addPlayer("Host");
         testRoom.addPlayer("Player2");
-        stubGameEndCapture();
+        lenient().when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
     }
 
-    private void stubGameEndCapture() {
-        Answer<GameEndResponse> buildResponse = invocation -> {
-            String id = invocation.getArgument(0);
-            Game game = invocation.getArgument(1);
-            Player winner = invocation.getArgument(2);
-            boolean forfeit = invocation.getArgument(3);
-            int maxPlayers = invocation.getArgument(4);
-            PublicGameStateResponse finalState = new PublicGameStateResponse(
-                    maxPlayers, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(),
-                    game != null && game.getPlayers() != null ? game.getPlayers().stream().map(p -> new PublicPlayerState(
-                            p.getPlayerId(), p.getName(), p.getChips(), 0, "status", false, false, false,
-                            false, false, null, List.of(), p.equals(winner), null, null, null, false)).toList() : List.of(),
-                    null, null, List.of(winner.getName()), null, false, null, false, null, false, null,
-                    true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, System.currentTimeMillis(),
-                    game != null ? game.getStateRevision() : 1);
-            return new GameEndResponse("GAME_END", id, winner.getName(), winner.getChips(), forfeit,
-                    winner.getName() + " wins", finalState);
-        };
-        lenient().when(gameStateService.captureGameEnd(anyString(), any(Game.class), any(Player.class), anyBoolean(), anyInt()))
-                .thenAnswer(buildResponse);
-        lenient().when(gameStateService.projectGameEnd(anyString(), any(Game.class), any(Player.class), anyBoolean(), anyInt()))
-                .thenAnswer(buildResponse);
+    private Game createAndRegisterStartedGame(List<Player> players) {
+        Game game = new Game(ROOM_ID, players, testRoom.getMaxPlayers(), 5, 10, handEvaluator);
+        game.resetForNewHand();
+        game.beginHand();
+        game.dealHoleCards();
+        game.postBlinds();
+        registerGame(game);
+        return game;
     }
 
-    @Nested
-    @DisplayName("Game Domain Terminal Settlement Helpers")
-    class GameTerminalHelperTests {
-
-        @Test
-        @DisplayName("isFallbackForfeit returns true for non-SHOWDOWN phases")
-        void isFallbackForfeit_NonShowdown_ReturnsTrue() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            Game game = gameLifecycleService.getGame(ROOM_ID);
-
-            assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
-            assertTrue(game.isFallbackForfeit());
-        }
-
-        @Test
-        @DisplayName("isFallbackForfeit returns false for settled SHOWDOWN phase")
-        void isFallbackForfeit_SettledShowdown_ReturnsFalse() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            Game game = gameLifecycleService.getGame(ROOM_ID);
-
-            game.conductShowdown();
-            assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
-            assertTrue(game.isHandSettled());
-            assertFalse(game.isFallbackForfeit());
-        }
-
-        @Test
-        @DisplayName("settleTerminalState marks forfeited players out and resolves winner")
-        void settleTerminalState_ForfeitedPlayersAndWinnerResolution() {
-            Player p1 = new Player("Host", "p1", 500);
-            Player p2 = new Player("Player2", "p2", 200);
-            Player p3 = new Player("Player3", "p3", 300);
-            Game game = new Game(ROOM_ID, List.of(p1, p2, p3), 5, 10, handEvaluator);
-
-            Player winner = game.settleTerminalState(null, Set.of("Player2"));
-            assertTrue(p2.getIsOut());
-            assertFalse(p1.getIsOut());
-            assertEquals(p1, winner);
-            assertTrue(game.isGameOver());
-            assertTrue(game.isTerminalCarryOverSettled());
-        }
-
-        @Test
-        @DisplayName("settleTerminalState honors preferredWinner when provided")
-        void settleTerminalState_HonorsPreferredWinner() {
-            Player p1 = new Player("Host", "p1", 500);
-            Player p2 = new Player("Player2", "p2", 1000);
-            Game game = new Game(ROOM_ID, List.of(p1, p2), 5, 10, handEvaluator);
-
-            Player winner = game.settleTerminalState(p1, Set.of("Player2"));
-            assertEquals(p1, winner);
-            assertTrue(game.isGameOver());
-        }
-
-        @Test
-        @DisplayName("isParticipantInTerminalRoster checks both retained DTO and game players")
-        void isParticipantInTerminalRoster_ChecksBothSources() {
-            Player p1 = new Player("Host", "p1", 500);
-            Player p2 = new Player("Player2", "p2", 500);
-            Game game = new Game(ROOM_ID, List.of(p1, p2), 5, 10, handEvaluator);
-
-            assertTrue(game.isParticipantInTerminalRoster("Host", null));
-            assertTrue(game.isParticipantInTerminalRoster("Player2", null));
-            assertFalse(game.isParticipantInTerminalRoster("Stranger", null));
-
-            PublicPlayerState retainedPlayer = new PublicPlayerState("p3", "Player3", 100, 0, "status",
-                    false, false, false, false, false, null, List.of(), false, null, null, null, false);
-            PublicGameStateResponse state = new PublicGameStateResponse(3, 0, List.of(), 0, GamePhase.SHOWDOWN,
-                    0, List.of(), List.of(retainedPlayer), null, null, List.of("Player3"), null, false, null,
-                    false, null, false, null, true, null, List.of(), null, null, 1, ReadyGateState.CLOSED,
-                    System.currentTimeMillis(), 1);
-            GameEndResponse retained = new GameEndResponse("GAME_END", ROOM_ID, "Player3", 100, false, "wins", state);
-
-            assertTrue(game.isParticipantInTerminalRoster("Player3", retained));
-            assertFalse(game.isParticipantInTerminalRoster("Stranger", retained));
+    private void registerGame(Game game) {
+        try (LockLease _ = roomCoordinator.acquire(game.getGameId())) {
+            activeGames.replace(game);
         }
     }
 
     @Nested
-    @DisplayName("GameCompletionHandler Collaborator Unit Tests")
-    class CollaboratorUnitTests {
+    @DisplayName("handleGameEnd & handleGameEndWithForfeits")
+    class TerminalSettlementTests {
 
         @Test
-        @DisplayName("settleUnderLock no-ops when forfeit is pending and preferredWinner is null")
-        void settleUnderLock_ForfeitPending_NoOps() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            Game game = gameLifecycleService.getGame(ROOM_ID);
+        @DisplayName("handleGameEnd with missing game or null players no-ops safely")
+        void handleGameEnd_MissingOrEmptyGame_DoesNotThrowOrBroadcast() {
+            try (LockLease _ = roomCoordinator.acquire("nonexistent-id")) {
+                assertDoesNotThrow(() -> completion.handleGameEnd("nonexistent-id"));
+            }
+
+            Game emptyGame = createAndRegisterStartedGame(List.of(
+                    new Player("Host", "host", 100),
+                    new Player("Player2", "p2", 100)));
+            emptyGame.getPlayers().clear();
+            emptyGame.getActivePlayers().clear();
+
+            clearInvocations(messagingTemplate, taskScheduler);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                assertDoesNotThrow(() -> completion.handleGameEnd(ROOM_ID));
+            }
+            verifyNoInteractions(messagingTemplate);
+        }
+
+        @Test
+        @DisplayName("handleGameEnd skips when forfeit is pending or game is already finally settled")
+        void handleGameEnd_PendingForfeitOrAlreadySettled_NoOps() {
+            Game game = createAndRegisterStartedGame(List.of(
+                    new Player("Host", "host", 100),
+                    new Player("Player2", "p2", 100)));
             game.setForfeitPending(true);
+            clearInvocations(messagingTemplate, taskScheduler);
 
-            GameCompletionHandler.SettlementOutcome outcome =
-                    gameLifecycleService.getRoomCoordinator().coordinate(ROOM_ID,
-                            () -> completion.settleUnderLock(ROOM_ID, game, testRoom, false, null, Set.of()));
-            assertFalse(outcome.settledNow());
-            assertNull(outcome.winner());
-        }
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.handleGameEnd(ROOM_ID);
+            }
+            verifyNoInteractions(messagingTemplate);
+            assertFalse(game.isGameOver());
 
-        @Test
-        @DisplayName("settleUnderLock no-ops when game is over and carryover already settled")
-        void settleUnderLock_AlreadyGameOverAndCarryoverSettled_NoOps() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            Game game = gameLifecycleService.getGame(ROOM_ID);
-
-            game.settleTerminalState(null, Set.of());
+            game.setForfeitPending(false);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.handleGameEnd(ROOM_ID);
+            }
             assertTrue(game.isGameOver());
-            assertTrue(game.isTerminalCarryOverSettled());
+            assertTrue(game.isFinalPotSettled());
 
-            GameCompletionHandler.SettlementOutcome outcome =
-                    gameLifecycleService.getRoomCoordinator().coordinate(ROOM_ID,
-                            () -> completion.settleUnderLock(ROOM_ID, game, testRoom, false, null, Set.of()));
-            assertFalse(outcome.settledNow());
+            clearInvocations(messagingTemplate, taskScheduler);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.handleGameEnd(ROOM_ID);
+            }
+            verifyNoInteractions(messagingTemplate);
         }
 
         @Test
-        @DisplayName("settleUnderLock captures retained terminal result and cancels runtime timers")
-        void settleUnderLock_CapturesTerminalResult() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            Game game = gameLifecycleService.getGame(ROOM_ID);
+        @DisplayName("handleGameEnd picks winner with chips in heads-up all-in and broadcasts GAME_END")
+        void handleGameEnd_HeadsUpAllIn_ShouldPickWinnerWithChips() {
+            Player host = new Player("Host", "host", 0);
+            Player p2 = new Player("Player2", "p2", 2000);
+            Game game = new Game(ROOM_ID, List.of(host, p2), 6, 5, 10, handEvaluator);
+            registerGame(game);
 
-            reset(gameStateService);
-            stubGameEndCapture();
+            clearInvocations(messagingTemplate, taskScheduler);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.handleGameEnd(ROOM_ID);
+            }
 
-            GameCompletionHandler.SettlementOutcome outcome =
-                    gameLifecycleService.getRoomCoordinator().coordinate(ROOM_ID,
-                            () -> completion.settleUnderLock(ROOM_ID, game, testRoom, false, null, Set.of()));
-            assertTrue(outcome.settledNow());
-            assertNotNull(outcome.winner());
-            assertNotNull(outcome.event());
-            assertSame(outcome.event(), game.getRetainedTerminalResult());
-            verify(gameStateService).clearRetainedSettlement(ROOM_ID);
+            ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+            verify(messagingTemplate).convertAndSend(eq("/game/" + ROOM_ID), captor.capture());
+            GameEndResponse response = assertInstanceOf(GameEndResponse.class, captor.getValue());
+            assertEquals("GAME_END", response.type());
+            assertEquals("Player2", response.winner());
+            assertFalse(response.isForfeit());
+            assertFalse(response.abandoned());
+            assertTrue(game.isGameOver());
+            assertTrue(testRoom.isTerminal());
+            assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
         }
 
         @Test
-        @DisplayName("resolveTerminalResultForParticipant throws UnauthorisedActionException for stranger")
-        void resolveTerminalResultForParticipant_UnauthorizedThrows() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            Game game = gameLifecycleService.getGame(ROOM_ID);
-            game.markGameOver();
+        @DisplayName("handleGameEndWithForfeits marks forfeited players out and broadcasts forfeit")
+        void handleGameEndWithForfeits_MarksForfeitedPlayersAndBroadcastsForfeit() {
+            Player host = new Player("Host", "host", 500);
+            Player p2 = new Player("Player2", "p2", 1000);
+            Game game = createAndRegisterStartedGame(List.of(host, p2));
 
-            assertThrows(UnauthorisedActionException.class, () ->
-                    gameLifecycleService.getRoomCoordinator().coordinate(ROOM_ID,
-                            () -> completion.resolveTerminalResultForParticipant(ROOM_ID, game, testRoom, "Stranger", false)));
-        }
+            clearInvocations(messagingTemplate, taskScheduler);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.handleGameEndWithForfeits(ROOM_ID, host, Set.of("Player2"));
+            }
 
-        @Test
-        @DisplayName("ensureRetainedClaimResult captures claim result when retained is null")
-        void ensureRetainedClaimResult_CapturesForClaimant() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            Game game = gameLifecycleService.getGame(ROOM_ID);
-            game.markGameOver();
-            assertNull(game.getRetainedTerminalResult());
+            assertTrue(p2.getIsOut());
+            assertTrue(game.isGameOver());
+            assertTrue(testRoom.isTerminal());
 
-            GameEndResponse response = gameLifecycleService.getRoomCoordinator().coordinate(ROOM_ID,
-                    () -> completion.ensureRetainedClaimResult(ROOM_ID, game, testRoom, "Host"));
-            assertNotNull(response);
+            ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+            verify(messagingTemplate).convertAndSend(eq("/game/" + ROOM_ID), captor.capture());
+            GameEndResponse response = assertInstanceOf(GameEndResponse.class, captor.getValue());
             assertEquals("Host", response.winner());
-            assertSame(response, game.getRetainedTerminalResult());
-        }
-    }
-
-    @Nested
-    @DisplayName("Migrated Terminal Settlement & Review Tests")
-    class MigratedLifecycleTests {
-
-        /**
-         * Protects the contract that handle game end with winner should broadcast end.
-         */
-        @Test
-        void handleGameEnd_WithWinner_ShouldBroadcastEnd() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            reset(gameStateService);
-            stubGameEndCapture();
-
-            gameLifecycleService.handleGameEnd(ROOM_ID, false);
-
-            verify(gameStateService).sendGameEnd(any(GameEndResponse.class));
+            assertTrue(response.isForfeit());
+            assertSame(response, game.getGameEndResult());
         }
 
         @Test
-        void terminalCarryOverFlowsThroughLifecycleIntoFrozenGameEndDtoOnce() {
-            Room room = testRoom;
-            when(roomService.getRoom(ROOM_ID)).thenReturn(room);
-            SimpMessagingTemplate publisher = messagingTemplate;
-            GameStateService realStateService = new GameStateService(roomService, publisher);
-            GameLifecycleService lifecycle = new GameLifecycleService(roomService, handEvaluator, realStateService,
-                    publisher, taskScheduler);
+        @DisplayName("terminal carry-over flows once into frozen GameEndResponse and repeat call is idempotent")
+        void terminalCarryOver_FlowsIntoFrozenGameEndDtoOnce() {
             Player winner = Player.restoreBuilder().name("Host").playerId("host").chips(1000).holeCards(List.of())
                     .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false).allIn(false)
                     .out(false).disconnected(false).readyForNextHand(false).build();
@@ -328,229 +259,274 @@ class GameCompletionHandlerTest {
                     .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, true))
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of()).handEvaluator(handEvaluator).build();
-            lifecycle.restoreGame(terminal);
+            registerGame(terminal);
 
-            lifecycle.handleGameEnd(ROOM_ID, false);
+            clearInvocations(messagingTemplate);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.handleGameEnd(ROOM_ID);
+            }
+
             ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-            verify(publisher).convertAndSend(eq("/game/" + ROOM_ID), captor.capture());
-            GameEndResponse result = (GameEndResponse) captor.getValue();
+            verify(messagingTemplate).convertAndSend(eq("/game/" + ROOM_ID), captor.capture());
+            GameEndResponse result = assertInstanceOf(GameEndResponse.class, captor.getValue());
             assertEquals(1010, result.winnerChips());
             assertEquals(0, result.finalState().pot());
-            assertEquals(1010, result.finalState().players().stream().filter(PublicPlayerState::isWinner)
-                    .findFirst().orElseThrow().chips());
-            assertTrue(terminal.isTerminalCarryOverSettled());
+            assertEquals(1010, result.finalState().players().stream()
+                    .filter(PublicPlayerState::isWinner).findFirst().orElseThrow().chips());
+            assertTrue(terminal.isFinalPotSettled());
 
-            lifecycle.handleGameEnd(ROOM_ID, false);
-            verify(publisher, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(Object.class));
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.handleGameEnd(ROOM_ID);
+            }
+            verify(messagingTemplate, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(Object.class));
             assertEquals(1010, winner.getChips());
         }
 
-        /**
-         * Protects the contract that handle game end with null game should not broadcast.
-         */
         @Test
-        void handleGameEnd_WithNullGame_ShouldNotBroadcast() {
-            gameLifecycleService.handleGameEnd("nonexistent-id", false);
+        @DisplayName("handleGameEnd preserves existing runtime cleanup timer when cancelling timers on end")
+        void handleGameEnd_CancelsProgressionTimersWhileRetainingCleanupSlot() {
+            Game game = createAndRegisterStartedGame(List.of(
+                    new Player("Host", "host", 1000),
+                    new Player("Player2", "p2", 1000)));
+            @SuppressWarnings("unchecked")
+            ScheduledFuture<Object> cleanupFuture = mock(ScheduledFuture.class);
+            @SuppressWarnings("unchecked")
+            ScheduledFuture<Object> turnFuture = mock(ScheduledFuture.class);
+            @SuppressWarnings("unchecked")
+            ScheduledFuture<Object> endCleanupFuture = mock(ScheduledFuture.class);
+            doReturn(cleanupFuture).doReturn(turnFuture).doReturn(endCleanupFuture)
+                    .when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
 
-            verify(gameStateService, never()).sendGameEnd(any(GameEndResponse.class));
+            runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 90_000L, () -> {});
+            runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 10_000L, () -> {});
+            assertEquals(2, runtimeTimers.activeTaskCount(ROOM_ID));
+
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.handleGameEnd(ROOM_ID);
+            }
+
+            verify(turnFuture).cancel(false);
+            verify(cleanupFuture).cancel(false); // replaced by scheduleGameCleanup inside handleGameEnd
+            assertEquals(BASE_EPOCH_MS + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
+                    game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
         }
+    }
 
-        /**
-         * Protects the contract that handle game end when no players remain should not throw.
-         */
-        @Test
-        void handleGameEnd_WhenNoPlayersRemain_ShouldNotThrow() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-
-            Game game = gameLifecycleService.getGame(ROOM_ID);
-            game.getPlayers().clear();
-            game.getActivePlayers().clear();
-
-            assertDoesNotThrow(() -> gameLifecycleService.handleGameEnd(ROOM_ID, false));
-        }
+    @Nested
+    @DisplayName("Inactivity Abandonment & Expiration")
+    class AbandonmentTests {
 
         @Test
-        @DisplayName("handleGameEnd should pick winner with chips in heads-up all-in")
-        void handleGameEnd_HeadsUpAllIn_ShouldPickWinnerWithChips() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            Game game = gameLifecycleService.getGame(ROOM_ID);
+        @DisplayName("abandonGameIfInactive guards against null room, changed deadline, and future deadline")
+        void abandonGameIfInactive_GuardsStaleAndEarlyCallbacks() {
+            Game game = createAndRegisterStartedGame(List.of(
+                    new Player("Host", "host", 100),
+                    new Player("Player2", "p2", 100)));
+            testRoom.setInactivityDeadlineEpochMs(BASE_EPOCH_MS + 50_000L);
 
-            // Host is index 0, Player2 is index 1
-            Player host = game.getPlayers().get(0);
-            Player p2 = game.getPlayers().get(1);
+            when(roomService.getRoom("missing")).thenReturn(null);
+            try (LockLease _ = roomCoordinator.acquire("missing")) {
+                completion.abandonGameIfInactive("missing", BASE_EPOCH_MS);
+            }
 
-            // Host is busted (0 chips)
-            host.setChips(0);
-            p2.setChips(2000);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                // Deadline mismatch
+                completion.abandonGameIfInactive(ROOM_ID, BASE_EPOCH_MS + 10_000L);
+                assertFalse(game.isGameOver());
 
-            reset(gameStateService);
-            stubGameEndCapture();
-            gameLifecycleService.handleGameEnd(ROOM_ID, false);
+                // Matches, but clock has not reached deadline yet
+                completion.abandonGameIfInactive(ROOM_ID, BASE_EPOCH_MS + 50_000L);
+                assertFalse(game.isGameOver());
+            }
 
-            // Should broadcast p2 as winner
-            verify(gameStateService).sendGameEnd(argThat(event -> event != null && event.winner().equals(p2.getName()) && !event.isForfeit()));
+            // Clock reaches deadline -> abandons
+            clockEpochMs.set(BASE_EPOCH_MS + 50_000L);
+            clearInvocations(messagingTemplate);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.abandonGameIfInactive(ROOM_ID, BASE_EPOCH_MS + 50_000L);
+            }
+
             assertTrue(game.isGameOver());
+            assertTrue(testRoom.isTerminal());
+            assertNotNull(game.getGameEndResult());
+            assertTrue(game.getGameEndResult().abandoned());
+            assertEquals("INACTIVITY", game.getGameEndResult().reason());
+            assertEquals(BASE_EPOCH_MS + 50_000L + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
+                    game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            verify(messagingTemplate).convertAndSend(eq("/game/" + ROOM_ID), eq(game.getGameEndResult()));
         }
 
         @Test
-        @DisplayName("handleGameEnd should broadcast forfeit when opponent is removed")
-        void handleGameEnd_ForfeitPath_ShouldBroadcastForfeit() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            Game game = gameLifecycleService.getGame(ROOM_ID);
+        @DisplayName("abandonGameDueToInactivity clears timers, invalidates tasks, and is idempotent")
+        void abandonGameDueToInactivity_ClearsProgressionAndIsIdempotent() {
+            Game game = createAndRegisterStartedGame(List.of(
+                    new Player("Host", "host", 100),
+                    new Player("Player2", "p2", 100)));
+            game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 5000L);
+            game.scheduleTask(ScheduledGameTask.READY_OPEN, BASE_EPOCH_MS + 6000L);
+            runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 5000L, () -> {});
+            long genBefore = game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT);
 
-            Player host = game.getPlayers().get(0);
-            Player p2 = game.getPlayers().get(1);
+            clearInvocations(messagingTemplate);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.abandonGameDueToInactivity(ROOM_ID);
+            }
 
-            // p2 is out
-            p2.setIsOut();
-
-            reset(gameStateService);
-            stubGameEndCapture();
-            gameLifecycleService.handleGameEnd(ROOM_ID, true);
-
-            // Host should be winner
-            verify(gameStateService).sendGameEnd(argThat(event -> event != null && event.winner().equals(host.getName()) && event.isForfeit()));
             assertTrue(game.isGameOver());
+            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+            assertThat(game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT)).isGreaterThan(genBefore);
+            verify(messagingTemplate, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(GameEndResponse.class));
+
+            // Repeat call is idempotent
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.abandonGameDueToInactivity(ROOM_ID);
+            }
+            verify(messagingTemplate, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(GameEndResponse.class));
         }
 
         @Test
-        @DisplayName("getGameReview enforces 200, 409, 404, 403 authorization rules")
+        @DisplayName("rejectExpiredActivity abandons game and throws GAME_EXPIRED when room inactivity expired")
+        void rejectExpiredActivity_WhenExpired_AbandonsAndThrows() {
+            Game game = createAndRegisterStartedGame(List.of(
+                    new Player("Host", "host", 100),
+                    new Player("Player2", "p2", 100)));
+            testRoom.setInactivityDeadlineEpochMs(BASE_EPOCH_MS + 1000L);
+
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                assertDoesNotThrow(() -> completion.rejectExpiredActivity(ROOM_ID, null));
+                assertDoesNotThrow(() -> completion.rejectExpiredActivity(ROOM_ID, testRoom));
+            }
+
+            clockEpochMs.set(BASE_EPOCH_MS + 1000L);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                BadRequestException ex = assertThrows(BadRequestException.class,
+                        () -> completion.rejectExpiredActivity(ROOM_ID, testRoom));
+                assertEquals("GAME_EXPIRED", ex.actionErrorCode());
+            }
+            assertTrue(game.isGameOver());
+            assertTrue(game.getGameEndResult().abandoned());
+        }
+    }
+
+    @Nested
+    @DisplayName("getGameReview & Cleanup")
+    class ReviewAndCleanupTests {
+
+        @Test
+        @DisplayName("getGameReview enforces 404, 409, 200 (winner, out, departed), and 403 authorization rules")
         void getGameReview_AuthorizationAndStatusRules() {
             testRoom.addPlayer("Player3");
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            Game game = gameLifecycleService.getGame(ROOM_ID);
+            Game game = createAndRegisterStartedGame(List.of(
+                    new Player("Host", "host", 1000),
+                    new Player("Player2", "p2", 1000),
+                    new Player("Player3", "p3", 1000)));
 
-            // 1. Active game -> 409 Conflict
-            assertThrows(ConflictException.class,
-                    () -> gameLifecycleService.getGameReview(ROOM_ID, "Host"));
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                assertThrows(ConflictException.class, () -> completion.getGameReview(ROOM_ID, "Host"));
 
-            // End the game
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", System.currentTimeMillis() + 120_000);
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", System.currentTimeMillis() + 120_000);
-            GameEndResponse terminal = gameLifecycleService.claimWin(ROOM_ID, "Host");
+                completion.handleGameEndWithForfeits(
+                        ROOM_ID, game.getPlayers().getFirst(), Set.of("Player2", "Player3"));
+                GameEndResponse terminal = game.getGameEndResult();
+                assertNotNull(terminal);
 
-            // 2. Winner can review -> 200
-            GameEndResponse reviewWinner = gameLifecycleService.getGameReview(ROOM_ID, "Host");
-            assertSame(terminal, reviewWinner);
+                assertSame(terminal, completion.getGameReview(ROOM_ID, "Host"));
+                assertSame(terminal, completion.getGameReview(ROOM_ID, "Player2"));
 
-            // 3. OUT / forfeit player in terminal roster can review -> 200
-            GameEndResponse reviewOutPlayer = gameLifecycleService.getGameReview(ROOM_ID, "Player2");
-            assertSame(terminal, reviewOutPlayer);
+                testRoom.removePlayer("Player3");
+                assertSame(terminal, completion.getGameReview(ROOM_ID, "Player3"));
 
-            // 4. Departed room member (removed from Room, but in terminal roster) can review -> 200
-            testRoom.removePlayer("Player3");
-            assertFalse(testRoom.getPlayers().contains("Player3"));
-            GameEndResponse reviewDepartedMember = gameLifecycleService.getGameReview(ROOM_ID, "Player3");
-            assertSame(terminal, reviewDepartedMember);
+                assertThrows(UnauthorisedActionException.class,
+                        () -> completion.getGameReview(ROOM_ID, "Stranger"));
 
-            // 5. Unauthorized player (not in terminal roster) -> 403 Forbidden
-            assertThrows(UnauthorisedActionException.class,
-                    () -> gameLifecycleService.getGameReview(ROOM_ID, "Stranger"));
+                // Expired game -> 404
+                game.scheduleTask(ScheduledGameTask.CLEANUP, BASE_EPOCH_MS - 1000L);
+                assertTrue(completion.isGameExpired(game));
+                assertThrows(ResourceNotFoundException.class,
+                        () -> completion.getGameReview(ROOM_ID, "Host"));
+            }
 
-            // 6. Non-existent game -> 404 Not Found
-            assertThrows(ResourceNotFoundException.class,
-                    () -> gameLifecycleService.getGameReview("non-existent-game", "Host"));
-
-            // 7. Expired game (now >= cleanupDeadline) -> 404 Not Found
-            game.scheduleTask(ScheduledGameTask.CLEANUP, System.currentTimeMillis() - 1000);
-            assertTrue(gameLifecycleService.isGameExpired(game));
-            assertFalse(gameLifecycleService.gameExists(ROOM_ID));
-            assertThrows(ResourceNotFoundException.class,
-                    () -> gameLifecycleService.getGameReview(ROOM_ID, "Host"));
+            try (LockLease _ = roomCoordinator.acquire("non-existent-game")) {
+                assertThrows(ResourceNotFoundException.class,
+                        () -> completion.getGameReview("non-existent-game", "Host"));
+            }
         }
 
         @Test
-        @DisplayName("getGameReview recovers terminal GameEndResponse after game is over without 404 or mutating stateRevision")
-        void getGameReview_WhenGameOverAndRetainedResultNull_RecoversWithout404() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
-            Game game = gameLifecycleService.getGame(ROOM_ID);
-            assertNotNull(game);
-
-            // Mark game over with null retainedTerminalResult (during PRE_FLOP -> forfeit)
+        @DisplayName("getGameReview synthesizes fallback without 404 or mutating stateRevision when gameEndResult is null")
+        void getGameReview_WhenGameOverAndResultNull_SynthesizesWithoutMutatingState() {
+            Game game = createAndRegisterStartedGame(List.of(
+                    new Player("Host", "host", 1000),
+                    new Player("Player2", "p2", 1000)));
             game.markGameOver();
-            game.setRetainedTerminalResult(null);
+            game.setGameEndResult(null);
             long revisionBefore = game.getStateRevision();
 
-            reset(gameStateService);
-            stubGameEndCapture();
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                GameEndResponse review = completion.getGameReview(ROOM_ID, "Host");
+                assertEquals("GAME_END", review.type());
+                assertNotNull(review.winner());
+                assertTrue(review.isForfeit(), "Pre-showdown end must synthesize isForfeit=true");
+                assertNotNull(review.finalState());
+                assertEquals(revisionBefore, game.getStateRevision(), "Read-only getGameReview must not bump stateRevision");
+                assertNull(game.getGameEndResult(), "Read-only getGameReview must not store gameEndResult");
 
-            // getGameReview should project the terminal result without mutating durable state or incrementing stateRevision
-            GameEndResponse review = gameLifecycleService.getGameReview(ROOM_ID, "Host");
-            assertNotNull(review, "getGameReview must return non-null GameEndResponse");
-            assertEquals("GAME_END", review.type());
-            assertNotNull(review.winner(), "Winner must be resolved");
-            assertTrue(review.isForfeit(), "Pre-showdown game over must synthesize isForfeit = true");
-            assertNotNull(review.finalState(), "finalState must be synthesized");
-            assertEquals(revisionBefore, game.getStateRevision(), "Read-only getGameReview must not increment stateRevision");
-            assertNull(game.getRetainedTerminalResult(), "Read-only getGameReview must not mutate retainedTerminalResult");
-            verify(gameStateService, never()).captureGameEnd(anyString(), any(), any(), anyBoolean(), anyInt());
-            verify(gameStateService).projectGameEnd(eq(ROOM_ID), eq(game), any(Player.class), eq(true), eq(testRoom.getMaxPlayers()));
+                game.conductShowdown();
+                GameEndResponse showdownReview = completion.getGameReview(ROOM_ID, "Host");
+                assertFalse(showdownReview.isForfeit(), "Settled SHOWDOWN must synthesize isForfeit=false");
 
-            // When game ended via settled SHOWDOWN, both getGameReview and claimWin derive isForfeit = false
-            game.conductShowdown();
-            assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
-            GameEndResponse showdownReview = gameLifecycleService.getGameReview(ROOM_ID, "Host");
-            assertFalse(showdownReview.isForfeit(), "Settled SHOWDOWN game over must synthesize isForfeit = false in getGameReview");
-
-            GameEndResponse showdownClaim = gameLifecycleService.claimWin(ROOM_ID, "Host");
-            assertFalse(showdownClaim.isForfeit(), "Settled SHOWDOWN game over must synthesize isForfeit = false in claimWin");
-            assertSame(showdownClaim, game.getRetainedTerminalResult(), "Durable claimWin retains synthesized terminal result");
+                // All remaining players marked out in settled SHOWDOWN -> falls back to first seated player
+                game.getPlayers().forEach(Player::setIsOut);
+                GameEndResponse allOutFallback = completion.getGameReview(ROOM_ID, "Host");
+                assertEquals("Host", allOutFallback.winner());
+                assertFalse(allOutFallback.isForfeit());
+                assertEquals(revisionBefore, game.getStateRevision());
+                assertNull(game.getGameEndResult());
+            }
         }
 
         @Test
-        @DisplayName("Empty terminal room preserves container until cleanup, closed to joining")
-        void terminalRoom_PreservesContainerWhenEmptyUntilCleanup() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            gameLifecycleService.createGameFromRoom(ROOM_ID);
+        @DisplayName("deleteGameAndRoom cancels timers, removes game from registry, and destroys room")
+        void deleteGameAndRoom_CleansRegistryAndDestroysRoom() {
+            createAndRegisterStartedGame(List.of(
+                    new Player("Host", "host", 100),
+                    new Player("Player2", "p2", 100)));
+            runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 10_000L, () -> {});
 
-            gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player2", System.currentTimeMillis() + 120_000);
-            gameLifecycleService.claimWin(ROOM_ID, "Host");
-
-            Game game = gameLifecycleService.getGame(ROOM_ID);
-            assertTrue(game.isGameOver());
-            assertTrue(testRoom.isTerminal());
-
-            // Host leaves after terminal settlement
-            gameLifecycleService.departParticipants(ROOM_ID, List.of("Host"));
-            assertTrue(testRoom.isTerminal());
-            // Verify room was NOT destroyed upon reaching 0 members because it's terminal
-            verify(roomService, never()).destroyRoom(ROOM_ID);
-
-            // Perform cleanup durably destroys room and removes game
-            gameLifecycleService.performGameCleanup(ROOM_ID);
-            assertNull(gameLifecycleService.getGame(ROOM_ID));
-            verify(roomService, times(1)).destroyRoom(ROOM_ID);
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                completion.deleteGameAndRoom(ROOM_ID);
+                assertNull(activeGames.get(ROOM_ID));
+            }
+            assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
+            verify(roomService).destroyRoom(ROOM_ID);
         }
 
         @Test
-        @DisplayName("performGameCleanup and evictGame clear retained settlement in GameStateService")
-        void performGameCleanupAndEvictGame_ClearRetainedSettlementInGameStateService() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            GameStateService realStateService = new GameStateService(roomService, messagingTemplate);
-            GameLifecycleService lifecycle = new GameLifecycleService(roomService, handEvaluator, realStateService,
-                    messagingTemplate, taskScheduler);
+        @DisplayName("cleanupAbandonedGameIfRoomEmpty removes game only when zero contenders and zero room members")
+        void cleanupAbandonedGameIfRoomEmpty_RespectsContendersAndRoomMembership() {
+            Game game = createAndRegisterStartedGame(List.of(
+                    new Player("Host", "host", 100),
+                    new Player("Player2", "p2", 100)));
+            runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 10_000L, () -> {});
 
-            lifecycle.createGameFromRoom(ROOM_ID);
-            Game game = lifecycle.getGame(ROOM_ID);
-            realStateService.broadcastShowdownResults(ROOM_ID, game, List.of(game.getPlayers().getFirst()), 50);
-            assertTrue(realStateService.hasRetainedSettlement(ROOM_ID));
+            try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
+                // Still has contenders and room members -> no-op
+                completion.cleanupAbandonedGameIfRoomEmpty(ROOM_ID, testRoom, game);
+                assertNotNull(activeGames.get(ROOM_ID));
 
-            lifecycle.performGameCleanup(ROOM_ID);
-            assertFalse(realStateService.hasRetainedSettlement(ROOM_ID),
-                    "performGameCleanup must evict retained settlement for cleaned-up game");
+                // Zero contenders, but room still has a member -> no-op
+                game.getPlayers().forEach(Player::setIsOut);
+                assertEquals(0, GameEligibility.countContenders(game));
+                completion.cleanupAbandonedGameIfRoomEmpty(ROOM_ID, testRoom, game);
+                assertNotNull(activeGames.get(ROOM_ID));
 
-            lifecycle.restoreGame(game);
-            realStateService.broadcastShowdownResults(ROOM_ID, game, List.of(game.getPlayers().getFirst()), 50);
-            assertTrue(realStateService.hasRetainedSettlement(ROOM_ID));
-
-            lifecycle.evictGame(ROOM_ID);
-            assertFalse(realStateService.hasRetainedSettlement(ROOM_ID),
-                    "evictGame must evict retained settlement for evicted game");
+                // Room becomes empty -> clears tasks, cancels timers, removes game
+                testRoom.removePlayer("Host");
+                testRoom.removePlayer("Player2");
+                completion.cleanupAbandonedGameIfRoomEmpty(ROOM_ID, testRoom, game);
+                assertNull(activeGames.get(ROOM_ID));
+            }
+            assertEquals(0, runtimeTimers.activeTaskCount(ROOM_ID));
         }
     }
 }

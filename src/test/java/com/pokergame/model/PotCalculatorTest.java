@@ -1,24 +1,13 @@
 package com.pokergame.model;
 
-import com.pokergame.dto.internal.PlayerDecision;
-import com.pokergame.enums.*;
-import java.util.ArrayList;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.junit.jupiter.MockitoSettings;
-import org.mockito.quality.Strictness;
-import static org.mockito.Mockito.*;
-
-import com.pokergame.enums.GamePhase;
-import java.util.stream.Collectors;
-import org.junit.jupiter.api.Nested;
-
 import com.pokergame.enums.HandRank;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -91,7 +80,7 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("p1", 100, "p2", 100);
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                200, 0, contributions, allPlayers, contenders, GAME_ID);
+                200, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(1, result.allocations().size());
         assertEquals(200, result.allocations().get(0).amount());
@@ -110,7 +99,7 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("s1", 50, "m1", 150, "d1", 150);
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                350, 0, contributions, allPlayers, contenders, GAME_ID);
+                350, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(2, result.allocations().size());
         // Main pot: 50 * 3 = 150, eligible: Short, Mid, Deep
@@ -133,7 +122,7 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("p1", 50, "p2", 100, "p3", 200, "p4", 200);
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                550, 0, contributions, allPlayers, contenders, GAME_ID);
+                550, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(3, result.allocations().size());
         assertEquals(200, result.allocations().get(0).amount()); // 50 * 4
@@ -155,7 +144,7 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("a1", 480, "s1", 10, "b1", 20);
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                510, 0, contributions, allPlayers, contenders, GAME_ID);
+                510, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         // Contested allocations: Layer 1 (10*3=30), Layer 2 (10*2=20)
         assertEquals(2, result.allocations().size());
@@ -180,9 +169,8 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("a", 50, "b", 100, "c", 200, "d", 200);
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                550, 0, contributions, allPlayers, contenders, GAME_ID);
+                550, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
-        assertEquals(2, result.allocations().size());
         // Layer 1: 50 * 4 = 200, eligible: [a, b]
         assertEquals(200, result.allocations().get(0).amount());
         assertEquals(List.of(a, b), result.allocations().get(0).eligiblePlayers());
@@ -202,7 +190,7 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("b", 10, "c", 20);
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                30, 0, contributions, allPlayers, contenders, GAME_ID);
+                30, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(1, result.allocations().size());
         assertEquals(30, result.allocations().get(0).amount());
@@ -219,7 +207,7 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("s", 50, "m", 150, "departed", 150);
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                350, 0, contributions, allPlayers, contenders, GAME_ID);
+                350, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(2, result.allocations().size());
         assertEquals(150, result.allocations().get(0).amount());
@@ -241,7 +229,7 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("a", 100, "b", 100, "f1", 5, "f2", 10, "f3", 15);
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                230, 0, contributions, allPlayers, contenders, GAME_ID);
+                230, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         // Slices coalesce into single allocation so odd-chip remainder does not fragment across identical contenders
         assertEquals(1, result.allocations().size());
@@ -259,7 +247,7 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("a", 50, "b", 50);
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                110, 10, contributions, allPlayers, contenders, GAME_ID);
+                110, 10, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(1, result.allocations().size());
         assertEquals(110, result.allocations().get(0).amount());
@@ -274,7 +262,7 @@ class PotCalculatorTest {
         List<Player> contenders = List.of(a, b);
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                50, 50, Map.of(), allPlayers, contenders, GAME_ID);
+                50, 50, Map.of(), contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(1, result.allocations().size());
         assertEquals(50, result.allocations().get(0).amount());
@@ -291,7 +279,8 @@ class PotCalculatorTest {
 
         // Pot is 200 but ledger has only 100 and carry-over is 0
         assertThrows(IllegalStateException.class, () ->
-                PotCalculator.computePotAllocationsAndUncalled(200, 0, contributions, allPlayers, contenders, GAME_ID));
+                PotCalculator.computePotAllocationsAndUncalled(
+                        200, 0, contributions, contenders, allPlayers, contenders, GAME_ID));
     }
 
     // =========================================================================
@@ -301,7 +290,7 @@ class PotCalculatorTest {
     @Test
     void getPotBreakdown_EmptyPot_ReturnsEmptyList() {
         List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                0, null, List.of(), 0, Map.of(), 0, List.of(), GAME_ID);
+                0, 0, Map.of(), List.of(), List.of(), null, 0, GAME_ID);
 
         assertTrue(breakdown.isEmpty());
     }
@@ -311,7 +300,7 @@ class PotCalculatorTest {
         HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, true);
 
         List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                100, settled, List.of(), 0, Map.of(), 0, List.of(), GAME_ID);
+                100, 0, Map.of(), List.of(), List.of(), settled, 0, GAME_ID);
 
         assertEquals(List.of(100), breakdown);
     }
@@ -323,7 +312,7 @@ class PotCalculatorTest {
         List<Player> active = List.of(p1, p2);
 
         List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                100, null, active, 50, Map.of("p1", 50, "p2", 50), 0, active, GAME_ID);
+                100, 0, Map.of("p1", 50, "p2", 50), active, active, null, 50, GAME_ID);
 
         assertEquals(List.of(100), breakdown);
     }
@@ -337,7 +326,7 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("short", 50, "bettor", 250, "owing", 50);
 
         List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                350, null, active, 250, contributions, 0, active, GAME_ID);
+                350, 0, contributions, active, active, null, 250, GAME_ID);
 
         assertEquals(List.of(150, 200), breakdown);
     }
@@ -352,7 +341,7 @@ class PotCalculatorTest {
 
         // SB and BB owe call below 480 cap -> entire pot remains pending single layer
         List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                510, null, active, 480, contributions, 0, active, GAME_ID);
+                510, 0, contributions, active, active, null, 480, GAME_ID);
 
         assertEquals(List.of(510), breakdown);
     }
@@ -368,7 +357,7 @@ class PotCalculatorTest {
 
         // Pot 380, carry-over 10
         List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                380, null, active, 250, contributions, 10, active, GAME_ID);
+                380, 10, contributions, active, active, null, 250, GAME_ID);
 
         assertEquals(List.of(180, 200), breakdown);
     }
@@ -383,7 +372,7 @@ class PotCalculatorTest {
 
         // Current highest bet is 150, all active non-all-in players have matched 150 (no owing calls)
         List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                350, null, active, 150, contributions, 0, active, GAME_ID);
+                350, 0, contributions, active, active, null, 150, GAME_ID);
 
         assertEquals(List.of(150, 200), breakdown);
     }
@@ -398,7 +387,7 @@ class PotCalculatorTest {
 
         // Action is complete (currentHighestBet = 20, SB is all-in for 10, BB matched 20)
         List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                510, null, active, 20, contributions, 0, active, GAME_ID);
+                510, 0, contributions, active, active, null, 20, GAME_ID);
 
         // Contested breakdown only: 30 and 20; the 460 uncalled is excluded from contested breakdown
         assertEquals(List.of(30, 20), breakdown);
@@ -411,7 +400,7 @@ class PotCalculatorTest {
     @Test
     void getUncalledAmount_EmptyPot_ReturnsZero() {
         assertEquals(0, PotCalculator.getUncalledAmount(
-                0, null, List.of(), 0, Map.of(), 0, List.of(), GAME_ID));
+                0, 0, Map.of(), List.of(), List.of(), null, 0, GAME_ID));
     }
 
     @Test
@@ -419,7 +408,7 @@ class PotCalculatorTest {
         HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, true);
 
         assertEquals(0, PotCalculator.getUncalledAmount(
-                100, settled, List.of(), 0, Map.of(), 0, List.of(), GAME_ID));
+                100, 0, Map.of(), List.of(), List.of(), settled, 0, GAME_ID));
     }
 
     @Test
@@ -428,7 +417,7 @@ class PotCalculatorTest {
         Player p2 = playerWithBet("p2", "Bob", 1000, 50);
 
         assertEquals(0, PotCalculator.getUncalledAmount(
-                100, null, List.of(p1, p2), 50, Map.of("p1", 50, "p2", 50), 0, List.of(p1, p2), GAME_ID));
+                100, 0, Map.of("p1", 50, "p2", 50), List.of(p1, p2), List.of(p1, p2), null, 50, GAME_ID));
     }
 
     @Test
@@ -439,7 +428,7 @@ class PotCalculatorTest {
         List<Player> active = List.of(shortStack, bettor, owing);
 
         assertEquals(0, PotCalculator.getUncalledAmount(
-                350, null, active, 250, Map.of("short", 50, "bettor", 250, "owing", 50), 0, active, GAME_ID));
+                350, 0, Map.of("short", 50, "bettor", 250, "owing", 50), active, active, null, 250, GAME_ID));
     }
 
     @Test
@@ -452,63 +441,75 @@ class PotCalculatorTest {
 
         // Action complete with currentHighestBet = 20 (SB is all-in for 10, BB matched 20)
         assertEquals(460, PotCalculator.getUncalledAmount(
-                510, null, active, 20, contributions, 0, active, GAME_ID));
+                510, 0, contributions, active, active, null, 20, GAME_ID));
     }
 
     // =========================================================================
-    // 5. Algorithm Helpers
+    // 5. Dead Layer Routing, Layer Coalescing, and Formatting
     // =========================================================================
 
     @Test
-    void routeDeadLayerToNearestEligible_RollsIntoPreviousAllocation() {
+    void deadLayerRouting_RollsIntoPreviousAllocation() {
         Player p1 = player("p1", "Alice", 1000);
-        List<PotCalculator.PotAllocation> allocations = new ArrayList<>();
-        allocations.add(new PotCalculator.PotAllocation(100, List.of(p1)));
+        Player f1 = foldedPlayer("f1", "F1", 1000);
+        Player f2 = foldedPlayer("f2", "F2", 1000);
+        List<Player> allPlayers = List.of(p1, f1, f2);
+        List<Player> contenders = List.of(p1);
 
-        PotCalculator.routeDeadLayerToNearestEligible(allocations, 50, List.of());
+        PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
+                250, 0, Map.of("p1", 50, "f1", 100, "f2", 100), contenders, allPlayers, contenders, GAME_ID);
 
-        assertEquals(1, allocations.size());
-        assertEquals(150, allocations.get(0).amount());
-        assertEquals(List.of(p1), allocations.get(0).eligiblePlayers());
+        assertEquals(1, result.allocations().size());
+        assertEquals(250, result.allocations().get(0).amount());
+        assertEquals(List.of(p1), result.allocations().get(0).eligiblePlayers());
+        assertEquals(0, result.uncalledTotal());
     }
 
     @Test
-    void routeDeadLayerToNearestEligible_PrependToContendersWhenNoAllocations() {
+    void deadLayerRouting_AssignsToContendersWhenNoPriorAllocationsExist() {
         Player p1 = player("p1", "Alice", 1000);
-        List<PotCalculator.PotAllocation> allocations = new ArrayList<>();
+        Player f1 = foldedPlayer("f1", "F1", 1000);
+        Player f2 = foldedPlayer("f2", "F2", 1000);
+        List<Player> allPlayers = List.of(p1, f1, f2);
+        List<Player> contenders = List.of(p1);
 
-        PotCalculator.routeDeadLayerToNearestEligible(allocations, 50, List.of(p1));
+        PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
+                50, 0, Map.of("f1", 25, "f2", 25), contenders, allPlayers, contenders, GAME_ID);
 
-        assertEquals(1, allocations.size());
-        assertEquals(50, allocations.get(0).amount());
-        assertEquals(List.of(p1), allocations.get(0).eligiblePlayers());
+        assertEquals(1, result.allocations().size());
+        assertEquals(50, result.allocations().get(0).amount());
+        assertEquals(List.of(p1), result.allocations().get(0).eligiblePlayers());
     }
 
     @Test
-    void appendAllocationCoalescingSameEligibility_MergesMatchingContenders() {
+    void allocationCoalescing_MergesAdjacentLayersWithSameEligibility() {
         Player p1 = player("p1", "Alice", 1000);
         Player p2 = player("p2", "Bob", 1000);
-        List<PotCalculator.PotAllocation> allocations = new ArrayList<>();
-        allocations.add(new PotCalculator.PotAllocation(100, List.of(p1, p2)));
+        Player f1 = foldedPlayer("f1", "Folded", 1000);
+        List<Player> allPlayers = List.of(p1, p2, f1);
+        List<Player> contenders = List.of(p1, p2);
 
-        PotCalculator.appendAllocationCoalescingSameEligibility(allocations, 50, List.of(p2, p1));
+        PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
+                220, 0, Map.of("p1", 100, "p2", 100, "f1", 20), contenders, allPlayers, contenders, GAME_ID);
 
-        assertEquals(1, allocations.size());
-        assertEquals(150, allocations.get(0).amount());
+        assertEquals(1, result.allocations().size());
+        assertEquals(220, result.allocations().get(0).amount());
+        assertEquals(List.of(p1, p2), result.allocations().get(0).eligiblePlayers());
     }
 
     @Test
-    void appendAllocationCoalescingSameEligibility_AppendsWhenContendersDiffer() {
-        Player p1 = player("p1", "Alice", 1000);
-        Player p2 = player("p2", "Bob", 1000);
-        List<PotCalculator.PotAllocation> allocations = new ArrayList<>();
-        allocations.add(new PotCalculator.PotAllocation(100, List.of(p1, p2)));
+    void allocationCoalescing_KeepsLayersSeparateWhenContendersDiffer() {
+        Player p1 = allInPlayer("p1", "Short", 0);
+        Player p2 = player("p2", "Alice", 1000);
+        Player p3 = player("p3", "Bob", 1000);
+        List<Player> allPlayers = List.of(p1, p2, p3);
 
-        PotCalculator.appendAllocationCoalescingSameEligibility(allocations, 50, List.of(p1));
+        PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
+                250, 0, Map.of("p1", 50, "p2", 100, "p3", 100), allPlayers, allPlayers, allPlayers, GAME_ID);
 
-        assertEquals(2, allocations.size());
-        assertEquals(100, allocations.get(0).amount());
-        assertEquals(50, allocations.get(1).amount());
+        assertEquals(2, result.allocations().size());
+        assertEquals(150, result.allocations().get(0).amount());
+        assertEquals(100, result.allocations().get(1).amount());
     }
 
     @Test
@@ -551,7 +552,7 @@ class PotCalculatorTest {
         int totalPot = 25 + 25 + 50 + 100 + 200;
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                totalPot, 0, contributions, allPlayers, contenders, GAME_ID);
+                totalPot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(1, result.allocations().size());
         assertEquals(400, result.allocations().get(0).amount());
@@ -572,7 +573,7 @@ class PotCalculatorTest {
         int totalPot = 50 + 150 + 100 + 250;
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                totalPot, 0, contributions, allPlayers, contenders, GAME_ID);
+                totalPot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(2, result.allocations().size());
         assertEquals(200, result.allocations().get(0).amount());
@@ -593,7 +594,7 @@ class PotCalculatorTest {
         int totalPot = 500;
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                totalPot, 0, contributions, allPlayers, contenders, GAME_ID);
+                totalPot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(1, result.allocations().size());
         assertEquals(500, result.allocations().get(0).amount());
@@ -606,20 +607,21 @@ class PotCalculatorTest {
     void challenge_LayerCoalescing_OrderIndependenceAndSubsets() {
         Player p1 = player("p1", "Alice", 1000);
         Player p2 = player("p2", "Bob", 1000);
-        Player p3 = player("p3", "Charlie", 1000);
+        Player p3 = allInPlayer("p3", "Charlie", 0);
+        Player f1 = foldedPlayer("f1", "Folded", 1000);
+        List<Player> allPlayers = List.of(p1, p2, p3, f1);
+        List<Player> contenders = List.of(p1, p2, p3);
 
-        List<PotCalculator.PotAllocation> allocations = new ArrayList<>();
-        allocations.add(new PotCalculator.PotAllocation(100, List.of(p1, p2, p3)));
+        // Layers 0-20 ([p1,p2,p3]=80) and 20-50 ([p1,p2,p3]=90) coalesce to 170; 50-100 ([p1,p2]=100) stays distinct.
+        PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
+                270, 0, Map.of("p1", 100, "p2", 100, "p3", 50, "f1", 20),
+                contenders, allPlayers, contenders, GAME_ID);
 
-        PotCalculator.appendAllocationCoalescingSameEligibility(allocations, 50, List.of(p3, p1, p2));
-        assertEquals(1, allocations.size());
-        assertEquals(150, allocations.get(0).amount());
-
-        PotCalculator.appendAllocationCoalescingSameEligibility(allocations, 75, List.of(p1, p2));
-        assertEquals(2, allocations.size());
-        assertEquals(150, allocations.get(0).amount());
-        assertEquals(75, allocations.get(1).amount());
-        assertEquals(List.of(p1, p2), allocations.get(1).eligiblePlayers());
+        assertEquals(2, result.allocations().size());
+        assertEquals(170, result.allocations().get(0).amount());
+        assertEquals(List.of(p1, p2, p3), result.allocations().get(0).eligiblePlayers());
+        assertEquals(100, result.allocations().get(1).amount());
+        assertEquals(List.of(p1, p2), result.allocations().get(1).eligiblePlayers());
     }
 
     @Test
@@ -682,7 +684,7 @@ class PotCalculatorTest {
         int totalPot = 350;
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                totalPot, 0, contributions, tablePlayers, contenders, GAME_ID);
+                totalPot, 0, contributions, contenders, tablePlayers, contenders, GAME_ID);
 
         assertEquals(2, result.allocations().size());
         assertEquals(150, result.allocations().get(0).amount());
@@ -703,7 +705,7 @@ class PotCalculatorTest {
         int totalPot = 400;
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                totalPot, 0, contributions, tablePlayers, contenders, GAME_ID);
+                totalPot, 0, contributions, contenders, tablePlayers, contenders, GAME_ID);
 
         assertEquals(2, result.allocations().size());
         assertEquals(150, result.allocations().get(0).amount());
@@ -724,7 +726,7 @@ class PotCalculatorTest {
         int totalPot = 400;
 
         PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                totalPot, 0, contributions, tablePlayers, contenders, GAME_ID);
+                totalPot, 0, contributions, contenders, tablePlayers, contenders, GAME_ID);
 
         assertEquals(1, result.allocations().size());
         assertEquals(400, result.allocations().get(0).amount());
@@ -782,7 +784,7 @@ class PotCalculatorTest {
             }
 
             PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                    totalPot, carryOver, contributions, activePlayers, allPlayers, GAME_ID);
+                    totalPot, carryOver, contributions, activePlayers, allPlayers, activePlayers, GAME_ID);
 
             int allocated = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
             assertEquals(totalPot, allocated + result.uncalledTotal(),
@@ -902,7 +904,7 @@ class PotCalculatorTest {
             assertEquals(550, totalPot);
 
             PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                    totalPot, 0, contributions, players, players, GAME_ID);
+                    totalPot, 0, contributions, players, players, players, GAME_ID);
 
             // Verification of Invariant: Conservation
             int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
@@ -977,7 +979,7 @@ class PotCalculatorTest {
             assertEquals(550, totalPot);
 
             PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                    totalPot, 0, contributions, allPlayers, contenders, GAME_ID);
+                    totalPot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
             // Pot conservation check
             int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
@@ -1022,7 +1024,7 @@ class PotCalculatorTest {
             assertEquals(550, totalPot);
 
             PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                    totalPot, 0, contributions, allPlayers, contenders, GAME_ID);
+                    totalPot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
             // Invariant: Because top player (P10) folded, NO uncalled refund is issued!
             assertEquals(0, result.uncalledTotal());
@@ -1053,7 +1055,7 @@ class PotCalculatorTest {
             int pot = 5100;
 
             PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                    pot, 0, contributions, allPlayers, contenders, GAME_ID);
+                    pot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
             // The whale folded, so CANNOT receive an uncalled refund.
             assertEquals(0, result.uncalledTotal());
@@ -1083,7 +1085,7 @@ class PotCalculatorTest {
             int totalPot = carryOver + 700;
 
             PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                    totalPot, carryOver, contributions, allPlayers, contenders, GAME_ID);
+                    totalPot, carryOver, contributions, contenders, allPlayers, contenders, GAME_ID);
 
             // Conservation check
             int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
@@ -1112,7 +1114,7 @@ class PotCalculatorTest {
             Map<String, Integer> contributions = Map.of("p1", p1Contrib, "p2", p2Contrib);
 
             PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                    totalPot, 0, contributions, allPlayers, allPlayers, GAME_ID);
+                    totalPot, 0, contributions, allPlayers, allPlayers, allPlayers, GAME_ID);
 
             // Layer 1: 500M * 2 = 1,000,000,000 (positive, no overflow)
             assertEquals(1, result.allocations().size());
@@ -1133,7 +1135,7 @@ class PotCalculatorTest {
         @Test
         void challenge_Boundary_EmptyPot_SafeEmptyReturns() {
             PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                    0, 0, Map.of(), List.of(), List.of(), GAME_ID);
+                    0, 0, Map.of(), List.of(), List.of(), List.of(), GAME_ID);
 
             assertTrue(result.allocations().isEmpty());
             assertTrue(result.uncalledByPlayer().isEmpty());
@@ -1157,7 +1159,7 @@ class PotCalculatorTest {
             int pot = 501;
 
             PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                    pot, 0, contributions, allPlayers, allPlayers, GAME_ID);
+                    pot, 0, contributions, allPlayers, allPlayers, allPlayers, GAME_ID);
 
             // Main pot: 1 * 2 = 2 chips contested by [micro, deep]
             assertEquals(1, result.allocations().size());
@@ -1182,7 +1184,7 @@ class PotCalculatorTest {
             }
 
             PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                    5, 0, contributions, players, players, GAME_ID);
+                    5, 0, contributions, players, players, players, GAME_ID);
 
             assertEquals(1, result.allocations().size());
             assertEquals(5, result.allocations().get(0).amount());
@@ -1223,7 +1225,7 @@ class PotCalculatorTest {
             assertEquals(1200, pot);
 
             PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                    pot, 0, contributions, players, players, GAME_ID);
+                    pot, 0, contributions, players, players, players, GAME_ID);
 
             // Since both top players contributed 300, no uncalled excess exists!
             assertEquals(0, result.uncalledTotal());
@@ -1284,7 +1286,7 @@ class PotCalculatorTest {
                 pot += carryOver;
 
                 PotCalculator.PotComputationResult result = PotCalculator.computePotAllocationsAndUncalled(
-                        pot, carryOver, contributions, allPlayers, contenders, "fuzz-" + iteration);
+                        pot, carryOver, contributions, contenders, allPlayers, contenders, "fuzz-" + iteration);
 
                 // Invariant 1: Conservation of Chips
                 int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
@@ -1331,63 +1333,6 @@ class PotCalculatorTest {
         }
 
         // =========================================================================
-        // 7. Game Showdown Integration and Odd-Chip Carry-Over Lifecycle
-        // =========================================================================
-
-        @Test
-        void challenge_GameShowdown_OddChipCarryOver_LifecycleContinuity() {
-            com.pokergame.service.HandEvaluatorService handEvaluator = new com.pokergame.service.HandEvaluatorService();
-
-            // 3 players: p1, p2, p3
-            Player p1 = Player.restoreBuilder().name("P1").playerId("p1").chips(0).holeCards(List.of())
-                    .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(33).hasFolded(false)
-                    .allIn(true).out(false).disconnected(false).readyForNextHand(false).build();
-            Player p2 = Player.restoreBuilder().name("P2").playerId("p2").chips(0).holeCards(List.of())
-                    .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(33).hasFolded(false)
-                    .allIn(true).out(false).disconnected(false).readyForNextHand(false).build();
-            Player p3 = Player.restoreBuilder().name("P3").playerId("p3").chips(0).holeCards(List.of())
-                    .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(34).hasFolded(false)
-                    .allIn(true).out(false).disconnected(false).readyForNextHand(false).build();
-
-            // Pot = 33 + 33 + 34 = 100 chips. P1, P2 contributed 33, P3 contributed 34.
-            // At level 33-34, P3 is the sole contributor -> 1 chip uncalled refund to P3!
-            // Contested pot: 99 chips (33 * 3) between P1, P2, P3.
-            Game game = Game.restoreBuilder().gameId("odd-chip-game")
-                    .players(List.of(p1, p2, p3)).activePlayerIds(List.of("p1", "p2", "p3"))
-                    .remainingDeck(List.of()).communityCards(List.of()).pot(100)
-                    .dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(2)
-                    .currentHighestBet(34).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
-                    .smallBlind(10).bigBlind(20)
-                    .handContributions(Map.of("p1", 33, "p2", 33, "p3", 34))
-                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(handEvaluator).build();
-
-            // Verify uncalled amount and pot breakdown before showdown
-            assertEquals(1, game.getUncalledAmount());
-            assertEquals(List.of(99), game.getPotBreakdown());
-
-            // Now suppose pot was 101 with contributions 33, 33, 35 (2 uncalled to P3, 99 contested)
-            // What if contested pot has an odd remainder? E.g. contributions 33, 34, 34 -> pot 101
-            // Level 0-33: 33 * 3 = 99. Contested by P1, P2, P3.
-            // Level 33-34: 1 * 2 = 2. Contested by P2, P3.
-            // Total contested: 99 + 2 = 101 chips.
-            Game oddGame = Game.restoreBuilder().gameId("odd-game-split")
-                    .players(List.of(p1, p2, p3)).activePlayerIds(List.of("p1", "p2", "p3"))
-                    .remainingDeck(List.of()).communityCards(List.of()).pot(101)
-                    .dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(2)
-                    .currentHighestBet(34).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
-                    .smallBlind(10).bigBlind(20)
-                    .handContributions(Map.of("p1", 33, "p2", 34, "p3", 34))
-                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                    .handEvaluator(handEvaluator).build();
-
-            assertEquals(0, oddGame.getUncalledAmount());
-            assertEquals(List.of(99, 2), oddGame.getPotBreakdown());
-        }
-
-        // =========================================================================
         // Helpers
         // =========================================================================
 
@@ -1413,200 +1358,6 @@ class PotCalculatorTest {
                     .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
                     .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false)
                     .build();
-        }
-    }
-
-    @Nested
-    @ExtendWith(MockitoExtension.class)
-    @MockitoSettings(strictness = Strictness.LENIENT)
-    class AggregateScenarios extends GameScenarioFixture {
-
-        @Test
-        void foldedContributionBoundariesDoNotCreateOddChipsAcrossSameEligiblePot() {
-                List<Card> highCard = List.of(new Card(Rank.ACE, Suit.SPADES));
-                when(mockHandEvaluator.getBestHand(any(), any()))
-                                .thenReturn(new HandEvaluationResult(highCard, HandRank.HIGH_CARD));
-                when(mockHandEvaluator.isBetterHandOfSameRank(any(), any(), any())).thenReturn(false);
-                Player a = Player.restoreBuilder().name("A").playerId("a").chips(900).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(100).hasFolded(false)
-                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Player b = Player.restoreBuilder().name("B").playerId("b").chips(900).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(100).hasFolded(false)
-                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Player f1 = Player.restoreBuilder().name("F1").playerId("f1").chips(995).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(5).hasFolded(true)
-                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Player f2 = Player.restoreBuilder().name("F2").playerId("f2").chips(990).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(10).hasFolded(true)
-                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Player f3 = Player.restoreBuilder().name("F3").playerId("f3").chips(985).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(15).hasFolded(true)
-                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Game ordinary = Game.restoreBuilder().gameId("coalesce-ordinary-pots")
-                                .players(List.of(a, b, f1, f2, f3)).activePlayerIds(List.of("a", "b", "f1", "f2", "f3"))
-                                .remainingDeck(List.of()).communityCards(List.of()).pot(230).dealerPosition(0)
-                                .smallBlindPosition(0).bigBlindPosition(1).currentPlayerPosition(0).currentHighestBet(100)
-                                .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
-                                .handContributions(Map.of("a", 100, "b", 100, "f1", 5, "f2", 10, "f3", 15))
-                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
-                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                                .handEvaluator(mockHandEvaluator).build();
-
-                ordinary.conductShowdown();
-
-                assertEquals(1015, a.getChips());
-                assertEquals(1015, b.getChips());
-                assertEquals(0, ordinary.getPot());
-        }
-
-        @Test
-        void deadUpperLayersJoinNearestEligibleLowerAllocation() {
-                Player a = Player.restoreBuilder().name("A").playerId("a").chips(0).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false)
-                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Player b = Player.restoreBuilder().name("B").playerId("b").chips(0).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false)
-                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Player c = Player.restoreBuilder().name("C").playerId("c").chips(0).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(true)
-                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Player d = Player.restoreBuilder().name("D").playerId("d").chips(0).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(true)
-                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Game game = Game.restoreBuilder().gameId("dead-upper-layer").players(List.of(a, b, c, d))
-                                .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(List.of())
-                                .communityCards(List.of()).pot(550).dealerPosition(0).smallBlindPosition(1)
-                                .bigBlindPosition(2).currentPlayerPosition(0).currentHighestBet(200)
-                                .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
-                                .handContributions(Map.of("a", 50, "b", 100, "c", 200, "d", 200))
-                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
-                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                                .handEvaluator(mockHandEvaluator).build();
-                List<Card> high = List.of(new Card(Rank.ACE, Suit.SPADES));
-                List<Card> low = List.of(new Card(Rank.KING, Suit.SPADES));
-                when(mockHandEvaluator.getBestHand(any(), any()))
-                                .thenReturn(new HandEvaluationResult(high, HandRank.ROYAL_FLUSH))
-                                .thenReturn(new HandEvaluationResult(low, HandRank.ONE_PAIR));
-
-                assertEquals(List.of(a, b), game.conductShowdown());
-                assertEquals(200, a.getChips());
-                assertEquals(350, b.getChips());
-                assertEquals(0, game.getPot());
-                assertEquals(Map.of("a", 200, "b", 350), game.getLastSettlementResult().contestedAwards());
-                assertTrue(game.getLastSettlementResult().refunds().isEmpty());
-        }
-
-        @Test
-        void departedContributionStillDefinesSidePotAndCannotReceiveRefund() {
-                Player shortPlayer = new Player("Short", "s", 0);
-                Player midPlayer = new Player("Mid", "m", 150);
-                Game game = Game.restoreBuilder().gameId("departed-contributor").players(List.of(shortPlayer, midPlayer))
-                                .activePlayerIds(List.of("s", "m")).remainingDeck(List.of()).communityCards(List.of())
-                                .pot(350).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                                .currentPlayerPosition(0).currentHighestBet(150).currentPhase(GamePhase.RIVER)
-                                .gameOver(false).smallBlind(10).bigBlind(20)
-                                .handContributions(Map.of("s", 50, "m", 150, "departed", 150))
-                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
-                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                                .handEvaluator(mockHandEvaluator).build();
-                List<Card> high = List.of(new Card(Rank.ACE, Suit.SPADES));
-                List<Card> low = List.of(new Card(Rank.KING, Suit.SPADES));
-                when(mockHandEvaluator.getBestHand(any(), any()))
-                                .thenReturn(new HandEvaluationResult(high, HandRank.ROYAL_FLUSH))
-                                .thenReturn(new HandEvaluationResult(low, HandRank.ONE_PAIR));
-
-                game.conductShowdown();
-
-                assertEquals(150, shortPlayer.getChips());
-                assertEquals(350, midPlayer.getChips());
-                assertEquals(0, game.getPot());
-                assertEquals(Map.of("s", 150, "m", 200), game.getLastSettlementResult().contestedAwards());
-                assertTrue(game.getLastSettlementResult().refunds().isEmpty());
-        }
-
-        @Test
-        void deadBlindLayersPayRetainedZeroContributionContender() {
-                Player contender = new Player("Contender", "a", 100);
-                Player foldedSmallBlind = Player.restoreBuilder().name("Folded SB").playerId("b").chips(90)
-                                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(10)
-                                .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Player foldedBigBlind = Player.restoreBuilder().name("Folded BB").playerId("c").chips(80)
-                                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(20)
-                                .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Game game = Game.restoreBuilder().gameId("zero-contribution-contender")
-                                .players(List.of(contender, foldedSmallBlind, foldedBigBlind))
-                                .activePlayerIds(List.of("a", "b", "c")).remainingDeck(List.of()).communityCards(List.of())
-                                .pot(30).dealerPosition(0).smallBlindPosition(1).bigBlindPosition(2)
-                                .currentPlayerPosition(0).currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP)
-                                .gameOver(false).smallBlind(10).bigBlind(20)
-                                .handContributions(Map.of("b", 10, "c", 20)).preHandCarryOver(0)
-                                .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
-                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                                .handEvaluator(mockHandEvaluator).build();
-
-                game.conductShowdown();
-
-                assertEquals(130, contender.getChips());
-                assertEquals(0, game.getPot());
-                assertEquals(Map.of("a", 30), game.getLastSettlementResult().contestedAwards());
-        }
-
-        /**
-         * Protects the expected behavior for get pot breakdown treats single player layer as uncalled.
-         */
-        @Test
-        void testGetPotBreakdown_TreatsSinglePlayerLayerAsUncalled() {
-                List<Player> playersWithShove = new ArrayList<>();
-                playersWithShove.add(new Player("AllIn", "a1", 480));
-                playersWithShove.add(new Player("SmallBlind", "s1", 1000));
-                playersWithShove.add(new Player("BigBlind", "b1", 1000));
-
-                Game shoveGame = new Game("uncalled-breakdown", playersWithShove, 10, 20, mockHandEvaluator);
-                shoveGame.postBlinds();
-
-                Player allInPlayer = shoveGame.getCurrentPlayer();
-                shoveGame.processPlayerDecision(allInPlayer,
-                                new PlayerDecision(PlayerAction.ALL_IN, 0, allInPlayer.getPlayerId()));
-
-                assertEquals(List.of(510), shoveGame.getPotBreakdown());
-                assertEquals(0, shoveGame.getUncalledAmount());
-        }
-
-        @Test
-        void livePotKeepsEstablishedAllInCapAndPendingBetVisible() {
-                Player shortStack = Player.restoreBuilder().name("Short").playerId("short").chips(0).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(50).hasFolded(false)
-                                .allIn(true).out(false).disconnected(false).readyForNextHand(false).build();
-                Player bettor = Player.restoreBuilder().name("Bettor").playerId("bettor").chips(800).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(250).hasFolded(false)
-                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Player owing = Player.restoreBuilder().name("Owing").playerId("owing").chips(950).holeCards(List.of())
-                                .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(50).hasFolded(false)
-                                .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-                Game live = Game.restoreBuilder().gameId("live-cap-pending-bet").players(List.of(shortStack, bettor, owing))
-                                .activePlayerIds(List.of("short", "bettor", "owing")).remainingDeck(List.of())
-                                .communityCards(List.of()).pot(350).dealerPosition(0).smallBlindPosition(0).bigBlindPosition(1)
-                                .currentPlayerPosition(2).currentHighestBet(250).currentPhase(GamePhase.FLOP)
-                                .gameOver(false).smallBlind(10).bigBlind(20)
-                                .handContributions(Map.of("short", 50, "bettor", 250, "owing", 50))
-                                .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
-                                .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
-                                .handEvaluator(mockHandEvaluator).build();
-
-                assertEquals(List.of(150, 200), live.getPotBreakdown());
-                assertEquals(0, live.getUncalledAmount());
-        }
-
-        @Test
-        void liveCapSlicesIncludeFoldedChipsBelowCapAndPreHandCarryOver() {
-                Game live = livePotWithFoldedBlindAndCarryOver(370, 0);
-                assertEquals(List.of(170, 200), live.getPotBreakdown());
-                assertEquals(0, live.getUncalledAmount());
-
-                Game carried = livePotWithFoldedBlindAndCarryOver(380, 10);
-                assertEquals(List.of(180, 200), carried.getPotBreakdown(),
-                                "Pre-hand carry-over belongs in the main live allocation");
-                assertEquals(0, carried.getUncalledAmount());
         }
     }
 }

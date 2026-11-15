@@ -70,13 +70,13 @@ class RoomTest {
     void testRoomCreationWithWhitespaceOnlyPassword() {
         Room roomEmptyPass = new Room("room-empty", "Empty Pass Room", "Host", 4, 5, 10, 500, "");
         assertFalse(roomEmptyPass.hasPassword());
-        assertNull(roomEmptyPass.getPasswordForPersistence());
+        assertNull(roomEmptyPass.getPasswordHash());
         assertTrue(roomEmptyPass.checkPassword(null));
         assertTrue(roomEmptyPass.checkPassword("any"));
 
         Room roomSpacesPass = new Room("room-spaces", "Spaces Pass Room", "Host", 4, 5, 10, 500, "   ");
         assertFalse(roomSpacesPass.hasPassword());
-        assertNull(roomSpacesPass.getPasswordForPersistence());
+        assertNull(roomSpacesPass.getPasswordHash());
         assertTrue(roomSpacesPass.checkPassword(null));
         assertTrue(roomSpacesPass.checkPassword("any"));
     }
@@ -89,9 +89,9 @@ class RoomTest {
     void testRoomCreationWithPasswordPreservingSpaces() {
         Room roomPreservedPass = new Room("room-spaces-kept", "Kept Pass Room", "Host", 4, 5, 10, 500, "  secret123  ");
         assertTrue(roomPreservedPass.hasPassword());
-        assertNotNull(roomPreservedPass.getPasswordForPersistence());
-        assertNotEquals("  secret123  ", roomPreservedPass.getPasswordForPersistence());
-        assertTrue(passwordEncoder.matches("  secret123  ", roomPreservedPass.getPasswordForPersistence()));
+        assertNotNull(roomPreservedPass.getPasswordHash());
+        assertNotEquals("  secret123  ", roomPreservedPass.getPasswordHash());
+        assertTrue(passwordEncoder.matches("  secret123  ", roomPreservedPass.getPasswordHash()));
         assertTrue(roomPreservedPass.checkPassword("  secret123  "));
         assertTrue(roomPreservedPass.checkPassword("  secret123  ", passwordEncoder));
         assertFalse(roomPreservedPass.checkPassword("secret123"));
@@ -576,9 +576,9 @@ class RoomTest {
         assertEquals(25, restoredRoom.getSmallBlind());
         assertEquals(50, restoredRoom.getBigBlind());
         assertEquals(2500, restoredRoom.getBuyIn());
-        assertNotNull(restoredRoom.getPasswordForPersistence());
-        assertNotEquals("secret-pass", restoredRoom.getPasswordForPersistence());
-        assertTrue(passwordEncoder.matches("secret-pass", restoredRoom.getPasswordForPersistence()));
+        assertNotNull(restoredRoom.getPasswordHash());
+        assertNotEquals("secret-pass", restoredRoom.getPasswordHash());
+        assertTrue(passwordEncoder.matches("secret-pass", restoredRoom.getPasswordHash()));
         assertTrue(restoredRoom.hasPassword());
         assertTrue(restoredRoom.checkPassword("secret-pass"));
         assertTrue(restoredRoom.checkPassword("secret-pass", passwordEncoder));
@@ -728,14 +728,12 @@ class RoomTest {
         int capacity = 4;
         Room concurrentRoom = new Room("concurrent-room", "Concurrent Room", "Host", capacity, 5, 10, 500, null);
         int totalThreads = 12;
-        ExecutorService executor = Executors.newFixedThreadPool(totalThreads);
         CountDownLatch readyLatch = new CountDownLatch(totalThreads);
         CountDownLatch startLatch = new CountDownLatch(1);
-        CountDownLatch doneLatch = new CountDownLatch(totalThreads);
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger fullCount = new AtomicInteger(0);
 
-        try {
+        try (ExecutorService executor = Executors.newFixedThreadPool(totalThreads)) {
             for (int i = 0; i < totalThreads; i++) {
                 final String playerName = "Player" + i;
                 executor.submit(() -> {
@@ -748,20 +746,14 @@ class RoomTest {
                         if ("Room is full".equals(e.getMessage())) {
                             fullCount.incrementAndGet();
                         }
-                    } catch (Exception ignored) {
-                    } finally {
-                        doneLatch.countDown();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
                     }
                 });
             }
 
             assertTrue(readyLatch.await(5, TimeUnit.SECONDS), "All concurrent join threads must get ready in time");
             startLatch.countDown();
-            assertTrue(doneLatch.await(5, TimeUnit.SECONDS), "All concurrent join threads must finish");
-        } finally {
-            // Shut the pool down even if an assertion above fails, so no worker thread leaks.
-            executor.shutdownNow();
-            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "Executor must terminate promptly");
         }
 
         assertEquals(capacity, successCount.get(), "Exactly maxPlayers joins must succeed");
@@ -800,15 +792,12 @@ class RoomTest {
         assertNotNull(privateRoom.getPasswordHash());
         assertNotEquals(raw, privateRoom.getPasswordHash());
         assertTrue(privateRoom.getPasswordHash().startsWith("$2a$") || privateRoom.getPasswordHash().startsWith("$2b$"));
-        assertEquals(privateRoom.getPasswordHash(), privateRoom.getPasswordForPersistence());
 
         // Constant-time checks with and without PasswordEncoder bean
         assertTrue(privateRoom.checkPassword(raw, passwordEncoder));
-        assertTrue(privateRoom.matchesPassword(raw, passwordEncoder));
         assertTrue(privateRoom.checkPassword(raw));
 
         assertFalse(privateRoom.checkPassword("WrongPassword", passwordEncoder));
-        assertFalse(privateRoom.matchesPassword("WrongPassword", passwordEncoder));
         assertFalse(privateRoom.checkPassword("WrongPassword"));
 
         assertFalse(privateRoom.checkPassword(null, passwordEncoder));
@@ -848,10 +837,8 @@ class RoomTest {
                 .build();
 
         assertEquals(hash, restored.getPasswordHash());
-        assertEquals(hash, restored.getPasswordForPersistence());
         assertTrue(restored.hasPassword());
         assertTrue(restored.checkPassword(raw, passwordEncoder));
-        assertTrue(restored.matchesPassword(raw, passwordEncoder));
         assertFalse(restored.checkPassword("wrong-pass", passwordEncoder));
     }
 
@@ -878,7 +865,6 @@ class RoomTest {
         assertFalse(publicRoom.hasPassword());
         assertNull(publicRoom.getPasswordHash());
         assertTrue(publicRoom.checkPassword("any-input", passwordEncoder));
-        assertTrue(publicRoom.matchesPassword("any-input", passwordEncoder));
         assertTrue(publicRoom.checkPassword(null, passwordEncoder));
         assertTrue(publicRoom.checkPassword(""));
     }

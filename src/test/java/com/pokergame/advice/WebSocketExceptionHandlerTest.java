@@ -25,7 +25,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.exception.ResourceNotFoundException;
-import java.lang.reflect.Method;
+import java.time.Clock;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
@@ -38,6 +38,7 @@ import com.pokergame.model.Room;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.ValidationException;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
@@ -67,7 +68,8 @@ class WebSocketExceptionHandlerTest {
         room.addPlayer(playerName);
         PlayerPrincipal replacement = new PlayerPrincipal(playerName, gameId, room.getMembershipId(playerName));
         Mockito.when(rooms.getRoom(gameId)).thenReturn(room);
-        var realHandler = new WebSocketExceptionHandler(new GameStateService(rooms, messagingTemplate));
+        var realHandler = new WebSocketExceptionHandler(
+                new GameStateService(rooms, messagingTemplate, Clock.systemUTC()));
         String suffix = kind.equals("malformed") ? "action" : kind;
         String payload = kind.equals("malformed") ? "{\"action\":\"INVALID\"}" : "{\"action\":\"CHECK\"}";
         Message<String> frame = MessageBuilder.withPayload(payload)
@@ -89,7 +91,8 @@ class WebSocketExceptionHandlerTest {
     @BeforeEach
     void setUp() {
         messagingTemplate = mock(SimpMessagingTemplate.class);
-        handler = new WebSocketExceptionHandler(new GameStateService(mock(RoomService.class), messagingTemplate));
+        handler = new WebSocketExceptionHandler(
+                new GameStateService(mock(RoomService.class), messagingTemplate, Clock.systemUTC()));
     }
 
     /** Every supported rejected action is carried explicitly in private feedback. */
@@ -239,19 +242,17 @@ class WebSocketExceptionHandlerTest {
      * Bean Validation failure on amount > 10,000,000 extracts exact validation message and uses INVALID_ACTION_FORMAT.
      */
     @Test
-    void beanValidationFailureAboveMaxAmountReturnsInvalidActionFormatWithExactMessage() throws Exception {
+    void beanValidationFailureAboveMaxAmountReturnsInvalidActionFormatWithExactMessage() {
         Message<String> frame = MessageBuilder.withPayload("{\"action\":\"RAISE\",\"amount\":10000001}")
                 .setHeader("simpDestination", "/app/" + gameId + "/action").build();
 
-        Method method = WebSocketExceptionHandlerTest.class.getDeclaredMethod("actionFrame", PlayerAction.class);
-        MethodParameter methodParameter = new MethodParameter(method, 0);
         BeanPropertyBindingResult bindingResult =
                 new BeanPropertyBindingResult(new Object(), "actionRequest");
         bindingResult.addError(new FieldError(
                 "actionRequest", "amount", "Amount cannot exceed 10,000,000"));
         MethodArgumentNotValidException validationException =
                 new MethodArgumentNotValidException(
-                        frame, methodParameter, bindingResult);
+                        frame, methodParameter(), bindingResult);
 
         handler.handleMessageException(validationException, principal, frame);
 
@@ -299,9 +300,15 @@ class WebSocketExceptionHandlerTest {
     }
 
     /** Builds the parameter handle that Spring's argument-validation exceptions require. */
-    private MethodParameter methodParameter() throws Exception {
-        Method method = WebSocketExceptionHandlerTest.class.getDeclaredMethod("actionFrame", PlayerAction.class);
-        return new MethodParameter(method, 0);
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private MethodParameter methodParameter() {
+        Method executable = mock(Method.class);
+        Mockito.lenient().when(executable.toGenericString()).thenReturn("handle(PlayerActionRequest)");
+        MethodParameter parameter = mock(MethodParameter.class);
+        Mockito.lenient().when(parameter.getExecutable()).thenReturn(executable);
+        Mockito.lenient().when(parameter.getNestedParameterType()).thenReturn((Class) PlayerActionRequest.class);
+        Mockito.lenient().when(parameter.getParameterIndex()).thenReturn(0);
+        return parameter;
     }
 
     /** Builds a binding result holding one field error with the given message. */

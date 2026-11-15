@@ -1,14 +1,5 @@
 package com.pokergame.model;
 
-import com.pokergame.dto.internal.PlayerDecision;
-import java.util.ArrayList;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.junit.jupiter.MockitoSettings;
-import org.mockito.quality.Strictness;
-
-import org.junit.jupiter.api.Nested;
-
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
@@ -16,6 +7,7 @@ import com.pokergame.enums.*;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.service.HandEvaluatorService;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -153,7 +145,7 @@ class GameRestoreBuilderTest {
         assertEquals(0, game.getCurrentPlayerPosition());                            // 10
         assertEquals("p1", game.getCurrentPlayer().getPlayerId());                  // 10
         assertEquals(100, game.getCurrentHighestBet());                              // 11
-        assertEquals(25, game.getPreHandCarryOver());                                // 12
+        assertEquals(25, game.getCarryOverPot());                                    // 12
         assertEquals(GamePhase.FLOP, game.getCurrentPhase());                        // 13
         assertFalse(game.isGameOver());                                              // 14
         assertEquals(15, game.getSmallBlind());                                      // 15
@@ -163,18 +155,18 @@ class GameRestoreBuilderTest {
         assertEquals(lastFullRaise, game.getLastFullRaiseByStreetSnapshot());        // 19
         assertEquals(lastActedWager, game.getLastActedWagerByPlayerSnapshot());      // 20
         assertEquals(seatOrder, game.getHandSeatOrderSnapshot());                    // 21
-        assertEquals("p2", game.getDealerAnchorPlayerId());                          // 22
+        assertEquals("p2", game.getDealerPlayerId());                                // 22
         assertEquals("p3", game.getSmallBlindPlayerId());                            // 23
         assertEquals("p1", game.getBigBlindPlayerId());                              // 24
-        assertTrue(game.isTerminalCarryOverSettled());                                // 25
+        assertTrue(game.isFinalPotSettled());                                        // 25
         assertTrue(game.isForfeitPending());                                         // 26
         assertTrue(game.isReadyCountdownActive());                                   // 27
         assertEquals(1700000000000L, game.getReadyCountdownDeadlineEpochMs());      // 28
         assertEquals(ReadyGateState.COUNTING_DOWN, game.getReadyGateState());        // 29
         assertEquals(7L, game.getHandNumber());                                      // 30
         assertEquals(88L, game.getStateRevision());                                  // 31
-        assertEquals(terminalResult, game.getRetainedTerminalResult());              // 32
-        assertTrue(game.hasEveryoneHadInitialTurn());                                // 33
+        assertEquals(terminalResult, game.getGameEndResult());                       // 32
+        assertTrue(game.hasAllPlayersHadInitialTurn());                              // 33
         assertEquals(actedPlayers, game.getActedPlayerIdsSnapshot());                // 34
         assertEquals(1700000005000L,
                 game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));      // 35
@@ -817,7 +809,7 @@ class GameRestoreBuilderTest {
                     .bigBlind(0)
                     .build();
             assertEquals(0, gameZero.getPot());
-            assertEquals(0, gameZero.getPreHandCarryOver());
+            assertEquals(0, gameZero.getCarryOverPot());
             assertEquals(0, gameZero.getSmallBlind());
             assertEquals(0, gameZero.getBigBlind());
 
@@ -828,7 +820,7 @@ class GameRestoreBuilderTest {
                     .bigBlind(2_000_000)
                     .build();
             assertEquals(Integer.MAX_VALUE, gameMax.getPot());
-            assertEquals(Integer.MAX_VALUE, gameMax.getPreHandCarryOver());
+            assertEquals(Integer.MAX_VALUE, gameMax.getCarryOverPot());
             assertEquals(1_000_000, gameMax.getSmallBlind());
             assertEquals(2_000_000, gameMax.getBigBlind());
         }
@@ -1061,7 +1053,7 @@ class GameRestoreBuilderTest {
                 assertEquals(activeCount, game.getActivePlayers().size());
                 assertEquals(commCount, game.getCommunityCards().size());
                 assertEquals(pot, game.getPot());
-                assertEquals(carryOver, game.getPreHandCarryOver());
+                assertEquals(carryOver, game.getCarryOverPot());
                 assertEquals(sb, game.getSmallBlind());
                 assertEquals(bb, game.getBigBlind());
                 assertEquals(revision, game.getStateRevision());
@@ -1127,60 +1119,6 @@ class GameRestoreBuilderTest {
                     .scheduledTaskDeadlines(Map.of())
                     .scheduledTaskGenerations(Map.of())
                     .handEvaluator(new HandEvaluatorService());
-        }
-    }
-
-    @Nested
-    @ExtendWith(MockitoExtension.class)
-    @MockitoSettings(strictness = Strictness.LENIENT)
-    class AggregateScenarios extends GameScenarioFixture {
-
-        @Test
-        @DisplayName("restoreBuilder fully reconstructs the game state from persistence boundaries")
-        void testRestoreBuilder() {
-                Player p1 = new Player("P1", "p1-id", 500);
-                Player p2 = new Player("P2", "p2-id", 300);
-                List<Player> restoredPlayers = List.of(p1, p2);
-
-                List<Card> deckCards = List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.HEARTS));
-                List<Card> community = List.of(new Card(Rank.TWO, Suit.DIAMONDS));
-
-                Map<String, Integer> contribs = Map.of("p1-id", 100);
-                Set<String> acted = Set.of("p1-id");
-                Map<ScheduledGameTask, Long> tasks = Map.of(ScheduledGameTask.AUTO_ADVANCE, 12345L);
-
-                Game restored = Game.restoreBuilder()
-                                .gameId("restored-game")
-                                .players(restoredPlayers)
-                                .activePlayerIds(List.of("p1-id", "p2-id"))
-                                .remainingDeck(deckCards)
-                                .communityCards(community)
-                                .pot(100)
-                                .dealerPosition(1)
-                                .smallBlindPosition(0)
-                                .bigBlindPosition(1)
-                                .currentPlayerPosition(0)
-                                .currentHighestBet(50)
-                                .currentPhase(GamePhase.FLOP)
-                                .gameOver(false)
-                                .smallBlind(10)
-                                .bigBlind(20)
-                                .handContributions(contribs)
-                                .readyCountdownActive(true)
-                                .readyCountdownDeadlineEpochMs(9999L)
-                                .everyoneHasHadInitialTurn(true)
-                                .actedPlayersInRound(acted)
-                                .scheduledTaskDeadlines(tasks)
-                                .handEvaluator(mockHandEvaluator)
-                                .build();
-
-                assertEquals("restored-game", restored.getGameId());
-                assertEquals(100, restored.getPot());
-                assertEquals(GamePhase.FLOP, restored.getCurrentPhase());
-                assertTrue(restored.getCommunityCards().contains(new Card(Rank.TWO, Suit.DIAMONDS)));
-                assertEquals(2, restored.getActivePlayers().size());
-                assertEquals(10, restored.getSmallBlind());
-                assertEquals(20, restored.getBigBlind());
         }
     }
 }

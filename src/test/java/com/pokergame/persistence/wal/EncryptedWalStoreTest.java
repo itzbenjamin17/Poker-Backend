@@ -1,5 +1,6 @@
 package com.pokergame.persistence.wal;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -21,6 +22,7 @@ import com.pokergame.persistence.config.PersistenceException;
 import java.util.Arrays;
 
 /** Tests encrypted WAL store behavior. */
+@Tag("unit")
 class EncryptedWalStoreTest {
 
     @TempDir

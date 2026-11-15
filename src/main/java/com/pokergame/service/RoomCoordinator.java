@@ -4,6 +4,7 @@ import static java.util.Objects.requireNonNull;
 
 import com.pokergame.util.KeyedLockRegistry;
 import com.pokergame.util.LockLease;
+import com.pokergame.util.VisibleForTesting;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.stereotype.Service;
 
@@ -88,6 +89,28 @@ public class RoomCoordinator {
         if (!isHeldByCurrentThread(roomId)) {
             throw new IllegalStateException("Current thread does not hold room lock for room: " + roomId);
         }
+    }
+
+    /**
+     * Returns the number of rooms that currently have an active lock entry or waiting thread.
+     *
+     * @return active lock key count
+     */
+    @VisibleForTesting
+    public int activeLockCount() {
+        return lockRegistry.activeKeyCount();
+    }
+
+    /**
+     * Returns the active reservation count (owners, waiters, and nested acquisitions) for {@code roomId}.
+     *
+     * @param roomId the unique ID of the room
+     * @return active reservation count for {@code roomId}
+     */
+    @VisibleForTesting
+    public int lockReservationCount(String roomId) {
+        requireNonNull(roomId, "roomId must not be null");
+        return lockRegistry.reservationCount(roomId);
     }
 
     private void checkCrossRoom(String roomId) {

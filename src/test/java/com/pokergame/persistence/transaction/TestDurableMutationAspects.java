@@ -2,6 +2,7 @@ package com.pokergame.persistence.transaction;
 
 import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.service.RoomCoordinator;
 import org.springframework.beans.factory.ObjectProvider;
 
 import static org.mockito.Mockito.mock;
@@ -19,6 +20,7 @@ public final class TestDurableMutationAspects {
     @SuppressWarnings("unchecked")
     public static DurableMutationAspect lockOnly() {
         return new DurableMutationAspect(null, mock(AggregateSnapshotMapper.class),
-                mock(ObjectProvider.class), mock(ObjectProvider.class), new PersistenceProperties());
+                mock(ObjectProvider.class), mock(ObjectProvider.class),
+                new PersistenceProperties(), new RoomCoordinator());
     }
 }

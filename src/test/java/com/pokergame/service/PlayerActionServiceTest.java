@@ -12,6 +12,7 @@ import com.pokergame.enums.Suit;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.*;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -22,18 +23,21 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-import static com.pokergame.util.ConcurrentTestSupport.awaitBlockedOn;
-import static com.pokergame.util.ConcurrentTestSupport.stopExecutor;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -55,24 +59,29 @@ class PlayerActionServiceTest {
     @Mock
     private HandEvaluatorService handEvaluator;
 
+    private RoomCoordinator roomCoordinator;
     private PlayerActionService playerActionService;
 
     private Game testGame;
     private List<Player> testPlayers;
     private static final String GAME_ID = "test-game-id";
+    private static final Instant FIXED_INSTANT = Instant.parse("2026-01-01T00:00:00Z");
+    private static final Clock FIXED_CLOCK = Clock.fixed(FIXED_INSTANT, ZoneOffset.UTC);
 
     /**
      * Initializes the test fixtures before each scenario.
      */
     @BeforeEach
     void setUp() {
-        playerActionService = new PlayerActionService(gameLifecycleService, gameStateService);
+        roomCoordinator = new RoomCoordinator();
+        playerActionService = new PlayerActionService(
+                gameLifecycleService, gameStateService, roomCoordinator, FIXED_CLOCK);
         testPlayers = new ArrayList<>();
         testPlayers.add(new Player("Player1", UUID.randomUUID().toString(), 1000));
         testPlayers.add(new Player("Player2", UUID.randomUUID().toString(), 1000));
         testPlayers.add(new Player("Player3", UUID.randomUUID().toString(), 1000));
 
-        testGame = new Game(GAME_ID, testPlayers, 5, 10, handEvaluator);
+        testGame = new Game(GAME_ID, testPlayers, 6, 5, 10, handEvaluator);
         testGame.resetForNewHand();
         testGame.dealHoleCards();
         testGame.postBlinds();
@@ -81,13 +90,9 @@ class PlayerActionServiceTest {
             Game g = invocation.getArgument(1);
             TurnOutcome outcome = invocation.getArgument(2);
             switch (outcome.type()) {
-                case NEXT_PLAYER, PHASE_ADVANCED -> gameStateService.broadcastGameState(gId, g);
-                case AUTO_ADVANCING -> {
-                    gameLifecycleService.scheduleAutoAdvance(gId);
-                    gameStateService.broadcastAutoAdvanceNotification(gId, g);
-                }
-                case SHOWDOWN -> gameStateService.broadcastShowdownResults(
-                        gId, g, outcome.winners(), outcome.winningsPerPlayer());
+                case NEXT_PLAYER, PHASE_ADVANCED -> gameStateService.broadcastGameState(g);
+                case AUTO_ADVANCING -> gameStateService.broadcastAutoAdvanceNotification(g);
+                case SHOWDOWN -> gameStateService.broadcastShowdownResults(g);
             }
             return null;
         }).when(gameLifecycleService).applyTurnOutcome(anyString(), any(Game.class), any(TurnOutcome.class), anyBoolean());
@@ -205,7 +210,7 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
         assertTrue(currentPlayer.getHasFolded());
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
     /**
@@ -222,7 +227,7 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
         assertTrue(currentPlayer.getChips() < initialChips || currentPlayer.getCurrentBet() > 0);
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
     /**
@@ -268,7 +273,7 @@ class PlayerActionServiceTest {
         assertEquals(GamePhase.FLOP, testGame.getCurrentPhase(),
                 "The big blind's check completes the pre-flop round and advances to the flop");
         assertNotNull(testGame.getCurrentPlayer(), "The flop must have a current actor");
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
     // ==================== processPlayerAction - Raise Tests ====================
@@ -286,7 +291,7 @@ class PlayerActionServiceTest {
 
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
     /**
@@ -330,7 +335,7 @@ class PlayerActionServiceTest {
         shortStackPlayers.add(new Player("Short", UUID.randomUUID().toString(), 5));
         shortStackPlayers.add(new Player("BB", UUID.randomUUID().toString(), 1000));
 
-        Game shortStackGame = new Game(GAME_ID, shortStackPlayers, 5, 10, handEvaluator);
+        Game shortStackGame = new Game(GAME_ID, shortStackPlayers, 6, 5, 10, handEvaluator);
         shortStackGame.resetForNewHand();
         shortStackGame.dealHoleCards();
         shortStackGame.postBlinds();
@@ -345,8 +350,6 @@ class PlayerActionServiceTest {
         assertTrue(currentPlayer.getIsAllIn());
         verify(gameStateService, atLeastOnce()).sendPrivatePlayerNotification(eq(GAME_ID), eq(currentPlayer.getName()),
                 contains("converted to all-in"), eq(ResponseMessage.PLAYER_NOTIFICATION));
-        verify(gameStateService, never()).sendPlayerNotification(eq(GAME_ID), eq(currentPlayer.getName()),
-                anyString());
     }
 
     // ==================== processPlayerAction - All-In Tests ====================
@@ -364,7 +367,7 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
         // Action should process without error even when all-in players are present.
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
     /**
@@ -377,7 +380,7 @@ class PlayerActionServiceTest {
         lowChipPlayers.add(new Player("LowChip", UUID.randomUUID().toString(), 5)); // Only 5 chips
         lowChipPlayers.add(new Player("Normal", UUID.randomUUID().toString(), 1000));
 
-        Game lowChipGame = new Game(GAME_ID, lowChipPlayers, 5, 10, handEvaluator);
+        Game lowChipGame = new Game(GAME_ID, lowChipPlayers, 6, 5, 10, handEvaluator);
         lowChipGame.resetForNewHand();
         lowChipGame.dealHoleCards();
         lowChipGame.postBlinds();
@@ -413,7 +416,7 @@ class PlayerActionServiceTest {
 
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
     // ==================== Broadcasting Tests ====================
@@ -430,7 +433,7 @@ class PlayerActionServiceTest {
 
         playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName());
 
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
     // ==================== Game Progression Tests ====================
@@ -445,7 +448,7 @@ class PlayerActionServiceTest {
         twoPlayers.add(new Player("P1", UUID.randomUUID().toString(), 1000));
         twoPlayers.add(new Player("P2", UUID.randomUUID().toString(), 1000));
 
-        Game twoPlayerGame = new Game(GAME_ID, twoPlayers, 5, 10, handEvaluator);
+        Game twoPlayerGame = new Game(GAME_ID, twoPlayers, 6, 5, 10, handEvaluator);
         twoPlayerGame.resetForNewHand();
         twoPlayerGame.dealHoleCards();
         twoPlayerGame.postBlinds();
@@ -458,7 +461,7 @@ class PlayerActionServiceTest {
         playerActionService.processPlayerAction(GAME_ID, callRequest, currentPlayer.getName());
 
         // Game state should be broadcast
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
     /**
@@ -471,7 +474,7 @@ class PlayerActionServiceTest {
         players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
         players.add(new Player("P3", UUID.randomUUID().toString(), 1000));
 
-        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -502,7 +505,7 @@ class PlayerActionServiceTest {
         players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
         players.add(new Player("P3", UUID.randomUUID().toString(), 1000));
 
-        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -541,7 +544,7 @@ class PlayerActionServiceTest {
         players.add(new Player("P1", UUID.randomUUID().toString(), 1000));
         players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
 
-        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -634,7 +637,7 @@ class PlayerActionServiceTest {
         players.add(allInPlayer);
         players.add(thirdPlayer);
 
-        Game gameWithAllIn = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        Game gameWithAllIn = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
         gameWithAllIn.resetForNewHand();
         gameWithAllIn.dealHoleCards();
         gameWithAllIn.postBlinds();
@@ -657,8 +660,8 @@ class PlayerActionServiceTest {
 
         assertTrue(raiser.getCurrentBet() > previousBet);
         assertEquals(raiser.getCurrentBet(), gameWithAllIn.getCurrentHighestBet());
-        verify(gameStateService, never()).sendPlayerNotification(eq(GAME_ID), eq(raiser.getName()),
-                contains("converted to a call"));
+        verify(gameStateService, never()).sendPrivatePlayerNotification(eq(GAME_ID), eq(raiser.getName()),
+                contains("converted to a call"), any());
     }
 
     // ==================== Pot Updates Tests ====================
@@ -695,7 +698,7 @@ class PlayerActionServiceTest {
                 "One of three players calling does not complete the pre-flop round");
         assertNotEquals(currentPlayer.getPlayerId(), testGame.getCurrentPlayer().getPlayerId(),
                 "Action advances to the next player after a call that does not close the round");
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
     /**
@@ -748,7 +751,7 @@ class PlayerActionServiceTest {
         playerActionService.processPlayerAction(GAME_ID, allInRequest, currentPlayer.getName());
 
         // Player should either be all-in or have made the equivalent call
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
     // ==================== Concurrent Access Tests ====================
@@ -767,17 +770,17 @@ class PlayerActionServiceTest {
         assertEquals(chipsBefore - amountToCall, actor.getChips());
         assertEquals(potBefore + amountToCall, testGame.getPot());
         assertNotSame(actor, testGame.getCurrentPlayer());
-        verify(gameStateService).broadcastGameState(GAME_ID, testGame);
+        verify(gameStateService).broadcastGameState(testGame);
     }
 
-    /** Parks the first action inside its game monitor while both other requests run. */
+    /** Parks the first action inside its room lease while both other requests run. */
     @Test
     void actionsWaitForTheirOwnGameButDoNotBlockAnIndependentGame() throws Exception {
         String independentId = "independent-game";
         Game independent = new Game(independentId, new ArrayList<>(List.of(
                 new Player("Alice", "a", 1000),
                 new Player("Bob", "b", 1000),
-                new Player("Charlie", "c", 1000))), 5, 10, handEvaluator);
+                new Player("Charlie", "c", 1000))), 6, 5, 10, handEvaluator);
         independent.resetForNewHand();
         independent.dealHoleCards();
         independent.postBlinds();
@@ -786,44 +789,42 @@ class PlayerActionServiceTest {
 
         Player first = testGame.getCurrentPlayer();
         Player independentActor = independent.getCurrentPlayer();
-        CountDownLatch firstApplied = new CountDownLatch(1);
-        CountDownLatch releaseFirst = new CountDownLatch(1);
-        AtomicReference<Thread> sameGameWorker = new AtomicReference<>();
+        AtomicBoolean firstEntered = new AtomicBoolean(false);
+        AtomicBoolean releaseFirst = new AtomicBoolean(false);
         doAnswer(invocation -> {
-            firstApplied.countDown();
-            assertTrue(releaseFirst.await(15, TimeUnit.SECONDS));
+            firstEntered.set(true);
+            Awaitility.await().atMost(15, TimeUnit.SECONDS).untilTrue(releaseFirst);
             return null;
         }).doNothing().when(gameLifecycleService)
                 .applyTurnOutcome(eq(GAME_ID), same(testGame), any(TurnOutcome.class), eq(true));
 
-        ExecutorService executor = Executors.newFixedThreadPool(3);
         PlayerActionRequest call = new PlayerActionRequest(PlayerAction.CALL, null);
-        try {
+        try (ExecutorService executor = Executors.newFixedThreadPool(3)) {
             Future<?> firstAction = executor.submit(() ->
                     playerActionService.processPlayerAction(GAME_ID, call, first.getName()));
-            assertTrue(firstApplied.await(5, TimeUnit.SECONDS), "First action never entered the game monitor");
+            Awaitility.await().atMost(5, TimeUnit.SECONDS).untilTrue(firstEntered);
             Player next = testGame.getCurrentPlayer();
 
-            Future<?> sameGameAction = executor.submit(() -> {
-                sameGameWorker.set(Thread.currentThread());
-                playerActionService.processPlayerAction(GAME_ID, call, next.getName());
-            });
-            awaitBlockedOn(sameGameWorker, testGame);
+            Future<?> sameGameAction = executor.submit(() ->
+                    playerActionService.processPlayerAction(GAME_ID, call, next.getName()));
+            Awaitility.await().atMost(5, TimeUnit.SECONDS)
+                    .until(() -> roomCoordinator.lockReservationCount(GAME_ID) >= 2);
 
             Future<?> independentAction = executor.submit(() ->
                     playerActionService.processPlayerAction(independentId, call, independentActor.getName()));
-            independentAction.get(5, TimeUnit.SECONDS);
-            assertEquals(independent.getCurrentHighestBet(), independentActor.getCurrentBet());
-            assertFalse(sameGameAction.isDone());
+            try {
+                independentAction.get(5, TimeUnit.SECONDS);
+                assertEquals(independent.getCurrentHighestBet(), independentActor.getCurrentBet());
+                assertFalse(sameGameAction.isDone());
 
-            releaseFirst.countDown();
-            firstAction.get(5, TimeUnit.SECONDS);
-            sameGameAction.get(5, TimeUnit.SECONDS);
-            assertEquals(testGame.getCurrentHighestBet(), next.getCurrentBet());
-            assertNotSame(next, testGame.getCurrentPlayer());
-        } finally {
-            releaseFirst.countDown();
-            stopExecutor(executor);
+                releaseFirst.set(true);
+                firstAction.get(5, TimeUnit.SECONDS);
+                sameGameAction.get(5, TimeUnit.SECONDS);
+                assertEquals(testGame.getCurrentHighestBet(), next.getCurrentBet());
+                assertNotSame(next, testGame.getCurrentPlayer());
+            } finally {
+                releaseFirst.set(true);
+            }
         }
     }
 
@@ -848,16 +849,13 @@ class PlayerActionServiceTest {
 
     /** Releases requests together and observes every worker, including failures from the assertions. */
     private List<Boolean> raceActions(List<Player> actors, PlayerAction action) throws Exception {
-        CountDownLatch ready = new CountDownLatch(actors.size());
-        CountDownLatch start = new CountDownLatch(1);
-        ExecutorService executor = Executors.newFixedThreadPool(actors.size());
+        CyclicBarrier startBarrier = new CyclicBarrier(actors.size());
         PlayerActionRequest request = new PlayerActionRequest(action, null);
-        List<Future<Boolean>> attempts = new ArrayList<>();
-        try {
+        try (ExecutorService executor = Executors.newFixedThreadPool(actors.size())) {
+            List<Future<Boolean>> attempts = new ArrayList<>();
             for (Player actor : actors) {
                 attempts.add(executor.submit(() -> {
-                    ready.countDown();
-                    assertTrue(start.await(5, TimeUnit.SECONDS));
+                    startBarrier.await(5, TimeUnit.SECONDS);
                     try {
                         playerActionService.processPlayerAction(GAME_ID, request, actor.getName());
                         return true;
@@ -867,15 +865,11 @@ class PlayerActionServiceTest {
                     }
                 }));
             }
-            assertTrue(ready.await(5, TimeUnit.SECONDS));
-            start.countDown();
             List<Boolean> accepted = new ArrayList<>();
             for (Future<Boolean> attempt : attempts) {
                 accepted.add(attempt.get(5, TimeUnit.SECONDS));
             }
             return accepted;
-        } finally {
-            stopExecutor(executor);
         }
     }
 
@@ -888,7 +882,7 @@ class PlayerActionServiceTest {
         players.add(new Player("P1", UUID.randomUUID().toString(), 1000));
         players.add(new Player("P2", UUID.randomUUID().toString(), 1000));
 
-        Game twoPlayerGame = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        Game twoPlayerGame = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
         twoPlayerGame.resetForNewHand();
         twoPlayerGame.dealHoleCards();
         twoPlayerGame.postBlinds();
@@ -907,7 +901,7 @@ class PlayerActionServiceTest {
     // ==================== processPlayerAction - Outcome Arms ====================
 
     private static TurnOutcome outcome(TurnOutcome.TurnOutcomeType type) {
-        return new TurnOutcome(type, null, null, 0);
+        return new TurnOutcome(type, null);
     }
 
     @Test
@@ -916,7 +910,7 @@ class PlayerActionServiceTest {
         List<Player> players = new ArrayList<>();
         players.add(new Player("P1", UUID.randomUUID().toString(), 100));
         players.add(new Player("P2", UUID.randomUUID().toString(), 100));
-        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -934,10 +928,11 @@ class PlayerActionServiceTest {
 
         assertTrue(first.getIsAllIn());
         assertTrue(second.getIsAllIn());
-        verify(gameLifecycleService).scheduleAutoAdvance(GAME_ID);
-        verify(gameStateService).broadcastAutoAdvanceNotification(GAME_ID, game);
-        verify(gameStateService, never()).broadcastGameState(anyString(), any(Game.class));
-        verify(gameStateService, never()).broadcastShowdownResults(anyString(), any(Game.class), any(), anyInt());
+        verify(gameLifecycleService).applyTurnOutcome(eq(GAME_ID), eq(game),
+                argThat(o -> o.type() == TurnOutcome.TurnOutcomeType.AUTO_ADVANCING), eq(true));
+        verify(gameStateService).broadcastAutoAdvanceNotification(game);
+        verify(gameStateService, never()).broadcastGameState(any(Game.class));
+        verify(gameStateService, never()).broadcastShowdownResults(any(Game.class));
 
     }
 
@@ -949,7 +944,10 @@ class PlayerActionServiceTest {
      */
     private void playUntilPhaseAdvances(Game game) {
         GamePhase startPhase = game.getCurrentPhase();
-        for (int guard = 0; guard < 20 && game.getCurrentPhase() == startPhase && !game.isHandOver(); guard++) {
+        for (int guard = 0; guard < 20
+                && game.getCurrentPhase() == startPhase
+                && game.getCurrentPhase() != GamePhase.SHOWDOWN
+                && !game.isGameOver(); guard++) {
             Player actor = game.getCurrentPlayer();
             List<PlayerAction> legal = game.getLegalActionsFor(actor);
             PlayerAction choice = legal.contains(PlayerAction.CHECK) ? PlayerAction.CHECK : PlayerAction.CALL;
@@ -964,7 +962,7 @@ class PlayerActionServiceTest {
         List<Player> players = new ArrayList<>();
         players.add(new Player("A", UUID.randomUUID().toString(), 1000));
         players.add(new Player("B", UUID.randomUUID().toString(), 1000));
-        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -979,9 +977,10 @@ class PlayerActionServiceTest {
         assertEquals(GamePhase.FLOP, game.getCurrentPhase());
         assertTrue(game.getPot() >= potAfterBlinds, "Completing the pre-flop round cannot shrink the pot");
         assertEquals(2 * game.getBigBlind(), game.getPot(), "Both players matched the big blind pre-flop");
-        verify(gameStateService, atLeastOnce()).broadcastGameState(GAME_ID, game);
-        verify(gameLifecycleService, never()).scheduleAutoAdvance(anyString());
-        verify(gameStateService, never()).broadcastShowdownResults(anyString(), any(Game.class), any(), anyInt());
+        verify(gameStateService, atLeastOnce()).broadcastGameState(game);
+        verify(gameLifecycleService, never()).applyTurnOutcome(anyString(), any(Game.class),
+                argThat(o -> o.type() == TurnOutcome.TurnOutcomeType.AUTO_ADVANCING), anyBoolean());
+        verify(gameStateService, never()).broadcastShowdownResults(any(Game.class));
     }
 
     @Test
@@ -990,7 +989,7 @@ class PlayerActionServiceTest {
         List<Player> players = new ArrayList<>();
         players.add(new Player("A", UUID.randomUUID().toString(), 1000));
         players.add(new Player("B", UUID.randomUUID().toString(), 1000));
-        Game game = new Game(GAME_ID, players, 5, 10, handEvaluator);
+        Game game = new Game(GAME_ID, players, 6, 5, 10, handEvaluator);
         game.resetForNewHand();
         game.dealHoleCards();
         game.postBlinds();
@@ -1010,8 +1009,8 @@ class PlayerActionServiceTest {
         }
 
         assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase(), "A limped hand reaches a river showdown");
-        assertFalse(game.isTournamentOver(), "Both players still hold chips");
-        verify(gameStateService).broadcastShowdownResults(eq(GAME_ID), eq(game), argThat(winners -> !winners.isEmpty()), anyInt());
+        assertFalse(game.isGameOver(), "Both players still hold chips");
+        verify(gameStateService).broadcastShowdownResults(game);
     }
 
     // ==================== processPlayerAction - Post-processing Failures ====================
@@ -1028,8 +1027,8 @@ class PlayerActionServiceTest {
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID,
                 new PlayerActionRequest(PlayerAction.FOLD, null), spyGame.getCurrentPlayer().getName()));
 
-        verify(gameStateService).broadcastGameState(GAME_ID, spyGame);
-        verify(gameStateService, never()).broadcastAutoAdvanceNotification(anyString(), any(Game.class));
+        verify(gameStateService).broadcastGameState(spyGame);
+        verify(gameStateService, never()).broadcastAutoAdvanceNotification(any(Game.class));
     }
 
     @Test
@@ -1039,14 +1038,14 @@ class PlayerActionServiceTest {
         doThrow(new IllegalStateException("progression failed")).when(gameLifecycleService)
                 .applyTurnOutcome(eq(GAME_ID), eq(testGame), any(TurnOutcome.class), eq(true));
         doThrow(new IllegalStateException("broadcast failed")).when(gameStateService)
-                .broadcastGameState(anyString(), any(Game.class));
+                .broadcastGameState(any(Game.class));
 
         Player currentPlayer = testGame.getCurrentPlayer();
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID,
                 new PlayerActionRequest(PlayerAction.FOLD, null), currentPlayer.getName()));
 
         assertTrue(currentPlayer.getHasFolded());
-        verify(gameStateService).broadcastGameState(GAME_ID, testGame);
+        verify(gameStateService).broadcastGameState(testGame);
     }
 
     // ==================== processPlayerAction - Rejection Paths ====================
@@ -1242,7 +1241,7 @@ class PlayerActionServiceTest {
         assertEquals(highestBet, currentPlayer.getCurrentBet(), "A null-amount call matches the outstanding wager");
         assertEquals(potBefore + owed, testGame.getPot(), "The pot grows by exactly the owed call");
         assertNotEquals(currentPlayer.getName(), testGame.getCurrentPlayer().getName(), "The turn moves to the opponent");
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
     @Test
@@ -1264,6 +1263,61 @@ class PlayerActionServiceTest {
 
         assertEquals(betBefore, currentPlayer.getCurrentBet(), "A check commits no chips");
         assertNotEquals(currentPlayer.getName(), testGame.getCurrentPlayer().getName(), "The turn moves on after a check");
-        verify(gameStateService, atLeastOnce()).broadcastGameState(eq(GAME_ID), any(Game.class));
+        verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
+    }
+
+    @Test
+    @DisplayName("an action attempted after game inactivity expiry abandons the game and throws GAME_EXPIRED")
+    void processPlayerAction_WhenGameInactivityExpired_AbandonsAndThrowsGameExpired() {
+        when(gameLifecycleService.isGameInactivityExpired(GAME_ID)).thenReturn(true);
+
+        BadRequestException exception = assertThrows(BadRequestException.class, () ->
+                playerActionService.processPlayerAction(
+                        GAME_ID,
+                        new PlayerActionRequest(PlayerAction.CHECK, null),
+                        "Player1"));
+
+        assertEquals("GAME_EXPIRED", exception.actionErrorCode());
+        verify(gameLifecycleService).abandonGameDueToInactivity(GAME_ID);
+        verify(gameLifecycleService, never()).getGame(GAME_ID);
+    }
+
+    @Test
+    @DisplayName("an action attempted at or after the turn deadline rejects with TURN_EXPIRED")
+    void processPlayerAction_WhenTurnDeadlineExpired_ThrowsTurnExpired() {
+        Game expiredTurnGame = Game.restoreBuilder()
+                .gameId(GAME_ID)
+                .players(testPlayers)
+                .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList())
+                .remainingDeck(List.of())
+                .communityCards(List.of())
+                .pot(15)
+                .dealerPosition(0)
+                .smallBlindPosition(1)
+                .bigBlindPosition(2)
+                .currentPlayerPosition(0)
+                .currentHighestBet(10)
+                .currentPhase(GamePhase.PRE_FLOP)
+                .gameOver(false)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handContributions(Map.of())
+                .preHandCarryOver(0)
+                .readyCountdownActive(false)
+                .everyoneHasHadInitialTurn(false)
+                .actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(Map.of(ScheduledGameTask.TURN_TIMEOUT, FIXED_INSTANT.toEpochMilli()))
+                .handEvaluator(handEvaluator)
+                .build();
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(expiredTurnGame);
+
+        BadRequestException exception = assertThrows(BadRequestException.class, () ->
+                playerActionService.processPlayerAction(
+                        GAME_ID,
+                        new PlayerActionRequest(PlayerAction.CALL, null),
+                        testPlayers.getFirst().getName()));
+
+        assertEquals("TURN_EXPIRED", exception.actionErrorCode());
+        verify(gameStateService, never()).broadcastGameState(any(Game.class));
     }
 }
