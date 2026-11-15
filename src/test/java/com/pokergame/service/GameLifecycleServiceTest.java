@@ -685,6 +685,11 @@ class GameLifecycleServiceTest {
                 assertThrows(AccessDeniedException.class,
                         () -> gameLifecycleService.validatePlayerMembership(ROOM_ID, "", "mem-1"));
             });
+            withRoomLock("missing-room", () -> {
+                ResourceNotFoundException ex = assertThrows(ResourceNotFoundException.class,
+                        () -> gameLifecycleService.validatePlayerMembership("missing-room", "Host", "mem-1"));
+                assertEquals("Room not found", ex.getMessage());
+            });
             assertThrows(AccessDeniedException.class,
                     () -> gameLifecycleService.validatePlayerMembership(null, "Host", "mem-1"));
         }

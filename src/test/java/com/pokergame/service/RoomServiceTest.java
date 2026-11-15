@@ -667,15 +667,37 @@ class RoomServiceTest {
         }
 
         @Test
-        @DisplayName("should validate room identifiers when retrieving room data")
+        @DisplayName("should validate room identifiers when retrieving room data or rooms")
         void givenInvalidRoomIdentifiers_whenGetRoomData_thenThrowMeaningfulExceptions() {
             assertThatThrownBy(() -> roomService.getRoomData(null))
-                    .isInstanceOf(BadRequestException.class)
-                    .hasMessage("Room ID cannot be null");
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessage("roomId must not be null");
+            assertThatThrownBy(() -> roomService.getRoom(null))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessage("roomId must not be null");
 
             assertThatThrownBy(() -> withRoomLock("missing-room", () -> roomService.getRoomData("missing-room")))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessage("Room not found");
+        }
+
+        @Test
+        @DisplayName("getRoomData throws ResourceNotFoundException for expired lobby without closing or evicting it")
+        void givenExpiredLobby_whenGetRoomData_thenThrowNotFoundWithoutSideEffects() {
+            String roomName = "ExpiredReadRoom";
+            String roomId = createRoom(roomService, new CreateRoomRequest(
+                    roomName, "HostPlayer", 6, 5, 10, 100, null)).roomId();
+            Long deadline = coordinatedGetRoom(roomId).getInactivityDeadlineEpochMs();
+            clock.setMillis(deadline + 5_000L);
+
+            assertThatThrownBy(() -> withRoomLock(roomId, () -> roomService.getRoomData(roomId)))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Room not found");
+
+            Room roomAfterRead = coordinatedGetRoom(roomId);
+            assertThat(roomAfterRead).isNotNull();
+            assertThat(roomAfterRead.isTerminal()).isFalse();
+            assertThat(roomService.findRoomByName(roomName)).isNotNull();
         }
 
         @Test

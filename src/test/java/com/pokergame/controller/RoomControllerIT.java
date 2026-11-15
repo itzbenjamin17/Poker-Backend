@@ -236,6 +236,23 @@ class RoomControllerIT {
         verify(gameLifecycleService).removePlayers(roomId, List.of(playerName));
     }
 
+    @Test
+    @DisplayName("POST /api/room/{roomId}/leave - Closes expired lobby and returns 404")
+    void leaveRoom_ExpiredLobby_ClosesAndReturnsNotFound() throws Exception {
+        String roomId = "room-123";
+        PlayerPrincipal principal = new PlayerPrincipal("Player1", roomId, "mem-1");
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
+        when(roomService.checkAndCloseIfExpired(roomId)).thenReturn(true);
+
+        mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
+                .principal(auth))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message").value("Room not found"));
+
+        verify(roomService).checkAndCloseIfExpired(roomId);
+        verifyNoInteractions(gameLifecycleService);
+    }
+
     /**
      * Verifies the expected response for POST /api/room/{roomId}/leave - Success (Game Active, Player in Game).
      */
@@ -315,6 +332,23 @@ class RoomControllerIT {
         mockMvc.perform(get("/api/room/{roomId}", roomId)
                 .principal(auth))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("GET /api/room/{roomId} - Closes expired lobby and returns 404")
+    void getRoomInfo_ExpiredLobby_ClosesAndReturnsNotFound() throws Exception {
+        String roomId = "room-123";
+        PlayerPrincipal principal = new PlayerPrincipal("Player1", roomId, "mem-1");
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
+        when(roomService.checkAndCloseIfExpired(roomId)).thenReturn(true);
+
+        mockMvc.perform(get("/api/room/{roomId}", roomId)
+                .principal(auth))
+                .andExpect(status().isNotFound());
+
+        verify(roomService).checkAndCloseIfExpired(roomId);
+        verify(roomService, never()).getRoomData(anyString());
+        verifyNoInteractions(gameLifecycleService);
     }
 
     /**
@@ -698,6 +732,23 @@ class RoomControllerIT {
                 .andExpect(jsonPath("$.data").value("game-123"));
 
         verify(gameLifecycleService).createGameFromRoom(roomId);
+    }
+
+    @Test
+    @DisplayName("POST /api/room/{roomId}/start-game - Closes expired lobby and returns 404")
+    void startGame_ExpiredLobby_ClosesAndReturnsNotFound() throws Exception {
+        String roomId = "room-123";
+        PlayerPrincipal principal = new PlayerPrincipal("HostPlayer", roomId, "mem-1");
+        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
+        when(roomService.checkAndCloseIfExpired(roomId)).thenReturn(true);
+
+        mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
+                .principal(auth))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message").value("Room not found"));
+
+        verify(roomService).checkAndCloseIfExpired(roomId);
+        verifyNoInteractions(gameLifecycleService);
     }
 
     /**

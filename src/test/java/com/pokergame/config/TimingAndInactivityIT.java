@@ -309,7 +309,7 @@ class TimingAndInactivityIT {
             clock.setMillis(T0 + THIRTY_MINUTES_MS + 5_000L);
 
             assertThatThrownBy(() -> joinRoom(roomName, "LateGuest"))
-                    .isInstanceOf(HttpClientErrorException.class);
+                    .isInstanceOf(HttpClientErrorException.BadRequest.class);
             assertThatThrownBy(() -> getRoom(roomId, hostToken))
                     .isInstanceOf(HttpClientErrorException.NotFound.class);
         }
@@ -329,7 +329,23 @@ class TimingAndInactivityIT {
             clock.setMillis(joinTime + THIRTY_MINUTES_MS + 5_000L);
 
             assertThatThrownBy(() -> startGame(roomId, hostToken))
-                    .isInstanceOf(HttpClientErrorException.class);
+                    .isInstanceOf(HttpClientErrorException.NotFound.class);
+            assertThatThrownBy(() -> getRoom(roomId, hostToken))
+                    .isInstanceOf(HttpClientErrorException.NotFound.class);
+        }
+
+        @Test
+        @DisplayName("delayed scheduler does not revive expired lobby on late leave")
+        void delayedSchedulerDoesNotReviveExpiredLobbyOnLeave() throws Exception {
+            String roomName = uniqueName("LateLeaveRevive");
+            JsonNode created = createRoom(roomName, "Host", 6);
+            String roomId = created.path("roomId").asText();
+            String hostToken = created.path("token").asText();
+
+            clock.setMillis(T0 + THIRTY_MINUTES_MS + 5_000L);
+
+            assertThatThrownBy(() -> leaveRoom(roomId, hostToken))
+                    .isInstanceOf(HttpClientErrorException.NotFound.class);
             assertThatThrownBy(() -> getRoom(roomId, hostToken))
                     .isInstanceOf(HttpClientErrorException.NotFound.class);
         }

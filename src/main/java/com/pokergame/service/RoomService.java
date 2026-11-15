@@ -22,7 +22,6 @@ import com.pokergame.util.InputSanitizer;
 import com.pokergame.util.RoomPasswordPolicy;
 import java.time.Clock;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -402,20 +401,14 @@ public class RoomService {
      *
      * @param roomId the unique ID of the room
      * @return formatted room state for REST and WebSocket responses
-     * @throws BadRequestException       if {@code roomId} is null
+     * @throws NullPointerException      if {@code roomId} is null
      * @throws ResourceNotFoundException if the room does not exist or has expired
      */
     public RoomDataResponse getRoomData(String roomId) {
-        if (roomId == null) {
-            logger.error("Room data request failed: roomId is null");
-            throw new BadRequestException("Room ID cannot be null");
-        }
+        requireNonNull(roomId, "roomId must not be null");
         roomCoordinator.assertHeldByCurrentThread(roomId);
         Room room = rooms.get(roomId);
         if (room == null || isLobbyExpired(room)) {
-            if (room != null) {
-                checkAndCloseIfExpired(roomId);
-            }
             logger.warn("Room data request failed: room not found for id {}", roomId);
             throw new ResourceNotFoundException("Room not found");
         }
@@ -423,8 +416,9 @@ public class RoomService {
         String currentHost = room.getHostName();
         List<PlayerJoinInfo> playerObjects = room.getPlayers().stream()
                 .map(playerName -> {
-                    LocalDateTime joinedAt = room.getJoinedAt(playerName);
-                    String joinedAtStr = joinedAt != null ? joinedAt.toString() : "recently";
+                    String joinedAtStr = requireNonNull(
+                            room.getJoinedAt(playerName),
+                            "joinedAt must not be null for member " + playerName).toString();
                     return new PlayerJoinInfo(
                             playerName,
                             currentHost != null && currentHost.equals(playerName),
@@ -453,12 +447,11 @@ public class RoomService {
      * Returns the live room for {@code roomId} when the calling thread already holds its room lock.
      *
      * @param roomId the unique ID of the room
-     * @return the live room, or {@code null} if {@code roomId} is null or not found
+     * @return the live room, or {@code null} if not found
+     * @throws NullPointerException if {@code roomId} is null
      */
     public Room getRoom(String roomId) {
-        if (roomId == null) {
-            return null;
-        }
+        requireNonNull(roomId, "roomId must not be null");
         roomCoordinator.assertHeldByCurrentThread(roomId);
         return rooms.get(roomId);
     }

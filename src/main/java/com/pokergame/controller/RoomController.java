@@ -6,6 +6,7 @@ import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.TokenResponse;
 import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.security.JwtService;
 import com.pokergame.service.GameLifecycleService;
@@ -145,7 +146,7 @@ public class RoomController {
 
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
             if (roomService.checkAndCloseIfExpired(roomId)) {
-                throw new BadRequestException("Room has expired due to inactivity.");
+                throw new ResourceNotFoundException("Room not found");
             }
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
             gameLifecycleService.removePlayers(roomId, List.of(playerName));
@@ -211,7 +212,7 @@ public class RoomController {
 
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
             if (roomService.checkAndCloseIfExpired(roomId)) {
-                throw new BadRequestException("Room has expired due to inactivity.");
+                throw new ResourceNotFoundException("Room not found");
             }
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
             if (!roomService.isRoomHost(roomId, playerName)) {

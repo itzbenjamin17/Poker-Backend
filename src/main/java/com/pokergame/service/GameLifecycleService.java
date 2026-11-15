@@ -423,7 +423,8 @@ public class GameLifecycleService {
      * @param gameId       the unique ID of the room/game
      * @param playerName   the authenticated player name
      * @param membershipId the membership ID claimed by the request token
-     * @throws AccessDeniedException if membership claims are blank or do not match the room
+     * @throws AccessDeniedException     if membership claims are blank or do not match the room
+     * @throws ResourceNotFoundException if the room does not exist
      */
     public void validatePlayerMembership(String gameId, String playerName, String membershipId) {
         if (membershipId == null || membershipId.isBlank()
@@ -433,13 +434,14 @@ public class GameLifecycleService {
         }
         roomCoordinator.assertHeldByCurrentThread(gameId);
         Room room = roomService.getRoom(gameId);
-        if (room != null) {
-            String activeMembershipId = room.getMembershipId(playerName);
-            if (activeMembershipId == null || !activeMembershipId.equals(membershipId)) {
-                logger.warn("Rejecting request: stale or mismatched membership for player {} in game {} "
-                        + "(token: {}, active: {})", playerName, gameId, membershipId, activeMembershipId);
-                throw new AccessDeniedException("Token membership is stale or invalid.");
-            }
+        if (room == null) {
+            throw new ResourceNotFoundException("Room not found");
+        }
+        String activeMembershipId = room.getMembershipId(playerName);
+        if (activeMembershipId == null || !activeMembershipId.equals(membershipId)) {
+            logger.warn("Rejecting request: stale or mismatched membership for player {} in game {} "
+                    + "(token: {}, active: {})", playerName, gameId, membershipId, activeMembershipId);
+            throw new AccessDeniedException("Token membership is stale or invalid.");
         }
     }
 
