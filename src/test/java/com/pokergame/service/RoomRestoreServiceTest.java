@@ -52,6 +52,9 @@ class RoomRestoreServiceTest {
     private GameLifecycleService gameLifecycleService;
 
     @Mock
+    private RoomAggregateStore roomAggregates;
+
+    @Mock
     private GameStateService gameStateService;
 
     @Mock
@@ -83,6 +86,7 @@ class RoomRestoreServiceTest {
         roomRestoreService = new RoomRestoreService(
                 roomService,
                 gameLifecycleService,
+                roomAggregates,
                 gameStateService,
                 activeGames,
                 scheduler,
@@ -127,7 +131,7 @@ class RoomRestoreServiceTest {
     @Test
     void restoreRequiresRoomLockToBeHeld() {
         Room room = createRoom(ROOM_ID, "Alice");
-        RecoveredAggregate aggregate = new RecoveredAggregate(room, "Alice", null, false);
+        RecoveredAggregate aggregate = new RecoveredAggregate(room, null, false);
 
         assertThrows(IllegalStateException.class, () -> roomRestoreService.restore(aggregate));
         verifyNoInteractions(roomService, gameLifecycleService, webSocketEventListener);
@@ -140,11 +144,11 @@ class RoomRestoreServiceTest {
         when(roomService.isLobbyExpired(room)).thenReturn(true);
 
         RecoveryDecision decision = withRoomLock(ROOM_ID,
-                () -> roomRestoreService.restore(new RecoveredAggregate(room, "Alice", null, false)));
+                () -> roomRestoreService.restore(new RecoveredAggregate(room, null, false)));
 
         assertEquals(RecoveryDecision.DISCARD, decision);
         verify(roomService).isLobbyExpired(room);
-        verify(roomService, never()).restoreRoom(any(), anyString());
+        verify(roomAggregates, never()).install(any(), any());
         verifyNoInteractions(gameLifecycleService, webSocketEventListener);
     }
 
@@ -156,10 +160,10 @@ class RoomRestoreServiceTest {
         when(roomService.isLobbyExpired(room)).thenReturn(false);
 
         RecoveryDecision decision = withRoomLock(ROOM_ID,
-                () -> roomRestoreService.restore(new RecoveredAggregate(room, "Alice", null, false)));
+                () -> roomRestoreService.restore(new RecoveredAggregate(room, null, false)));
 
         assertEquals(RecoveryDecision.KEEP, decision);
-        verify(roomService).restoreRoom(room, "Alice");
+        verify(roomAggregates).install(room, null);
         verify(roomService).scheduleLobbyInactivity(ROOM_ID, futureDeadline);
         verify(webSocketEventListener).scheduleRecoveredDisconnect(
                 ROOM_ID, "Alice", BASE_EPOCH_MS + DISCONNECT_GRACE_MS);
@@ -174,7 +178,7 @@ class RoomRestoreServiceTest {
         game.scheduleTask(ScheduledGameTask.CLEANUP, BASE_EPOCH_MS - 500L);
 
         RecoveryDecision decision = withRoomLock(ROOM_ID,
-                () -> roomRestoreService.restore(new RecoveredAggregate(room, "Alice", game, false)));
+                () -> roomRestoreService.restore(new RecoveredAggregate(room, game, false)));
 
         assertEquals(RecoveryDecision.DISCARD, decision);
         verifyNoInteractions(roomService, gameLifecycleService, webSocketEventListener);
@@ -187,11 +191,10 @@ class RoomRestoreServiceTest {
         Game game = createGame(ROOM_ID, "Alice", "Bob");
 
         RecoveryDecision decision = withRoomLock(ROOM_ID,
-                () -> roomRestoreService.restore(new RecoveredAggregate(room, "Alice", game, false)));
+                () -> roomRestoreService.restore(new RecoveredAggregate(room, game, false)));
 
         assertEquals(RecoveryDecision.KEEP, decision);
-        verify(roomService).restoreRoom(room, "Alice");
-        verify(gameLifecycleService).restoreGame(game);
+        verify(roomAggregates).install(room, game);
         verify(gameLifecycleService).abandonGameDueToInactivity(ROOM_ID);
         verify(taskScheduler, never()).schedule(any(Runnable.class), any(Instant.class));
         verifyNoInteractions(webSocketEventListener);
@@ -217,16 +220,15 @@ class RoomRestoreServiceTest {
         long turnDeadline = BASE_EPOCH_MS + 45_000L;
         game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, turnDeadline);
         doAnswer(inv -> {
-            activeGames.replace(inv.getArgument(0));
+            activeGames.replace(inv.getArgument(1));
             return null;
-        }).when(gameLifecycleService).restoreGame(game);
+        }).when(roomAggregates).install(room, game);
 
         RecoveryDecision decision = withRoomLock(ROOM_ID,
-                () -> roomRestoreService.restore(new RecoveredAggregate(room, "Alice", game, false)));
+                () -> roomRestoreService.restore(new RecoveredAggregate(room, game, false)));
 
         assertEquals(RecoveryDecision.KEEP, decision);
-        verify(roomService).restoreRoom(room, "Alice");
-        verify(gameLifecycleService).restoreGame(game);
+        verify(roomAggregates).install(room, game);
 
         long expectedFreshDeadline = BASE_EPOCH_MS + DISCONNECT_GRACE_MS;
         assertTrue(alice.getIsDisconnected());
@@ -257,12 +259,12 @@ class RoomRestoreServiceTest {
         game.markGameOver();
         game.scheduleTask(ScheduledGameTask.CLEANUP, cleanupDeadline);
         doAnswer(inv -> {
-            activeGames.replace(inv.getArgument(0));
+            activeGames.replace(inv.getArgument(1));
             return null;
-        }).when(gameLifecycleService).restoreGame(game);
+        }).when(roomAggregates).install(room, game);
 
         RecoveryDecision decision = withRoomLock(ROOM_ID,
-                () -> roomRestoreService.restore(new RecoveredAggregate(room, "Alice", game, false)));
+                () -> roomRestoreService.restore(new RecoveredAggregate(room, game, false)));
 
         assertEquals(RecoveryDecision.KEEP, decision);
         verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(cleanupDeadline)));
@@ -279,15 +281,12 @@ class RoomRestoreServiceTest {
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
                 withRoomLock(ROOM_ID,
-                        () -> spyService.restore(new RecoveredAggregate(room, "Alice", game, false))));
+                        () -> spyService.restore(new RecoveredAggregate(room, game, false))));
 
         assertEquals("Timer resume failure", ex.getMessage());
-        verify(roomService).restoreRoom(room, "Alice");
-        verify(gameLifecycleService).restoreGame(game);
+        verify(roomAggregates).install(room, game);
         verify(webSocketEventListener).cancelRoomPendingDisconnects(ROOM_ID);
-        verify(roomService).cancelLobbyInactivity(ROOM_ID);
-        verify(gameLifecycleService).evictGame(ROOM_ID);
-        verify(roomService).evictRoom(ROOM_ID);
+        verify(roomAggregates).remove(ROOM_ID);
     }
 
     @Test
@@ -300,13 +299,11 @@ class RoomRestoreServiceTest {
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
                 withRoomLock(ROOM_ID,
-                        () -> roomRestoreService.restore(new RecoveredAggregate(room, "Alice", game, false))));
+                        () -> roomRestoreService.restore(new RecoveredAggregate(room, game, false))));
 
         assertEquals("Abandon failure", ex.getMessage());
         verify(webSocketEventListener).cancelRoomPendingDisconnects(ROOM_ID);
-        verify(roomService).cancelLobbyInactivity(ROOM_ID);
-        verify(gameLifecycleService).evictGame(ROOM_ID);
-        verify(roomService).evictRoom(ROOM_ID);
+        verify(roomAggregates).remove(ROOM_ID);
     }
 
     @Test
@@ -320,15 +317,13 @@ class RoomRestoreServiceTest {
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
                 withRoomLock(ROOM_ID,
-                        () -> roomRestoreService.restore(new RecoveredAggregate(room, "Alice", null, false))));
+                        () -> roomRestoreService.restore(new RecoveredAggregate(room, null, false))));
 
         assertEquals("Disconnect schedule failure", ex.getMessage());
-        verify(roomService).restoreRoom(room, "Alice");
+        verify(roomAggregates).install(room, null);
         verify(roomService).scheduleLobbyInactivity(ROOM_ID, futureDeadline);
         verify(webSocketEventListener).cancelRoomPendingDisconnects(ROOM_ID);
-        verify(roomService).cancelLobbyInactivity(ROOM_ID);
-        verify(gameLifecycleService).evictGame(ROOM_ID);
-        verify(roomService).evictRoom(ROOM_ID);
+        verify(roomAggregates).remove(ROOM_ID);
     }
 
     @Test

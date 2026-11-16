@@ -24,19 +24,17 @@ import java.util.Set;
  * </p>
  *
  * @param deleted       true if this room was deleted
- * @param room          the saved room details (like its name and rules)
- * @param currentHost   the current host of the room
+ * @param room          the saved room details, or {@code null} for a deletion record
  * @param game          the saved game progress, or {@code null} if the game hasn't started
  */
-public record AggregateStateImage(boolean deleted, RoomState room, String currentHost,
-        GameState game) {
+public record AggregateStateImage(boolean deleted, RoomState room, GameState game) {
 
     /**
      * Details about the room itself (the lobby) that we need to restore, like passwords and who joined when.
      *
      * @param roomId             the unique ID for the room
      * @param roomName           the name of the room players see
-     * @param originalHost       the player who created the room
+     * @param hostName           the room's current host
      * @param maxPlayers         how many people can join
      * @param smallBlind         the room's small blind amount
      * @param bigBlind           the room's big blind amount
@@ -46,7 +44,7 @@ public record AggregateStateImage(boolean deleted, RoomState room, String curren
      * @param playersWithJoinTime when each player joined
      * @param gameStarted        true if they have started playing
      */
-    public record RoomState(String roomId, String roomName, String originalHost, int maxPlayers, int smallBlind,
+    public record RoomState(String roomId, String roomName, String hostName, int maxPlayers, int smallBlind,
             int bigBlind, int buyIn, String password, LocalDateTime createdAt,
             Map<String, LocalDateTime> playersWithJoinTime, Map<String, String> playerMembershipIds,
             boolean gameStarted,
@@ -56,21 +54,6 @@ public record AggregateStateImage(boolean deleted, RoomState room, String curren
             playerMembershipIds = playerMembershipIds == null
                     ? Map.of()
                     : Collections.unmodifiableMap(new LinkedHashMap<>(playerMembershipIds));
-        }
-
-        public RoomState(String roomId, String roomName, String originalHost, int maxPlayers, int smallBlind,
-                int bigBlind, int buyIn, String password, LocalDateTime createdAt,
-                Map<String, LocalDateTime> playersWithJoinTime, Map<String, String> playerMembershipIds,
-                boolean gameStarted) {
-            this(roomId, roomName, originalHost, maxPlayers, smallBlind, bigBlind, buyIn, password, createdAt,
-                    playersWithJoinTime, playerMembershipIds, gameStarted, null);
-        }
-
-        public RoomState(String roomId, String roomName, String originalHost, int maxPlayers, int smallBlind,
-                int bigBlind, int buyIn, String password, LocalDateTime createdAt,
-                Map<String, LocalDateTime> playersWithJoinTime, boolean gameStarted) {
-            this(roomId, roomName, originalHost, maxPlayers, smallBlind, bigBlind, buyIn, password, createdAt,
-                    playersWithJoinTime, Map.of(), gameStarted, null);
         }
     }
 

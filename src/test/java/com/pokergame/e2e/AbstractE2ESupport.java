@@ -1,5 +1,6 @@
 package com.pokergame.e2e;
 
+import com.pokergame.persistence.RoomAggregates;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pokergame.dto.request.CreateRoomRequest;
@@ -83,6 +84,9 @@ public abstract class AbstractE2ESupport {
     private RoomService roomService;
 
     @Autowired
+    private RoomAggregates roomAggregates;
+
+    @Autowired
     private GameLifecycleService gameLifecycleService;
 
     @Autowired
@@ -132,8 +136,8 @@ public abstract class AbstractE2ESupport {
 
         for (String roomId : List.copyOf(trackedRoomIds)) {
             withRoomLock(roomId, () -> {
-                gameLifecycleService.evictGame(roomId);
                 roomService.destroyRoom(roomId);
+                roomAggregates.remove(roomId);
                 return null;
             });
         }

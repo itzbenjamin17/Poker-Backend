@@ -75,10 +75,10 @@ class PersistenceRecoveryTest {
     void mismatchedRoomIdentityQuarantinesWalAndRecoversRemainingRooms() {
         Room roomY = mock(Room.class);
         when(roomY.getRoomId()).thenReturn("room-Y");
-        RecoveredAggregate aggregate = new RecoveredAggregate(roomY, "host", null, false);
+        RecoveredAggregate aggregate = new RecoveredAggregate(roomY, null, false);
 
         Room roomValid = roomForRecovery("room-valid", "Alice");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(roomValid, "Alice", null, false);
+        RecoveredAggregate validAggregate = new RecoveredAggregate(roomValid, null, false);
 
         when(store.recoverAll()).thenReturn(Map.of(
                 "room-X", new byte[]{1, 2, 3},
@@ -100,7 +100,7 @@ class PersistenceRecoveryTest {
 
     @Test
     void deletionTombstoneDeletesWalAndDoesNotInvokeHandler() {
-        RecoveredAggregate tombstone = new RecoveredAggregate(null, null, null, true);
+        RecoveredAggregate tombstone = new RecoveredAggregate(null, null, true);
 
         when(store.recoverAll()).thenReturn(Map.of("room-deleted", new byte[]{1, 2, 3}));
         when(mapper.deserialize(any())).thenReturn(tombstone);
@@ -118,7 +118,7 @@ class PersistenceRecoveryTest {
     @Test
     void restoreAcquiresRoomLockAroundHandlerAndPublishesReadinessTransitions() {
         Room room = roomForRecovery("room-1", "Alice");
-        RecoveredAggregate aggregate = new RecoveredAggregate(room, "Alice", null, false);
+        RecoveredAggregate aggregate = new RecoveredAggregate(room, null, false);
         when(store.recoverAll()).thenReturn(Map.of("room-1", new byte[]{1, 2, 3}));
         when(mapper.deserialize(any())).thenReturn(aggregate);
 
@@ -150,9 +150,9 @@ class PersistenceRecoveryTest {
     @Test
     void handlerDiscardDecisionDeletesWalWithoutQuarantine() {
         Room expiredRoom = roomForRecovery("expired-room", "Alice");
-        RecoveredAggregate expiredAggregate = new RecoveredAggregate(expiredRoom, "Alice", null, false);
+        RecoveredAggregate expiredAggregate = new RecoveredAggregate(expiredRoom, null, false);
         Room validRoom = roomForRecovery("valid-room", "Bob");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Bob", null, false);
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, null, false);
 
         byte[] expiredBytes = new byte[]{1};
         byte[] validBytes = new byte[]{2};
@@ -195,7 +195,7 @@ class PersistenceRecoveryTest {
             Game activeGame = room == active ? game : null;
             withRoomLock(coordinator, room.getRoomId(), () -> {
                 realStore.commit(realStore.prepare(room.getRoomId()),
-                        realMapper.serialize(realMapper.captureStateImage(room, room.getHostName(), activeGame)));
+                        realMapper.serialize(realMapper.captureStateImage(room, activeGame)));
                 return null;
             });
         }
@@ -242,11 +242,11 @@ class PersistenceRecoveryTest {
         Room unknownKeyRoom = roomForRecovery("unknown-key-room", "Bob");
         withRoomLock(coordinator, validRoom.getRoomId(), () -> {
             realStore.commit(realStore.prepare(validRoom.getRoomId()),
-                    realMapper.serialize(realMapper.captureStateImage(validRoom, "Alice", null)));
+                    realMapper.serialize(realMapper.captureStateImage(validRoom, null)));
             return null;
         });
 
-        byte[] baseSnapshot = realMapper.serialize(realMapper.captureStateImage(unknownKeyRoom, "Bob", null));
+        byte[] baseSnapshot = realMapper.serialize(realMapper.captureStateImage(unknownKeyRoom, null));
         ObjectNode tree = (ObjectNode) jsonMapper.readTree(baseSnapshot);
         tree.put("staleFieldFromOlderBuild", "unexpected");
         withRoomLock(coordinator, unknownKeyRoom.getRoomId(), () -> {
@@ -281,13 +281,13 @@ class PersistenceRecoveryTest {
         Room missingKeyRoom = roomForRecovery("missing-key-room", "Bob");
         withRoomLock(coordinator, validRoom.getRoomId(), () -> {
             realStore.commit(realStore.prepare(validRoom.getRoomId()),
-                    realMapper.serialize(realMapper.captureStateImage(validRoom, "Alice", null)));
+                    realMapper.serialize(realMapper.captureStateImage(validRoom, null)));
             return null;
         });
 
-        byte[] baseSnapshot = realMapper.serialize(realMapper.captureStateImage(missingKeyRoom, "Bob", null));
+        byte[] baseSnapshot = realMapper.serialize(realMapper.captureStateImage(missingKeyRoom, null));
         ObjectNode tree = (ObjectNode) jsonMapper.readTree(baseSnapshot);
-        tree.remove("currentHost");
+        tree.remove("game");
         withRoomLock(coordinator, missingKeyRoom.getRoomId(), () -> {
             realStore.commit(realStore.prepare(missingKeyRoom.getRoomId()), jsonMapper.writeValueAsBytes(tree));
             return null;
@@ -310,7 +310,7 @@ class PersistenceRecoveryTest {
     @Test
     void corruptedSnapshotDeserializationFailureQuarantinesWalAndRecoversRemainingRooms() {
         Room validRoom = roomForRecovery("room-valid", "Alice");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", null, false);
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, null, false);
 
         byte[] corruptBytes = new byte[]{9, 9, 9};
         byte[] validBytes = new byte[]{1, 2, 3};
@@ -335,9 +335,9 @@ class PersistenceRecoveryTest {
     @Test
     void handlerRestorationExceptionQuarantinesWalAndRecoversRemainingRooms() {
         Room brokenRoom = roomForRecovery("room-broken", "Bob");
-        RecoveredAggregate brokenAggregate = new RecoveredAggregate(brokenRoom, "Bob", null, false);
+        RecoveredAggregate brokenAggregate = new RecoveredAggregate(brokenRoom, null, false);
         Room validRoom = roomForRecovery("room-valid", "Alice");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", null, false);
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, null, false);
 
         byte[] brokenBytes = new byte[]{4, 5, 6};
         byte[] validBytes = new byte[]{1, 2, 3};
@@ -385,9 +385,9 @@ class PersistenceRecoveryTest {
 
     @Test
     void tombstoneDeleteFailureDoesNotQuarantineOrAbortRecovery() {
-        RecoveredAggregate tombstone = new RecoveredAggregate(null, null, null, true);
+        RecoveredAggregate tombstone = new RecoveredAggregate(null, null, true);
         Room validRoom = roomForRecovery("room-valid", "Alice");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Alice", null, false);
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, null, false);
 
         byte[] tombstoneBytes = new byte[]{1};
         byte[] validBytes = new byte[]{2};
@@ -415,9 +415,9 @@ class PersistenceRecoveryTest {
     @Test
     void discardedRoomDeleteFailureDoesNotQuarantineOrAbortRecovery() {
         Room discardedRoom = roomForRecovery("expired-room", "Alice");
-        RecoveredAggregate discardedAggregate = new RecoveredAggregate(discardedRoom, "Alice", null, false);
+        RecoveredAggregate discardedAggregate = new RecoveredAggregate(discardedRoom, null, false);
         Room validRoom = roomForRecovery("room-valid", "Bob");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, "Bob", null, false);
+        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, null, false);
 
         byte[] discardedBytes = new byte[]{1};
         byte[] validBytes = new byte[]{2};
@@ -460,12 +460,12 @@ class PersistenceRecoveryTest {
 
         withRoomLock(coordinator, validRoom.getRoomId(), () -> {
             realStore.commit(realStore.prepare(validRoom.getRoomId()),
-                    realMapper.serialize(realMapper.captureStateImage(validRoom, "Alice", null)));
+                    realMapper.serialize(realMapper.captureStateImage(validRoom, null)));
             return null;
         });
         withRoomLock(coordinator, expiredLobby.getRoomId(), () -> {
             realStore.commit(realStore.prepare(expiredLobby.getRoomId()),
-                    realMapper.serialize(realMapper.captureStateImage(expiredLobby, "Bob", null)));
+                    realMapper.serialize(realMapper.captureStateImage(expiredLobby, null)));
             return null;
         });
         withRoomLock(coordinator, "tombstone-room", () -> {

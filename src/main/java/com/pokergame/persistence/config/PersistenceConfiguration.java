@@ -31,9 +31,8 @@ import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.PersistenceRecovery;
 import com.pokergame.persistence.RoomRecoveryHandler;
-import com.pokergame.service.GameLifecycleService;
+import com.pokergame.persistence.RoomAggregates;
 import com.pokergame.util.RoomCoordinator;
-import com.pokergame.service.RoomService;
 import org.springframework.context.ApplicationContext;
 
 /**
@@ -113,19 +112,17 @@ public class PersistenceConfiguration {
      *
      * @param store                optional secure vault, absent when persistence is disabled
      * @param snapshotMapper       the tool used to convert active game data into a saveable format
-     * @param roomService          helps look up game rooms
-     * @param gameLifecycleService helps manage the state of active games
+     * @param aggregates           the live rooms and games
      * @param properties           settings for when to clean up old save files
      * @param roomCoordinator      the per-room lock shared with the rest of the application
      * @return the background autosaving mechanism
      */
     @Bean
     DurableMutationAspect durableMutationAspect(ObjectProvider<EncryptedWalStore> store, AggregateSnapshotMapper snapshotMapper,
-            ObjectProvider<RoomService> roomService,
-            ObjectProvider<GameLifecycleService> gameLifecycleService,
+            RoomAggregates aggregates,
             PersistenceProperties properties,
             RoomCoordinator roomCoordinator) {
-        return new DurableMutationAspect(store.getIfAvailable(), snapshotMapper, roomService, gameLifecycleService, properties, roomCoordinator);
+        return new DurableMutationAspect(store.getIfAvailable(), snapshotMapper, aggregates, properties, roomCoordinator);
     }
 
     /**

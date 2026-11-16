@@ -94,10 +94,10 @@ class AggregateSnapshotMapperTest {
 
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
-        RecoveredAggregate recovered = mapper.deserialize(mapper.serialize(room, "Bob", game));
+        RecoveredAggregate recovered = mapper.deserialize(mapper.serialize(mapper.captureStateImage(room, game)));
 
         assertEquals(room.getRoomName(), recovered.room().getRoomName());
-        assertEquals("Bob", recovered.currentHost());
+        assertEquals(room.getHostName(), recovered.room().getHostName());
         assertTrue(recovered.room().checkPassword("secret"));
         assertEquals(game.getPot(), recovered.game().getPot());
         assertEquals(game.getCurrentPlayer().getPlayerId(), recovered.game().getCurrentPlayer().getPlayerId());
@@ -124,7 +124,7 @@ class AggregateSnapshotMapperTest {
                 new Player("Bob", "bob-id", 1000)), 6, 5, 10);
         AggregateSnapshotMapper mapper = newMapper();
 
-        RecoveredAggregate restored = mapper.restoreStateImage(mapper.captureStateImage(room, "Alice", game));
+        RecoveredAggregate restored = mapper.restoreStateImage(mapper.captureStateImage(room, game));
 
         assertEquals(room.getRoomId(), restored.room().getRoomId());
         assertEquals(deadline, restored.room().getInactivityDeadlineEpochMs());
@@ -162,7 +162,7 @@ class AggregateSnapshotMapperTest {
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
-        byte[] snapshot = mapper.serialize(room, "Alice", game);
+        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, game));
         Game restored = mapper.deserialize(snapshot).game();
         assertEquals(3, restored.getCarryOverPot());
         assertEquals(game.getLastSettlementResult(), restored.getLastSettlementResult());
@@ -245,7 +245,7 @@ class AggregateSnapshotMapperTest {
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
-        byte[] snapshot = mapper.serialize(room, "Alice", game);
+        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, game));
         String json = new String(snapshot, StandardCharsets.UTF_8);
         assertFalse(json.contains("schemaVersion"));
         assertTrue(json.contains("\"retainedTerminalResult\""));
@@ -292,7 +292,7 @@ class AggregateSnapshotMapperTest {
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
-        Game restored = mapper.deserialize(mapper.serialize(room, "A", game)).game();
+        Game restored = mapper.deserialize(mapper.serialize(mapper.captureStateImage(room, game))).game();
         Player initialA = restored.getPlayers().getFirst();
         assertEquals(150, restored.getMinimumRaiseAmount(initialA));
         assertFalse(restored.getLegalActionsFor(initialA).contains(PlayerAction.RAISE));
@@ -301,7 +301,7 @@ class AggregateSnapshotMapperTest {
         Player restoredShort = restored.getPlayers().get(3);
         restored.processPlayerDecision(restoredShort, new PlayerDecision(PlayerAction.ALL_IN, 0, "s2"));
         restored.processPlayerDecision(restored.getPlayers().get(1), new PlayerDecision(PlayerAction.CALL, 0, "b"));
-        Game reopened = mapper.deserialize(mapper.serialize(room, "A", restored)).game();
+        Game reopened = mapper.deserialize(mapper.serialize(mapper.captureStateImage(room, restored))).game();
         Player reopenedA = reopened.getPlayers().getFirst();
         assertEquals(200, reopened.getMinimumRaiseAmount(reopenedA));
         assertTrue(reopened.getLegalActionsFor(reopenedA).contains(PlayerAction.RAISE));
@@ -327,7 +327,7 @@ class AggregateSnapshotMapperTest {
 
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
-        byte[] snapshot = mapper.serialize(room, null, game);
+        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, game));
 
         RecoveredAggregate recovered = mapper.deserialize(snapshot);
         assertNotNull(recovered.room());
@@ -340,7 +340,7 @@ class AggregateSnapshotMapperTest {
         assertNotNull(recovered.room().getJoinedAt("Alice"), "Alice must have join record");
         assertNull(recovered.room().getJoinedAt("Bob"));
         assertNotNull(recovered.room().getJoinedAt("BustedSpectator"));
-        assertEquals("Alice", recovered.currentHost(), "Current host remains an actual Room member");
+        assertEquals("Alice", recovered.room().getHostName(), "Current host remains an actual Room member");
     }
 
     @Test
@@ -373,7 +373,7 @@ class AggregateSnapshotMapperTest {
         room.addPlayer("Alice");
         AggregateSnapshotMapper mapper = newMapper();
 
-        byte[] snapshot = mapper.serialize(room, "Alice", null);
+        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, null));
         String json = new String(snapshot, StandardCharsets.UTF_8);
         assertTrue(json.contains("\"inactivityDeadlineEpochMs\":null"));
         assertFalse(json.contains("schemaVersion"));
@@ -382,7 +382,7 @@ class AggregateSnapshotMapperTest {
         assertFalse(recovered.deleted());
         assertNull(recovered.game());
         assertNull(recovered.room().getInactivityDeadlineEpochMs());
-        assertEquals("Alice", recovered.currentHost());
+        assertEquals("Alice", recovered.room().getHostName());
     }
 
     private Player bettingPlayer(String name, String id, int chips, int currentBet, boolean allIn) {
@@ -406,7 +406,7 @@ class AggregateSnapshotMapperTest {
         Game game = new Game("room-order", List.of(p1, p2), 6, 10, 20);
 
         // Capture and serialize state image before mutating live game
-        AggregateStateImage stateImage = mapper.captureStateImage(room, "Alice", game);
+        AggregateStateImage stateImage = mapper.captureStateImage(room, game);
         assertNotNull(stateImage);
         assertNotNull(stateImage.room());
         assertNotNull(stateImage.game());
@@ -444,7 +444,7 @@ class AggregateSnapshotMapperTest {
                 alice.payChips(0, 10);
                 capture = executor.submit(() -> {
                     try (LockLease _ = coordinator.acquire(roomId)) {
-                        return mapper.serialize(room, "Alice", game);
+                        return mapper.serialize(mapper.captureStateImage(room, game));
                     }
                 });
                 Awaitility.await().until(() -> coordinator.lockReservationCount(roomId) >= 2);
@@ -491,7 +491,7 @@ class AggregateSnapshotMapperTest {
         Room room = new Room("pw-room", "Protected Room", "Host", 4, 10, 20, 500, rawSecret);
         room.addPlayer("Host");
 
-        byte[] snapshot = mapper.serialize(room, "Host", null);
+        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, null));
         String json = new String(snapshot, StandardCharsets.UTF_8);
 
         // Security check: raw password MUST NOT appear anywhere in the snapshot JSON
@@ -522,7 +522,7 @@ class AggregateSnapshotMapperTest {
         Room publicRoom = new Room("pub-room", "Public Room", "Host", 4, 10, 20, 500, null);
         publicRoom.addPlayer("Host");
 
-        byte[] snapshot = mapper.serialize(publicRoom, "Host", null);
+        byte[] snapshot = mapper.serialize(mapper.captureStateImage(publicRoom, null));
         RecoveredAggregate recovered = mapper.deserialize(snapshot);
 
         assertNotNull(recovered.room());
@@ -543,7 +543,7 @@ class AggregateSnapshotMapperTest {
         String aliceMemId = room.addPlayer("Alice");
         String bobMemId = room.addPlayer("Bob");
 
-        byte[] snapshot = mapper.serialize(room, "Alice", null);
+        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, null));
         RecoveredAggregate recovered = mapper.deserialize(snapshot);
 
         assertNotNull(recovered.room());
@@ -551,41 +551,6 @@ class AggregateSnapshotMapperTest {
                 "Alice membershipId must survive WAL snapshot round-trip");
         assertEquals(bobMemId, recovered.room().getMembershipId("Bob"),
                 "Bob membershipId must survive WAL snapshot round-trip");
-
-        RoomCoordinator coordinator = new RoomCoordinator();
-        @SuppressWarnings("unchecked")
-        RoomService roomService = new RoomService(
-                Mockito.mock(SimpMessagingTemplate.class),
-                Mockito.mock(ApplicationEventPublisher.class),
-                Mockito.mock(PasswordEncoder.class),
-                coordinator,
-                Clock.systemUTC(),
-                Mockito.mock(TaskScheduler.class),
-                new RoomTimingProperties(60_000L),
-                Mockito.mock(ObjectProvider.class));
-        try (LockLease _ = coordinator.acquire("mem-room")) {
-            roomService.restoreRoom(recovered.room(), recovered.currentHost());
-            assertEquals(aliceMemId, roomService.getRoom("mem-room").getMembershipId("Alice"));
-            assertEquals(bobMemId, roomService.getRoom("mem-room").getMembershipId("Bob"));
-        }
-
-        // Verify fallback preservation when a restored room lacks persisted membershipIds for an existing player
-        Room legacyRestored = Room.restoreBuilder()
-                .roomId("mem-room")
-                .roomName("Membership Room")
-                .hostName("Alice")
-                .maxPlayers(4)
-                .smallBlind(10)
-                .bigBlind(20)
-                .buyIn(500)
-                .playersWithJoinTime(room.getPlayersWithJoinTimeSnapshot())
-                .build();
-        try (LockLease _ = coordinator.acquire("mem-room")) {
-            roomService.restoreRoom(legacyRestored, "Alice");
-            assertEquals(aliceMemId, roomService.getRoom("mem-room").getMembershipId("Alice"),
-                    "Existing in-memory membershipId must be preserved if restored room lacks persisted membershipIds");
-            assertEquals(bobMemId, roomService.getRoom("mem-room").getMembershipId("Bob"));
-        }
     }
 
     private static final JsonMapper JSON = JsonMapper.builder().findAndAddModules().build();
@@ -667,7 +632,7 @@ class AggregateSnapshotMapperTest {
                 .retainedTerminalResult(terminalResult).build();
 
         ObjectNode serialized = JSON.valueToTree(
-                new AggregateSnapshotMapper(JSON).captureStateImage(room, "Alice", game));
+                new AggregateSnapshotMapper(JSON).captureStateImage(room, game));
 
         assertEquals(fieldNameShape(validTerminalSnapshotTree()), fieldNameShape(serialized),
                 "Mapper writer field names drifted from the independent terminal-snapshot fixture");
@@ -749,7 +714,7 @@ class AggregateSnapshotMapperTest {
         game.setGameEndResult(result);
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(JSON);
 
-        GameEndResponse restored = mapper.deserialize(mapper.serialize(room, "Alice", game))
+        GameEndResponse restored = mapper.deserialize(mapper.serialize(mapper.captureStateImage(room, game)))
                 .game().getGameEndResult();
 
         assertEquals(result, restored);
@@ -786,11 +751,11 @@ class AggregateSnapshotMapperTest {
     private static AggregateStateImage.RoomState roomState(String roomId, int maxPlayers, int smallBlind,
             int bigBlind, int buyIn) {
         return new AggregateStateImage.RoomState(roomId, "Room", "Host", maxPlayers, smallBlind, bigBlind, buyIn,
-                null, null, Map.of(), false);
+                null, null, Map.of(), Map.of(), false, null);
     }
 
     private static AggregateStateImage lobbyImage(AggregateStateImage.RoomState room) {
-        return new AggregateStateImage(false, room, "Host", null);
+        return new AggregateStateImage(false, room, null);
     }
 
     static Stream<Arguments> invalidImages() {
@@ -843,14 +808,13 @@ class AggregateSnapshotMapperTest {
         AggregateSnapshotMapper mapper = newMapper();
 
         RecoveredAggregate fromImage = mapper.restoreStateImage(
-                new AggregateStateImage(true, null, null, null));
+                new AggregateStateImage(true, null, null));
         RecoveredAggregate fromTombstone = mapper.deserialize(mapper.serializeDeletion("gone-room"));
 
         for (RecoveredAggregate recovered : List.of(fromImage, fromTombstone)) {
             assertTrue(recovered.deleted());
             assertNull(recovered.room());
             assertNull(recovered.game());
-            assertNull(recovered.currentHost());
         }
     }
 
@@ -864,32 +828,23 @@ class AggregateSnapshotMapperTest {
 
     static Stream<Arguments> hostReconciliations() {
         return Stream.of(
-                Arguments.of("current host is in the room", "Bob", "Alice", joinTimes("Alice", "Bob"), "Bob"),
-                Arguments.of("current host left, original host is in the room", "Zed", "Alice",
-                        joinTimes("Carol", "Alice"), "Alice"),
-                Arguments.of("no current host, original host is in the room", null, "Alice",
-                        joinTimes("Carol", "Alice"), "Alice"),
-                Arguments.of("neither host is in the room, first member is used", "Zed", "Yan",
-                        joinTimes("Carol", "Dave"), "Carol"),
-                Arguments.of("no current host and original host left, first member is used", null, "Yan",
-                        joinTimes("Carol", "Dave"),
-                        "Carol"),
-                Arguments.of("empty room has no host", "Zed", "Yan", joinTimes(), null),
-                Arguments.of("no join times has no host", "Zed", "Yan", null, null));
+                Arguments.of("the host is in the room", "Bob", joinTimes("Alice", "Bob"), "Bob"),
+                Arguments.of("the host left, first member is used", "Zed", joinTimes("Carol", "Alice"), "Carol"),
+                Arguments.of("no host, first member is used", null, joinTimes("Carol", "Dave"), "Carol"),
+                Arguments.of("empty room keeps the stored host", "Yan", joinTimes(), "Yan"));
     }
 
     @ParameterizedTest(name = "[{index}] {0}")
     @MethodSource("hostReconciliations")
     @DisplayName("restoreStateImage reconciles the host against actual room membership")
-    void restoreStateImage_HostReconciliation_FallsBackThroughMembership(String name, String currentHost,
-            String originalHost, Map<String, LocalDateTime> members, String expectedHost) {
-        AggregateStateImage.RoomState room = new AggregateStateImage.RoomState("r", "Room", originalHost, 6, 5, 10,
-                100, null, null, members, false);
-        AggregateStateImage image = new AggregateStateImage(false, room, currentHost, null);
+    void restoreStateImage_HostReconciliation_FallsBackThroughMembership(String name, String hostName, Map<String, LocalDateTime> members, String expectedHost) {
+        AggregateStateImage.RoomState room = new AggregateStateImage.RoomState("r", "Room", hostName, 6, 5, 10,
+                100, null, null, members, Map.of(), false, null);
+        AggregateStateImage image = new AggregateStateImage(false, room, null);
 
         RecoveredAggregate recovered = newMapper().restoreStateImage(image);
 
-        assertEquals(expectedHost, recovered.currentHost(), name);
+        assertEquals(expectedHost, recovered.room().getHostName(), name);
         assertFalse(recovered.deleted());
         assertNull(recovered.game());
     }
@@ -898,7 +853,7 @@ class AggregateSnapshotMapperTest {
     @DisplayName("captureStateImage rejects a null room with a PersistenceException")
     void captureStateImage_NullRoom_IsRejected() {
         PersistenceException ex = assertThrows(PersistenceException.class,
-                () -> newMapper().captureStateImage(null, "Host", null));
+                () -> newMapper().captureStateImage(null, null));
 
         assertEquals("Room cannot be null for aggregate state capture", ex.getMessage());
     }
@@ -911,7 +866,7 @@ class AggregateSnapshotMapperTest {
         PersistenceException nullImage = assertThrows(PersistenceException.class,
                 () -> mapper.serialize((AggregateStateImage) null));
         PersistenceException nullRoom = assertThrows(PersistenceException.class,
-                () -> mapper.serialize(null, "Host", null));
+                () -> mapper.serialize(mapper.captureStateImage(null, null)));
 
         assertEquals("State image cannot be null for serialization", nullImage.getMessage());
         assertEquals("Room cannot be null for aggregate state capture", nullRoom.getMessage());
@@ -927,21 +882,20 @@ class AggregateSnapshotMapperTest {
     }
 
     @Test
-    @DisplayName("restoreRoom and toState(Room) return null for null input and restore a state without join times")
+    @DisplayName("restoreRoom returns null for null input, restores a state without join times, and capture keeps the host")
     void restoreRoom_NullAndMissingJoinTimes_AreHandled() {
         AggregateSnapshotMapper mapper = newMapper();
 
         assertNull(mapper.restoreRoom(null));
-        assertNull(mapper.toState((Room) null, "Host"));
 
         Room restored = mapper.restoreRoom(new AggregateStateImage.RoomState("r", "Room", "Host", 6, 5, 10, 100,
-                null, null, null, false));
+                null, null, null, Map.of(), false, null));
         assertEquals("r", restored.getRoomId());
         assertTrue(restored.getPlayersWithJoinTimeSnapshot().isEmpty());
 
         Room live = new Room("live", "Live", "Host", 4, 5, 10, 100, null);
         live.addPlayer("Host");
-        AggregateStateImage.RoomState captured = mapper.toState(live, "Host");
+        AggregateStateImage.RoomState captured = mapper.captureStateImage(live, null).room();
         assertEquals("live", captured.roomId());
         assertEquals(List.of("Host"), List.copyOf(captured.playersWithJoinTime().keySet()));
     }
@@ -995,7 +949,7 @@ class AggregateSnapshotMapperTest {
             assertEquals(20, game.getCurrentHighestBet());
 
             // Snapshot via mapper
-            byte[] snapshotBytes = snapshotMapper.serialize(room, "Alice", game);
+            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
 
             // Store into real encrypted WAL
             RoomCoordinator coordinator = new RoomCoordinator();
@@ -1052,7 +1006,7 @@ class AggregateSnapshotMapperTest {
             assertEquals(GamePhase.FLOP, game.getCurrentPhase());
             assertEquals(3, game.getCommunityCards().size());
 
-            byte[] snapshotBytes = snapshotMapper.serialize(room, "Alice", game);
+            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
 
             // WAL round-trip
             RoomCoordinator coordinator = new RoomCoordinator();
@@ -1095,7 +1049,7 @@ class AggregateSnapshotMapperTest {
             assertEquals(GamePhase.TURN, game.getCurrentPhase());
             assertEquals(4, game.getCommunityCards().size());
 
-            byte[] snapshotBytes = snapshotMapper.serialize(room, "Alice", game);
+            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
 
             // WAL round-trip
             RoomCoordinator coordinator = new RoomCoordinator();
@@ -1138,7 +1092,7 @@ class AggregateSnapshotMapperTest {
             assertEquals(GamePhase.RIVER, game.getCurrentPhase());
             assertEquals(5, game.getCommunityCards().size());
 
-            byte[] snapshotBytes = snapshotMapper.serialize(room, "Alice", game);
+            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
 
             // WAL round-trip
             RoomCoordinator coordinator = new RoomCoordinator();
@@ -1182,7 +1136,7 @@ class AggregateSnapshotMapperTest {
             assertNotNull(game.getLastSettlementResult());
             HandSettlementResult originalSettlement = game.getLastSettlementResult();
 
-            byte[] snapshotBytes = snapshotMapper.serialize(room, "Alice", game);
+            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
 
             // WAL round-trip
             RoomCoordinator coordinator = new RoomCoordinator();
@@ -1242,7 +1196,7 @@ class AggregateSnapshotMapperTest {
             assertTrue(game.isReadyCountdownActive());
             assertEquals(deadline, game.getReadyCountdownDeadlineEpochMs());
 
-            byte[] bytes = snapshotMapper.serialize(room, "Alice", game);
+            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
             Game restored = snapshotMapper.deserialize(bytes).game();
 
             assertEquals(ReadyGateState.COUNTING_DOWN, restored.getReadyGateState());
@@ -1276,7 +1230,7 @@ class AggregateSnapshotMapperTest {
             assertFalse(game.isReadyCountdownActive());
             assertNull(game.getReadyCountdownDeadlineEpochMs());
 
-            byte[] bytes = snapshotMapper.serialize(room, "Alice", game);
+            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
             Game restored = snapshotMapper.deserialize(bytes).game();
 
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, restored.getReadyGateState());
@@ -1309,7 +1263,7 @@ class AggregateSnapshotMapperTest {
             assertEquals(ReadyGateState.CLOSED, game.getReadyGateState());
             assertFalse(game.isReadyCountdownActive());
 
-            byte[] bytes = snapshotMapper.serialize(room, "Alice", game);
+            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
             Game restored = snapshotMapper.deserialize(bytes).game();
 
             assertEquals(ReadyGateState.CLOSED, restored.getReadyGateState());
@@ -1392,7 +1346,7 @@ class AggregateSnapshotMapperTest {
             assertEquals(deadlines, game.getScheduledTaskDeadlinesSnapshot());
             assertEquals(generations, game.getScheduledTaskGenerationsSnapshot());
 
-            byte[] bytes = snapshotMapper.serialize(room, "Alice", game);
+            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
             Game restored = snapshotMapper.deserialize(bytes).game();
 
             assertEquals(42L, restored.getStateRevision());
@@ -1476,8 +1430,8 @@ class AggregateSnapshotMapperTest {
                 
                 .build();
 
-        AggregateStateImage beforeImage = mapper.captureStateImage(room, "Alice", game);
-        byte[] beforeBytes = mapper.serialize(room, "Alice", game);
+        AggregateStateImage beforeImage = mapper.captureStateImage(room, game);
+        byte[] beforeBytes = mapper.serialize(mapper.captureStateImage(room, game));
 
         for (int i = 0; i < 3; i++) {
             assertEquals("p2", game.getCurrentPlayer().getPlayerId());
@@ -1485,8 +1439,8 @@ class AggregateSnapshotMapperTest {
             assertEquals("p3", game.getBigBlindPlayerId());
         }
 
-        AggregateStateImage afterImage = mapper.captureStateImage(room, "Alice", game);
-        byte[] afterBytes = mapper.serialize(room, "Alice", game);
+        AggregateStateImage afterImage = mapper.captureStateImage(room, game);
+        byte[] afterBytes = mapper.serialize(mapper.captureStateImage(room, game));
 
         assertEquals(beforeImage, afterImage);
         assertArrayEquals(beforeBytes, afterBytes);

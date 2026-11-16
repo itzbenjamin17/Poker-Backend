@@ -221,7 +221,8 @@ class GameLifecycleServiceTest {
     private Game gameWithReadyCountdown() {
         withRoomLock(ROOM_ID, () -> {
             if (gameLifecycleService.getGame(ROOM_ID) != null) {
-                gameLifecycleService.evictGame(ROOM_ID);
+                activeGames.remove(ROOM_ID);
+                testRoom.setGameStarted(false);
             }
         });
         Game game = createShowdownGame();
@@ -622,7 +623,7 @@ class GameLifecycleServiceTest {
             when(nullPlayersGame.getGameId()).thenReturn("mock-null-players");
             when(nullPlayersGame.getPlayers()).thenReturn(null);
             withRoomLock("mock-null-players", () -> {
-                gameLifecycleService.restoreGame(nullPlayersGame);
+                activeGames.replace(nullPlayersGame);
                 assertFalse(gameLifecycleService.playerExistsInGame("mock-null-players", "Host"));
             });
 
@@ -646,32 +647,11 @@ class GameLifecycleServiceTest {
             when(lockedGame.getGameId()).thenReturn("mock-locked");
             when(lockedGame.getPlayers()).thenReturn(verifiedList);
             withRoomLock("mock-locked", () -> {
-                gameLifecycleService.restoreGame(lockedGame);
+                activeGames.replace(lockedGame);
                 assertTrue(gameLifecycleService.playerExistsInGame("mock-locked", "Alice"));
                 assertFalse(gameLifecycleService.playerExistsInGame("mock-locked", "Bob"));
                 assertFalse(gameLifecycleService.playerExistsInGame("mock-locked", "Charlie"));
             });
-        }
-
-        @Test
-        void evictGame_RemovesGameAndTimersWhilePreservingRoomContainer() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
-            @SuppressWarnings("unchecked")
-            ScheduledFuture<Object> turnFuture = mock(ScheduledFuture.class);
-            doReturn(turnFuture).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
-            timerRegistry.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 5_000L, () -> {});
-            testRoom.setTerminal(true);
-
-            gameLifecycleService.evictGame(null);
-            withRoomLock(ROOM_ID, () -> gameLifecycleService.evictGame(ROOM_ID));
-
-            assertNull(getGameLocked(ROOM_ID));
-            assertFalse(withRoomLock(ROOM_ID, () -> gameLifecycleService.gameExists(ROOM_ID)));
-            assertFalse(testRoom.isGameStarted());
-            assertFalse(testRoom.isTerminal());
-            verify(turnFuture).cancel(false);
-            verify(roomService, never()).destroyRoom(ROOM_ID);
         }
 
         @Test
@@ -697,34 +677,6 @@ class GameLifecycleServiceTest {
                     () -> gameLifecycleService.validatePlayerMembership(null, "Host", "mem-1"));
         }
 
-        @Test
-        void restoreAndRollbackTimers() {
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-            @SuppressWarnings("unchecked")
-            ScheduledFuture<Object> rollbackReadyFuture = mock(ScheduledFuture.class);
-            @SuppressWarnings("unchecked")
-            ScheduledFuture<Object> rollbackInactivityFuture = mock(ScheduledFuture.class);
-            doReturn(rollbackReadyFuture, rollbackInactivityFuture)
-                    .when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
-
-            Game game = new Game(ROOM_ID,
-                    List.of(new Player("Host", "h", 100), new Player("Player2", "p2", 100)),
-                    6, 5, 10);
-            dealBoardAndShowdown(game);
-            game.openOrWaitReadyGate(BASE_EPOCH_MS + 10_000L);
-            withRoomLock(ROOM_ID, () -> {
-                gameLifecycleService.restoreGame(game);
-                testRoom.setInactivityDeadlineEpochMs(BASE_EPOCH_MS + 50_000L);
-
-                gameLifecycleService.resumeRollbackTimers(ROOM_ID);
-                verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 10_000L)));
-                verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 50_000L)));
-
-                gameLifecycleService.cancelTimers(ROOM_ID, false);
-                verify(rollbackReadyFuture).cancel(false);
-                verify(rollbackInactivityFuture).cancel(false);
-            });
-        }
     }
 
     // ==================== Scheduled Execution & Inactivity Handoffs ====================

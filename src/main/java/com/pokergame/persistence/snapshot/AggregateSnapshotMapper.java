@@ -51,19 +51,14 @@ public final class AggregateSnapshotMapper {
      * No JSON serialization or I/O is performed during capture.
      *
      * @param room the room aggregate
-     * @param currentHost the current host
      * @param game the game aggregate, or null if room is a lobby
      * @return independent immutable state image
      */
-    public AggregateStateImage captureStateImage(Room room, String currentHost, Game game) {
+    public AggregateStateImage captureStateImage(Room room, Game game) {
         if (room == null) {
             throw new PersistenceException("Room cannot be null for aggregate state capture");
         }
-        AggregateStateImage.RoomState roomState;
-        AggregateStateImage.GameState gameState;
-        roomState = toRoomState(room);
-        gameState = toState(game);
-        return new AggregateStateImage(false, roomState, currentHost, gameState);
+        return new AggregateStateImage(false, toRoomState(room), toState(game));
     }
 
     private AggregateStateImage.RoomState toRoomState(Room room) {
@@ -72,13 +67,6 @@ public final class AggregateSnapshotMapper {
                 room.getBigBlind(), room.getBuyIn(), room.getPasswordHash(), room.getCreatedAt(),
                 room.getPlayersWithJoinTimeSnapshot(), room.getPlayerMembershipIdsSnapshot(), room.isGameStarted(),
                 room.getInactivityDeadlineEpochMs());
-    }
-
-    AggregateStateImage.RoomState toState(Room room, String currentHost) {
-        if (room == null) {
-            return null;
-        }
-        return toRoomState(room);
     }
 
     /**
@@ -97,20 +85,6 @@ public final class AggregateSnapshotMapper {
     }
 
     /**
-     * Captures and serializes a room and game while the caller owns the room coordination lease.
-     *
-     * @param room        the room being saved
-     * @param currentHost the current host, which could be different from the original creator
-     * @param game        the active game, or {@code null} if the room is still a lobby
-     * @return the bytes of the saved snapshot
-     * @throws PersistenceException if the snapshot cannot be created
-     */
-    public byte[] serialize(Room room, String currentHost, Game game) {
-        AggregateStateImage image = captureStateImage(room, currentHost, game);
-        return serialize(image);
-    }
-
-    /**
      * Creates a special "deleted" snapshot so that if the app crashes while deleting a room,
      * the room isn't accidentally restored on restart.
      *
@@ -119,9 +93,7 @@ public final class AggregateSnapshotMapper {
      * @throws PersistenceException if the deletion snapshot cannot be created
      */
     public byte[] serializeDeletion(String roomId) {
-        AggregateStateImage.RoomState tombstone = new AggregateStateImage.RoomState(
-                roomId, "deleted", "deleted", 2, 1, 2, 20, null, null, Map.of(), false);
-        return write(new AggregateStateImage(true, tombstone, "deleted", null));
+        return write(new AggregateStateImage(true, null, null));
     }
 
     /**
@@ -156,7 +128,7 @@ public final class AggregateSnapshotMapper {
         }
         // If this snapshot marks a deleted room, just return a deleted result
         if (image.deleted()) {
-            return new RecoveredAggregate(null, null, null, true);
+            return new RecoveredAggregate(null, null, true);
         }
         AggregateStateImage.RoomState state = image.room();
         if (state == null || state.roomId() == null || state.roomId().trim().isEmpty()) {
@@ -179,15 +151,7 @@ public final class AggregateSnapshotMapper {
             game = restoreGame(image.game(), state.maxPlayers());
         }
 
-        // Room membership is authoritative independently of retained final Game rows.
-        Map<String, LocalDateTime> joinTimes = state.playersWithJoinTime() == null
-                ? Map.of() : state.playersWithJoinTime();
-        List<String> roomMembers = List.copyOf(joinTimes.keySet());
-        String host = image.currentHost();
-        String reconciledHost = host != null && roomMembers.contains(host) ? host
-                : state.originalHost() != null && roomMembers.contains(state.originalHost()) ? state.originalHost()
-                : roomMembers.stream().findFirst().orElse(null);
-        return new RecoveredAggregate(restoreRoom(state), reconciledHost, game, false);
+        return new RecoveredAggregate(restoreRoom(state), game, false);
     }
 
     private byte[] write(AggregateStateImage image) {
@@ -261,12 +225,16 @@ public final class AggregateSnapshotMapper {
         if (state == null) {
             return null;
         }
+        // Room membership is authoritative; the host must be one of the members.
         Map<String, LocalDateTime> joinTimes = state.playersWithJoinTime() == null
                 ? Map.of() : state.playersWithJoinTime();
+        String hostName = state.hostName() != null && joinTimes.containsKey(state.hostName())
+                ? state.hostName()
+                : joinTimes.keySet().stream().findFirst().orElse(state.hostName());
         return Room.restoreBuilder()
                 .roomId(state.roomId())
                 .roomName(state.roomName())
-                .hostName(state.originalHost())
+                .hostName(hostName)
                 .maxPlayers(state.maxPlayers())
                 .smallBlind(state.smallBlind())
                 .bigBlind(state.bigBlind())

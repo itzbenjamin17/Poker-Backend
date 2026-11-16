@@ -50,9 +50,9 @@ All production packages are under `src/main/java/com/pokergame/`.
 | --- | --- |
 | [RoomController](../../src/main/java/com/pokergame/controller/RoomController.java) | Create/join, room snapshot, leave, and host-authorized start. |
 | [GameController](../../src/main/java/com/pokergame/controller/GameController.java) | Public/private snapshots, post-game review endpoint, STOMP action/ready/unready, REST claim-win. |
-| [RoomService](../../src/main/java/com/pokergame/service/RoomService.java) | Room registry, name lookup, lobby membership, host tracking on `Room`, lobby inactivity cleanup, and room broadcasts. `getRoom(...)` asserts room lock ownership. |
+| [RoomService](../../src/main/java/com/pokergame/service/RoomService.java) | Room lifecycle on top of `RoomRegistry` (the room map), name lookup, lobby membership, host tracking on `Room`, lobby inactivity cleanup, and room broadcasts. `getRoom(...)` asserts room lock ownership. |
 | [RoomCoordinator](../../src/main/java/com/pokergame/util/RoomCoordinator.java) and `ActiveGameRegistry` | Single per-room concurrency lock boundary ([ADR-0011](../adr/0011-room-coordinator-single-boundary-concurrency.md)) and live game lookup. `ActiveGameRegistry` methods and `RoomService.getRoom(...)` verify the calling thread already holds the room lock. |
-| [GameLifecycleService](../../src/main/java/com/pokergame/service/GameLifecycleService.java) | Game creation, startup recovery/rollback restoration, room-coordinated entry points, and workflow routing. |
+| [GameLifecycleService](../../src/main/java/com/pokergame/service/GameLifecycleService.java) | Game creation, room-coordinated entry points, and workflow routing. |
 | Lifecycle collaborators (`service/`) | Package-private Spring `@Component` beans: `GameReadinessCoordinator` (ready gate/countdown), `HandProgressionService` (dealing/street progression), `PlayerDepartureHandler` (leave, host transfer, timeout, reconnect, grace expiry, claim-win), `GameCompletionHandler` (settlement, inactivity abandonment, review lookup, game/room deletion), `GameTaskScheduler` (timer scheduling and claim validation), and `GameTimerRegistry` (`TaskScheduler` futures). |
 | [PlayerActionService](../../src/main/java/com/pokergame/service/PlayerActionService.java) | Action validation, betting mutations, turn/round progression, and lifecycle scheduling. |
 | [GameStateService](../../src/main/java/com/pokergame/service/GameStateService.java) | Public/private snapshots and WebSocket broadcasts queued via `PostSaveActions` until saving completes. |
@@ -60,6 +60,7 @@ All production packages are under `src/main/java/com/pokergame/`.
 | `dto/request/`, `dto/response/`, `dto/internal/` | Validated input, client projections, and service-internal results. |
 | `advice/` and `exception/` | HTTP/STOMP error mapping and domain exceptions. |
 | `security/` and `config/` | JWT principal/filters, payload/rate limits, origins, STOMP authorization, session events, executor/scheduler setup. |
+| `RoomAggregates` (`persistence/`), `RoomAggregateStore` (`service/`) | The only view persistence has of live rooms and games: `find`, `replace` (rollback, timers rescheduled) and `remove`. `persistence/` imports nothing from `service`, `config` or `controller`. |
 | `persistence/transaction/`, `snapshot/`, `wal/`, `config/` | Durable AOP boundary (`DurableMutationAspect`, `PostSaveActions`), state-image mappings, encrypted WAL/keyring, and persistence settings/health. |
 | [PersistenceRecovery](../../src/main/java/com/pokergame/persistence/PersistenceRecovery.java) | Startup restoration, disconnected-client assumptions, and deadline rescheduling. |
 | `util/` | Input sanitization, principal/client-IP helpers, MDC context, and log throttling. |

@@ -33,6 +33,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
     private static final Logger logger = LoggerFactory.getLogger(RoomRestoreService.class);
     private final RoomService roomService;
     private final GameLifecycleService gameLifecycleService;
+    private final RoomAggregateStore roomAggregates;
     private final GameStateService gameStateService;
     private final ActiveGameRegistry activeGames;
     private final GameTaskScheduler taskScheduler;
@@ -45,6 +46,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
     public RoomRestoreService(
             RoomService roomService,
             GameLifecycleService gameLifecycleService,
+            RoomAggregateStore roomAggregates,
             GameStateService gameStateService,
             ActiveGameRegistry activeGames,
             GameTaskScheduler taskScheduler,
@@ -55,6 +57,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
             @Value("${poker.room.disconnect-grace-period-ms:120000}") long disconnectGracePeriodMs) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
+        this.roomAggregates = roomAggregates;
         this.gameStateService = gameStateService;
         this.activeGames = activeGames;
         this.taskScheduler = taskScheduler;
@@ -97,8 +100,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
                 logger.info("Game {} expired due to room inactivity during restart downtime (deadline: {}, now: {}); abandoning",
                         roomId, room.getInactivityDeadlineEpochMs(), now);
                 try {
-                    roomService.restoreRoom(room, recovered.currentHost());
-                    gameLifecycleService.restoreGame(game);
+                    roomAggregates.install(room, game);
                     gameLifecycleService.abandonGameDueToInactivity(roomId);
                 } catch (RuntimeException e) {
                     evictPartialRestore(roomId);
@@ -110,9 +112,8 @@ public class RoomRestoreService implements RoomRecoveryHandler {
 
         long freshDeadline = now + disconnectGracePeriodMs;
         try {
-            roomService.restoreRoom(room, recovered.currentHost());
+            roomAggregates.install(room, game);
             if (game != null) {
-                gameLifecycleService.restoreGame(game);
                 if (!game.isGameOver() && room.getInactivityDeadlineEpochMs() != null) {
                     taskScheduler.scheduleGameInactivity(roomId, room.getInactivityDeadlineEpochMs());
                 }
@@ -176,9 +177,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
 
     private void evictPartialRestore(String roomId) {
         webSocketEventListener.cancelRoomPendingDisconnects(roomId);
-        roomService.cancelLobbyInactivity(roomId);
-        gameLifecycleService.evictGame(roomId);
-        roomService.evictRoom(roomId);
+        roomAggregates.remove(roomId);
     }
 
     private static Player findGamePlayer(Game game, String playerName) {

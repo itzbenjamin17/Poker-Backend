@@ -1,5 +1,6 @@
 package com.pokergame.persistence;
 
+import com.pokergame.persistence.RoomAggregates;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
@@ -87,6 +88,9 @@ class PersistenceAvailabilityIT {
     private RoomService roomService;
 
     @Autowired
+    private RoomAggregates roomAggregates;
+
+    @Autowired
     private GameLifecycleService gameLifecycleService;
 
     @Autowired
@@ -116,8 +120,8 @@ class PersistenceAvailabilityIT {
         awaitPendingSavesFlushed();
         for (String roomId : List.copyOf(trackedRoomIds)) {
             try (LockLease _ = roomCoordinator.acquire(roomId)) {
-                gameLifecycleService.evictGame(roomId);
                 roomService.destroyRoom(roomId);
+                roomAggregates.remove(roomId);
                 walStore.delete(roomId);
             }
         }

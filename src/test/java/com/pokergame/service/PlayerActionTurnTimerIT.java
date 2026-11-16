@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.persistence.RoomAggregates;
 import com.pokergame.util.RoomCoordinator;
 
 import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
@@ -59,6 +60,9 @@ class PlayerActionTurnTimerIT {
     private static final Duration ASYNC_TIMEOUT = Duration.ofSeconds(3);
 
     @Autowired
+    private RoomAggregates roomAggregates;
+
+    @Autowired
     private RoomService roomService;
 
     @Autowired
@@ -91,7 +95,7 @@ class PlayerActionTurnTimerIT {
         taskScheduler.clearTrackedTasks();
         for (String roomId : List.copyOf(trackedRoomIds)) {
             withRoomLock(roomCoordinator, roomId, () -> {
-                gameLifecycleService.evictGame(roomId);
+                roomAggregates.remove(roomId);
                 roomService.destroyRoom(roomId);
                 return null;
             });

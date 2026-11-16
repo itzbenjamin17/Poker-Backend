@@ -3,7 +3,7 @@
   "room" : {
     "roomId" : "room-terminal",
     "roomName" : "Final Table",
-    "originalHost" : "Alice",
+    "hostName" : "Alice",
     "maxPlayers" : 6,
     "smallBlind" : 5,
     "bigBlind" : 10,
@@ -21,7 +21,6 @@
     "gameStarted" : true,
     "inactivityDeadlineEpochMs" : null
   },
-  "currentHost" : "Alice",
   "game" : {
     "gameId" : "room-terminal",
     "players" : [ {

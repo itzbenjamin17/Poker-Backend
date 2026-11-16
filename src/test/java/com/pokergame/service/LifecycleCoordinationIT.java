@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.persistence.RoomAggregates;
 import com.pokergame.util.RoomCoordinator;
 
 import com.pokergame.config.WebSocketAuthInterceptor;
@@ -84,6 +85,9 @@ class LifecycleCoordinationIT {
     private static final Duration ASYNC_TIMEOUT = Duration.ofSeconds(5);
 
     @Autowired
+    private RoomAggregates roomAggregates;
+
+    @Autowired
     private RoomService roomService;
 
     @Autowired
@@ -122,7 +126,7 @@ class LifecycleCoordinationIT {
     void cleanUpTrackedRooms() {
         for (String roomId : List.copyOf(trackedRoomIds)) {
             withRoomLock(roomCoordinator, roomId, () -> {
-                gameLifecycleService.evictGame(roomId);
+                roomAggregates.remove(roomId);
                 roomService.destroyRoom(roomId);
                 return null;
             });
@@ -179,13 +183,7 @@ class LifecycleCoordinationIT {
             assertThatThrownBy(() -> roomService.isRoomHost(roomId, "Host"))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("does not hold room lock for room: " + roomId);
-            assertThatThrownBy(() -> roomService.getCurrentHost(roomId))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("does not hold room lock for room: " + roomId);
             assertThatThrownBy(() -> roomService.checkAndCloseIfExpired(roomId))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("does not hold room lock for room: " + roomId);
-            assertThatThrownBy(() -> roomService.evictRoom(roomId))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("does not hold room lock for room: " + roomId);
 

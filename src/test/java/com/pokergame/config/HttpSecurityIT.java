@@ -1,5 +1,6 @@
 package com.pokergame.config;
 
+import com.pokergame.persistence.RoomAggregates;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pokergame.dto.request.CreateRoomRequest;
@@ -79,6 +80,9 @@ class HttpSecurityIT {
     private RoomService roomService;
 
     @Autowired
+    private RoomAggregates roomAggregates;
+
+    @Autowired
     private GameLifecycleService gameLifecycleService;
 
     @Autowired
@@ -98,8 +102,8 @@ class HttpSecurityIT {
     void tearDown() {
         for (String roomId : List.copyOf(trackedRoomIds)) {
             withRoomLock(roomCoordinator, roomId, () -> {
-                gameLifecycleService.evictGame(roomId);
                 roomService.destroyRoom(roomId);
+                roomAggregates.remove(roomId);
                 return null;
             });
         }

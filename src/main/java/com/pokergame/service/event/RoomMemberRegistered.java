@@ -6,7 +6,7 @@ package com.pokergame.service.event;
  *
  * @param roomId          the unique ID of the room the player joined
  * @param playerName      the sanitized player name
- * @param membershipId    the unique membership ID assigned for this join, or {@code null} if unavailable
+ * @param membershipId    the unique membership ID assigned for this join
  * @param deadlineEpochMs initial connection timeout deadline in epoch milliseconds
  */
 public record RoomMemberRegistered(String roomId, String playerName, String membershipId, long deadlineEpochMs) {

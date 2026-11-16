@@ -1,5 +1,7 @@
 package com.pokergame.persistence;
 
+import com.pokergame.persistence.RoomAggregate;
+import com.pokergame.persistence.RoomAggregates;
 import com.pokergame.PokerApplication;
 import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.dto.request.CreateRoomRequest;
@@ -131,7 +133,7 @@ class PersistenceRestartIT {
                 assertThat(restored.getMembershipId("Alice")).isEqualTo(hostMembership);
                 assertThat(restored.getMembershipId("Bob")).isEqualTo(guestMembership);
                 assertThat(restored.isGameStarted()).isFalse();
-                assertThat(rooms.getCurrentHost(roomId)).isEqualTo("Alice");
+                assertThat(restored.getHostName()).isEqualTo("Alice");
                 assertThat(rooms.resolveRoomIdByName("Private Vault")).isEqualTo(roomId);
                 return null;
             });
@@ -234,33 +236,27 @@ class PersistenceRestartIT {
 
             Game original = withRoomLock(context, roomId, () -> games.getGame(roomId));
             byte[] image = withRoomLock(context, roomId,
-                    () -> mapper.serialize(rooms.getRoom(roomId), rooms.getCurrentHost(roomId), original));
+                    () -> mapper.serialize(mapper.captureStateImage(rooms.getRoom(roomId), original)));
             Game replacement = mapper.deserialize(image).game();
             assertThat(replacement).isNotSameAs(original);
 
+            RoomAggregates aggregates = context.getBean(RoomAggregates.class);
             withRoomLock(context, roomId, () -> {
-                games.restoreGame(replacement);
+                aggregates.replace(new RoomAggregate(rooms.getRoom(roomId), replacement));
                 assertThat(games.getGame(roomId)).isSameAs(replacement);
                 assertThat(rooms.getRoom(roomId).isGameStarted()).isTrue();
                 return null;
             });
-            assertThat(countActiveScheduledFutures(context)).isEqualTo(baselineFutures);
-
-            withRoomLock(context, roomId, () -> {
-                games.resumeRollbackTimers(roomId);
-                return null;
-            });
             assertThat(countActiveScheduledFutures(context)).isGreaterThan(baselineFutures);
 
-            Room roomBeforeEvict = withRoomLock(context, roomId, () -> rooms.getRoom(roomId));
             withRoomLock(context, roomId, () -> {
-                games.evictGame(roomId);
+                aggregates.remove(roomId);
                 return null;
             });
             assertThat(countActiveScheduledFutures(context)).isEqualTo(baselineFutures);
             withRoomLock(context, roomId, () -> {
                 assertThat(games.getGame(roomId)).isNull();
-                assertThat(rooms.getRoom(roomId)).isSameAs(roomBeforeEvict);
+                assertThat(rooms.getRoom(roomId)).isNull();
                 return null;
             });
         }
@@ -357,7 +353,7 @@ class PersistenceRestartIT {
                 Game game = games.getGame(roomId);
                 game.markGameOver();
                 game.scheduleTask(ScheduledGameTask.CLEANUP, System.currentTimeMillis() - 10_000L);
-                byte[] image = mapper.serialize(rooms.getRoom(roomId), rooms.getCurrentHost(roomId), game);
+                byte[] image = mapper.serialize(mapper.captureStateImage(rooms.getRoom(roomId), game));
                 store.checkpoint(roomId, image);
                 return null;
             });
@@ -387,7 +383,7 @@ class PersistenceRestartIT {
             withRoomLock(first, roomId, () -> {
                 Room room = rooms.getRoom(roomId);
                 room.setInactivityDeadlineEpochMs(System.currentTimeMillis() - 10_000L);
-                byte[] image = mapper.serialize(room, rooms.getCurrentHost(roomId), null);
+                byte[] image = mapper.serialize(mapper.captureStateImage(room, null));
                 store.checkpoint(roomId, image);
                 return null;
             });
@@ -420,7 +416,7 @@ class PersistenceRestartIT {
             withRoomLock(first, roomId, () -> {
                 Room room = rooms.getRoom(roomId);
                 room.setInactivityDeadlineEpochMs(System.currentTimeMillis() - 10_000L);
-                byte[] image = mapper.serialize(room, rooms.getCurrentHost(roomId), games.getGame(roomId));
+                byte[] image = mapper.serialize(mapper.captureStateImage(room, games.getGame(roomId)));
                 store.checkpoint(roomId, image);
                 return null;
             });
@@ -466,7 +462,7 @@ class PersistenceRestartIT {
                 Game game = games.getGame(roomId);
                 game.findPlayerByName("Alice").setDisconnectDeadlineEpochMs(longerDeadline);
                 game.findPlayerByName("Bob").setDisconnectDeadlineEpochMs(null);
-                byte[] image = mapper.serialize(rooms.getRoom(roomId), rooms.getCurrentHost(roomId), game);
+                byte[] image = mapper.serialize(mapper.captureStateImage(rooms.getRoom(roomId), game));
                 store.checkpoint(roomId, image);
                 return null;
             });
@@ -515,7 +511,7 @@ class PersistenceRestartIT {
             withRoomLock(first, roomId, () -> {
                 Game game = games.getGame(roomId);
                 game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, System.currentTimeMillis() + 500L);
-                byte[] image = mapper.serialize(rooms.getRoom(roomId), rooms.getCurrentHost(roomId), game);
+                byte[] image = mapper.serialize(mapper.captureStateImage(rooms.getRoom(roomId), game));
                 store.checkpoint(roomId, image);
                 return null;
             });

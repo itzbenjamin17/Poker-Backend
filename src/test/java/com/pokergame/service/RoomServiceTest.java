@@ -52,6 +52,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.awaitility.Awaitility;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -87,6 +88,7 @@ class RoomServiceTest {
     private MutableClock clock;
     private RoomCoordinator roomCoordinator;
     private RoomService roomService;
+    private RoomRegistry roomRegistry;
     private CreateRoomRequest validCreateRequest;
 
     @BeforeEach
@@ -101,10 +103,12 @@ class RoomServiceTest {
             ApplicationEventPublisher publisher,
             PasswordEncoder passwordEncoder,
             RoomCoordinator coordinator) {
+        roomRegistry = new RoomRegistry(coordinator);
         return new RoomService(
                 messagingTemplate,
                 publisher,
                 passwordEncoder,
+                roomRegistry,
                 coordinator,
                 clock,
                 taskScheduler,
@@ -138,6 +142,11 @@ class RoomServiceTest {
         try (LockLease _ = coordinator.acquire(roomId)) {
             return service.getRoom(roomId);
         }
+    }
+
+    private String hostOf(String roomId) {
+        Room room = coordinatedGetRoom(roomId);
+        return room == null ? null : room.getHostName();
     }
 
     private Room coordinatedGetRoom(String roomId) {
@@ -547,7 +556,7 @@ class RoomServiceTest {
 
                 Room room = coordinatedGetRoom(roomId);
                 assertNotNull(room);
-                String currentHost = withRoomLock(roomId, () -> roomService.getCurrentHost(roomId));
+                String currentHost = hostOf(roomId);
                 assertNotNull(currentHost, "Current host must not be null while players remain");
                 assertTrue(room.getPlayers().contains(currentHost),
                         "Current host must be a member of the room, was: " + currentHost);
@@ -573,13 +582,7 @@ class RoomServiceTest {
             assertThatThrownBy(() -> roomService.isRoomHost(roomId, "HostPlayer"))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("Current thread does not hold room lock");
-            assertThatThrownBy(() -> roomService.getCurrentHost(roomId))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Current thread does not hold room lock");
-            assertThatThrownBy(() -> roomService.restoreRoom(room, "HostPlayer"))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Current thread does not hold room lock");
-            assertThatThrownBy(() -> roomService.evictRoom(roomId))
+            assertThatThrownBy(() -> roomService.getRoom(roomId))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("Current thread does not hold room lock");
             assertThatThrownBy(() -> roomService.checkAndCloseIfExpired(roomId))
@@ -1044,7 +1047,7 @@ class RoomServiceTest {
 
             assertThat(withRoomLock(roomId, () -> roomService.checkAndCloseIfExpired(roomId))).isTrue();
             assertThat(coordinatedGetRoom(roomId)).isNull();
-            assertThat(withRoomLock(roomId, () -> roomService.getCurrentHost(roomId))).isNull();
+            assertThat(hostOf(roomId)).isNull();
             assertThat(roomService.findRoomByName("ExplicitCloseRoom")).isNull();
         }
 
@@ -1056,9 +1059,9 @@ class RoomServiceTest {
                     roomName, "Host1", 4, 5, 10, 100, null)).roomId();
             withRoomLock(roomId1, () -> {
                 roomService.joinRoom(roomId1, new JoinRoomRequest(roomName, "Guest1", null));
-                assertThat(roomService.getCurrentHost(roomId1)).isEqualTo("Host1");
+                assertThat(hostOf(roomId1)).isEqualTo("Host1");
                 roomService.destroyRoom(roomId1);
-                assertThat(roomService.getCurrentHost(roomId1)).isNull();
+                assertThat(hostOf(roomId1)).isNull();
             });
 
             assertThat(coordinatedGetRoom(roomId1)).isNull();
@@ -1068,7 +1071,7 @@ class RoomServiceTest {
             String roomId2 = createRoom(roomService, new CreateRoomRequest(
                     roomName, "Host2", 4, 5, 10, 100, null)).roomId();
             assertThat(roomId2).isNotEqualTo(roomId1);
-            assertThat(withRoomLock(roomId2, () -> roomService.getCurrentHost(roomId2))).isEqualTo("Host2");
+            assertThat(withRoomLock(roomId2, () -> hostOf(roomId2))).isEqualTo("Host2");
 
             withRoomLock(roomId2, () -> roomService.destroyRoom(roomId2));
             assertThat(roomCoordinator.lockReservationCount(roomId2)).isZero();
@@ -1203,7 +1206,7 @@ class RoomServiceTest {
         private Room registerSpiedRoom() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
             Room spied = spy(coordinatedGetRoom(roomId));
-            withRoomLock(roomId, () -> roomService.restoreRoom(spied, "HostPlayer"));
+            withRoomLock(roomId, () -> roomRegistry.put(spied));
             return spied;
         }
 
@@ -1273,7 +1276,7 @@ class RoomServiceTest {
                 room.removePlayer("G1");
                 room.setTerminal(terminal);
                 assertThat(room.getPlayers()).containsExactly("G2");
-                assertThat(roomService.getCurrentHost(roomId)).isEqualTo("G1");
+                assertThat(hostOf(roomId)).isEqualTo("G1");
                 reset(messagingTemplate);
             });
             return coordinatedGetRoom(roomId);
@@ -1287,7 +1290,7 @@ class RoomServiceTest {
 
             withRoomLock(roomId, () -> {
                 roomService.leaveRoom(roomId, "G2");
-                assertThat(roomService.getCurrentHost(roomId)).isEqualTo("G1");
+                assertThat(hostOf(roomId)).isEqualTo("G1");
             });
 
             assertThat(coordinatedGetRoom(roomId)).isSameAs(room);
@@ -1307,49 +1310,6 @@ class RoomServiceTest {
             assertThat(coordinatedGetRoom(roomId)).isNull();
             verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
                     eq(new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null)));
-        }
-    }
-
-    /** Groups in-memory eviction behavior. */
-    @Nested
-    @DisplayName("evictRoom")
-    class MembershipAndEviction {
-
-        @Test
-        @DisplayName("evictRoom ignores a null room id")
-        void evictRoom_NullRoomId_IsNoOp() {
-            String roomId = createRoom(roomService, validCreateRequest).roomId();
-
-            assertThatCode(() -> roomService.evictRoom(null)).doesNotThrowAnyException();
-            assertThat(coordinatedGetRoom(roomId)).isNotNull();
-        }
-
-        @Test
-        @DisplayName("evictRoom ignores an unknown room id and leaves other rooms registered")
-        void evictRoom_UnknownRoomId_LeavesOtherRoomsUntouched() {
-            String roomId = createRoom(roomService, validCreateRequest).roomId();
-
-            assertThatCode(() -> withRoomLock("missing-room", () -> roomService.evictRoom("missing-room")))
-                    .doesNotThrowAnyException();
-            assertThat(coordinatedGetRoom(roomId)).isNotNull();
-            assertThat(withRoomLock(roomId, () -> roomService.isRoomHost(roomId, "HostPlayer"))).isTrue();
-        }
-
-        @Test
-        @DisplayName("evictRoom removes a known room silently without events or broadcasts")
-        void evictRoom_KnownRoomId_RemovesRoomSilently() {
-            String roomId = createRoom(roomService, validCreateRequest).roomId();
-            reset(messagingTemplate, eventPublisher);
-
-            withRoomLock(roomId, () -> {
-                roomService.evictRoom(roomId);
-                assertThat(roomService.getCurrentHost(roomId)).isNull();
-            });
-
-            assertThat(coordinatedGetRoom(roomId)).isNull();
-            assertThat(roomService.findRoomByName("Test Room")).isNull();
-            verify(eventPublisher, never()).publishEvent(any(RoomDestroyed.class));
-            verify(messagingTemplate, never()).convertAndSend(anyString(), ArgumentMatchers.any(Object.class));
         }
     }
 }

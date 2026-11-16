@@ -111,7 +111,7 @@ class PlayerDepartureHandler {
             if (roomMembers.isEmpty()) {
                 return;
             }
-            String currentHost = roomService.getCurrentHost(roomId);
+            String currentHost = room.getHostName();
             boolean hostLeaving = currentHost != null && roomMembers.contains(currentHost);
             if (hostLeaving) {
                 roomService.leaveRoom(roomId, currentHost);
@@ -402,7 +402,7 @@ class PlayerDepartureHandler {
         if (room == null) {
             return null;
         }
-        String currentHost = roomService.getCurrentHost(room.getRoomId());
+        String currentHost = room.getHostName();
         List<String> remaining = room.getPlayers().stream()
                 .filter(name -> departingMembers == null || !departingMembers.contains(name))
                 .toList();

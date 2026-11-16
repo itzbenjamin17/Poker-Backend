@@ -50,6 +50,7 @@ public class RoomService {
     private final SimpMessagingTemplate messagingTemplate;
     private final ApplicationEventPublisher eventPublisher;
     private final PasswordEncoder passwordEncoder;
+    private final RoomRegistry rooms;
     private final RoomCoordinator roomCoordinator;
     private final Clock clock;
     private final TaskScheduler taskScheduler;
@@ -58,13 +59,13 @@ public class RoomService {
 
     // Guards room-name uniqueness across different room IDs.
     private final Object roomRegistrationLock = new Object();
-    private final Map<String, Room> rooms = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> inactivityFutures = new ConcurrentHashMap<>();
 
     public RoomService(
             SimpMessagingTemplate messagingTemplate,
             ApplicationEventPublisher eventPublisher,
             PasswordEncoder passwordEncoder,
+            RoomRegistry rooms,
             RoomCoordinator roomCoordinator,
             Clock clock,
             @Qualifier("taskScheduler") TaskScheduler taskScheduler,
@@ -73,6 +74,7 @@ public class RoomService {
         this.messagingTemplate = messagingTemplate;
         this.eventPublisher = eventPublisher;
         this.passwordEncoder = passwordEncoder;
+        this.rooms = rooms;
         this.roomCoordinator = roomCoordinator;
         this.clock = clock;
         this.taskScheduler = taskScheduler;
@@ -153,7 +155,7 @@ public class RoomService {
             long acceptanceDeadline = clock.millis() + timings.disconnectGracePeriodMs();
             room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
 
-            rooms.put(roomId, room);
+            rooms.put(room);
         }
 
         PostSaveActions.runAfterSave(() -> {
@@ -470,7 +472,7 @@ public class RoomService {
         if (roomName == null) {
             return null;
         }
-        return rooms.values().stream()
+        return rooms.all().stream()
                 .filter(r -> r.getRoomName().equalsIgnoreCase(roomName))
                 .findFirst()
                 .orElse(null);
@@ -488,50 +490,6 @@ public class RoomService {
         Room room = rooms.get(roomId);
         String hostName = room == null ? null : room.getHostName();
         return hostName != null && hostName.equals(playerName);
-    }
-
-    /**
-     * Returns the current host name for {@code roomId}, or {@code null} if the room does not exist.
-     *
-     * @param roomId the unique ID of the room
-     * @return the current host name, or {@code null} if absent
-     */
-    public String getCurrentHost(String roomId) {
-        roomCoordinator.assertHeldByCurrentThread(roomId);
-        Room room = rooms.get(roomId);
-        return room == null ? null : room.getHostName();
-    }
-
-    /**
-     * Restores a room from saved state into the in-memory registry without publishing creation
-     * events, preserving live session metadata when replacing an existing instance.
-     *
-     * @param room        the restored room object, ignored if {@code null}
-     * @param currentHost the restored current host name, if known
-     */
-    public void restoreRoom(Room room, String currentHost) {
-        if (room == null) {
-            return;
-        }
-        String roomId = room.getRoomId();
-        roomCoordinator.assertHeldByCurrentThread(roomId);
-        applyRestoreRoom(room, currentHost, rooms.get(roomId));
-    }
-
-    /**
-     * Removes a room from the in-memory registry without recording a deletion or notifying clients.
-     *
-     * @param roomId the unique ID of the room to evict
-     */
-    public void evictRoom(String roomId) {
-        if (roomId == null) {
-            return;
-        }
-        roomCoordinator.assertHeldByCurrentThread(roomId);
-        Room room = rooms.remove(roomId);
-        if (room != null) {
-            logger.info("Room evicted from memory: {} (ID: {})", room.getRoomName(), roomId);
-        }
     }
 
     /**
@@ -670,39 +628,8 @@ public class RoomService {
         PostSaveActions.runAfterSave(() -> eventPublisher.publishEvent(new RoomDestroyed(roomId)));
     }
 
-    private void applyRestoreRoom(Room room, String currentHost, Room existing) {
-        String roomId = room.getRoomId();
-        roomCoordinator.assertHeldByCurrentThread(roomId);
-        if (existing != null && existing != room) {
-            for (String playerName : room.getPlayers()) {
-                if (existing.hasPlayer(playerName)) {
-                    if (!room.hasPersistedMembershipId(playerName)) {
-                        String existingMembershipId = existing.getMembershipId(playerName);
-                        if (existingMembershipId != null && !existingMembershipId.isBlank()) {
-                            room.setMembershipId(playerName, existingMembershipId);
-                        }
-                    }
-                    Long deadline = existing.getAbsenceDeadline(playerName);
-                    if (deadline != null && room.getAbsenceDeadline(playerName) == null) {
-                        room.setAbsenceDeadline(playerName, deadline);
-                    }
-                    if (existing.isPlayerConnected(playerName)) {
-                        room.setPlayerConnected(playerName, true);
-                    }
-                }
-            }
-        }
-        rooms.put(roomId, room);
-        if (currentHost != null && !currentHost.trim().isEmpty() && room.hasPlayer(currentHost)) {
-            room.setHostName(currentHost);
-        } else if ((room.getHostName() == null || !room.hasPlayer(room.getHostName()))
-                && !room.getPlayers().isEmpty()) {
-            room.setHostName(room.getPlayers().getFirst());
-        }
-    }
-
     private boolean isRoomNameTaken(String roomName) {
-        return rooms.values().stream()
+        return rooms.all().stream()
                 .anyMatch(room -> room.getRoomName().equalsIgnoreCase(roomName));
     }
 

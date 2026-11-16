@@ -1,5 +1,6 @@
 package com.pokergame.persistence;
 
+import com.pokergame.persistence.RoomAggregates;
 import com.pokergame.config.WebSocketAuthInterceptor;
 import com.pokergame.controller.GameController;
 import com.pokergame.controller.RoomController;
@@ -123,6 +124,9 @@ class PersistenceCoordinationIT {
     private RoomService roomService;
 
     @Autowired
+    private RoomAggregates roomAggregates;
+
+    @Autowired
     private GameLifecycleService gameLifecycleService;
 
     @Autowired
@@ -187,8 +191,8 @@ class PersistenceCoordinationIT {
         awaitPendingSavesFlushed();
         for (String roomId : List.copyOf(trackedRoomIds)) {
             withRoomLock(roomCoordinator, roomId, () -> {
-                gameLifecycleService.evictGame(roomId);
                 roomService.destroyRoom(roomId);
+                roomAggregates.remove(roomId);
                 walStore.delete(roomId);
                 return null;
             });
@@ -272,8 +276,7 @@ class PersistenceCoordinationIT {
         String roomId = roomFixtures.createAndConnectRoom("Recovery Coord Room", "Alice", "Bob");
         String guestMembership;
         withRoomLock(roomCoordinator, roomId, () -> {
-            gameLifecycleService.evictGame(roomId);
-            roomService.evictRoom(roomId);
+            roomAggregates.remove(roomId);
             return null;
         });
 
@@ -364,7 +367,7 @@ class PersistenceCoordinationIT {
     void persistenceOrderingAndCoordination_MemoryOnlyMode() throws Exception {
         String roomId = "memory-only-" + UUID.randomUUID();
         DurableMutationAspect memoryOnlyAspect = new DurableMutationAspect(
-                null, snapshotMapper, roomServiceProvider, gameLifecycleServiceProvider, persistenceProperties, roomCoordinator);
+                null, snapshotMapper, roomAggregates, persistenceProperties, roomCoordinator);
         MemoryOnlyTarget target = new MemoryOnlyTarget(roomCoordinator, roomId);
         AspectJProxyFactory factory = new AspectJProxyFactory(target);
         factory.addAspect(memoryOnlyAspect);
@@ -668,10 +671,9 @@ class PersistenceCoordinationIT {
             game.markGameOver();
             game.scheduleTask(ScheduledGameTask.CLEANUP, pastCleanupDeadline);
             Room room = roomService.getRoom(roomId);
-            byte[] image = snapshotMapper.serialize(room, roomService.getCurrentHost(roomId), game);
+            byte[] image = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
             walStore.checkpoint(roomId, image);
-            gameLifecycleService.evictGame(roomId);
-            roomService.evictRoom(roomId);
+            roomAggregates.remove(roomId);
             return null;
         });
 
