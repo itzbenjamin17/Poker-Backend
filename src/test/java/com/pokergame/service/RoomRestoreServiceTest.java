@@ -3,11 +3,10 @@ package com.pokergame.service;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
-import com.pokergame.config.LifecycleTimingProperties;
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.ReadyGateState;
@@ -82,7 +81,7 @@ class RoomRestoreServiceTest {
         lenient().when(lifecycleProvider.getObject()).thenReturn(gameLifecycleService);
         scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, clock, lifecycleProvider);
 
-        LifecycleTimingProperties timings = new LifecycleTimingProperties(30_000L, 0L, READY_COUNTDOWN_MS);
+        GameTimingProperties timings = new GameTimingProperties(30_000L, 0L, READY_COUNTDOWN_MS);
         roomRestoreService = new RoomRestoreService(
                 roomService,
                 gameLifecycleService,

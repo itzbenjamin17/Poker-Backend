@@ -11,7 +11,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
-import com.pokergame.config.LifecycleTimingProperties;
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.GameEndResponse;
@@ -74,8 +74,8 @@ class PlayerDepartureHandlerTest {
 
     private static final String ROOM_ID = "test-room-id";
     private static final long BASE_EPOCH_MS = 1_767_225_600_000L; // 2026-01-01T00:00:00Z
-    private static final LifecycleTimingProperties DEFAULT_TIMINGS =
-            new LifecycleTimingProperties(30_000L, 0L, 10_000L);
+    private static final GameTimingProperties DEFAULT_TIMINGS =
+            new GameTimingProperties(30_000L, 0L, 10_000L);
 
     @Mock
     private RoomService roomService;

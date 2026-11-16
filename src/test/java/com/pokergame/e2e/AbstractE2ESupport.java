@@ -63,9 +63,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
         properties = {
                 "poker.persistence.enabled=false",
                 "poker.rate-limiting.enabled=false",
-                "poker.lifecycle.round-end-display-delay-ms=0",
-                "poker.lifecycle.ready-countdown-ms=3000",
-                "poker.lifecycle.game-end-display-delay-ms=1000"
+                "poker.game.round-end-display-delay-ms=0",
+                "poker.game.ready-countdown-ms=3000",
+                "poker.game.game-end-display-delay-ms=1000"
         })
 @ActiveProfiles("test")
 public abstract class AbstractE2ESupport {

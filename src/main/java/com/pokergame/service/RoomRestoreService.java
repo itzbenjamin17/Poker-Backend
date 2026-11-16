@@ -2,7 +2,7 @@ package com.pokergame.service;
 
 import static java.util.Objects.requireNonNull;
 
-import com.pokergame.config.LifecycleTimingProperties;
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
@@ -40,7 +40,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
     private final WebSocketEventListener webSocketEventListener;
     private final RoomCoordinator roomCoordinator;
     private final Clock clock;
-    private final LifecycleTimingProperties timings;
+    private final GameTimingProperties timings;
     private final long disconnectGracePeriodMs;
 
     public RoomRestoreService(
@@ -53,7 +53,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
             WebSocketEventListener webSocketEventListener,
             RoomCoordinator roomCoordinator,
             Clock clock,
-            LifecycleTimingProperties timings,
+            GameTimingProperties timings,
             @Value("${poker.room.disconnect-grace-period-ms:120000}") long disconnectGracePeriodMs) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;

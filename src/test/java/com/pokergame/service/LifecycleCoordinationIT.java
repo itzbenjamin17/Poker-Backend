@@ -77,8 +77,8 @@ import static org.awaitility.Awaitility.await;
         properties = {
                 "poker.persistence.enabled=false",
                 "poker.rate-limiting.enabled=true",
-                "poker.lifecycle.ready-countdown-ms=60000",
-                "poker.lifecycle.game-end-display-delay-ms=60000"
+                "poker.game.ready-countdown-ms=60000",
+                "poker.game.game-end-display-delay-ms=60000"
         })
 class LifecycleCoordinationIT {
 

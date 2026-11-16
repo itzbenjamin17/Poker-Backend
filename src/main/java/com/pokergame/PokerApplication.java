@@ -4,12 +4,12 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import com.pokergame.config.LifecycleTimingProperties;
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.config.RoomTimingProperties;
 
 /** Bootstraps the poker backend and its Spring application context. */
 @SpringBootApplication(exclude = { UserDetailsServiceAutoConfiguration.class })
-@EnableConfigurationProperties({LifecycleTimingProperties.class, RoomTimingProperties.class})
+@EnableConfigurationProperties({GameTimingProperties.class, RoomTimingProperties.class})
 public class PokerApplication {
 
     /**

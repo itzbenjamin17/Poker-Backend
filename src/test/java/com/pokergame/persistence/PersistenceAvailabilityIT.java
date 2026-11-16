@@ -64,8 +64,8 @@ import static org.assertj.core.api.Assertions.assertThat;
         properties = {
                 "spring.main.allow-bean-definition-overriding=true",
                 "poker.rate-limiting.enabled=false",
-                "poker.lifecycle.game-end-display-delay-ms=60000",
-                "poker.lifecycle.ready-countdown-ms=60000"
+                "poker.game.game-end-display-delay-ms=60000",
+                "poker.game.ready-countdown-ms=60000"
         })
 @Import(PersistenceAvailabilityIT.FaultyStorageConfig.class)
 class PersistenceAvailabilityIT {

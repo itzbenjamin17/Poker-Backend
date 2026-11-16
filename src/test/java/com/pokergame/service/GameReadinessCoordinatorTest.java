@@ -2,8 +2,7 @@ package com.pokergame.service;
 
 import com.pokergame.util.RoomCoordinator;
 
-import com.pokergame.config.LifecycleTimingProperties;
-import com.pokergame.enums.GamePhase;
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
@@ -31,7 +30,6 @@ import java.util.concurrent.ScheduledFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
 
 /**
@@ -73,7 +71,7 @@ class GameReadinessCoordinatorTest {
     void setUp() {
         mutableClock = new MutableClock(BASE_EPOCH_MS);
 
-        LifecycleTimingProperties timings = new LifecycleTimingProperties(30_000L, 4_000L, READY_COUNTDOWN_MS);
+        GameTimingProperties timings = new GameTimingProperties(30_000L, 4_000L, READY_COUNTDOWN_MS);
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);
         timerRegistry = new GameTimerRegistry(springScheduler, mutableClock);

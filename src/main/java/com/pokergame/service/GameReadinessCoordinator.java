@@ -1,6 +1,6 @@
 package com.pokergame.service;
 
-import com.pokergame.config.LifecycleTimingProperties;
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Game;
@@ -27,7 +27,7 @@ class GameReadinessCoordinator {
     private final GameCompletionHandler completionHandler;
     private final HandProgressionService handProgression;
     private final Clock clock;
-    private final LifecycleTimingProperties timings;
+    private final GameTimingProperties timings;
 
     GameReadinessCoordinator(
             ActiveGameRegistry activeGames,
@@ -38,7 +38,7 @@ class GameReadinessCoordinator {
             GameCompletionHandler completionHandler,
             HandProgressionService handProgression,
             Clock clock,
-            LifecycleTimingProperties timings) {
+            GameTimingProperties timings) {
         this.activeGames = activeGames;
         this.roomService = roomService;
         this.gameStateService = gameStateService;

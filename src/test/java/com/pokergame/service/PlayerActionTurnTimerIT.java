@@ -48,8 +48,8 @@ import org.springframework.test.context.ActiveProfiles;
                 "spring.main.allow-bean-definition-overriding=true",
                 "poker.persistence.enabled=false",
                 "poker.rate-limiting.enabled=false",
-                "poker.lifecycle.round-end-display-delay-ms=0",
-                "poker.lifecycle.ready-countdown-ms=600000"
+                "poker.game.round-end-display-delay-ms=0",
+                "poker.game.ready-countdown-ms=600000"
         })
 @ActiveProfiles("test")
 @Import(PlayerActionTurnTimerIT.TimerTestConfig.class)

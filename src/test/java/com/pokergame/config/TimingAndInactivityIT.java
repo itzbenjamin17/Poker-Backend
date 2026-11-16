@@ -54,8 +54,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         properties = {
                 "poker.persistence.enabled=false",
                 "poker.rate-limiting.enabled=false",
-                "poker.lifecycle.round-end-display-delay-ms=0",
-                "poker.lifecycle.ready-countdown-ms=600000"
+                "poker.game.round-end-display-delay-ms=0",
+                "poker.game.ready-countdown-ms=600000"
         })
 @ActiveProfiles("test")
 @Import(TimingAndInactivityIT.TimeConfiguration.class)
@@ -89,7 +89,7 @@ class TimingAndInactivityIT {
     private RoomCoordinator roomCoordinator;
 
     @Autowired
-    private LifecycleTimingProperties lifecycleTimingProperties;
+    private GameTimingProperties gameTimingProperties;
 
     @Autowired
     private MutableClock clock;
@@ -584,7 +584,7 @@ class TimingAndInactivityIT {
 
             Long cleanupDeadline = withRoomLock(roomCoordinator, roomId, () ->
                     lifecycle.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
-            assertThat(cleanupDeadline).isEqualTo(clock.millis() + lifecycleTimingProperties.gameEndDisplayDelayMs());
+            assertThat(cleanupDeadline).isEqualTo(clock.millis() + gameTimingProperties.gameEndDisplayDelayMs());
         }
     }
 
@@ -798,7 +798,7 @@ class TimingAndInactivityIT {
             lifecycle.markPlayerReconnected(roomId, "Guest");
 
             long gracePeriodMs = 100L;
-            assertThat(gracePeriodMs).isLessThan(lifecycleTimingProperties.gameEndDisplayDelayMs());
+            assertThat(gracePeriodMs).isLessThan(gameTimingProperties.gameEndDisplayDelayMs());
             long graceDeadline = clock.millis() + gracePeriodMs;
 
             String guestMembershipId = withRoomLock(roomCoordinator, roomId, () -> {

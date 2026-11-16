@@ -98,8 +98,8 @@ import static org.awaitility.Awaitility.await;
         properties = {
                 "spring.main.allow-bean-definition-overriding=true",
                 "poker.rate-limiting.enabled=false",
-                "poker.lifecycle.game-end-display-delay-ms=60000",
-                "poker.lifecycle.ready-countdown-ms=60000"
+                "poker.game.game-end-display-delay-ms=60000",
+                "poker.game.ready-countdown-ms=60000"
         })
 @Import(PersistenceCoordinationIT.CoordinationTestConfig.class)
 class PersistenceCoordinationIT {

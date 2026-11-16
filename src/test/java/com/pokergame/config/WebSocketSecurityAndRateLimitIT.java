@@ -86,7 +86,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
         properties = {
                 "poker.persistence.enabled=false",
                 "poker.rate-limiting.enabled=true",
-                "poker.lifecycle.ready-countdown-ms=30000"
+                "poker.game.ready-countdown-ms=30000"
         })
 @ActiveProfiles("test")
 @DisplayName("WebSocket security, identity isolation, and rate-limit integration")

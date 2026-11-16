@@ -1,6 +1,6 @@
 package com.pokergame.service;
 
-import com.pokergame.config.LifecycleTimingProperties;
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
@@ -30,7 +30,7 @@ class GameCompletionHandler {
     private final GameTimerRegistry runtimeTimers;
     private final GameTaskScheduler taskScheduler;
     private final Clock clock;
-    private final LifecycleTimingProperties timings;
+    private final GameTimingProperties timings;
 
     GameCompletionHandler(
             ActiveGameRegistry activeGames,
@@ -39,7 +39,7 @@ class GameCompletionHandler {
             GameTimerRegistry runtimeTimers,
             GameTaskScheduler taskScheduler,
             Clock clock,
-            LifecycleTimingProperties timings) {
+            GameTimingProperties timings) {
         this.activeGames = activeGames;
         this.roomService = roomService;
         this.gameStateService = gameStateService;

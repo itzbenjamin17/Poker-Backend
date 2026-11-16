@@ -2,7 +2,7 @@ package com.pokergame.service;
 
 import com.pokergame.util.RoomCoordinator;
 
-import com.pokergame.config.LifecycleTimingProperties;
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.Rank;
@@ -30,13 +30,10 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ScheduledFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -83,7 +80,7 @@ class HandProgressionServiceTest {
         taskScheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, fixedClock, lifecycleProvider);
         completionHandler = new GameCompletionHandler(
                 activeGames, roomService, gameStateService, timerRegistry, taskScheduler,
-                fixedClock, new LifecycleTimingProperties(30_000L, 4_000L, 10_000L));
+                fixedClock, new GameTimingProperties(30_000L, 4_000L, 10_000L));
 
         lenient().when(springScheduler.schedule(any(Runnable.class), any(Instant.class)))
                 .thenAnswer(_ -> mock(ScheduledFuture.class));
@@ -101,7 +98,7 @@ class HandProgressionServiceTest {
                 taskScheduler,
                 completionHandler,
                 gameStateService,
-                new LifecycleTimingProperties(30_000L, roundEndDisplayDelayMs, 10_000L));
+                new GameTimingProperties(30_000L, roundEndDisplayDelayMs, 10_000L));
     }
 
     private Game createGame(List<Player> players) {

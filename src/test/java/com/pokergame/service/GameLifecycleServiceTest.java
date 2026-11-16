@@ -9,25 +9,19 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
-import com.pokergame.config.LifecycleTimingProperties;
-import com.pokergame.dto.internal.PlayerJoinInfo;
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.internal.TurnOutcome.TurnOutcomeType;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
-import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.enums.GamePhase;
-import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
-import com.pokergame.enums.Rank;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
-import com.pokergame.enums.Suit;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.model.Card;
 import com.pokergame.model.Game;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
@@ -36,7 +30,6 @@ import com.pokergame.testutil.MutableClock;
 import com.pokergame.util.LockLease;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -114,7 +107,7 @@ class GameLifecycleServiceTest {
     }
 
     private void wireLifecycle(long gameEndDisplayMs, long roundEndDisplayMs, long readyCountdownMs) {
-        LifecycleTimingProperties timings = new LifecycleTimingProperties(
+        GameTimingProperties timings = new GameTimingProperties(
                 gameEndDisplayMs, roundEndDisplayMs, readyCountdownMs);
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);

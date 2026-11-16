@@ -81,7 +81,7 @@ class PersistenceRestartIT {
                 .bannerMode(Banner.Mode.OFF)
                 .run(
                         "--poker.room.disconnect-grace-period-ms=" + disconnectGracePeriodMs,
-                        "--poker.lifecycle.game-end-display-delay-ms=" + gameEndDisplayDelayMs,
+                        "--poker.game.game-end-display-delay-ms=" + gameEndDisplayDelayMs,
                         "--poker.persistence.enabled=true",
                         "--poker.persistence.directory=" + walDirectory.toString().replace('\\', '/'),
                         "--poker.persistence.current-key-id=current",

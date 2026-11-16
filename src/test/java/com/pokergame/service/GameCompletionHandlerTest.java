@@ -2,7 +2,7 @@ package com.pokergame.service;
 
 import com.pokergame.util.RoomCoordinator;
 
-import com.pokergame.config.LifecycleTimingProperties;
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
@@ -54,8 +54,8 @@ class GameCompletionHandlerTest {
 
     private static final String ROOM_ID = "test-room-id";
     private static final long BASE_EPOCH_MS = Instant.parse("2026-01-01T00:00:00Z").toEpochMilli();
-    private static final LifecycleTimingProperties DEFAULT_TIMINGS =
-            new LifecycleTimingProperties(30_000L, 4_000L, 10_000L);
+    private static final GameTimingProperties DEFAULT_TIMINGS =
+            new GameTimingProperties(30_000L, 4_000L, 10_000L);
 
     @Mock
     private TaskScheduler taskScheduler;
