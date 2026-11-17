@@ -23,19 +23,13 @@ import com.pokergame.service.event.RoomMembershipRetired;
 import com.pokergame.util.InputSanitizer;
 import com.pokergame.util.RoomPasswordPolicy;
 import java.time.Clock;
-import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.scheduling.TaskScheduler;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -52,13 +46,11 @@ public class RoomService {
     private final RoomRegistry rooms;
     private final RoomCoordinator roomCoordinator;
     private final Clock clock;
-    private final TaskScheduler taskScheduler;
     private final RoomTimingProperties timings;
-    private final ObjectProvider<RoomService> selfProvider;
+    private final LobbyInactivityScheduler lobbyInactivity;
 
     // Guards room-name uniqueness across different room IDs.
     private final Object roomRegistrationLock = new Object();
-    private final Map<String, ScheduledFuture<?>> inactivityFutures = new ConcurrentHashMap<>();
 
     public RoomService(
             SimpMessagingTemplate messagingTemplate,
@@ -67,18 +59,16 @@ public class RoomService {
             RoomRegistry rooms,
             RoomCoordinator roomCoordinator,
             Clock clock,
-            @Qualifier("taskScheduler") TaskScheduler taskScheduler,
             RoomTimingProperties timings,
-            ObjectProvider<RoomService> selfProvider) {
+            LobbyInactivityScheduler lobbyInactivity) {
         this.messagingTemplate = messagingTemplate;
         this.eventPublisher = eventPublisher;
         this.passwordEncoder = passwordEncoder;
         this.rooms = rooms;
         this.roomCoordinator = roomCoordinator;
         this.clock = clock;
-        this.taskScheduler = taskScheduler;
         this.timings = timings;
-        this.selfProvider = selfProvider;
+        this.lobbyInactivity = lobbyInactivity;
     }
 
     /**
@@ -509,34 +499,13 @@ public class RoomService {
 
     /**
      * Schedules a timer to close the unstarted lobby room if no activity occurs before
-     * {@code deadlineEpochMs}.
+     * {@code deadlineEpochMs}, replacing any earlier lobby timer for the room.
      *
      * @param roomId          the unique ID of the room
      * @param deadlineEpochMs target expiration epoch time in milliseconds
      */
-    public void scheduleLobbyInactivity(String roomId, Long deadlineEpochMs) {
-        if (roomId == null || deadlineEpochMs == null) {
-            return;
-        }
-        cancelLobbyInactivity(roomId);
-        long now = clock.millis();
-        long delay = Math.max(0, deadlineEpochMs - now);
-        try {
-            ScheduledFuture<?> future = taskScheduler.schedule(
-                    () -> {
-                        try {
-                            self().closeLobbyDueToInactivity(roomId, deadlineEpochMs);
-                        } catch (Exception e) {
-                            logger.error("Error executing scheduled lobby inactivity for room {}", roomId, e);
-                        }
-                    },
-                    Instant.ofEpochMilli(now + delay));
-            if (future != null) {
-                inactivityFutures.put(roomId, future);
-            }
-        } catch (Exception e) {
-            logger.warn("Scheduler rejected lobby inactivity for room {}", roomId, e);
-        }
+    public void scheduleLobbyInactivity(String roomId, long deadlineEpochMs) {
+        lobbyInactivity.schedule(roomId, deadlineEpochMs);
     }
 
     /**
@@ -545,13 +514,7 @@ public class RoomService {
      * @param roomId the unique ID of the room
      */
     public void cancelLobbyInactivity(String roomId) {
-        if (roomId == null) {
-            return;
-        }
-        ScheduledFuture<?> future = inactivityFutures.remove(roomId);
-        if (future != null) {
-            future.cancel(false);
-        }
+        lobbyInactivity.cancel(roomId);
     }
 
     /**
@@ -581,26 +544,18 @@ public class RoomService {
             return false;
         }
         roomCoordinator.assertHeldByCurrentThread(roomId);
-        Room room = rooms.get(roomId);
-        if (room == null) {
-            return false;
-        }
-        if (!room.isGameStarted() && room.isInactivityExpired(clock.millis())) {
-            self().closeLobbyDueToInactivity(roomId, room.getInactivityDeadlineEpochMs());
-            return true;
-        }
-        return false;
+        return lobbyInactivity.closeIfExpired(roomId);
     }
 
     /**
      * Closes an expired unstarted lobby room, broadcasts {@code ROOM_CLOSED}, and publishes
-     * {@link RoomDestroyed} after save.
+     * {@link RoomDestroyed} after save. Does nothing if the room is gone, started, or not yet
+     * past its current deadline.
      *
-     * @param roomId          the unique ID of the room
-     * @param deadlineEpochMs the deadline timestamp this expiration check was scheduled for
+     * @param roomId the unique ID of the room
      */
     @DurableMutation(roomId = "#roomId")
-    public void closeLobbyDueToInactivity(String roomId, long deadlineEpochMs) {
+    public void closeLobbyDueToInactivity(String roomId) {
         Room room = rooms.get(roomId);
         if (room == null || room.isGameStarted()) {
             return;
@@ -609,11 +564,7 @@ public class RoomService {
         if (currentDeadline == null) {
             return;
         }
-        long now = clock.millis();
-        if (currentDeadline > deadlineEpochMs && now < currentDeadline) {
-            return;
-        }
-        if (now < currentDeadline) {
+        if (clock.millis() < currentDeadline) {
             return;
         }
 
@@ -634,10 +585,5 @@ public class RoomService {
 
     private void sendAfterSave(String destination, Object payload) {
         PostSaveActions.runAfterSave(() -> messagingTemplate.convertAndSend(destination, payload));
-    }
-
-    private RoomService self() {
-        RoomService proxy = selfProvider != null ? selfProvider.getIfAvailable() : null;
-        return proxy != null ? proxy : this;
     }
 }

@@ -12,7 +12,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -36,6 +38,7 @@ import com.pokergame.service.event.RoomMemberRegistered;
 import com.pokergame.service.event.RoomMembershipRetired;
 import com.pokergame.testutil.MutableClock;
 import com.pokergame.util.LockLease;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
@@ -46,6 +49,7 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -59,9 +63,11 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
@@ -88,6 +94,8 @@ class RoomServiceTest {
     private MutableClock clock;
     private RoomCoordinator roomCoordinator;
     private RoomService roomService;
+    /** Stands in for the Spring proxy that the lobby timer uses for the durable close. */
+    private RoomService proxiedRoomService;
     private RoomRegistry roomRegistry;
     private CreateRoomRequest validCreateRequest;
 
@@ -104,16 +112,29 @@ class RoomServiceTest {
             PasswordEncoder passwordEncoder,
             RoomCoordinator coordinator) {
         roomRegistry = new RoomRegistry(coordinator);
-        return new RoomService(
+        // A real scheduler returns a future; the timer registry drops registrations that get none.
+        lenient().doAnswer(invocation -> mock(ScheduledFuture.class))
+                .when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
+        @SuppressWarnings("unchecked")
+        ObjectProvider<RoomService> roomServiceProvider = mock(ObjectProvider.class);
+        LobbyInactivityScheduler lobbyInactivity = new LobbyInactivityScheduler(
+                new GameTimerRegistry(taskScheduler, clock),
+                roomRegistry,
+                coordinator,
+                clock,
+                roomServiceProvider);
+        RoomService service = new RoomService(
                 messagingTemplate,
                 publisher,
                 passwordEncoder,
                 roomRegistry,
                 coordinator,
                 clock,
-                taskScheduler,
                 TestTimings.room(DISCONNECT_GRACE_MS),
-                null);
+                lobbyInactivity);
+        proxiedRoomService = spy(service);
+        lenient().when(roomServiceProvider.getObject()).thenReturn(proxiedRoomService);
+        return service;
     }
 
     private RoomEntryResult createRoom(RoomService service, CreateRoomRequest request) {
@@ -1310,6 +1331,119 @@ class RoomServiceTest {
             assertThat(coordinatedGetRoom(roomId)).isNull();
             verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
                     eq(new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null)));
+        }
+    }
+
+    /** Characterizes what the scheduled lobby inactivity callback does when it fires. */
+    @Nested
+    @DisplayName("lobby inactivity timer")
+    class LobbyInactivityTimer {
+
+        private List<Runnable> scheduledCallbacks() {
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(taskScheduler, atLeastOnce()).schedule(captor.capture(), any(Instant.class));
+            return captor.getAllValues();
+        }
+
+        private Runnable latestCallback() {
+            List<Runnable> callbacks = scheduledCallbacks();
+            return callbacks.get(callbacks.size() - 1);
+        }
+
+        // The production timer callback takes the room lock itself (reentrant); holding it here keeps
+        // this characterization valid both before and after that change.
+        private void fire(String roomId, Runnable callback) {
+            withRoomLock(roomId, callback);
+        }
+
+        private long deadlineOf(String roomId) {
+            return coordinatedGetRoom(roomId).getInactivityDeadlineEpochMs();
+        }
+
+        @Test
+        @DisplayName("firing after the deadline closes the lobby and announces it")
+        void givenExpiredLobby_whenTimerFires_thenRoomIsClosedAndAnnounced() {
+            String roomId = createRoom(roomService, validCreateRequest).roomId();
+            clock.setMillis(deadlineOf(roomId) + 1L);
+
+            fire(roomId, latestCallback());
+
+            assertThat(coordinatedGetRoom(roomId)).isNull();
+            assertThat(roomService.findRoomByName("Test Room")).isNull();
+            ArgumentCaptor<Object> payloads = ArgumentCaptor.forClass(Object.class);
+            verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/room/" + roomId), payloads.capture());
+            assertThat(payloads.getAllValues()).anySatisfy(payload ->
+                    assertThat(payload).isInstanceOfSatisfying(ApiResponse.class, response ->
+                            assertThat(response.message()).isEqualTo(ResponseMessage.ROOM_CLOSED.getMessage())));
+            verify(eventPublisher).publishEvent(new RoomDestroyed(roomId));
+        }
+
+        @Test
+        @DisplayName("firing before the deadline leaves the lobby open and publishes nothing")
+        void givenActiveLobby_whenTimerFiresEarly_thenNothingHappens() {
+            String roomId = createRoom(roomService, validCreateRequest).roomId();
+            clock.setMillis(deadlineOf(roomId) - 1L);
+            reset(messagingTemplate, eventPublisher);
+
+            fire(roomId, latestCallback());
+
+            assertThat(coordinatedGetRoom(roomId)).isNotNull();
+            verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
+            verify(eventPublisher, never()).publishEvent(any(Object.class));
+            verify(proxiedRoomService, never()).closeLobbyDueToInactivity(anyString());
+        }
+
+        @Test
+        @DisplayName("the timer callback takes the room lock itself when the scheduler thread holds none")
+        void givenCallerWithoutRoomLock_whenTimerFires_thenCallbackLocksAndClosesExpiredLobby() {
+            String roomId = createRoom(roomService, validCreateRequest).roomId();
+            clock.setMillis(deadlineOf(roomId) + 1L);
+            Runnable rawCallback = latestCallback();
+            assertThat(roomCoordinator.isHeldByCurrentThread(roomId)).isFalse();
+
+            rawCallback.run();
+
+            assertThat(coordinatedGetRoom(roomId)).isNull();
+            verify(proxiedRoomService).closeLobbyDueToInactivity(roomId);
+            assertThat(roomCoordinator.isHeldByCurrentThread(roomId)).isFalse();
+        }
+
+        @Test
+        @DisplayName("activity extends the deadline so the original timer no longer closes the lobby")
+        void givenJoinAfterScheduling_whenOriginalTimerFiresAtOldDeadline_thenLobbyStaysOpen() {
+            String roomId = createRoom(roomService, validCreateRequest).roomId();
+            long originalDeadline = deadlineOf(roomId);
+            Runnable originalCallback = latestCallback();
+
+            clock.setMillis(clock.millis() + 10 * 60_000L);
+            withRoomLock(roomId, () -> roomService.joinRoom(roomId,
+                    new JoinRoomRequest("Test Room", "LateFriend", null)));
+            long extendedDeadline = deadlineOf(roomId);
+            assertThat(extendedDeadline).isGreaterThan(originalDeadline);
+
+            clock.setMillis(originalDeadline + 1L);
+            fire(roomId, originalCallback);
+            assertThat(coordinatedGetRoom(roomId)).isNotNull();
+
+            clock.setMillis(extendedDeadline + 1L);
+            fire(roomId, latestCallback());
+            assertThat(coordinatedGetRoom(roomId)).isNull();
+        }
+
+        @Test
+        @DisplayName("firing after the room was already destroyed does nothing")
+        void givenDestroyedRoom_whenTimerFires_thenNoBroadcastAndNoError() {
+            String roomId = createRoom(roomService, validCreateRequest).roomId();
+            long deadline = deadlineOf(roomId);
+            Runnable callback = latestCallback();
+            withRoomLock(roomId, () -> roomService.destroyRoom(roomId));
+            reset(messagingTemplate, eventPublisher);
+            clock.setMillis(deadline + 1L);
+
+            assertThatCode(() -> fire(roomId, callback)).doesNotThrowAnyException();
+
+            verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
+            verify(eventPublisher, never()).publishEvent(any(Object.class));
         }
     }
 }

@@ -13,8 +13,8 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 
 /**
- * Tracks active {@link TaskScheduler} futures for each game's timers so at most one timer of
- * each kind is scheduled per game at a time and stale timers can be cancelled safely.
+ * Tracks active {@link TaskScheduler} futures for each room's and game's timers so at most one
+ * timer of each kind is scheduled per room at a time and stale timers can be cancelled safely.
  */
 @Component
 class GameTimerRegistry {
@@ -41,7 +41,7 @@ class GameTimerRegistry {
         long now = clock.millis();
         long delay = Math.max(0, deadline - now);
         logger.debug("Scheduling timer {} for game {} with delayMs={} deadline={}", task, gameId, delay, deadline);
-        register(new RuntimeTaskKey(gameId, task), Instant.ofEpochMilli(now + delay), callback);
+        register(RuntimeTaskKey.forTask(gameId, task), Instant.ofEpochMilli(now + delay), callback);
     }
 
     /**
@@ -57,30 +57,49 @@ class GameTimerRegistry {
             return;
         }
         long delay = Math.max(0, deadline - now);
-        register(new RuntimeTaskKey(gameId, null), Instant.ofEpochMilli(clock.millis() + delay), callback);
+        register(RuntimeTaskKey.forInactivity(gameId, InactivityTimer.GAME),
+                Instant.ofEpochMilli(clock.millis() + delay), callback);
+    }
+
+    /**
+     * Schedules (or replaces) the timer that closes an unstarted lobby room once it has been
+     * inactive until {@code deadline}. A deadline in the past fires as soon as possible.
+     *
+     * @param roomId   the room ID
+     * @param deadline target expiration epoch time in milliseconds
+     * @param callback action to execute when the timer fires
+     */
+    void scheduleLobbyInactivity(String roomId, long deadline, Runnable callback) {
+        register(RuntimeTaskKey.forInactivity(roomId, InactivityTimer.LOBBY), Instant.ofEpochMilli(deadline), callback);
+    }
+
+    /**
+     * Cancels the lobby inactivity timer for {@code roomId}, if any.
+     *
+     * @param roomId the room ID
+     */
+    void cancelLobbyInactivity(String roomId) {
+        cancel(RuntimeTaskKey.forInactivity(roomId, InactivityTimer.LOBBY));
     }
 
     /**
      * Cancels a single scheduled game timer without interrupting already running work.
      *
      * @param gameId the room/game ID
-     * @param task   the timer type to cancel, or {@code null} for the inactivity timer
+     * @param task   the timer type to cancel
      */
     void cancelTask(String gameId, ScheduledGameTask task) {
-        RuntimeTask registration = runtimeTasks.remove(new RuntimeTaskKey(gameId, task));
-        if (registration != null) {
-            registration.cancel();
-        }
+        cancel(RuntimeTaskKey.forTask(gameId, task));
     }
 
     /**
-     * Cancels the inactivity timer for {@code gameId}.
+     * Cancels the active-game inactivity timer for {@code gameId}.
      *
      * @param gameId the room/game ID
      */
     void cancelInactivity(String gameId) {
         if (gameId != null) {
-            cancelTask(gameId, null);
+            cancel(RuntimeTaskKey.forInactivity(gameId, InactivityTimer.GAME));
         }
     }
 
@@ -98,19 +117,26 @@ class GameTimerRegistry {
     }
 
     /**
-     * Cancels timers for a game, optionally retaining the room cleanup timer.
+     * Cancels every timer for a room or game, optionally retaining the room cleanup timer.
      *
      * @param gameId      the room/game ID
      * @param keepCleanup {@code true} to keep {@link ScheduledGameTask#CLEANUP} scheduled
      */
     void cancelAllForGame(String gameId, boolean keepCleanup) {
         runtimeTasks.forEach((key, registration) -> {
-            if (key.gameId().equals(gameId)
+            if (key.roomId().equals(gameId)
                     && (!keepCleanup || key.task() != ScheduledGameTask.CLEANUP)
                     && runtimeTasks.remove(key, registration)) {
                 registration.cancel();
             }
         });
+    }
+
+    private void cancel(RuntimeTaskKey key) {
+        RuntimeTask registration = runtimeTasks.remove(key);
+        if (registration != null) {
+            registration.cancel();
+        }
     }
 
     private void register(RuntimeTaskKey key, Instant executionTime, Runnable callback) {
@@ -128,8 +154,7 @@ class GameTimerRegistry {
                 try {
                     callback.run();
                 } catch (Exception e) {
-                    logger.error("Scheduled task {} failed for game {}",
-                            key.task() == null ? "INACTIVITY" : key.task(), key.gameId(), e);
+                    logger.error("Scheduled task {} failed for room {}", key.name(), key.roomId(), e);
                 } finally {
                     registration.complete();
                     runtimeTasks.remove(key, registration);
@@ -147,8 +172,25 @@ class GameTimerRegistry {
         }
     }
 
-    /** Key identifying one timer slot for a room; a {@code null} task denotes inactivity. */
-    private record RuntimeTaskKey(String gameId, ScheduledGameTask task) {
+    /** The two inactivity timers a room can have; a room is never in both states at once. */
+    private enum InactivityTimer {
+        LOBBY,
+        GAME
+    }
+
+    /** Key identifying one timer slot for a room: exactly one of {@code task} or {@code inactivity} is set. */
+    private record RuntimeTaskKey(String roomId, ScheduledGameTask task, InactivityTimer inactivity) {
+        static RuntimeTaskKey forTask(String roomId, ScheduledGameTask task) {
+            return new RuntimeTaskKey(roomId, task, null);
+        }
+
+        static RuntimeTaskKey forInactivity(String roomId, InactivityTimer inactivity) {
+            return new RuntimeTaskKey(roomId, null, inactivity);
+        }
+
+        String name() {
+            return task != null ? task.name() : inactivity + "_INACTIVITY";
+        }
     }
 
     /** Tracks completion or cancellation that can occur before the scheduler returns its future. */
