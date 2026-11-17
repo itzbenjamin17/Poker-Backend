@@ -1,9 +1,12 @@
 package com.pokergame.persistence.wal;
 
+import com.pokergame.util.VisibleForTesting;
+
 /**
  * A helper interface that lets us intentionally cause errors during automated tests.
  * This helps us check if the game saves safely when the server crashes, without breaking the real code.
  */
+@VisibleForTesting
 @FunctionalInterface
 public interface WalFaultInjector {
     /**

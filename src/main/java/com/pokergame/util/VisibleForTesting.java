@@ -7,7 +7,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a member whose visibility is widened or exposed solely for read-only test inspection.
+ * Marks code that exists, or whose visibility is widened, only so tests can reach it.
  */
 @Documented
 @Retention(RetentionPolicy.CLASS)

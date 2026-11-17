@@ -27,9 +27,11 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import com.pokergame.persistence.config.PersistenceException;
 import com.pokergame.util.LockLease;
 import com.pokergame.util.RoomCoordinator;
+import com.pokergame.util.VisibleForTesting;
 import java.nio.file.AccessDeniedException;
 import java.util.Locale;
 import org.slf4j.Logger;
@@ -57,6 +59,18 @@ public final class EncryptedWalStore {
     private static final int MAGIC = 0x504B574C; // PKWL
     private static final int NONCE_LENGTH = 12;
     private static final int MAX_FRAME_LENGTH = 64 * 1024 * 1024;
+    private static final String CIPHER_TRANSFORMATION = "AES/GCM/NoPadding";
+    private static final int GCM_TAG_BYTES = 16;
+    private static final int GCM_TAG_BITS = GCM_TAG_BYTES * Byte.SIZE;
+    private static final int FRAME_HEADER_BYTES = 8; // magic + body length
+    // Associated-data layout: sequence, transaction id (two longs), record type, then two length-prefixed strings.
+    private static final int AAD_FIXED_BYTES = Long.BYTES + 2 * Long.BYTES + Byte.BYTES;
+    private static final int AAD_LENGTH_PREFIX_BYTES = Short.BYTES;
+    private static final long FIRST_SEQUENCE = 1L;
+    // A fresh WAL written by a checkpoint holds exactly one prepare (1) and one commit (2), so appends resume at 3.
+    private static final long CHECKPOINT_PREPARE_SEQUENCE = FIRST_SEQUENCE;
+    private static final long CHECKPOINT_COMMIT_SEQUENCE = FIRST_SEQUENCE + 1;
+    private static final long SEQUENCE_AFTER_CHECKPOINT = CHECKPOINT_COMMIT_SEQUENCE + 1;
 
     private final Path directory;
     private final EncryptionKeyring keyring;
@@ -90,6 +104,7 @@ public final class EncryptedWalStore {
      * @param roomCoordinator coordinator managing per-room concurrency locks
      * @throws PersistenceException if we can't create or write to the folder
      */
+    @VisibleForTesting
     public EncryptedWalStore(Path directory, EncryptionKeyring keyring, WalFaultInjector faultInjector,
             RoomCoordinator roomCoordinator) {
         this.directory = directory.toAbsolutePath().normalize();
@@ -123,16 +138,13 @@ public final class EncryptedWalStore {
         if (requiresCheckpoint(roomId)) {
             throw new PersistenceException("WAL needs a full checkpoint before appending");
         }
-        try {
+        return recordingFailure(roomId, () -> {
             long sequence = nextSequence(roomId);
             UUID transactionId = UUID.randomUUID();
             append(roomId, sequence, transactionId, RecordType.PREPARE, new byte[0]);
             nextSequences.put(roomId, sequence + 1);
             return new WalTransaction(roomId, transactionId, sequence);
-        } catch (RuntimeException e) {
-            recordWriteFailure(roomId, e);
-            throw e;
-        }
+        });
     }
 
     /**
@@ -149,7 +161,7 @@ public final class EncryptedWalStore {
         validateRoomId(transaction.roomId());
         roomCoordinator.assertHeldByCurrentThread(transaction.roomId());
         requireHealthy(transaction.roomId());
-        try {
+        recordingFailure(transaction.roomId(), () -> {
             long expected = transaction.prepareSequence() + 1;
             long sequence = nextSequence(transaction.roomId());
             if (sequence != expected) {
@@ -157,10 +169,8 @@ public final class EncryptedWalStore {
             }
             append(transaction.roomId(), sequence, transaction.transactionId(), RecordType.COMMIT, payload.clone());
             nextSequences.put(transaction.roomId(), sequence + 1);
-        } catch (RuntimeException e) {
-            recordWriteFailure(transaction.roomId(), e);
-            throw e;
-        }
+            return null;
+        });
     }
 
     /**
@@ -182,15 +192,12 @@ public final class EncryptedWalStore {
         if (!Files.exists(path)) {
             return Optional.empty();
         }
-        try {
-            Recovery recovery = readWal(path, roomId);
-            repairIncompleteTail(path, roomId, recovery);
-            nextSequences.put(roomId, recovery.nextSequence());
-            return Optional.ofNullable(recovery.latestPayload()).map(byte[]::clone);
-        } catch (RuntimeException e) {
-            recordWriteFailure(roomId, e);
-            throw e;
-        }
+        return recordingFailure(roomId, () -> {
+            WalReadResult result = readWal(path, roomId);
+            repairIncompleteTail(path, roomId, result);
+            nextSequences.put(roomId, result.nextSequence());
+            return Optional.ofNullable(result.latestPayload()).map(byte[]::clone);
+        });
     }
 
     /**
@@ -280,7 +287,7 @@ public final class EncryptedWalStore {
         validateRoomId(roomId);
         roomCoordinator.assertHeldByCurrentThread(roomId);
         requireHealthy(roomId);
-        checkpoint(roomId, latestPayload);
+        replaceWalWithCurrentState(roomId, latestPayload);
     }
 
     /**
@@ -294,31 +301,32 @@ public final class EncryptedWalStore {
     public void checkpoint(String roomId, byte[] latestPayload) {
         validateRoomId(roomId);
         roomCoordinator.assertHeldByCurrentThread(roomId);
+        replaceWalWithCurrentState(roomId, latestPayload);
+    }
+
+    private void replaceWalWithCurrentState(String roomId, byte[] latestPayload) {
         long startMs = System.currentTimeMillis();
         long bytesBefore = walSize(roomId);
-        try {
-            Path replacement = directory.resolve(roomId + ".wal.compacting");
-            Files.deleteIfExists(replacement);
-            writeFreshWal(replacement, roomId, latestPayload);
-            faultInjector.check(WalFaultPoint.BEFORE_COMPACTION_REPLACE, roomId);
-            replaceAtomically(replacement, walPath(roomId));
-            forceDirectory();
-            nextSequences.put(roomId, 3L);
-            checkpointRooms.remove(roomId);
-            failedRooms.remove(roomId);
-            long bytesAfter = walSize(roomId);
-            long durationMs = System.currentTimeMillis() - startMs;
-            logger.info("WAL compacted room={} bytesBefore={} bytesAfter={} ms={}", roomId, bytesBefore, bytesAfter, durationMs);
-        } catch (IOException e) {
-            deleteCompactingFileQuietly(roomId);
-            PersistenceException failure = new PersistenceException("Cannot compact WAL for room " + roomId, e);
-            recordWriteFailure(roomId, failure);
-            throw failure;
-        } catch (RuntimeException e) {
-            deleteCompactingFileQuietly(roomId);
-            recordWriteFailure(roomId, e);
-            throw e;
-        }
+        recordingFailure(roomId, "Cannot compact WAL for room " + roomId, () -> {
+            try {
+                Path replacement = directory.resolve(roomId + ".wal.compacting");
+                Files.deleteIfExists(replacement);
+                writeFreshWal(replacement, roomId, latestPayload);
+                faultInjector.check(WalFaultPoint.BEFORE_COMPACTION_REPLACE, roomId);
+                replaceAtomically(replacement, walPath(roomId));
+                forceDirectory();
+                nextSequences.put(roomId, SEQUENCE_AFTER_CHECKPOINT);
+                checkpointRooms.remove(roomId);
+                failedRooms.remove(roomId);
+                long bytesAfter = walSize(roomId);
+                long durationMs = System.currentTimeMillis() - startMs;
+                logger.info("WAL compacted room={} bytesBefore={} bytesAfter={} ms={}", roomId, bytesBefore, bytesAfter, durationMs);
+                return null;
+            } catch (IOException | RuntimeException e) {
+                deleteCompactingFileQuietly(roomId);
+                throw e;
+            }
+        });
     }
 
     /**
@@ -337,21 +345,15 @@ public final class EncryptedWalStore {
         if (recoveryFailed.get()) {
             throw new PersistenceException("Persistence recovery failed");
         }
-        try {
+        recordingFailure(roomId, "Cannot delete WAL for room " + roomId, () -> {
             faultInjector.check(WalFaultPoint.BEFORE_DELETE, roomId);
             Files.deleteIfExists(walPath(roomId));
             Files.deleteIfExists(directory.resolve(roomId + ".wal.compacting"));
             forceDirectory();
             clearRoomTracking(roomId);
             logger.debug("WAL deleted room={}", roomId);
-        } catch (IOException e) {
-            PersistenceException failure = new PersistenceException("Cannot delete WAL for room " + roomId, e);
-            recordWriteFailure(roomId, failure);
-            throw failure;
-        } catch (RuntimeException e) {
-            recordWriteFailure(roomId, e);
-            throw e;
-        }
+            return null;
+        });
     }
 
     /**
@@ -406,18 +408,6 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Convenience alias for {@link #quarantine(String, String)}.
-     * Caller must hold the room lock for {@code roomId}.
-     *
-     * @param roomId the room whose corrupted WAL should be quarantined
-     * @param reason diagnostic explanation for the quarantine
-     * @return the path of the quarantined file
-     */
-    public Path quarantineCorruptedWal(String roomId, String reason) {
-        return quarantine(roomId, reason);
-    }
-
-    /**
      * Reports overall store health for the persistence health indicator.
      * Returns {@code true} only when startup recovery succeeded and no room has an outstanding write failure.
      *
@@ -469,6 +459,7 @@ public final class EncryptedWalStore {
      * Counts how many save files we have.
      *
      * @return the number of save files, or -1 if we can't read the folder
+     *         (only used for reporting, so an unreadable folder must not look like a real count)
      */
     public long walCount() {
         try (var paths = Files.list(directory)) {
@@ -491,20 +482,21 @@ public final class EncryptedWalStore {
             Path path = walPath(roomId);
             return Files.exists(path) ? Files.size(path) : 0;
         } catch (IOException e) {
+            // An unreadable file must look "too big" so the size check forces a compaction that replaces it,
+            // whereas a bogus size of 0 or -1 would make callers believe the WAL is small and healthy.
             return Long.MAX_VALUE;
         }
     }
 
-    /** Reads the next sequence number from disk when not cached, in case of a prior crash. */
     private long nextSequence(String roomId) {
         Long cached = nextSequences.get(roomId);
         if (cached != null) {
             return cached;
         }
         Path path = walPath(roomId);
-        long calculated = 1L;
+        long calculated = FIRST_SEQUENCE;
         if (Files.exists(path)) {
-            Recovery recovered = readWal(path, roomId);
+            WalReadResult recovered = readWal(path, roomId);
             if (recovered.incompleteTail()) {
                 checkpointRooms.add(roomId);
                 throw new PersistenceException("WAL needs a full checkpoint before appending");
@@ -522,10 +514,7 @@ public final class EncryptedWalStore {
         boolean createsWal = !Files.exists(walPath(roomId));
         try (FileChannel channel = FileChannel.open(walPath(roomId), StandardOpenOption.CREATE,
                 StandardOpenOption.WRITE, StandardOpenOption.APPEND)) {
-            ByteBuffer bytes = ByteBuffer.wrap(frame);
-            while (bytes.hasRemaining()) {
-                channel.write(bytes);
-            }
+            writeFully(channel, frame);
             faultInjector.check(WalFaultPoint.BEFORE_FLUSH, roomId);
             channel.force(true);
             if (createsWal) {
@@ -542,8 +531,8 @@ public final class EncryptedWalStore {
             byte[] nonce = new byte[NONCE_LENGTH];
             secureRandom.nextBytes(nonce);
             byte[] aad = associatedData(roomId, sequence, transactionId, type, keyId);
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.ENCRYPT_MODE, keyring.currentKey(), new GCMParameterSpec(128, nonce));
+            Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
+            cipher.init(Cipher.ENCRYPT_MODE, keyring.currentKey(), new GCMParameterSpec(GCM_TAG_BITS, nonce));
             cipher.updateAAD(aad);
             byte[] ciphertext = cipher.doFinal(payload);
 
@@ -560,7 +549,7 @@ public final class EncryptedWalStore {
                 body.write(ciphertext);
             }
             byte[] encodedBody = bodyBytes.toByteArray();
-            ByteBuffer frame = ByteBuffer.allocate(8 + encodedBody.length);
+            ByteBuffer frame = ByteBuffer.allocate(FRAME_HEADER_BYTES + encodedBody.length);
             frame.putInt(MAGIC).putInt(encodedBody.length).put(encodedBody);
             return frame.array();
         } catch (GeneralSecurityException | IOException e) {
@@ -568,8 +557,7 @@ public final class EncryptedWalStore {
         }
     }
 
-    /** Parses the file without changing it; {@link #repairIncompleteTail} fixes up a cut-off tail. */
-    private Recovery readWal(Path path, String expectedRoomId) {
+    private WalReadResult readWal(Path path, String expectedRoomId) {
         try {
             byte[] file = Files.readAllBytes(path);
             ByteBuffer bytes = ByteBuffer.wrap(file);
@@ -578,7 +566,7 @@ public final class EncryptedWalStore {
             boolean incompleteTail = false;
             long validLength = file.length;
             while (bytes.hasRemaining()) {
-                if (bytes.remaining() < 8) {
+                if (bytes.remaining() < FRAME_HEADER_BYTES) {
                     incompleteTail = true;
                     validLength = bytes.position();
                     break;
@@ -590,7 +578,7 @@ public final class EncryptedWalStore {
                 }
                 if (bytes.remaining() < frameLength) {
                     incompleteTail = true;
-                    validLength = (long) bytes.position() - 8;
+                    validLength = (long) bytes.position() - FRAME_HEADER_BYTES;
                     break; // The save file was cut off right at the end (like from a power outage), which is okay. We just ignore this last partial save.
                 }
                 ByteBuffer frame = bytes.slice(bytes.position(), frameLength);
@@ -617,23 +605,22 @@ public final class EncryptedWalStore {
                     pending = null;
                 }
             }
-            return new Recovery(latest, previousSequence + 1, incompleteTail, validLength);
+            return new WalReadResult(latest, previousSequence + 1, incompleteTail, validLength);
         } catch (IOException e) {
             throw new PersistenceException("Cannot read WAL for room " + expectedRoomId, e);
         }
     }
 
-    /** Cuts a torn trailing frame off the file, and requires a full checkpoint before further appends. */
-    private void repairIncompleteTail(Path path, String roomId, Recovery recovery) {
-        if (!recovery.incompleteTail()) return;
+    private void repairIncompleteTail(Path path, String roomId, WalReadResult result) {
+        if (!result.incompleteTail()) return;
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
-            channel.truncate(recovery.validLength());
+            channel.truncate(result.validLength());
             channel.force(true);
         } catch (IOException e) {
             throw new PersistenceException("Cannot repair WAL for room " + roomId, e);
         }
         logger.warn("Truncated incomplete trailing WAL bytes for room {} to validLength {}",
-                roomId, recovery.validLength());
+                roomId, result.validLength());
         checkpointRooms.add(roomId);
     }
 
@@ -650,14 +637,14 @@ public final class EncryptedWalStore {
             byte[] nonce = new byte[NONCE_LENGTH];
             frame.get(nonce);
             int ciphertextLength = frame.getInt();
-            if (ciphertextLength < 16 || ciphertextLength != frame.remaining()) {
+            if (ciphertextLength < GCM_TAG_BYTES || ciphertextLength != frame.remaining()) {
                 throw new PersistenceException("Invalid encrypted WAL payload length");
             }
             byte[] ciphertext = new byte[ciphertextLength];
             frame.get(ciphertext);
             SecretKey key = keyring.key(keyId);
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, nonce));
+            Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
+            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, nonce));
             cipher.updateAAD(associatedData(roomId, sequence, transactionId, type, keyId));
             return new WalRecord(sequence, transactionId, type, cipher.doFinal(ciphertext));
         } catch (PersistenceException e) {
@@ -670,7 +657,8 @@ public final class EncryptedWalStore {
     private byte[] associatedData(String roomId, long sequence, UUID transactionId, RecordType type, String keyId) {
         byte[] room = roomId.getBytes(StandardCharsets.UTF_8);
         byte[] key = keyId.getBytes(StandardCharsets.UTF_8);
-        ByteBuffer aad = ByteBuffer.allocate(8 + 16 + 1 + 2 + room.length + 2 + key.length);
+        ByteBuffer aad = ByteBuffer.allocate(AAD_FIXED_BYTES + AAD_LENGTH_PREFIX_BYTES + room.length
+                + AAD_LENGTH_PREFIX_BYTES + key.length);
         aad.putLong(sequence)
                 .putLong(transactionId.getMostSignificantBits()).putLong(transactionId.getLeastSignificantBits())
                 .put(type.code).putShort((short) room.length).put(room).putShort((short) key.length).put(key);
@@ -679,19 +667,22 @@ public final class EncryptedWalStore {
 
     private void writeFreshWal(Path path, String roomId, byte[] payload) throws IOException {
         UUID transactionId = UUID.randomUUID();
-        byte[] prepare = encodeFrame(roomId, 1, transactionId, RecordType.PREPARE, new byte[0]);
-        byte[] commit = encodeFrame(roomId, 2, transactionId, RecordType.COMMIT, payload);
+        byte[] prepare = encodeFrame(roomId, CHECKPOINT_PREPARE_SEQUENCE, transactionId, RecordType.PREPARE, new byte[0]);
+        byte[] commit = encodeFrame(roomId, CHECKPOINT_COMMIT_SEQUENCE, transactionId, RecordType.COMMIT, payload);
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
-            for (byte[] frame : List.of(prepare, commit)) {
-                faultInjector.check(frame == prepare ? WalFaultPoint.BEFORE_PREPARE_WRITE
-                        : WalFaultPoint.BEFORE_COMMIT_WRITE, roomId);
-                ByteBuffer bytes = ByteBuffer.wrap(frame);
-                while (bytes.hasRemaining()) {
-                    channel.write(bytes);
-                }
-            }
+            faultInjector.check(WalFaultPoint.BEFORE_PREPARE_WRITE, roomId);
+            writeFully(channel, prepare);
+            faultInjector.check(WalFaultPoint.BEFORE_COMMIT_WRITE, roomId);
+            writeFully(channel, commit);
             faultInjector.check(WalFaultPoint.BEFORE_FLUSH, roomId);
             channel.force(true);
+        }
+    }
+
+    private static void writeFully(FileChannel channel, byte[] frame) throws IOException {
+        ByteBuffer bytes = ByteBuffer.wrap(frame);
+        while (bytes.hasRemaining()) {
+            channel.write(bytes);
         }
     }
 
@@ -762,17 +753,32 @@ public final class EncryptedWalStore {
         }
     }
 
-    /** Rejects characters that could cause path traversal in WAL filenames. */
     private static void validateRoomId(String roomId) {
         if (roomId == null || !roomId.matches("[A-Za-z0-9._-]+")) {
             throw new PersistenceException("Invalid room ID for WAL path");
         }
     }
 
-    /** Rejects ordinary appends for a room until startup is healthy and the room has no outstanding write failure. */
     private void requireHealthy(String roomId) {
         if (!isHealthy(roomId)) {
             throw new PersistenceException("Persistence needs a full checkpoint before further appends");
+        }
+    }
+
+    private <T> T recordingFailure(String roomId, Supplier<T> action) {
+        return recordingFailure(roomId, "Cannot write WAL for room " + roomId, action::get);
+    }
+
+    private <T> T recordingFailure(String roomId, String ioFailureMessage, IoAction<T> action) {
+        try {
+            return action.run();
+        } catch (IOException e) {
+            PersistenceException failure = new PersistenceException(ioFailureMessage, e);
+            recordWriteFailure(roomId, failure);
+            throw failure;
+        } catch (RuntimeException e) {
+            recordWriteFailure(roomId, e);
+            throw e;
         }
     }
 
@@ -791,18 +797,15 @@ public final class EncryptedWalStore {
         lastError = failure.getClass().getSimpleName();
     }
 
-    /**
-     * The two types of data pieces we save to the file. We always save a PREPARE first, and then a COMMIT.
-     */
+    @FunctionalInterface
+    private interface IoAction<T> {
+        T run() throws IOException;
+    }
+
     private enum RecordType {
         PREPARE((byte) 1), COMMIT((byte) 2);
         private final byte code;
 
-        /**
-         * Gives the piece a number to save in the file.
-         *
-         * @param code the number for the file
-         */
         RecordType(byte code) {
             this.code = code;
         }
@@ -815,25 +818,9 @@ public final class EncryptedWalStore {
         }
     }
 
-    /**
-     * A temporary box to hold one piece of data that we read from the file.
-     *
-     * @param sequence      the number in the sequence
-     * @param transactionId an ID linking a prepare and commit
-     * @param type          whether this is a prepare or a commit
-     * @param payload       the unencrypted game data
-     */
     private record WalRecord(long sequence, UUID transactionId, RecordType type, byte[] payload) {
     }
 
-    /**
-     * The final result after reading through the whole save file.
-     *
-     * @param latestPayload the final valid game data, or null
-     * @param nextSequence  the next number to use when saving new data
-     * @param incompleteTail whether ignored partial bytes require replacement before appending
-     * @param validLength    the number of bytes at the start of the file that hold complete records
-     */
-    private record Recovery(byte[] latestPayload, long nextSequence, boolean incompleteTail, long validLength) {
+    private record WalReadResult(byte[] latestPayload, long nextSequence, boolean incompleteTail, long validLength) {
     }
 }

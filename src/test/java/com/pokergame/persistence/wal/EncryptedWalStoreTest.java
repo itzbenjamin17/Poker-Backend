@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -486,6 +488,59 @@ class EncryptedWalStoreTest {
         assertNull(store.lastError());
     }
 
+    /**
+     * Pins the on-disk format: a checkpoint writes sequences 1 and 2, appends then continue at 3, and each frame's
+     * ciphertext is authenticated with the documented associated data, checked here with an independent decryptor.
+     */
+    @Test
+    void checkpointedWalKeepsDocumentedFrameLayoutAndContinuesAtSequenceThree() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 13);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys, roomCoordinator);
+        byte[] checkpointed = "checkpointed".getBytes(StandardCharsets.UTF_8);
+        withRoomLock(roomCoordinator, "room-fmt", () -> {
+            store.checkpoint("room-fmt", checkpointed);
+            assertEquals(3L, store.prepare("room-fmt").prepareSequence());
+            return null;
+        });
+        Path wal = directory.resolve("room-fmt.wal");
+
+        ByteBuffer file = ByteBuffer.wrap(Files.readAllBytes(wal));
+        long[] expectedSequences = {1, 2, 3};
+        byte[][] expectedPayloads = {new byte[0], checkpointed, new byte[0]};
+        for (int i = 0; i < expectedSequences.length; i++) {
+            assertEquals(0x504B574C, file.getInt());
+            int frameLength = file.getInt();
+            ByteBuffer frame = file.slice(file.position(), frameLength);
+            file.position(file.position() + frameLength);
+
+            long sequence = frame.getLong();
+            long high = frame.getLong();
+            long low = frame.getLong();
+            byte type = frame.get();
+            byte[] room = new byte[Short.toUnsignedInt(frame.getShort())];
+            frame.get(room);
+            byte[] keyId = new byte[Short.toUnsignedInt(frame.getShort())];
+            frame.get(keyId);
+            byte[] nonce = new byte[12];
+            frame.get(nonce);
+            byte[] ciphertext = new byte[frame.getInt()];
+            frame.get(ciphertext);
+            assertFalse(frame.hasRemaining());
+            assertEquals(expectedSequences[i], sequence);
+            assertEquals(i == 1 ? 2 : 1, type);
+
+            ByteBuffer aad = ByteBuffer.allocate(8 + 8 + 8 + 1 + 2 + room.length + 2 + keyId.length);
+            aad.putLong(sequence).putLong(high).putLong(low).put(type)
+                    .putShort((short) room.length).put(room).putShort((short) keyId.length).put(keyId);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(filledKey((byte) 13), "AES"),
+                    new GCMParameterSpec(128, nonce));
+            cipher.updateAAD(aad.array());
+            assertArrayEquals(expectedPayloads[i], cipher.doFinal(ciphertext));
+        }
+        assertFalse(file.hasRemaining());
+    }
+
     /** Exercises interrupted bodies after a complete header, through metadata and ciphertext. */
     @Test
     void tornTrailingFrameIsTruncatedSoSubsequentWritesDoNotCorruptWal() throws Exception {
@@ -586,7 +641,7 @@ class EncryptedWalStoreTest {
      * so that other rooms can continue committing transactions without interruption.
      */
     @Test
-    void quarantineCorruptedWalMovesFileAndPreservesStoreHealthForOtherRooms() throws Exception {
+    void quarantineMovesFileAndPreservesStoreHealthForOtherRooms() throws Exception {
         EncryptionKeyring keys = keyring("current", (byte) 42);
         EncryptedWalStore store = new EncryptedWalStore(directory, keys, roomCoordinator);
 
@@ -725,9 +780,9 @@ class EncryptedWalStoreTest {
 
         assertEquals(2, store.walCount());
 
-        // Quarantine room-to-quarantine using alias method
+        // Quarantine room-to-quarantine
         Path quarantined = withRoomLock(roomCoordinator, "room-to-quarantine",
-                () -> store.quarantineCorruptedWal("room-to-quarantine", "Administrative isolation"));
+                () -> store.quarantine("room-to-quarantine", "Administrative isolation"));
         assertTrue(Files.exists(quarantined));
 
         // walCount only counts active .wal files
@@ -1013,7 +1068,6 @@ class EncryptedWalStoreTest {
         assertThrows(IllegalStateException.class, () -> store.checkpoint(roomId, payload));
         assertThrows(IllegalStateException.class, () -> store.delete(roomId));
         assertThrows(IllegalStateException.class, () -> store.quarantine(roomId, "reason"));
-        assertThrows(IllegalStateException.class, () -> store.quarantineCorruptedWal(roomId, "reason"));
         assertThrows(IllegalStateException.class, () -> store.clearRoomTracking(roomId));
         assertThrows(IllegalStateException.class, () -> store.requiresCheckpoint(roomId));
         assertThrows(IllegalStateException.class, () -> store.walSize(roomId));
