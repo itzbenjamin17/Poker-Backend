@@ -1131,6 +1131,186 @@ class GameTest {
             assertEquals(0, carried.getUncalledAmount());
         }
 
+        private static final List<Card> SIDE_POT_BOARD = List.of(
+                new Card(Rank.TWO, Suit.CLUBS), new Card(Rank.SEVEN, Suit.DIAMONDS),
+                new Card(Rank.NINE, Suit.HEARTS), new Card(Rank.JACK, Suit.SPADES),
+                new Card(Rank.KING, Suit.CLUBS));
+
+        /** Hole cards from strongest to weakest against the side-pot board: aces, queens, tens, high card. */
+        private static final List<List<Card>> HOLE_BY_STRENGTH = List.of(
+                List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS)),
+                List.of(new Card(Rank.QUEEN, Suit.DIAMONDS), new Card(Rank.QUEEN, Suit.CLUBS)),
+                List.of(new Card(Rank.TEN, Suit.SPADES), new Card(Rank.TEN, Suit.DIAMONDS)),
+                List.of(new Card(Rank.THREE, Suit.HEARTS), new Card(Rank.FOUR, Suit.DIAMONDS)));
+
+        private Game riverGame(String id, List<Player> table, List<Player> active, int pot, int carryOver,
+                               int highestBet, Map<String, Integer> contributions, List<Card> board) {
+            return Game.restoreBuilder().gameId(id)
+                    .players(table).activePlayerIds(active.stream().map(Player::getPlayerId).toList())
+                    .remainingDeck(List.of()).communityCards(board).pot(pot)
+                    .dealerAnchorPlayerId(table.getFirst().getPlayerId())
+                    .smallBlindPlayerId(table.getFirst().getPlayerId())
+                    .bigBlindPlayerId(table.getLast().getPlayerId())
+                    .currentPlayerId(active.getFirst().getPlayerId())
+                    .currentHighestBet(highestBet).currentPhase(GamePhase.RIVER).gameOver(false)
+                    .smallBlind(10).bigBlind(20).handContributions(new java.util.HashMap<>(contributions))
+                    .preHandCarryOver(carryOver).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .build();
+        }
+
+        private static void deal(Player player, int strength) {
+            player.getHoleCards().clear();
+            player.getHoleCards().addAll(HOLE_BY_STRENGTH.get(strength));
+        }
+
+        @Test
+        void fourWayAllInShowsThreeContestedPotsAndPaysEachToItsBestEligibleHand() {
+            Player a = restoredPlayer("A", "a", 0, 50, true);
+            Player b = restoredPlayer("B", "b", 0, 100, true);
+            Player c = restoredPlayer("C", "c", 0, 200, true);
+            Player d = restoredPlayer("D", "d", 0, 300, true);
+            Game hand = riverGame("four-way-all-in", List.of(a, b, c, d), List.of(a, b, c, d), 650, 0, 300,
+                    Map.of("a", 50, "b", 100, "c", 200, "d", 300), SIDE_POT_BOARD);
+
+            assertEquals(List.of(200, 150, 200), hand.getPotBreakdown());
+            assertEquals(100, hand.getUncalledAmount());
+
+            deal(a, 0);
+            deal(b, 1);
+            deal(c, 2);
+            deal(d, 3);
+            hand.conductShowdown();
+
+            assertEquals(200, a.getChips());
+            assertEquals(150, b.getChips());
+            assertEquals(200, c.getChips());
+            assertEquals(100, d.getChips());
+            assertEquals(0, hand.getPot());
+        }
+
+        @Test
+        void uncalledShoveIsExcludedFromBreakdownAndRefundedToTheShover() {
+            Player shover = restoredPlayer("Shover", "a1", 0, 480, true);
+            Player sb = restoredPlayer("SB", "s1", 0, 10, true);
+            Player bb = restoredPlayer("BB", "b1", 980, 20, false);
+            Game hand = riverGame("uncalled-shove-payout", List.of(shover, sb, bb), List.of(shover, sb, bb),
+                    510, 0, 20, Map.of("a1", 480, "s1", 10, "b1", 20), SIDE_POT_BOARD);
+
+            assertEquals(List.of(30, 20), hand.getPotBreakdown());
+            assertEquals(460, hand.getUncalledAmount());
+
+            deal(shover, 3);
+            deal(sb, 0);
+            deal(bb, 1);
+            hand.conductShowdown();
+
+            assertEquals(460, shover.getChips());
+            assertEquals(30, sb.getChips());
+            assertEquals(1000, bb.getChips());
+            assertEquals(0, hand.getPot());
+        }
+
+        @Test
+        void foldedContributorsDeadMoneyJoinsTheContestedPotAndOnlyTheCoveringExcessIsRefunded() {
+            Player allIn = restoredPlayer("AllIn", "a", 0, 50, true);
+            Player caller = restoredPlayer("Caller", "b", 850, 150, false);
+            Player folded = restoredPlayer("c", "Folded", 980, false, true, false);
+            Game hand = riverGame("folded-dead-money", List.of(allIn, caller, folded), List.of(allIn, caller, folded),
+                    220, 0, 150, Map.of("a", 50, "b", 150, "c", 20), SIDE_POT_BOARD);
+
+            assertEquals(List.of(120), hand.getPotBreakdown());
+            assertEquals(100, hand.getUncalledAmount());
+
+            deal(allIn, 0);
+            deal(caller, 1);
+            hand.conductShowdown();
+
+            assertEquals(120, allIn.getChips());
+            assertEquals(950, caller.getChips());
+            assertEquals(980, folded.getChips());
+            assertEquals(0, hand.getPot());
+        }
+
+        @Test
+        void randomizedHandsBreakdownPlusUncalledEqualsPotAndShowdownConservesChips() {
+            Random rng = new Random(20_260_101L);
+            for (int run = 0; run < 400; run++) {
+                int carryOver = rng.nextInt(4) == 0 ? 1 + rng.nextInt(60) : 0;
+                List<Player> table = new ArrayList<>();
+                List<Player> active = new ArrayList<>();
+                Map<String, Integer> contributions = new java.util.LinkedHashMap<>();
+                int highestBet = 0;
+                int pot = carryOver;
+                boolean anyInHand = false;
+
+                for (int i = 0, count = 2 + rng.nextInt(7); i < count; i++) {
+                    String id = "p" + i;
+                    int contribution = 10 + rng.nextInt(300);
+                    int currentBet = rng.nextBoolean() ? contribution : rng.nextInt(contribution + 1);
+                    int role = rng.nextInt(10);
+                    boolean folded = role <= 1;
+                    boolean out = role == 2;
+                    boolean departed = role == 3;
+                    boolean allIn = role == 4 || role == 5;
+
+                    contributions.put(id, contribution);
+                    pot += contribution;
+                    if (departed) {
+                        continue;
+                    }
+                    Player player = Player.restoreBuilder()
+                            .playerId(id).name("P" + i).chips(allIn ? 0 : rng.nextInt(500)).currentBet(currentBet)
+                            .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
+                            .hasFolded(folded).allIn(allIn).out(out).disconnected(false).readyForNextHand(false)
+                            .build();
+                    table.add(player);
+                    if (!out || rng.nextBoolean()) {
+                        active.add(player);
+                    }
+                    if (!folded && !out) {
+                        anyInHand = true;
+                        highestBet = Math.max(highestBet, currentBet);
+                    }
+                }
+                if (!anyInHand) {
+                    Player survivor = restoredPlayer("Survivor", "survivor", 100, 10, false);
+                    table.add(survivor);
+                    active.add(survivor);
+                    contributions.put("survivor", 10);
+                    pot += 10;
+                    highestBet = Math.max(highestBet, 10);
+                }
+
+                List<Card> deck = new ArrayList<>();
+                for (Suit suit : Suit.values()) {
+                    for (Rank rank : Rank.values()) {
+                        deck.add(new Card(rank, suit));
+                    }
+                }
+                Collections.shuffle(deck, rng);
+                int nextCard = 5;
+                for (Player player : table) {
+                    player.getHoleCards().addAll(deck.subList(nextCard, nextCard + 2));
+                    nextCard += 2;
+                }
+                int chipsBefore = table.stream().mapToInt(Player::getChips).sum();
+                Game hand = riverGame("random-pot-" + run, table, active, pot, carryOver, highestBet,
+                        contributions, List.copyOf(deck.subList(0, 5)));
+                String context = "run " + run + " contributions=" + contributions + " pot=" + pot;
+
+                List<Integer> breakdown = hand.getPotBreakdown();
+                assertTrue(breakdown.stream().allMatch(layer -> layer > 0), context);
+                assertEquals(pot, breakdown.stream().mapToInt(Integer::intValue).sum() + hand.getUncalledAmount(),
+                        "breakdown plus uncalled must equal the pot, " + context);
+
+                hand.conductShowdown();
+                int chipsAfter = table.stream().mapToInt(Player::getChips).sum();
+                assertEquals(chipsBefore + pot, chipsAfter + hand.getPot(),
+                        "showdown must pay out every chip in the pot, " + context);
+            }
+        }
+
         @Test
         void testConductShowdownWithOnePlayerRefundOnlyAndMultiplePlayers() {
             game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.BET, 100, "p3"));

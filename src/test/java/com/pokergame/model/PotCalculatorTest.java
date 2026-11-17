@@ -314,8 +314,8 @@ class PotCalculatorTest {
 
     @Test
     void getPotBreakdown_EmptyPot_ReturnsEmptyList() {
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                0, 0, Map.of(), List.of(), List.of(), null, 0, GAME_ID);
+        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                0, 0, Map.of(), List.of(), List.of(), null, 0, GAME_ID));
 
         assertTrue(breakdown.isEmpty());
     }
@@ -324,8 +324,8 @@ class PotCalculatorTest {
     void getPotBreakdown_SettledGame_ReturnsTotalPot() {
         HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, true);
 
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                100, 0, Map.of(), List.of(), List.of(), settled, 0, GAME_ID);
+        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                100, 0, Map.of(), List.of(), List.of(), settled, 0, GAME_ID));
 
         assertEquals(List.of(100), breakdown);
     }
@@ -336,8 +336,8 @@ class PotCalculatorTest {
         Player p2 = playerWithBet("p2", "Bob", 1000, 50);
         List<Player> active = List.of(p1, p2);
 
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                100, 0, Map.of("p1", 50, "p2", 50), active, active, null, 50, GAME_ID);
+        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                100, 0, Map.of("p1", 50, "p2", 50), active, active, null, 50, GAME_ID));
 
         assertEquals(List.of(100), breakdown);
     }
@@ -350,8 +350,8 @@ class PotCalculatorTest {
         List<Player> active = List.of(shortStack, bettor, owing);
         Map<String, Integer> contributions = Map.of("short", 50, "bettor", 250, "owing", 50);
 
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                350, 0, contributions, active, active, null, 250, GAME_ID);
+        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                350, 0, contributions, active, active, null, 250, GAME_ID));
 
         assertEquals(List.of(150, 200), breakdown);
     }
@@ -365,8 +365,8 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("a1", 480, "s1", 10, "b1", 20);
 
         // SB and BB owe call below 480 cap -> entire pot remains pending single layer
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                510, 0, contributions, active, active, null, 480, GAME_ID);
+        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                510, 0, contributions, active, active, null, 480, GAME_ID));
 
         assertEquals(List.of(510), breakdown);
     }
@@ -381,10 +381,26 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("short", 50, "bettor", 250, "owing", 50, "folded", 20);
 
         // Pot 380, carry-over 10
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                380, 10, contributions, active, active, null, 250, GAME_ID);
+        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                380, 10, contributions, active, active, null, 250, GAME_ID));
 
         assertEquals(List.of(180, 200), breakdown);
+    }
+
+    @Test
+    void getPotBreakdown_PendingCallOnLaterStreet_CapComesFromWholeHandContributions() {
+        // Everyone put 100 in on earlier streets; only the bettor has wagered on this street (40).
+        Player allIn = allInPlayerWithBet("a", "A", 0);
+        Player owing = playerWithBet("b", "B", 900, 0);
+        Player bettor = playerWithBet("c", "C", 860, 40);
+        List<Player> active = List.of(allIn, owing, bettor);
+        Map<String, Integer> contributions = Map.of("a", 100, "b", 100, "c", 140);
+        PotCalculator.PotInputs inputs = new PotCalculator.PotInputs(
+                340, 0, contributions, active, active, null, 40, GAME_ID);
+
+        // The matched 300 is the main pot; the 40 bet is an open layer, not a refund, while B may still call.
+        assertEquals(List.of(300, 40), PotCalculator.getPotBreakdown(inputs));
+        assertEquals(0, PotCalculator.getUncalledAmount(inputs));
     }
 
     @Test
@@ -396,8 +412,8 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("short", 50, "mid", 150, "deep", 150);
 
         // Current highest bet is 150, all active non-all-in players have matched 150 (no owing calls)
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                350, 0, contributions, active, active, null, 150, GAME_ID);
+        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                350, 0, contributions, active, active, null, 150, GAME_ID));
 
         assertEquals(List.of(150, 200), breakdown);
     }
@@ -411,8 +427,8 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("a1", 480, "s1", 10, "b1", 20);
 
         // Action is complete (currentHighestBet = 20, SB is all-in for 10, BB matched 20)
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                510, 0, contributions, active, active, null, 20, GAME_ID);
+        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                510, 0, contributions, active, active, null, 20, GAME_ID));
 
         // Contested breakdown only: 30 and 20; the 460 uncalled is excluded from contested breakdown
         assertEquals(List.of(30, 20), breakdown);
@@ -424,16 +440,16 @@ class PotCalculatorTest {
 
     @Test
     void getUncalledAmount_EmptyPot_ReturnsZero() {
-        assertEquals(0, PotCalculator.getUncalledAmount(
-                0, 0, Map.of(), List.of(), List.of(), null, 0, GAME_ID));
+        assertEquals(0, PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                0, 0, Map.of(), List.of(), List.of(), null, 0, GAME_ID)));
     }
 
     @Test
     void getUncalledAmount_SettledGame_ReturnsZero() {
         HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, true);
 
-        assertEquals(0, PotCalculator.getUncalledAmount(
-                100, 0, Map.of(), List.of(), List.of(), settled, 0, GAME_ID));
+        assertEquals(0, PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                100, 0, Map.of(), List.of(), List.of(), settled, 0, GAME_ID)));
     }
 
     @Test
@@ -441,8 +457,8 @@ class PotCalculatorTest {
         Player p1 = playerWithBet("p1", "Alice", 1000, 50);
         Player p2 = playerWithBet("p2", "Bob", 1000, 50);
 
-        assertEquals(0, PotCalculator.getUncalledAmount(
-                100, 0, Map.of("p1", 50, "p2", 50), List.of(p1, p2), List.of(p1, p2), null, 50, GAME_ID));
+        assertEquals(0, PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                100, 0, Map.of("p1", 50, "p2", 50), List.of(p1, p2), List.of(p1, p2), null, 50, GAME_ID)));
     }
 
     @Test
@@ -452,8 +468,8 @@ class PotCalculatorTest {
         Player owing = playerWithBet("owing", "Owing", 950, 50);
         List<Player> active = List.of(shortStack, bettor, owing);
 
-        assertEquals(0, PotCalculator.getUncalledAmount(
-                350, 0, Map.of("short", 50, "bettor", 250, "owing", 50), active, active, null, 250, GAME_ID));
+        assertEquals(0, PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                350, 0, Map.of("short", 50, "bettor", 250, "owing", 50), active, active, null, 250, GAME_ID)));
     }
 
     @Test
@@ -465,8 +481,8 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("a1", 480, "s1", 10, "b1", 20);
 
         // Action complete with currentHighestBet = 20 (SB is all-in for 10, BB matched 20)
-        assertEquals(460, PotCalculator.getUncalledAmount(
-                510, 0, contributions, active, active, null, 20, GAME_ID));
+        assertEquals(460, PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                510, 0, contributions, active, active, null, 20, GAME_ID)));
     }
 
     // =========================================================================
@@ -658,10 +674,12 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("short", 100, "owing", 100, "bettor", 300);
         int totalPot = 500;
 
-        int uncalled = PotCalculator.getUncalledAmount(totalPot, 0, contributions, active, active, null, 300, GAME_ID);
+        int uncalled = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                totalPot, 0, contributions, active, active, null, 300, GAME_ID));
         assertEquals(0, uncalled);
 
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(totalPot, 0, contributions, active, active, null, 300, GAME_ID);
+        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                totalPot, 0, contributions, active, active, null, 300, GAME_ID));
         assertEquals(List.of(300, 200), breakdown);
         assertEquals(totalPot, breakdown.stream().mapToInt(Integer::intValue).sum());
     }
@@ -676,10 +694,12 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("p1", 50, "p2", 100, "owing", 100, "bettor", 300);
         int totalPot = 550;
 
-        int uncalled = PotCalculator.getUncalledAmount(totalPot, 0, contributions, active, active, null, 300, GAME_ID);
+        int uncalled = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                totalPot, 0, contributions, active, active, null, 300, GAME_ID));
         assertEquals(0, uncalled);
 
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(totalPot, 0, contributions, active, active, null, 300, GAME_ID);
+        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                totalPot, 0, contributions, active, active, null, 300, GAME_ID));
         assertEquals(List.of(200, 150, 200), breakdown);
         assertEquals(totalPot, breakdown.stream().mapToInt(Integer::intValue).sum());
     }
@@ -692,10 +712,12 @@ class PotCalculatorTest {
         Map<String, Integer> contributions = Map.of("allIn", 500, "owing", 50);
         int totalPot = 550;
 
-        int uncalled = PotCalculator.getUncalledAmount(totalPot, 0, contributions, active, active, null, 500, GAME_ID);
+        int uncalled = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                totalPot, 0, contributions, active, active, null, 500, GAME_ID));
         assertEquals(0, uncalled);
 
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(totalPot, 0, contributions, active, active, null, 500, GAME_ID);
+        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                totalPot, 0, contributions, active, active, null, 500, GAME_ID));
         assertEquals(List.of(550), breakdown);
     }
 
@@ -832,10 +854,10 @@ class PotCalculatorTest {
                         && !p.getHasFolded() && !p.getIsOut()), "Uncalled recipient must be active seated player");
             }
 
-            List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                    totalPot, carryOver, contributions, activePlayers, allPlayers, null, 0, GAME_ID);
-            int uncalledQuery = PotCalculator.getUncalledAmount(
-                    totalPot, carryOver, contributions, activePlayers, allPlayers, null, 0, GAME_ID);
+            List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                    totalPot, carryOver, contributions, activePlayers, allPlayers, null, 0, GAME_ID));
+            int uncalledQuery = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                    totalPot, carryOver, contributions, activePlayers, allPlayers, null, 0, GAME_ID));
             int breakdownSum = breakdown.stream().mapToInt(Integer::intValue).sum();
             assertEquals(totalPot, breakdownSum + uncalledQuery,
                     "Breakdown sum + uncalled query must equal total pot for run " + i);
@@ -964,13 +986,13 @@ class PotCalculatorTest {
 
             // Test public getPotBreakdown() when action complete:
             // Contested breakdown should be [100, 90, 80, 70, 60, 50, 40, 30, 20]
-            List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                    totalPot, 0, contributions, players, players, null, 100, GAME_ID);
+            List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                    totalPot, 0, contributions, players, players, null, 100, GAME_ID));
             assertEquals(List.of(100, 90, 80, 70, 60, 50, 40, 30, 20), breakdown);
 
             // Test public getUncalledAmount()
-            int uncalled = PotCalculator.getUncalledAmount(
-                    totalPot, 0, contributions, players, players, null, 100, GAME_ID);
+            int uncalled = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                    totalPot, 0, contributions, players, players, null, 100, GAME_ID));
             assertEquals(10, uncalled);
         }
 
@@ -1166,12 +1188,12 @@ class PotCalculatorTest {
             assertTrue(result.uncalledByPlayer().isEmpty());
             assertEquals(0, result.uncalledTotal());
 
-            List<Integer> breakdown = PotCalculator.getPotBreakdown(
-                    0, 0, Map.of(), List.of(), List.of(), null, 0, GAME_ID);
+            List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                    0, 0, Map.of(), List.of(), List.of(), null, 0, GAME_ID));
             assertTrue(breakdown.isEmpty());
 
-            int uncalled = PotCalculator.getUncalledAmount(
-                    0, 0, Map.of(), List.of(), List.of(), null, 0, GAME_ID);
+            int uncalled = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                    0, 0, Map.of(), List.of(), List.of(), null, 0, GAME_ID));
             assertEquals(0, uncalled);
         }
 

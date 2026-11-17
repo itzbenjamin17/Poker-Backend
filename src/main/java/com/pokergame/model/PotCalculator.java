@@ -13,6 +13,17 @@ import java.util.stream.Collectors;
 /**
  * Pure calculation logic for side-pot layering, uncalled-bet detection,
  * pot breakdown representations, and contribution tracking.
+ *
+ * <p>{@link #computePotAllocationsAndUncalled} is the single side-pot algorithm. It decides payouts at
+ * showdown, and the client breakdown and uncalled amount read its allocations when the hand has an all-in
+ * and no active player owes a call. A settled hand or a hand with no all-in shows one pot of the whole pot
+ * without using the allocations.
+ *
+ * <p>While an active player still owes a call, the breakdown comes from a separate projection
+ * ({@code projectLayersWhileCallIsOwed}). Until that player calls or folds, the chips above the highest
+ * all-in are not yet known to be uncalled, so the display shows them as an open top layer. The payout
+ * algorithm would refund them, so it cannot produce this projection without changing what players see
+ * mid-hand.
  */
 final class PotCalculator {
 
@@ -34,7 +45,7 @@ final class PotCalculator {
             Player player,
             int amount,
             String gameId) {
-        if (player == null || amount <= 0 || handContributions == null) {
+        if (player == null || amount <= 0) {
             return;
         }
 
@@ -77,18 +88,13 @@ final class PotCalculator {
         logger.debug("Building pot allocations for game {} | pot={} | contributions={}",
                 gameId, pot, handContributions);
 
-        Map<String, Integer> ledger = (handContributions == null) ? Map.of() : handContributions;
-        List<Player> allPlayers = (tablePlayers == null) ? List.of() : tablePlayers;
-        List<Player> safeActivePlayers = (activePlayers == null) ? List.of() : activePlayers;
-        List<Player> contenders = (eligibleHandContenders != null && !eligibleHandContenders.isEmpty())
+        List<Player> contenders = !eligibleHandContenders.isEmpty()
                 ? eligibleHandContenders
-                : safeActivePlayers.stream().filter(Player::isInHand).toList();
+                : activePlayers.stream().filter(Player::isInHand).toList();
 
-        Map<String, Integer> contributions = ledger.entrySet().stream()
-                .filter(entry -> entry.getValue() != null && entry.getValue() > 0)
-                .collect(HashMap::new,
-                        (map, entry) -> map.put(entry.getKey(), entry.getValue()),
-                        HashMap::putAll);
+        Map<String, Integer> contributions = handContributions.entrySet().stream()
+                .filter(entry -> entry.getValue() > 0)
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
         if (!contributions.isEmpty()) {
             List<Integer> contributionLevels = contributions.values().stream()
@@ -111,7 +117,7 @@ final class PotCalculator {
                         .filter(entry -> entry.getValue() >= level)
                         .map(Map.Entry::getKey)
                         .toList();
-                List<Player> participants = allPlayers.stream()
+                List<Player> participants = tablePlayers.stream()
                         .filter(player -> contributorIds.contains(player.getPlayerId()))
                         .toList();
 
@@ -122,7 +128,7 @@ final class PotCalculator {
 
                 if (contributorIds.size() == 1) {
                     String ownerId = contributorIds.getFirst();
-                    Player owner = allPlayers.stream()
+                    Player owner = tablePlayers.stream()
                             .filter(p -> p.getPlayerId().equals(ownerId) && p.isInHand())
                             .findFirst()
                             .orElse(null);
@@ -161,7 +167,7 @@ final class PotCalculator {
             throw new IllegalStateException("Contribution ledger and carry-over do not match the committed pot for game " + gameId);
         }
         if (carryOverPot > 0) {
-            List<Player> eligible = safeActivePlayers.stream()
+            List<Player> eligible = activePlayers.stream()
                     .filter(Player::isInHand)
                     .toList();
             if (eligible.isEmpty() && !contenders.isEmpty()) {
@@ -195,98 +201,36 @@ final class PotCalculator {
     }
 
     /**
-     * Computes live pot and side-pot layer amounts for client display during a hand.
+     * Computes the pot layers clients see during a hand, ordered from main pot to outermost side pot.
+     * Only the all-in case with no call owed excludes uncalled chips that will be refunded. A settled hand,
+     * a hand with no all-in, and a hand where a call is still owed return layers that add up to the whole pot.
      *
-     * @param pot                  current total pot
-     * @param carryOverPot         chips carried over from an earlier hand
-     * @param handContributions    per-player chip contributions for this hand
-     * @param activePlayers        players active in the hand
-     * @param tablePlayers         full table roster
-     * @param lastSettlementResult previous settlement result, if already settled
-     * @param currentHighestBet    highest current street bet
-     * @param gameId               game identifier for diagnostics
-     * @return list of pot layer amounts ordered from main pot to outermost side pot
+     * @param inputs the hand's pot state
+     * @return pot layer amounts, or an empty list when the pot is empty
      */
-    static List<Integer> getPotBreakdown(
-            int pot,
-            int carryOverPot,
-            Map<String, Integer> handContributions,
-            List<Player> activePlayers,
-            List<Player> tablePlayers,
-            HandSettlementResult lastSettlementResult,
-            int currentHighestBet,
-            String gameId) {
-        if (pot <= 0) {
-            logger.debug("Pot breakdown requested for game {} with empty pot", gameId);
+    static List<Integer> getPotBreakdown(PotInputs inputs) {
+        if (inputs.pot() <= 0) {
+            logger.debug("Pot breakdown requested for game {} with empty pot", inputs.gameId());
             return List.of();
         }
-        if (lastSettlementResult != null && lastSettlementResult.settled()) {
-            return List.of(pot);
+        if (inputs.isSettled()) {
+            return List.of(inputs.pot());
+        }
+        if (BettingRound.hasActionablePlayerOwingCall(inputs.activePlayers(), inputs.currentHighestBet())) {
+            return projectLayersWhileCallIsOwed(inputs);
+        }
+        if (!inputs.hasAllIn()) {
+            logger.debug("Pot breakdown for game {} without all-ins: [{}]", inputs.gameId(), inputs.pot());
+            return List.of(inputs.pot());
         }
 
-        List<Player> safeActivePlayers = (activePlayers == null) ? List.of() : activePlayers;
-        Map<String, Integer> safeContributions = (handContributions == null) ? Map.of() : handContributions;
-
-        boolean hasAllIn = safeActivePlayers.stream()
-                .anyMatch(player -> player.getIsAllIn() && !player.getHasFolded());
-
-        if (BettingRound.hasActionablePlayerOwingCall(safeActivePlayers, currentHighestBet)) {
-            int maxAllInCap = safeContributions.entrySet().stream()
-                    .filter(entry -> safeActivePlayers.stream().anyMatch(player -> player.getPlayerId().equals(entry.getKey())
-                            && player.getIsAllIn() && player.isInHand()))
-                    .mapToInt(Map.Entry::getValue)
-                    .max()
-                    .orElse(0);
-            boolean owingBelowCap = safeActivePlayers.stream().anyMatch(player -> player.canAct()
-                    && currentHighestBet > player.getCurrentBet()
-                    && safeContributions.getOrDefault(player.getPlayerId(), 0) < maxAllInCap);
-            if (owingBelowCap || maxAllInCap == 0) {
-                return List.of(pot);
-            }
-
-            List<Integer> caps = safeContributions.entrySet().stream()
-                    .filter(entry -> safeActivePlayers.stream().anyMatch(player -> player.getPlayerId().equals(entry.getKey())
-                            && player.getIsAllIn() && player.isInHand()))
-                    .map(Map.Entry::getValue)
-                    .distinct()
-                    .sorted()
-                    .toList();
-            List<Integer> liveLayers = new ArrayList<>();
-            int previousCap = 0;
-            for (int cap : caps) {
-                int layerWidth = cap - previousCap;
-                int lowerBoundary = previousCap;
-                int layer = safeContributions.values().stream()
-                        .mapToInt(value -> Math.max(0, Math.min(value - lowerBoundary, layerWidth)))
-                        .sum();
-                if (liveLayers.isEmpty()) {
-                    layer = Math.addExact(layer, carryOverPot);
-                }
-                if (layer > 0) {
-                    liveLayers.add(layer);
-                }
-                previousCap = cap;
-            }
-            int projected = liveLayers.stream().mapToInt(Integer::intValue).sum();
-            if (pot > projected) {
-                liveLayers.add(pot - projected);
-            }
-            return List.copyOf(liveLayers);
-        }
-
-        if (!hasAllIn) {
-            logger.debug("Pot breakdown for game {} without all-ins: [{}]", gameId, pot);
-            return List.of(pot);
-        }
-
-        PotComputationResult computation = computeLiveAllocations(
-                pot, carryOverPot, safeContributions, safeActivePlayers, tablePlayers, gameId);
+        PotComputationResult computation = computeLiveAllocations(inputs);
         List<Integer> breakdown = computation.allocations().stream()
                 .map(PotAllocation::amount)
                 .toList();
 
         logger.debug("Pot breakdown for game {} with all-ins: {} | uncalled={}",
-                gameId, breakdown, computation.uncalledTotal());
+                inputs.gameId(), breakdown, computation.uncalledTotal());
 
         return breakdown;
     }
@@ -294,52 +238,79 @@ final class PotCalculator {
     /**
      * Computes the total uncalled chip amount subject to refund when all-in players face no further action.
      *
-     * @param pot                  current total pot
-     * @param carryOverPot         chips carried over from an earlier hand
-     * @param handContributions    per-player chip contributions for this hand
-     * @param activePlayers        players active in the hand
-     * @param tablePlayers         full table roster
-     * @param lastSettlementResult previous settlement result, if already settled
-     * @param currentHighestBet    highest current street bet
-     * @param gameId               game identifier for diagnostics
+     * @param inputs the hand's pot state
      * @return total uncalled chips awaiting refund, or {@code 0} when none apply
      */
-    static int getUncalledAmount(
-            int pot,
-            int carryOverPot,
-            Map<String, Integer> handContributions,
-            List<Player> activePlayers,
-            List<Player> tablePlayers,
-            HandSettlementResult lastSettlementResult,
-            int currentHighestBet,
-            String gameId) {
-        if (pot <= 0 || (lastSettlementResult != null && lastSettlementResult.settled())) {
+    static int getUncalledAmount(PotInputs inputs) {
+        if (inputs.pot() <= 0 || inputs.isSettled()) {
             return 0;
         }
-
-        List<Player> safeActivePlayers = (activePlayers == null) ? List.of() : activePlayers;
-        Map<String, Integer> safeContributions = (handContributions == null) ? Map.of() : handContributions;
-
-        boolean hasAllIn = safeActivePlayers.stream()
-                .anyMatch(player -> player.getIsAllIn() && !player.getHasFolded());
-        if (!hasAllIn || BettingRound.hasActionablePlayerOwingCall(safeActivePlayers, currentHighestBet)) {
+        if (!inputs.hasAllIn()
+                || BettingRound.hasActionablePlayerOwingCall(inputs.activePlayers(), inputs.currentHighestBet())) {
             return 0;
         }
+        return computeLiveAllocations(inputs).uncalledTotal();
+    }
 
-        return computeLiveAllocations(
-                pot, carryOverPot, safeContributions, safeActivePlayers, tablePlayers, gameId).uncalledTotal();
+    /**
+     * Projects display layers while an active player still owes a call. Nothing is uncalled yet because the
+     * owing player may still match the top bet, so chips above the highest all-in stay in an open top layer
+     * and the layers always add up to the whole pot.
+     */
+    private static List<Integer> projectLayersWhileCallIsOwed(PotInputs inputs) {
+        List<Integer> caps = allInContributionCaps(inputs);
+        int maxAllInCap = caps.isEmpty() ? 0 : caps.getLast();
+        boolean owingBelowCap = inputs.activePlayers().stream().anyMatch(player -> player.canAct()
+                && inputs.currentHighestBet() > player.getCurrentBet()
+                && inputs.handContributions().getOrDefault(player.getPlayerId(), 0) < maxAllInCap);
+        if (owingBelowCap || maxAllInCap == 0) {
+            return List.of(inputs.pot());
+        }
+
+        List<Integer> liveLayers = new ArrayList<>();
+        int previousCap = 0;
+        for (int cap : caps) {
+            int layerWidth = cap - previousCap;
+            int lowerBoundary = previousCap;
+            int layer = inputs.handContributions().values().stream()
+                    .mapToInt(value -> Math.max(0, Math.min(value - lowerBoundary, layerWidth)))
+                    .sum();
+            if (liveLayers.isEmpty()) {
+                layer = Math.addExact(layer, inputs.carryOverPot());
+            }
+            if (layer > 0) {
+                liveLayers.add(layer);
+            }
+            previousCap = cap;
+        }
+        int projected = liveLayers.stream().mapToInt(Integer::intValue).sum();
+        if (inputs.pot() > projected) {
+            liveLayers.add(inputs.pot() - projected);
+        }
+        return List.copyOf(liveLayers);
+    }
+
+    /** Distinct hand contributions of the all-in players still in the hand, lowest first. */
+    private static List<Integer> allInContributionCaps(PotInputs inputs) {
+        Set<String> allInIds = inputs.activePlayers().stream()
+                .filter(player -> player.getIsAllIn() && player.isInHand())
+                .map(Player::getPlayerId)
+                .collect(Collectors.toSet());
+        return inputs.handContributions().entrySet().stream()
+                .filter(entry -> allInIds.contains(entry.getKey()))
+                .map(Map.Entry::getValue)
+                .distinct()
+                .sorted()
+                .toList();
     }
 
     /**
      * Returns player names for diagnostic logging.
      *
      * @param players players to summarize
-     * @return immutable list of player names, or an empty list if {@code players} is {@code null}
+     * @return immutable list of player names
      */
     static List<String> playerNames(List<Player> players) {
-        if (players == null) {
-            return List.of();
-        }
         return players.stream().map(Player::getName).toList();
     }
 
@@ -350,9 +321,6 @@ final class PotCalculator {
      * @return summary strings showing each pot amount and eligible player names
      */
     static List<String> allocationSummary(List<PotAllocation> allocations) {
-        if (allocations == null) {
-            return List.of();
-        }
         List<String> summary = new ArrayList<>();
         for (int i = 0; i < allocations.size(); i++) {
             PotAllocation allocation = allocations.get(i);
@@ -362,18 +330,13 @@ final class PotCalculator {
         return summary;
     }
 
-    private static PotComputationResult computeLiveAllocations(
-            int pot,
-            int carryOverPot,
-            Map<String, Integer> handContributions,
-            List<Player> activePlayers,
-            List<Player> tablePlayers,
-            String gameId) {
-        List<Player> eligibleContenders = activePlayers.stream()
+    private static PotComputationResult computeLiveAllocations(PotInputs inputs) {
+        List<Player> eligibleContenders = inputs.activePlayers().stream()
                 .filter(Player::isInHand)
                 .toList();
         return computePotAllocationsAndUncalled(
-                pot, carryOverPot, handContributions, activePlayers, tablePlayers, eligibleContenders, gameId);
+                inputs.pot(), inputs.carryOverPot(), inputs.handContributions(), inputs.activePlayers(),
+                inputs.tablePlayers(), eligibleContenders, inputs.gameId());
     }
 
     private static void routeDeadLayerToNearestEligible(
@@ -387,18 +350,16 @@ final class PotCalculator {
                 return;
             }
         }
-        if (eligibleHandContenders != null && !eligibleHandContenders.isEmpty()) {
+        if (!eligibleHandContenders.isEmpty()) {
             allocations.add(0, new PotAllocation(amount, List.copyOf(eligibleHandContenders)));
         }
     }
 
+    /** Callers pass a non-empty {@code eligiblePlayers}. */
     private static void appendAllocationCoalescingSameEligibility(
             List<PotAllocation> allocations,
             int amount,
             List<Player> eligiblePlayers) {
-        if (eligiblePlayers == null || eligiblePlayers.isEmpty()) {
-            return;
-        }
         if (!allocations.isEmpty()) {
             PotAllocation previous = allocations.getLast();
             Set<String> previousIds = previous.eligiblePlayers().stream().map(Player::getPlayerId).collect(Collectors.toSet());
@@ -412,10 +373,42 @@ final class PotCalculator {
         allocations.add(new PotAllocation(amount, List.copyOf(eligiblePlayers)));
     }
 
+    /**
+     * Everything needed to describe a hand's pot to clients: chip totals, the contribution ledger, the players
+     * and the last settlement. Build one per call so the breakdown and the uncalled amount read the same state.
+     *
+     * @param pot                  current total pot
+     * @param carryOverPot         chips carried over from an earlier hand
+     * @param handContributions    per-player chip contributions for this hand
+     * @param activePlayers        players active in the hand
+     * @param tablePlayers         full table roster
+     * @param lastSettlementResult previous settlement result, or {@code null} before the hand settles
+     * @param currentHighestBet    highest current street bet
+     * @param gameId               game identifier for diagnostics
+     */
+    record PotInputs(
+            int pot,
+            int carryOverPot,
+            Map<String, Integer> handContributions,
+            List<Player> activePlayers,
+            List<Player> tablePlayers,
+            HandSettlementResult lastSettlementResult,
+            int currentHighestBet,
+            String gameId) {
+
+        boolean isSettled() {
+            return lastSettlementResult != null && lastSettlementResult.settled();
+        }
+
+        boolean hasAllIn() {
+            return activePlayers.stream().anyMatch(player -> player.getIsAllIn() && !player.getHasFolded());
+        }
+    }
+
     /** A single main or side pot slice together with the contenders eligible to win it. */
     record PotAllocation(int amount, List<Player> eligiblePlayers) {
         PotAllocation {
-            eligiblePlayers = (eligiblePlayers == null) ? List.of() : List.copyOf(eligiblePlayers);
+            eligiblePlayers = List.copyOf(eligiblePlayers);
         }
     }
 
@@ -425,8 +418,8 @@ final class PotCalculator {
             Map<String, Integer> uncalledByPlayer,
             int uncalledTotal) {
         PotComputationResult {
-            allocations = (allocations == null) ? List.of() : List.copyOf(allocations);
-            uncalledByPlayer = (uncalledByPlayer == null) ? Map.of() : Map.copyOf(uncalledByPlayer);
+            allocations = List.copyOf(allocations);
+            uncalledByPlayer = Map.copyOf(uncalledByPlayer);
         }
     }
 }

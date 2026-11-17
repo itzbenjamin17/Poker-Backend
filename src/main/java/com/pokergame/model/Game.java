@@ -717,9 +717,7 @@ public class Game {
      * @return list of contested pot amounts
      */
     public List<Integer> getPotBreakdown() {
-        return PotCalculator.getPotBreakdown(
-                pot, carryOverPot, handContributions, activePlayers, players,
-                lastSettlementResult, bettingRound.getCurrentHighestBet(), gameId);
+        return PotCalculator.getPotBreakdown(potInputs());
     }
 
     /**
@@ -728,7 +726,11 @@ public class Game {
      * @return total uncalled chips eligible for refund
      */
     public int getUncalledAmount() {
-        return PotCalculator.getUncalledAmount(
+        return PotCalculator.getUncalledAmount(potInputs());
+    }
+
+    private PotCalculator.PotInputs potInputs() {
+        return new PotCalculator.PotInputs(
                 pot, carryOverPot, handContributions, activePlayers, players,
                 lastSettlementResult, bettingRound.getCurrentHighestBet(), gameId);
     }
