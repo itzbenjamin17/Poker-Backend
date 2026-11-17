@@ -700,7 +700,7 @@ class GameStateServiceTest {
         Player bb = Player.restoreBuilder().name("BB").playerId("bb").chips(1000).holeCards(List.of())
                 .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0)
                 .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
-        HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, true);
+        HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, false);
         Game terminal = Game.restoreBuilder().gameId(GAME_ID).players(List.of(sb, bb)).activePlayerIds(List.of("bb"))
                 .remainingDeck(List.of()).communityCards(List.of()).pot(10)
                 .dealerAnchorPlayerId("sb").smallBlindPlayerId("sb").bigBlindPlayerId("bb")
@@ -856,7 +856,7 @@ class GameStateServiceTest {
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId()).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
-                .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 100, true))
+                .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 100, false))
                 .readyCountdownActive(true).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of()).build();
 
@@ -890,7 +890,7 @@ class GameStateServiceTest {
                 .currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
                 .smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of(winner.getPlayerId(), 150), Map.of(),
-                        Set.of(winner.getPlayerId()), 0, true))
+                        Set.of(winner.getPlayerId()), 0, false))
                 .readyCountdownActive(true).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of()).build();
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
@@ -2084,7 +2084,7 @@ class GameStateServiceTest {
         List<Player> players = viewPlayers(false);
         players.get(0).setHandRank(HandRank.NO_HAND);
         HandSettlementResult settlement = new HandSettlementResult(
-                Map.of("a", 30), Map.of(), Set.of("a"), 0, true);
+                Map.of("a", 30), Map.of(), Set.of("a"), 0, false);
         Game game = viewGame(GamePhase.SHOWDOWN, settlement, false, ReadyGateState.CLOSED,
                 Map.of(), players, false);
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);

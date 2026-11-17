@@ -322,7 +322,7 @@ class PotCalculatorTest {
 
     @Test
     void getPotBreakdown_SettledGame_ReturnsTotalPot() {
-        HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, true);
+        HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, false);
 
         List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
                 100, 0, Map.of(), List.of(), List.of(), settled, 0, GAME_ID));
@@ -446,7 +446,7 @@ class PotCalculatorTest {
 
     @Test
     void getUncalledAmount_SettledGame_ReturnsZero() {
-        HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, true);
+        HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, false);
 
         assertEquals(0, PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
                 100, 0, Map.of(), List.of(), List.of(), settled, 0, GAME_ID)));

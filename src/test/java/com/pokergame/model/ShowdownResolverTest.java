@@ -116,14 +116,14 @@ class ShowdownResolverTest {
                 List.of(new PotAllocation(200, List.of(a, b))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, computation, List.of(a, b), List.of("a", "b"), "a");
+                GAME_ID, computation, List.of(a, b), List.of("a", "b"), "a", true);
 
         assertEquals(200, a.getChips());
         assertEquals(0, b.getChips());
         assertEquals(0, d.remainder());
         assertEquals(List.of(a), d.winners());
         assertEquals(200, d.settlement().contestedAwards().get("a"));
-        assertTrue(d.settlement().settled());
+        assertTrue(d.settlement().wentToShowdown());
     }
 
     @Test
@@ -134,7 +134,7 @@ class ShowdownResolverTest {
                 List.of(new PotAllocation(101, List.of(a, b))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, computation, List.of(a, b), List.of("a", "b"), "a");
+                GAME_ID, computation, List.of(a, b), List.of("a", "b"), "a", true);
 
         assertEquals(50, a.getChips());
         assertEquals(51, b.getChips());
@@ -152,7 +152,7 @@ class ShowdownResolverTest {
                 List.of(new PotAllocation(101, List.of(a, b, c))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, computation, List.of(a, b, c), List.of("a", "b", "c"), "b");
+                GAME_ID, computation, List.of(a, b, c), List.of("a", "b", "c"), "b", true);
 
         assertEquals(34, c.getChips());
         assertEquals(34, a.getChips());
@@ -171,7 +171,7 @@ class ShowdownResolverTest {
                 List.of(new PotAllocation(101, List.of(a, b, c))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, computation, List.of(a, b, c), List.of(), "a");
+                GAME_ID, computation, List.of(a, b, c), List.of(), "a", true);
 
         assertEquals(34, b.getChips());
         assertEquals(34, c.getChips());
@@ -187,7 +187,7 @@ class ShowdownResolverTest {
                 List.of(new PotAllocation(100, List.of(a))), Map.of("a", 40, "f", 30), 70);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, computation, List.of(a, folded), List.of("a", "f"), "a");
+                GAME_ID, computation, List.of(a, folded), List.of("a", "f"), "a", true);
 
         assertEquals(140, a.getChips());
         assertEquals(0, folded.getChips());
@@ -200,7 +200,7 @@ class ShowdownResolverTest {
                 List.of(new PotAllocation(75, List.of())), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, computation, List.of(), List.of(), null);
+                GAME_ID, computation, List.of(), List.of(), null, true);
 
         assertEquals(75, d.remainder());
         assertTrue(d.winners().isEmpty());
@@ -247,7 +247,7 @@ class ShowdownResolverTest {
                 new PotAllocation(40, List.of(b, c))), Map.of("c", 12), 12);
 
         var distribution = ShowdownResolver.distribute(
-                GAME_ID, pots, List.of(a, b, c), List.of("a", "b", "c"), "a");
+                GAME_ID, pots, List.of(a, b, c), List.of("a", "b", "c"), "a", true);
 
         assertEquals(List.of(a, b, c), distribution.winners());
         assertEquals(Map.of("a", 30, "b", 51, "c", 50), distribution.settlement().contestedAwards());

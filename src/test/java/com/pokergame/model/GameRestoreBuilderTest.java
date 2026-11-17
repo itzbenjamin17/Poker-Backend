@@ -54,7 +54,7 @@ class GameRestoreBuilderTest {
 
         Map<String, Integer> contributions = Map.of("p1", 200, "p2", 250);
         HandSettlementResult settlement = new HandSettlementResult(
-                Map.of("p1", 450), Map.of(), Set.of("p1"), 0, false);
+                Map.of("p1", 450), Map.of(), Set.of("p1"), 0, true);
         int lastFullRaise = 70;
         Map<String, Integer> lastActedWager = Map.of("p1", 100, "p2", 100);
         List<String> seatOrder = List.of("p2", "p3", "p1");
@@ -162,8 +162,29 @@ class GameRestoreBuilderTest {
                 game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));         // 36
         assertEquals(taskGenerations, game.getScheduledTaskGenerationsSnapshot());    // 36
 
-        // Verify hand evaluation works on the restored game by triggering showdown
+        // A restored hand that already has a settlement returns its recorded winners without a second showdown
+        assertEquals(List.of(p1), game.conductShowdown());
+    }
+
+    @Test
+    @DisplayName("A restored hand with no settlement yet evaluates its contenders' hands at showdown")
+    void restoredHandWithoutSettlement_ConductShowdownEvaluatesHands() {
+        Player p1 = player("p1", "Alice", 1000);
+        p1.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+        Player p2 = player("p2", "Bob", 800);
+        p2.getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.CLUBS)));
+        Game game = Game.restoreBuilder().gameId(GAME_ID).players(List.of(p1, p2))
+                .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of())
+                .communityCards(List.of(new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
+                        new Card(Rank.QUEEN, Suit.SPADES)))
+                .pot(200).currentPlayerId("p1").currentHighestBet(100).currentPhase(GamePhase.FLOP)
+                .smallBlind(15).bigBlind(30).handContributions(Map.of("p1", 100, "p2", 100))
+                .dealerAnchorPlayerId("p2").smallBlindPlayerId("p2").bigBlindPlayerId("p1")
+                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                .build();
+
         List<Player> winners = game.conductShowdown();
+
         assertEquals(List.of(p1), winners);
         assertEquals(HandRank.ROYAL_FLUSH, p1.getHandRank());
     }

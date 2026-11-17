@@ -60,7 +60,7 @@ class GameEligibilityTest {
                 .smallBlind(10)
                 .bigBlind(20)
                 .handContributions(Map.of())
-                .lastSettlementResult(settled ? new HandSettlementResult(Map.of("p1", 100), Map.of(), Set.of("p1"), 0, true) : null)
+                .lastSettlementResult(settled ? new HandSettlementResult(Map.of("p1", 100), Map.of(), Set.of("p1"), 0, false) : null)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 .build();

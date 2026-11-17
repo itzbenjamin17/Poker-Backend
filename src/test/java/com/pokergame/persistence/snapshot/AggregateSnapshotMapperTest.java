@@ -1113,7 +1113,7 @@ class AggregateSnapshotMapperTest {
             // Conduct Showdown on restored instance
             assertDoesNotThrow(restored::conductShowdown);
             assertNotNull(restored.getLastSettlementResult());
-            assertTrue(restored.getLastSettlementResult().settled());
+            assertTrue(restored.isHandSettled());
         }
 
         @Test
@@ -1157,12 +1157,55 @@ class AggregateSnapshotMapperTest {
             assertEquals(originalSettlement.refunds(), restoredSettlement.refunds());
             assertEquals(originalSettlement.winnerIds(), restoredSettlement.winnerIds());
             assertEquals(originalSettlement.remainder(), restoredSettlement.remainder());
-            assertEquals(originalSettlement.settled(), restoredSettlement.settled());
+            assertEquals(originalSettlement.wentToShowdown(), restoredSettlement.wentToShowdown());
 
             // Perform resetForNewHand on restored game
             assertDoesNotThrow(restored::resetForNewHand);
             assertEquals(GamePhase.PRE_FLOP, restored.getCurrentPhase());
             assertTrue(restored.getCommunityCards().isEmpty());
+        }
+
+        @Test
+        @DisplayName("Settlement round-trip keeps whether the hand went to a contested showdown")
+        void testSettlementRoundTrip_PreservesContestedShowdownVersusUncontestedFoldWin() {
+            Player p1 = createPlayer("p1", "Alice", 1000);
+            Player p2 = createPlayer("p2", "Bob", 1000);
+            List<Player> contestedPlayers = List.of(p1, p2);
+            Room contestedRoom = createRoom(ROOM_ID, contestedPlayers);
+            Game contested = new Game(ROOM_ID, contestedPlayers, 6, 10, 20);
+            assertFalse(contested.resetForNewHand());
+            contested.dealHoleCards();
+            contested.postBlinds();
+            contested.dealFlop();
+            contested.dealTurn();
+            contested.dealRiver();
+            contested.conductShowdown();
+            assertTrue(contested.wasContestedShowdown());
+
+            Game restoredContested = snapshotMapper.deserialize(
+                    snapshotMapper.serialize(snapshotMapper.captureStateImage(contestedRoom, contested))).game();
+
+            assertTrue(restoredContested.isHandSettled());
+            assertTrue(restoredContested.wasContestedShowdown());
+
+            Player f1 = createPlayer("p1", "Alice", 1000);
+            Player f2 = createPlayer("p2", "Bob", 1000);
+            List<Player> foldPlayers = List.of(f1, f2);
+            Room foldRoom = createRoom(ROOM_ID, foldPlayers);
+            Game foldWin = new Game(ROOM_ID, foldPlayers, 6, 10, 20);
+            assertFalse(foldWin.resetForNewHand());
+            foldWin.dealHoleCards();
+            foldWin.postBlinds();
+            Player folder = foldWin.getCurrentPlayer();
+            foldWin.processPlayerDecision(folder, new PlayerDecision(PlayerAction.FOLD, 0, folder.getPlayerId()));
+            assertTrue(foldWin.isHandSettled());
+            assertFalse(foldWin.wasContestedShowdown());
+
+            Game restoredFoldWin = snapshotMapper.deserialize(
+                    snapshotMapper.serialize(snapshotMapper.captureStateImage(foldRoom, foldWin))).game();
+
+            assertTrue(restoredFoldWin.isHandSettled());
+            assertFalse(restoredFoldWin.wasContestedShowdown());
         }
 
         // =========================================================================

@@ -443,13 +443,13 @@ public final class AggregateSnapshotMapper {
     private static AggregateStateImage.SettlementState settlementState(HandSettlementResult result) {
         if (result == null) return null;
         return new AggregateStateImage.SettlementState(result.contestedAwards(), result.refunds(),
-                result.winnerIds(), result.remainder(), result.settled());
+                result.winnerIds(), result.remainder(), result.wentToShowdown());
     }
 
     private static HandSettlementResult settlementResult(AggregateStateImage.SettlementState state) {
         if (state == null) return null;
         return new HandSettlementResult(state.contestedAwards(), state.refunds(),
-                state.winnerIds(), state.remainder(), state.settled());
+                state.winnerIds(), state.remainder(), state.wentToShowdown());
     }
 
     private static AggregateStateImage.CardState toCardState(Card card) {

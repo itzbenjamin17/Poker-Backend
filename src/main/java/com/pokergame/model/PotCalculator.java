@@ -397,7 +397,7 @@ final class PotCalculator {
             String gameId) {
 
         boolean isSettled() {
-            return lastSettlementResult != null && lastSettlementResult.settled();
+            return lastSettlementResult != null;
         }
 
         boolean hasAllIn() {

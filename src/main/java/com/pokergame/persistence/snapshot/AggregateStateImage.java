@@ -110,7 +110,7 @@ public record AggregateStateImage(boolean deleted, RoomState room, GameState gam
 
     /** Plain persisted form of the immutable hand settlement result. */
     public record SettlementState(Map<String, Integer> contestedAwards, Map<String, Integer> refunds,
-            Set<String> winnerIds, int remainder, boolean settled) { }
+            Set<String> winnerIds, int remainder, boolean wentToShowdown) { }
 
     /** Plain persisted form of the immutable terminal game end result. */
     public record TerminalResultState(

@@ -497,7 +497,7 @@ class PlayerDepartureHandlerTest {
             host.setIsOut();
             game.conductShowdown();
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
-            assertTrue(game.getLastSettlementResult().settled());
+            assertTrue(game.isHandSettled());
             survivor.setDisconnected(true);
             game.setForfeitPending(true);
             game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 10L);
@@ -1288,7 +1288,7 @@ class PlayerDepartureHandlerTest {
             Player busted = game.getPlayers().get(0);
             busted.setIsOut();
             game.conductShowdown();
-            assertTrue(game.getLastSettlementResult().settled());
+            assertTrue(game.isHandSettled());
             assertTrue(game.isGameDecided());
             assertFalse(game.isGameOver());
             long deadline = BASE_EPOCH_MS - 100;

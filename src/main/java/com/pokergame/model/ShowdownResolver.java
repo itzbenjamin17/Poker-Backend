@@ -62,11 +62,12 @@ final class ShowdownResolver {
      * @param players        all seated players (used to resolve refund recipients and fallback seat order)
      * @param handSeatOrder  clockwise player IDs for the current hand; falls back to {@code players} order when empty
      * @param dealerPlayerId player ID holding the dealer button for odd-chip ordering, or {@code null}
+     * @param wentToShowdown whether two or more players had their hands evaluated, recorded on the settlement
      * @return the distribution result
      */
     static Distribution distribute(String gameId,
             PotComputationResult computation, List<Player> players,
-            List<String> handSeatOrder, String dealerPlayerId) {
+            List<String> handSeatOrder, String dealerPlayerId, boolean wentToShowdown) {
         List<PotAllocation> allocations = computation.allocations();
         if (logger.isDebugEnabled()) {
             logger.debug("Side-pot allocations for game {}: {}", gameId, PotCalculator.allocationSummary(allocations));
@@ -130,7 +131,7 @@ final class ShowdownResolver {
 
         HandSettlementResult settlement = new HandSettlementResult(awards, refunds,
                 uniqueWinners.stream().map(Player::getPlayerId).collect(Collectors.toSet()),
-                remainder, true);
+                remainder, wentToShowdown);
         logger.info(
                 "Side-pot distribution complete for game {} | uniqueWinners={} | refundedUncalled={} | potRemainder={}",
                 gameId,

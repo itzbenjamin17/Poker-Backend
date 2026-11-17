@@ -840,7 +840,7 @@ class GameTest {
             assertEquals(1050, a.getChips());
             assertEquals(950, folded.getChips());
             assertEquals(0, hand.getPot());
-            assertTrue(hand.getLastSettlementResult().settled());
+            assertTrue(hand.isHandSettled());
         }
 
         @Test
@@ -878,7 +878,7 @@ class GameTest {
 
             assertEquals(TurnOutcome.TurnOutcomeType.SHOWDOWN, outcome.type());
             assertEquals(GamePhase.SHOWDOWN, hand.getCurrentPhase());
-            assertTrue(hand.getLastSettlementResult().settled());
+            assertTrue(hand.isHandSettled());
         }
 
         @Test
@@ -1705,7 +1705,7 @@ class GameTest {
                     .pot(1).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                     .currentPlayerId("a").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                     .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of())
-                    .preHandCarryOver(1).lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, true))
+                    .preHandCarryOver(1).lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, false))
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();

@@ -247,7 +247,7 @@ class GameCompletionHandlerTest {
                     .dealerAnchorPlayerId("host").smallBlindPlayerId("host").bigBlindPlayerId("p2")
                     .currentPlayerId("host").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false).smallBlind(5).bigBlind(10)
                     .handContributions(Map.of()).preHandCarryOver(10)
-                    .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, true))
+                    .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, false))
                     .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of()).build();
             registerGame(terminal);

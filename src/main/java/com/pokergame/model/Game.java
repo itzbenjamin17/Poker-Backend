@@ -4,7 +4,6 @@ import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.GamePhase;
-import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ReadyCountdownStartOutcome;
 import com.pokergame.enums.ReadyCountdownTimeoutOutcome;
@@ -427,7 +426,7 @@ public class Game {
      * @return list of winning players
      */
     public List<Player> conductShowdown() {
-        if (lastSettlementResult != null && lastSettlementResult.settled()) {
+        if (lastSettlementResult != null) {
             return players.stream()
                     .filter(p -> lastSettlementResult.winnerIds().contains(p.getPlayerId()))
                     .toList();
@@ -446,7 +445,7 @@ public class Game {
 
         if (showdownPlayers.isEmpty()) {
             // Keep unclaimed chips as carry-over so the ready/new-hand flow can continue safely.
-            lastSettlementResult = new HandSettlementResult(Map.of(), Map.of(), Set.of(), pot, true);
+            lastSettlementResult = new HandSettlementResult(Map.of(), Map.of(), Set.of(), pot, false);
             resetHandAccountingAfterShowdown();
             return List.of();
         }
@@ -461,7 +460,7 @@ public class Game {
                     p.getName(), p.getHandRank(), p.getBestHand()));
         }
 
-        List<Player> winners = distributeSidePotsAtShowdown(showdownPlayers);
+        List<Player> winners = distributeSidePotsAtShowdown(showdownPlayers, showdownPlayers.size() > 1);
         resetHandAccountingAfterShowdown();
 
         logger.debug("Pot after distribution: {}", pot);
@@ -810,23 +809,17 @@ public class Game {
      * @return {@code true} if hand settlement is complete
      */
     public boolean isHandSettled() {
-        return lastSettlementResult != null && lastSettlementResult.settled();
+        return lastSettlementResult != null;
     }
 
     /**
      * Returns whether the current or most recent hand settled a contested showdown with evaluated
      * hands rather than an uncontested fold win or void hand.
      *
-     * @return {@code true} if the hand is settled and at least one settled winner has an evaluated hand rank
+     * @return {@code true} if the hand is settled and two or more players had their hands evaluated
      */
     public boolean wasContestedShowdown() {
-        if (!isHandSettled()) {
-            return false;
-        }
-        Set<String> winnerIds = lastSettlementResult.winnerIds();
-        return players.stream()
-                .filter(player -> winnerIds.contains(player.getPlayerId()))
-                .anyMatch(player -> player.getHandRank() != null && player.getHandRank() != HandRank.NO_HAND);
+        return lastSettlementResult != null && lastSettlementResult.wentToShowdown();
     }
 
     public List<String> getHandSeatOrderSnapshot() {
@@ -1055,13 +1048,13 @@ public class Game {
         return activePlayers.stream().filter(Player::isInHand).count() <= 1;
     }
 
-    private List<Player> distributeSidePotsAtShowdown(List<Player> showdownPlayers) {
+    private List<Player> distributeSidePotsAtShowdown(List<Player> showdownPlayers, boolean wentToShowdown) {
         logger.info("Distributing side pots for game {}", gameId);
         PotComputationResult computation = PotCalculator.computePotAllocationsAndUncalled(
                 pot, carryOverPot, handContributions, activePlayers, players, showdownPlayers, gameId);
         ShowdownResolver.Distribution distribution =
                 ShowdownResolver.distribute(gameId, computation, players,
-                        seating.getHandSeatOrderSnapshot(), seating.getDealerPlayerId());
+                        seating.getHandSeatOrderSnapshot(), seating.getDealerPlayerId(), wentToShowdown);
         pot = distribution.remainder();
         lastSettlementResult = distribution.settlement();
         return distribution.winners();

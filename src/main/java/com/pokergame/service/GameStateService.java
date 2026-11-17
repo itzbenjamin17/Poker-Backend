@@ -133,7 +133,7 @@ public class GameStateService {
         String gameId = game.getGameId();
 
         HandSettlementResult settlement = game.getLastSettlementResult();
-        if (settlement == null || !settlement.settled()) {
+        if (settlement == null) {
             throw new IllegalStateException("Cannot broadcast showdown results for unsettled game " + gameId);
         }
 
