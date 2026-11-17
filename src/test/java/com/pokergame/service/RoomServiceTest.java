@@ -37,6 +37,7 @@ import com.pokergame.service.event.RoomDestroyed;
 import com.pokergame.service.event.RoomMemberRegistered;
 import com.pokergame.service.event.RoomMembershipRetired;
 import com.pokergame.testutil.MutableClock;
+import com.pokergame.testutil.TestTimings;
 import com.pokergame.util.LockLease;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -1334,7 +1335,10 @@ class RoomServiceTest {
         }
     }
 
-    /** Characterizes what the scheduled lobby inactivity callback does when it fires. */
+    /**
+     * Characterizes what the room service does when the lobby inactivity timer fires. The callback
+     * itself is covered by {@link LobbyInactivitySchedulerTest}.
+     */
     @Nested
     @DisplayName("lobby inactivity timer")
     class LobbyInactivityTimer {
@@ -1379,36 +1383,6 @@ class RoomServiceTest {
         }
 
         @Test
-        @DisplayName("firing before the deadline leaves the lobby open and publishes nothing")
-        void givenActiveLobby_whenTimerFiresEarly_thenNothingHappens() {
-            String roomId = createRoom(roomService, validCreateRequest).roomId();
-            clock.setMillis(deadlineOf(roomId) - 1L);
-            reset(messagingTemplate, eventPublisher);
-
-            fire(roomId, latestCallback());
-
-            assertThat(coordinatedGetRoom(roomId)).isNotNull();
-            verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
-            verify(eventPublisher, never()).publishEvent(any(Object.class));
-            verify(proxiedRoomService, never()).closeLobbyDueToInactivity(anyString());
-        }
-
-        @Test
-        @DisplayName("the timer callback takes the room lock itself when the scheduler thread holds none")
-        void givenCallerWithoutRoomLock_whenTimerFires_thenCallbackLocksAndClosesExpiredLobby() {
-            String roomId = createRoom(roomService, validCreateRequest).roomId();
-            clock.setMillis(deadlineOf(roomId) + 1L);
-            Runnable rawCallback = latestCallback();
-            assertThat(roomCoordinator.isHeldByCurrentThread(roomId)).isFalse();
-
-            rawCallback.run();
-
-            assertThat(coordinatedGetRoom(roomId)).isNull();
-            verify(proxiedRoomService).closeLobbyDueToInactivity(roomId);
-            assertThat(roomCoordinator.isHeldByCurrentThread(roomId)).isFalse();
-        }
-
-        @Test
         @DisplayName("activity extends the deadline so the original timer no longer closes the lobby")
         void givenJoinAfterScheduling_whenOriginalTimerFiresAtOldDeadline_thenLobbyStaysOpen() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
@@ -1428,22 +1402,6 @@ class RoomServiceTest {
             clock.setMillis(extendedDeadline + 1L);
             fire(roomId, latestCallback());
             assertThat(coordinatedGetRoom(roomId)).isNull();
-        }
-
-        @Test
-        @DisplayName("firing after the room was already destroyed does nothing")
-        void givenDestroyedRoom_whenTimerFires_thenNoBroadcastAndNoError() {
-            String roomId = createRoom(roomService, validCreateRequest).roomId();
-            long deadline = deadlineOf(roomId);
-            Runnable callback = latestCallback();
-            withRoomLock(roomId, () -> roomService.destroyRoom(roomId));
-            reset(messagingTemplate, eventPublisher);
-            clock.setMillis(deadline + 1L);
-
-            assertThatCode(() -> fire(roomId, callback)).doesNotThrowAnyException();
-
-            verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
-            verify(eventPublisher, never()).publishEvent(any(Object.class));
         }
     }
 }

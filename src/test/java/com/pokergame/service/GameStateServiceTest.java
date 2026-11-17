@@ -15,7 +15,9 @@ import com.pokergame.enums.ReadyCountdownStartOutcome;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.RejectedAction;
 import com.pokergame.enums.ResponseMessage;
+import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
+import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.*;
 import com.pokergame.security.PlayerPrincipal;
 import org.junit.jupiter.api.BeforeEach;
@@ -1985,5 +1987,303 @@ class GameStateServiceTest {
         }
         lenient().when(user.getSessions()).thenReturn(sessions);
         return user;
+    }
+
+    // ==================== Full public view characterization Tests ====================
+
+    private static final Card VIEW_ACE = new Card(Rank.ACE, Suit.SPADES);
+    private static final Card VIEW_KING = new Card(Rank.KING, Suit.HEARTS);
+    private static final Card VIEW_TWO = new Card(Rank.TWO, Suit.CLUBS);
+    private static final Card VIEW_THREE = new Card(Rank.THREE, Suit.CLUBS);
+    private static final List<Card> VIEW_BOARD = List.of(
+            new Card(Rank.ACE, Suit.HEARTS),
+            new Card(Rank.NINE, Suit.DIAMONDS),
+            new Card(Rank.SEVEN, Suit.CLUBS));
+    private static final long VIEW_NOW_MS = FIXED_INSTANT.toEpochMilli();
+
+    /**
+     * Protects the contract that a live betting view names the actor, lists the legal actions and hides hole cards.
+     */
+    @Test
+    void getPublicGameStateSnapshot_LiveBettingHand_NamesActorLegalActionsAndHidesHoleCards() {
+        Game game = viewGame(GamePhase.FLOP, null, false, ReadyGateState.CLOSED,
+                Map.of(ScheduledGameTask.TURN_TIMEOUT, 5_000L), viewPlayers(false), false);
+        testRoom.setInactivityDeadlineEpochMs(9_000L);
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+
+        PublicGameStateResponse actual = gameStateService.getPublicGameStateSnapshot(game);
+
+        Player current = game.getCurrentPlayer();
+        assertEquals(new PublicGameStateResponse(
+                6, game.getPot(), game.getPotBreakdown(), game.getUncalledAmount(), GamePhase.FLOP,
+                game.getCurrentHighestBet(), VIEW_BOARD,
+                List.of(viewState("a", "Alice", 90, 10, "ACTIVE", false, current.getName().equals("Alice"), false,
+                                true, false, null, null, null, null, null),
+                        viewState("b", "Bob", 80, 20, "ACTIVE", false, current.getName().equals("Bob"), false,
+                                false, true, null, null, null, null, null)),
+                current.getName(), current.getPlayerId(), null, null, false, null, false, null, false, null,
+                false, null, game.getLegalActionsFor(current), 10, game.getMinimumRaiseAmount(current),
+                3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision(), 5_000L, 9_000L), actual);
+    }
+
+    /**
+     * Protects the contract that a live view during auto-advance has no actor and carries the banner.
+     */
+    @Test
+    void getPublicGameStateSnapshot_DuringAutoAdvance_HasNoActorAndCarriesBanner() {
+        Game game = viewGame(GamePhase.FLOP, null, false, ReadyGateState.CLOSED,
+                Map.of(ScheduledGameTask.AUTO_ADVANCE, 7_000L), viewPlayers(true), false);
+        testRoom.setInactivityDeadlineEpochMs(9_000L);
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+
+        PublicGameStateResponse actual = gameStateService.getPublicGameStateSnapshot(game);
+
+        assertEquals(new PublicGameStateResponse(
+                6, game.getPot(), game.getPotBreakdown(), game.getUncalledAmount(), GamePhase.FLOP,
+                game.getCurrentHighestBet(), VIEW_BOARD,
+                List.of(viewState("a", "Alice", 90, 10, "ALL_IN", true, false, false, true, false,
+                                null, null, null, null, null),
+                        viewState("b", "Bob", 80, 20, "ALL_IN", true, false, false, false, true,
+                                null, null, null, null, null)),
+                null, null, null, null, true, "Auto-advancing...", false, null, false, null, false, null,
+                List.of(), null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision(), null,
+                9_000L), actual);
+    }
+
+    /**
+     * Protects the contract that a settled hand at the ready gate shows results and reveals contested cards.
+     */
+    @Test
+    void getPublicGameStateSnapshot_SettledHandAtReadyGate_ShowsResultsAndRevealsContestedCards() {
+        HandSettlementResult settlement = new HandSettlementResult(
+                Map.of("a", 30), Map.of(), Set.of("a"), 4, true);
+        Game game = viewGame(GamePhase.SHOWDOWN, settlement, true, ReadyGateState.COUNTING_DOWN,
+                Map.of(), viewPlayers(false), false);
+        testRoom.setInactivityDeadlineEpochMs(9_000L);
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+
+        PublicGameStateResponse actual = gameStateService.getPublicGameStateSnapshot(game);
+
+        assertEquals(new PublicGameStateResponse(
+                6, game.getPot(), game.getPotBreakdown(), game.getUncalledAmount(), GamePhase.SHOWDOWN,
+                game.getCurrentHighestBet(), VIEW_BOARD,
+                List.of(viewState("a", "Alice", 90, 10, "ACTIVE", false, false, false, true, false,
+                                HandRank.ONE_PAIR, List.of(VIEW_ACE, VIEW_KING), true, 30, List.of(VIEW_ACE, VIEW_KING)),
+                        viewState("b", "Bob", 80, 20, "ACTIVE", false, false, false, false, true,
+                                HandRank.HIGH_CARD, List.of(VIEW_TWO, VIEW_THREE), false, 0, List.of(VIEW_TWO, VIEW_THREE))),
+                null, null, List.of("Alice"), 30, false, null, true, 12_345L, false, null, true, 4,
+                List.of(), null, null, 3L, ReadyGateState.COUNTING_DOWN, VIEW_NOW_MS, game.getStateRevision(),
+                null, 9_000L), actual);
+    }
+
+    /**
+     * Protects the contract that a settled hand won without a contest does not reveal hole cards.
+     */
+    @Test
+    void getPublicGameStateSnapshot_UncontestedSettledHand_DoesNotRevealHoleCards() {
+        List<Player> players = viewPlayers(false);
+        players.get(0).setHandRank(HandRank.NO_HAND);
+        HandSettlementResult settlement = new HandSettlementResult(
+                Map.of("a", 30), Map.of(), Set.of("a"), 0, true);
+        Game game = viewGame(GamePhase.SHOWDOWN, settlement, false, ReadyGateState.CLOSED,
+                Map.of(), players, false);
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+
+        PublicGameStateResponse actual = gameStateService.getPublicGameStateSnapshot(game);
+
+        assertEquals(List.of(
+                        viewState("a", "Alice", 90, 10, "ACTIVE", false, false, false, true, false,
+                                HandRank.NO_HAND, List.of(VIEW_ACE, VIEW_KING), true, 30, null),
+                        viewState("b", "Bob", 80, 20, "ACTIVE", false, false, false, false, true,
+                                HandRank.HIGH_CARD, List.of(VIEW_TWO, VIEW_THREE), false, 0, null)),
+                actual.players());
+        assertEquals(List.of("Alice"), actual.winners());
+        assertEquals(30, actual.winningsPerPlayer());
+        assertTrue(actual.handSettled());
+    }
+
+    /**
+     * Protects the contract that the showdown broadcast clears the actor, flags settlement and reveals contested cards.
+     */
+    @Test
+    void broadcastShowdownResults_ContestedHandWithFoldedPlayer_ClearsActorFlagsSettlementAndRevealsContestedCards() {
+        HandSettlementResult settlement = new HandSettlementResult(
+                Map.of("a", 30), Map.of(), Set.of("a"), 4, true);
+        List<Player> players = viewPlayers(false);
+        players.set(1, Player.restoreBuilder().name("Bob").playerId("b").chips(80).currentBet(20)
+                .holeCards(List.of(VIEW_TWO, VIEW_THREE)).bestHand(List.of(VIEW_TWO, VIEW_THREE))
+                .handRank(HandRank.HIGH_CARD)
+                .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false).build());
+        Game game = viewGame(GamePhase.SHOWDOWN, settlement, true, ReadyGateState.COUNTING_DOWN,
+                Map.of(), players, false);
+        long revisionBefore = game.getStateRevision();
+
+        gameStateService.broadcastShowdownResults(game);
+
+        assertEquals(revisionBefore + 1, game.getStateRevision());
+        assertEquals(new PublicGameStateResponse(
+                6, game.getPot(), game.getPotBreakdown(), game.getUncalledAmount(), GamePhase.SHOWDOWN,
+                game.getCurrentHighestBet(), VIEW_BOARD,
+                List.of(viewState("a", "Alice", 90, 10, "ACTIVE", false, false, false, true, false,
+                                HandRank.ONE_PAIR, List.of(VIEW_ACE, VIEW_KING), true, 30, List.of(VIEW_ACE, VIEW_KING)),
+                        viewState("b", "Bob", 80, 20, "FOLDED", false, false, true, false, true,
+                                null, List.of(), false, 0, null)),
+                null, null, List.of("Alice"), 30, null, null, true, 12_345L, null, null, true, 4,
+                null, null, null, 3L, ReadyGateState.COUNTING_DOWN, VIEW_NOW_MS, game.getStateRevision()),
+                capturePublicBroadcast());
+    }
+
+    /**
+     * Protects the contract that the auto-advance broadcast has no actor, hides cards and carries the banner.
+     */
+    @Test
+    void broadcastGameStateWithAutoAdvance_ShouldHaveNoActorHideCardsAndCarryBanner() {
+        Game game = viewGame(GamePhase.FLOP, null, false, ReadyGateState.CLOSED,
+                Map.of(), viewPlayers(true), false);
+        long revisionBefore = game.getStateRevision();
+
+        gameStateService.broadcastGameStateWithAutoAdvance(game, "Banner");
+
+        assertEquals(revisionBefore + 1, game.getStateRevision());
+        assertEquals(new PublicGameStateResponse(
+                6, game.getPot(), game.getPotBreakdown(), game.getUncalledAmount(), GamePhase.FLOP,
+                game.getCurrentHighestBet(), VIEW_BOARD,
+                List.of(viewState("a", "Alice", 90, 10, "ALL_IN", true, false, false, true, false,
+                                HandRank.ONE_PAIR, List.of(), null, null, null),
+                        viewState("b", "Bob", 80, 20, "ALL_IN", true, false, false, false, true,
+                                HandRank.HIGH_CARD, List.of(), null, null, null)),
+                null, null, null, null, true, "Banner", false, null, null, null, null, null, List.of(),
+                null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision()),
+                capturePublicBroadcast());
+    }
+
+    /**
+     * Protects the contract that a private view holds the player's own cards and rejects an unknown player.
+     */
+    @Test
+    void getPrivatePlayerStateSnapshot_ReturnsOwnCardsAndRejectsUnknownPlayer() {
+        List<Player> players = viewPlayers(false);
+        players.get(1).setIsOut();
+        Game game = viewGame(GamePhase.FLOP, null, false, ReadyGateState.CLOSED,
+                Map.of(), players, false);
+
+        assertEquals(new PrivatePlayerState("a", 3L, List.of(VIEW_ACE, VIEW_KING)),
+                gameStateService.getPrivatePlayerStateSnapshot(game, "Alice"));
+        assertEquals(new PrivatePlayerState("b", 3L, List.of(VIEW_TWO, VIEW_THREE)),
+                gameStateService.getPrivatePlayerStateSnapshot(game, "Bob"));
+        assertThrows(ResourceNotFoundException.class,
+                () -> gameStateService.getPrivatePlayerStateSnapshot(game, "Spectator"));
+    }
+
+    /**
+     * Protects the contract that a contested win game-end view reveals in-hand cards and closes the ready gate.
+     */
+    @Test
+    void buildGameEndResponse_ContestedWin_RevealsInHandCardsAndClosesReadyGate() {
+        HandSettlementResult settlement = new HandSettlementResult(
+                Map.of("a", 30), Map.of(), Set.of("a"), 0, true);
+        Game game = viewGame(GamePhase.SHOWDOWN, settlement, false, ReadyGateState.COUNTING_DOWN,
+                Map.of(), viewPlayers(false), true);
+        Player winner = game.findPlayerByName("Alice");
+
+        GameEndResponse response = gameStateService.buildGameEndResponse(game, winner, false);
+
+        assertEquals(new GameEndResponse(ResponseMessage.GAME_END.getMessage(), GAME_ID, "Alice", 90, false,
+                "Alice wins the game with 90 chips!",
+                new PublicGameStateResponse(
+                        6, game.getPot(), game.getPotBreakdown(), game.getUncalledAmount(),
+                        GamePhase.SHOWDOWN, game.getCurrentHighestBet(), VIEW_BOARD,
+                        List.of(viewState("a", "Alice", 90, 10, "ACTIVE", false, false, false, true, false,
+                                        HandRank.ONE_PAIR, List.of(VIEW_ACE, VIEW_KING), true, null,
+                                        List.of(VIEW_ACE, VIEW_KING)),
+                                viewState("b", "Bob", 80, 20, "ACTIVE", false, false, false, false, true,
+                                        HandRank.HIGH_CARD, List.of(VIEW_TWO, VIEW_THREE), false, null,
+                                        List.of(VIEW_TWO, VIEW_THREE))),
+                        null, null, List.of("Alice"), null, false, null, false, null, false, null, true, null,
+                        List.of(), null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision())),
+                response);
+    }
+
+    /**
+     * Protects the contract that the abandonment view has no winner, a closed gate and the INACTIVITY reason.
+     */
+    @Test
+    void buildAbandonmentResponse_HasNoWinnerClosedGateAndInactivityReason() {
+        Game game = viewGame(GamePhase.FLOP, null, false, ReadyGateState.CLOSED,
+                Map.of(), viewPlayers(false), false);
+
+        GameEndResponse response = gameStateService.buildAbandonmentResponse(game);
+
+        assertEquals(new GameEndResponse(ResponseMessage.GAME_END.getMessage(), GAME_ID, null, null, false,
+                true, "INACTIVITY", "Game abandoned due to inactivity.",
+                new PublicGameStateResponse(
+                        6, game.getPot(), game.getPotBreakdown(), game.getUncalledAmount(), GamePhase.FLOP,
+                        game.getCurrentHighestBet(), VIEW_BOARD,
+                        List.of(viewState("a", "Alice", 90, 10, "ACTIVE", false, false, false, true, false,
+                                        null, List.of(), false, null, null),
+                                viewState("b", "Bob", 80, 20, "ACTIVE", false, false, false, false, true,
+                                        null, List.of(), false, null, null)),
+                        null, null, List.of(), null, false, null, false, null, false, null, false, null,
+                        List.of(), null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision())),
+                response);
+    }
+
+    private PublicGameStateResponse capturePublicBroadcast() {
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        return (PublicGameStateResponse) captor.getValue();
+    }
+
+    private static PublicPlayerState viewState(String id, String name, int chips, int bet, String status,
+            boolean allIn, boolean current, boolean folded, boolean smallBlind, boolean bigBlind,
+            HandRank rank, List<Card> best, Boolean winner, Integer won, List<Card> hole) {
+        return new PublicPlayerState(id, name, chips, bet, status, allIn, current, folded, smallBlind,
+                bigBlind, rank, best, winner, won, hole, null, false);
+    }
+
+    private static List<Player> viewPlayers(boolean allIn) {
+        Player alice = Player.restoreBuilder().name("Alice").playerId("a").chips(90).currentBet(10)
+                .holeCards(List.of(VIEW_ACE, VIEW_KING)).bestHand(List.of(VIEW_ACE, VIEW_KING))
+                .handRank(HandRank.ONE_PAIR)
+                .hasFolded(false).allIn(allIn).out(false).disconnected(false).readyForNextHand(false).build();
+        Player bob = Player.restoreBuilder().name("Bob").playerId("b").chips(80).currentBet(20)
+                .holeCards(List.of(VIEW_TWO, VIEW_THREE)).bestHand(List.of(VIEW_TWO, VIEW_THREE))
+                .handRank(HandRank.HIGH_CARD)
+                .hasFolded(false).allIn(allIn).out(false).disconnected(false).readyForNextHand(false).build();
+        return new ArrayList<>(List.of(alice, bob));
+    }
+
+    private static Game viewGame(GamePhase phase, HandSettlementResult settlement,
+            boolean countdown, ReadyGateState gate, Map<ScheduledGameTask, Long> deadlines,
+            List<Player> players, boolean gameOver) {
+        return Game.restoreBuilder()
+                .gameId(GAME_ID)
+                .maxPlayers(6)
+                .players(players)
+                .activePlayerIds(players.stream().filter(Player::isInHand).map(Player::getPlayerId).toList())
+                .remainingDeck(List.of())
+                .communityCards(VIEW_BOARD)
+                .pot(30)
+                .dealerAnchorPlayerId("a")
+                .smallBlindPlayerId("a")
+                .bigBlindPlayerId("b")
+                .currentPlayerId("a")
+                .currentHighestBet(20)
+                .currentPhase(phase)
+                .gameOver(gameOver)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handContributions(Map.of("a", 10, "b", 20))
+                .preHandCarryOver(0)
+                .lastSettlementResult(settlement)
+                .readyCountdownActive(countdown)
+                .readyCountdownDeadlineEpochMs(countdown ? 12_345L : null)
+                .readyGateState(gate)
+                .everyoneHasHadInitialTurn(false)
+                .actedPlayersInRound(Set.of())
+                .scheduledTaskDeadlines(deadlines)
+                .handNumber(3L)
+                .stateRevision(7L)
+                .build();
     }
 }

@@ -10,6 +10,7 @@ import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
@@ -17,6 +18,7 @@ import com.pokergame.service.PlayerActionService;
 import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
 import com.pokergame.testutil.MutableClock;
+import com.pokergame.testutil.TestRoomFixtures;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -25,16 +27,22 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ScheduledFuture;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,6 +51,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Deterministic clock-driven integration tests for lobby inactivity, game inactivity abandonment,
@@ -63,6 +72,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TimingAndInactivityIT {
 
     private static final long T0 = 1_900_000_000_000L;
+    private static final Duration ASYNC_TIMEOUT = Duration.ofSeconds(3);
     private static final long FIFTEEN_MINUTES_MS = 15 * 60_000L;
     private static final long THIRTY_MINUTES_MS = 30 * 60_000L;
     private static final AtomicLong UNIQUE_COUNTER = new AtomicLong();
@@ -94,6 +104,9 @@ class TimingAndInactivityIT {
     @Autowired
     private MutableClock clock;
 
+    @Autowired
+    private ControllableTaskScheduler taskScheduler;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Set<String> trackedRoomIds = ConcurrentHashMap.newKeySet();
     private RestClient restClient;
@@ -101,11 +114,13 @@ class TimingAndInactivityIT {
     @BeforeEach
     void setUp() {
         clock.setMillis(T0);
+        taskScheduler.clearTrackedTasks();
         restClient = RestClient.builder().baseUrl("http://localhost:" + port).build();
     }
 
     @AfterEach
     void tearDown() {
+        taskScheduler.clearTrackedTasks();
         for (String roomId : List.copyOf(trackedRoomIds)) {
             withRoomLock(roomCoordinator, roomId, () -> {
                 rooms.destroyRoom(roomId);
@@ -122,6 +137,64 @@ class TimingAndInactivityIT {
         @Primary
         MutableClock timingTestClock() {
             return new MutableClock(T0);
+        }
+
+        /**
+         * Swaps the application's own {@code taskScheduler} (same pool size, thread prefix and MDC
+         * decorator) for one that can run its scheduled tasks on demand. Its timing is otherwise unchanged.
+         */
+        @Bean
+        static BeanPostProcessor controllableSchedulerPostProcessor() {
+            return new BeanPostProcessor() {
+                @Override
+                public Object postProcessAfterInitialization(Object bean, String beanName) {
+                    if (!"taskScheduler".equals(beanName) || !(bean instanceof ThreadPoolTaskScheduler original)) {
+                        return bean;
+                    }
+                    original.shutdown();
+                    ControllableTaskScheduler scheduler = new ControllableTaskScheduler();
+                    scheduler.setPoolSize(5);
+                    scheduler.setThreadNamePrefix("TaskScheduler-");
+                    scheduler.setTaskDecorator(new MdcTaskDecorator());
+                    scheduler.initialize();
+                    return scheduler;
+                }
+            };
+        }
+    }
+
+    static class ControllableTaskScheduler extends ThreadPoolTaskScheduler {
+
+        private record TrackedTask(Instant startTime, Runnable task, ScheduledFuture<?> future) {
+        }
+
+        private final List<TrackedTask> trackedTasks = new CopyOnWriteArrayList<>();
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable task, Instant startTime) {
+            ScheduledFuture<?> future = super.schedule(task, startTime);
+            if (future != null) {
+                trackedTasks.add(new TrackedTask(startTime, task, future));
+            }
+            return future;
+        }
+
+        void triggerDueTasks(Instant now) {
+            for (TrackedTask entry : List.copyOf(trackedTasks)) {
+                if (!entry.startTime().isAfter(now)) {
+                    trackedTasks.remove(entry);
+                    if (entry.future().cancel(false)) {
+                        super.execute(entry.task());
+                    }
+                }
+            }
+        }
+
+        void clearTrackedTasks() {
+            for (TrackedTask entry : List.copyOf(trackedTasks)) {
+                entry.future().cancel(false);
+            }
+            trackedTasks.clear();
         }
     }
 
@@ -831,5 +904,54 @@ class TimingAndInactivityIT {
             assertThat(response.getBody().abandoned()).isTrue();
             assertThat(response.getBody().reason()).isEqualTo("INACTIVITY");
         }
+    }
+
+    @Nested
+    @DisplayName("Turn timer retention")
+    class TurnTimerRetentionTests {
+
+        private TestRoomFixtures roomFixtures() {
+            return new TestRoomFixtures(rooms, roomCoordinator, trackedRoomIds);
+        }
+
+    @Test
+    @DisplayName("invalid CHECK when a call is owed rejects the action without cancelling the turn timer")
+    void invalidCheckKeepsTurnTimerScheduledAndTimesOutActor() {
+        String roomId = roomFixtures().createAndConnectRoom("Timer Retain Room", "Host", "Alice", "Bob");
+        lifecycle.createGameFromRoom(roomId);
+
+        String actor = withRoomLock(roomCoordinator, roomId, () -> {
+            Game game = lifecycle.getGame(roomId);
+            return game.getCurrentPlayer().getName();
+        });
+        Long turnDeadlineBefore = withRoomLock(roomCoordinator, roomId, () ->
+                lifecycle.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+        assertThat(turnDeadlineBefore).isNotNull();
+
+        assertThatThrownBy(() -> playerActionService.processPlayerAction(
+                roomId, new PlayerActionRequest(PlayerAction.CHECK, null), actor))
+                .isInstanceOf(UnauthorisedActionException.class)
+                .satisfies(ex -> assertThat(((UnauthorisedActionException) ex).actionErrorCode())
+                        .isEqualTo("CHECK_NOT_AVAILABLE"));
+
+        withRoomLock(roomCoordinator, roomId, () -> {
+            Game game = lifecycle.getGame(roomId);
+            assertThat(game.getCurrentPlayer().getName()).isEqualTo(actor);
+            assertThat(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(turnDeadlineBefore);
+            return null;
+        });
+
+        clock.setMillis(turnDeadlineBefore);
+        taskScheduler.triggerDueTasks(clock.instant());
+
+        await().atMost(ASYNC_TIMEOUT).untilAsserted(() -> withRoomLock(roomCoordinator, roomId, () -> {
+            Game game = lifecycle.getGame(roomId);
+            assertThat(rooms.getRoom(roomId).hasPlayer(actor)).isFalse();
+            assertThat(game.findPlayerByName(actor)).isNull();
+            assertThat(game.getCurrentPlayer()).isNotNull();
+            assertThat(game.getCurrentPlayer().getName()).isNotEqualTo(actor);
+            return null;
+        }));
+    }
     }
 }
