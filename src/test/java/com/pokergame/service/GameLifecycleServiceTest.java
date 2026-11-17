@@ -156,11 +156,11 @@ class GameLifecycleServiceTest {
                     winner.getName(), winner.getChips(), forfeit,
                     winner.getName() + " wins", finalState);
         };
-        lenient().when(gameStateService.recordGameEnd(any(Game.class), any(Player.class), anyBoolean()))
+        lenient().when(gameStateService.advanceRevisionAndBuildGameEnd(any(Game.class), any(Player.class), anyBoolean()))
                 .thenAnswer(buildResponse);
         lenient().when(gameStateService.buildGameEndResponse(any(Game.class), any(Player.class), anyBoolean()))
                 .thenAnswer(buildResponse);
-        lenient().when(gameStateService.recordAbandonment(any(Game.class))).thenAnswer(inv -> {
+        lenient().when(gameStateService.advanceRevisionAndBuildAbandonment(any(Game.class))).thenAnswer(inv -> {
             Game game = inv.getArgument(0);
             return new GameEndResponse(
                     "GAME_END", game.getGameId(), null, null, false, true, "INACTIVITY",

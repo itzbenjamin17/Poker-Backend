@@ -43,6 +43,10 @@ import org.springframework.stereotype.Service;
 public class GameStateService {
     private static final Logger logger = LoggerFactory.getLogger(GameStateService.class);
     private static final String PRIVATE_QUEUE = "/queue/private";
+
+    /** Status-banner text shown to clients while an all-in hand auto-advances to showdown. */
+    static final String AUTO_ADVANCE_MESSAGE = "Auto-advancing...";
+
     private final RoomService roomService;
     private final SimpMessagingTemplate messagingTemplate;
     private final Clock clock;
@@ -81,10 +85,10 @@ public class GameStateService {
         requireNonNull(game, "game must not be null");
         requireNonNull(playerName, "playerName must not be null");
 
-        Player player = game.getPlayers().stream()
-                .filter(p -> p.getName().equals(playerName))
-                .findFirst()
-                .orElseThrow(() -> new ResourceNotFoundException("Player not found in game"));
+        Player player = game.findPlayerByName(playerName);
+        if (player == null) {
+            throw new ResourceNotFoundException("Player not found in game");
+        }
 
         return buildPrivatePlayerState(game, player);
     }
@@ -135,11 +139,8 @@ public class GameStateService {
 
         game.incrementStateRevision();
 
-        // Clear turn pointers at showdown so clients do not briefly show Fold/Check controls
-        // before the next hand or game-end update arrives.
-        String currentPlayerName = null;
-        String currentPlayerId = null;
-
+        // The showdown view sets no current player, so clients do not briefly show Fold/Check
+        // controls before the next hand or game-end update arrives.
         Set<String> winnerIds = settlement.winnerIds();
         Map<String, Integer> contestedAwards = settlement.contestedAwards();
 
@@ -168,34 +169,14 @@ public class GameStateService {
                     (isActive && isActualShowdown) ? player.getHoleCards() : null);
         }).toList();
 
-        PublicGameStateResponse showdownResponse = new PublicGameStateResponse(
-                game.getMaxPlayers(),
-                game.getPot(),
-                game.getPotBreakdown(),
-                game.getUncalledAmount(),
-                game.getCurrentPhase(),
-                game.getCurrentHighestBet(),
-                game.getCommunityCards(),
-                playersList,
-                currentPlayerName,
-                currentPlayerId,
-                winnerNames,
-                equalWinnerAward,
-                null,
-                null,
-                game.isReadyCountdownActive(),
-                game.getReadyCountdownDeadlineEpochMs(),
-                null,
-                null,
-                true,
-                settlement.remainder(),
-                null,
-                null,
-                null,
-                game.getHandNumber(),
-                game.getReadyGateState(),
-                clock.millis(),
-                game.getStateRevision());
+        PublicGameStateResponse showdownResponse = PublicGameStateBuilder.forGame(game, clock.millis())
+                .players(playersList)
+                .winners(winnerNames)
+                .winningsPerPlayer(equalWinnerAward)
+                .readyCountdown(game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs())
+                .handSettled(true)
+                .carryOverAmount(settlement.remainder())
+                .build();
 
         sendAfterSave("/game/" + gameId, showdownResponse);
 
@@ -233,34 +214,12 @@ public class GameStateService {
                         null))
                 .toList();
 
-        PublicGameStateResponse autoAdvanceResponse = new PublicGameStateResponse(
-                game.getMaxPlayers(),
-                game.getPot(),
-                game.getPotBreakdown(),
-                game.getUncalledAmount(),
-                game.getCurrentPhase(),
-                game.getCurrentHighestBet(),
-                game.getCommunityCards(),
-                playersList,
-                null,
-                null,
-                null,
-                null,
-                true,
-                message,
-                game.isReadyCountdownActive(),
-                game.getReadyCountdownDeadlineEpochMs(),
-                null,
-                null,
-                null,
-                null,
-                List.of(),
-                null,
-                null,
-                game.getHandNumber(),
-                game.getReadyGateState(),
-                clock.millis(),
-                game.getStateRevision());
+        PublicGameStateResponse autoAdvanceResponse = PublicGameStateBuilder.forGame(game, clock.millis())
+                .players(playersList)
+                .autoAdvance(true, message)
+                .readyCountdown(game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs())
+                .legalActions(List.of())
+                .build();
 
         logger.info("Broadcasting auto-advance state for game {}: {}", gameId, message);
         sendAfterSave("/game/" + gameId, autoAdvanceResponse);
@@ -340,7 +299,7 @@ public class GameStateService {
      * @param isForfeit {@code true} if the game ended by forfeit
      * @return the final {@link GameEndResponse}
      */
-    public GameEndResponse recordGameEnd(Game game, Player winner, boolean isForfeit) {
+    public GameEndResponse advanceRevisionAndBuildGameEnd(Game game, Player winner, boolean isForfeit) {
         requireNonNull(game, "game must not be null");
         requireNonNull(winner, "winner must not be null");
         game.incrementStateRevision();
@@ -354,7 +313,7 @@ public class GameStateService {
      * @param game the abandoned game instance
      * @return the abandonment {@link GameEndResponse}
      */
-    public GameEndResponse recordAbandonment(Game game) {
+    public GameEndResponse advanceRevisionAndBuildAbandonment(Game game) {
         requireNonNull(game, "game must not be null");
         game.incrementStateRevision();
         return buildAbandonmentResponse(game);
@@ -423,38 +382,16 @@ public class GameStateService {
                         null))
                 .toList();
 
-        boolean handSettled = game.getLastSettlementResult() != null && game.getLastSettlementResult().settled();
-
-        return new PublicGameStateResponse(
-                game.getMaxPlayers(),
-                game.getPot(),
-                game.getPotBreakdown(),
-                game.getUncalledAmount(),
-                game.getCurrentPhase(),
-                game.getCurrentHighestBet(),
-                game.getCommunityCards(),
-                playerStates,
-                null,
-                null,
-                List.of(),
-                null,
-                false,
-                null,
-                false,
-                null,
-                false,
-                null,
-                handSettled,
-                null,
-                List.of(),
-                null,
-                null,
-                game.getHandNumber(),
-                ReadyGateState.CLOSED,
-                clock.millis(),
-                game.getStateRevision(),
-                null,
-                null);
+        return PublicGameStateBuilder.forGame(game, clock.millis())
+                .players(playerStates)
+                .winners(List.of())
+                .autoAdvance(false, null)
+                .readyCountdown(false, null)
+                .claimWin(false, null)
+                .handSettled(game.isHandSettled())
+                .legalActions(List.of())
+                .readyGateState(ReadyGateState.CLOSED)
+                .build();
     }
 
     private PublicGameStateResponse buildCompletedGameState(Game game, Player winner) {
@@ -481,34 +418,16 @@ public class GameStateService {
 
         List<String> winnerNames = List.of(winner.getName());
 
-        return new PublicGameStateResponse(
-                game.getMaxPlayers(),
-                game.getPot(),
-                game.getPotBreakdown(),
-                game.getUncalledAmount(),
-                game.getCurrentPhase(),
-                game.getCurrentHighestBet(),
-                game.getCommunityCards(),
-                playerStates,
-                null,
-                null,
-                winnerNames,
-                null,
-                false,
-                null,
-                false,
-                null,
-                false,
-                null,
-                handSettled,
-                null,
-                List.of(),
-                null,
-                null,
-                game.getHandNumber(),
-                ReadyGateState.CLOSED,
-                clock.millis(),
-                game.getStateRevision());
+        return PublicGameStateBuilder.forGame(game, clock.millis())
+                .players(playerStates)
+                .winners(winnerNames)
+                .autoAdvance(false, null)
+                .readyCountdown(false, null)
+                .claimWin(false, null)
+                .handSettled(handSettled)
+                .legalActions(List.of())
+                .readyGateState(ReadyGateState.CLOSED)
+                .build();
     }
 
     private Room requireRoom(String gameId) {
@@ -521,10 +440,10 @@ public class GameStateService {
     }
 
     private PublicGameStateResponse buildLiveGameState(Game game, Long inactivityDeadlineEpochMs) {
-        boolean autoAdvancing = game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE) != null;
+        boolean autoAdvancing = game.isAutoAdvancing();
         HandSettlementResult lastSettlement = game.getLastSettlementResult();
         boolean inShowdownOrCountdown = game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive();
-        boolean handSettled = lastSettlement != null && lastSettlement.settled();
+        boolean handSettled = game.isHandSettled();
         Set<String> settledWinnerIds = handSettled ? lastSettlement.winnerIds() : Set.of();
         Map<String, Integer> settledAwards = handSettled ? lastSettlement.contestedAwards() : Map.of();
         boolean revealHoleCards = game.wasContestedShowdown();
@@ -572,36 +491,25 @@ public class GameStateService {
                 ? computeEqualWinnerAward(settledWinnerIds, settledAwards)
                 : null;
 
-        return new PublicGameStateResponse(
-                game.getMaxPlayers(),
-                game.getPot(),
-                game.getPotBreakdown(),
-                game.getUncalledAmount(),
-                game.getCurrentPhase(),
-                game.getCurrentHighestBet(),
-                game.getCommunityCards(),
-                playerStates,
-                currentPlayer != null ? currentPlayer.getName() : null,
-                currentPlayer != null ? currentPlayer.getPlayerId() : null,
-                winnerNames,
-                winningsPerPlayer,
-                autoAdvancing,
-                autoAdvancing ? "Auto-advancing..." : null,
-                game.isReadyCountdownActive(),
-                game.getReadyCountdownDeadlineEpochMs(),
-                claimWinAvailable,
-                claimWinPlayerName,
-                handSettled,
-                handSettled ? lastSettlement.remainder() : null,
-                currentPlayer == null ? List.of() : game.getLegalActionsFor(currentPlayer),
-                currentPlayer == null ? null : game.getBigBlind(),
-                currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer),
-                game.getHandNumber(),
-                game.getReadyGateState(),
-                clock.millis(),
-                game.getStateRevision(),
-                currentPlayer == null ? null : game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT),
-                inactivityDeadlineEpochMs);
+        return PublicGameStateBuilder.forGame(game, clock.millis())
+                .players(playerStates)
+                .currentPlayer(
+                        currentPlayer != null ? currentPlayer.getName() : null,
+                        currentPlayer != null ? currentPlayer.getPlayerId() : null)
+                .winners(winnerNames)
+                .winningsPerPlayer(winningsPerPlayer)
+                .autoAdvance(autoAdvancing, autoAdvancing ? AUTO_ADVANCE_MESSAGE : null)
+                .readyCountdown(game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs())
+                .claimWin(claimWinAvailable, claimWinPlayerName)
+                .handSettled(handSettled)
+                .carryOverAmount(handSettled ? lastSettlement.remainder() : null)
+                .legalActions(currentPlayer == null ? List.of() : game.getLegalActionsFor(currentPlayer))
+                .minimumBetAmount(currentPlayer == null ? null : game.getBigBlind())
+                .minimumRaiseAmount(currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer))
+                .turnDeadlineEpochMs(
+                        currentPlayer == null ? null : game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT))
+                .inactivityDeadlineEpochMs(inactivityDeadlineEpochMs)
+                .build();
     }
 
     private Integer computeEqualWinnerAward(Set<String> winnerIds, Map<String, Integer> contestedAwards) {
@@ -689,10 +597,8 @@ public class GameStateService {
             return;
         }
         // Capture membership ID before queuing so a replacement player with the same name never receives it.
+        // A missing or blank membership ID is dropped by sendToPrincipalAfterSave.
         String membershipId = room.getMembershipId(playerName);
-        if (membershipId == null || membershipId.isBlank()) {
-            return;
-        }
         sendToPrincipalAfterSave(new PlayerPrincipal(playerName, gameId, membershipId), payload);
     }
 

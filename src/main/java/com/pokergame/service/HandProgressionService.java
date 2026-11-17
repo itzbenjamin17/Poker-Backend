@@ -131,13 +131,13 @@ class HandProgressionService {
             case AUTO_ADVANCING -> {
                 game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
                 runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
-                if (game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE) == null) {
+                if (!game.isAutoAdvancing()) {
                     scheduling.scheduleAutoAdvance(gameId);
                 }
                 if (notifyImmediateAutoAdvance) {
                     gameStateService.broadcastAutoAdvanceNotification(game);
                 } else {
-                    gameStateService.broadcastGameStateWithAutoAdvance(game, "Auto-advancing...");
+                    gameStateService.broadcastGameStateWithAutoAdvance(game, GameStateService.AUTO_ADVANCE_MESSAGE);
                 }
             }
             case SHOWDOWN -> {

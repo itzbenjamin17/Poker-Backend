@@ -162,7 +162,7 @@ class GameReadinessCoordinatorTest {
             }
 
             assertTrue(game.isGameOver());
-            verify(gameStateService).recordGameEnd(game, host, false);
+            verify(gameStateService).advanceRevisionAndBuildGameEnd(game, host, false);
             verify(gameStateService).sendGameEnd(any());
         }
     }

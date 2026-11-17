@@ -176,7 +176,7 @@ class HandProgressionServiceTest {
                 game.markGameOver();
                 assertFalse(progression.startNewHand(GAME_ID));
                 assertTrue(game.isFinalPotSettled());
-                verify(gameStateService).recordGameEnd(eq(game), any(Player.class), eq(false));
+                verify(gameStateService).advanceRevisionAndBuildGameEnd(eq(game), any(Player.class), eq(false));
                 verify(gameStateService).sendGameEnd(any());
             }
         }
@@ -196,7 +196,7 @@ class HandProgressionServiceTest {
 
             assertFalse(openReadyGate);
             assertTrue(game.isGameOver());
-            verify(gameStateService).recordGameEnd(game, p1, false);
+            verify(gameStateService).advanceRevisionAndBuildGameEnd(game, p1, false);
             verify(gameStateService).sendGameEnd(any());
         }
     }

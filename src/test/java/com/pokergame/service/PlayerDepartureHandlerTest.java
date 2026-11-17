@@ -164,11 +164,11 @@ class PlayerDepartureHandlerTest {
                     winner.getName(), winner.getChips(), forfeit,
                     winner.getName() + " wins", finalState);
         };
-        lenient().when(gameStateService.recordGameEnd(any(Game.class), any(Player.class), anyBoolean()))
+        lenient().when(gameStateService.advanceRevisionAndBuildGameEnd(any(Game.class), any(Player.class), anyBoolean()))
                 .thenAnswer(buildResponse);
         lenient().when(gameStateService.buildGameEndResponse(any(Game.class), any(Player.class), anyBoolean()))
                 .thenAnswer(buildResponse);
-        lenient().when(gameStateService.recordAbandonment(any(Game.class))).thenAnswer(inv -> {
+        lenient().when(gameStateService.advanceRevisionAndBuildAbandonment(any(Game.class))).thenAnswer(inv -> {
             Game game = inv.getArgument(0);
             return new GameEndResponse(
                     "GAME_END", game.getGameId(), null, null, false, true, "INACTIVITY",
@@ -854,7 +854,7 @@ class PlayerDepartureHandlerTest {
                     argThat(event -> event != null && "Host".equals(event.winner()) && event.isForfeit()));
             verify(roomService, times(1)).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2", "Player3")), any());
             verify(roomService, never()).leaveRoom(anyString(), anyString());
-            verify(gameStateService).recordGameEnd(
+            verify(gameStateService).advanceRevisionAndBuildGameEnd(
                     argThat(game -> game.getPlayers().stream().map(Player::getName).collect(Collectors.toSet())
                             .equals(Set.of("Host", "Player2", "Player3"))
                             && game.getPlayers().stream().filter(p -> p.getName().startsWith("Player"))

@@ -121,7 +121,7 @@ class GameCompletionHandler {
         game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
         game.clearScheduledTask(ScheduledGameTask.READY_OPEN);
         game.clearScheduledTask(ScheduledGameTask.NEW_HAND);
-        GameEndResponse event = gameStateService.recordAbandonment(game);
+        GameEndResponse event = gameStateService.advanceRevisionAndBuildAbandonment(game);
         game.setGameEndResult(event);
 
         if (room != null) {
@@ -248,7 +248,7 @@ class GameCompletionHandler {
 
         GameEndResponse event = game.getGameEndResult();
         if (event == null) {
-            event = gameStateService.recordGameEnd(game, winner, isForfeit);
+            event = gameStateService.advanceRevisionAndBuildGameEnd(game, winner, isForfeit);
             game.setGameEndResult(event);
         }
         gameStateService.sendGameEnd(event);

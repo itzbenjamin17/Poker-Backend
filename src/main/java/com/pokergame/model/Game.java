@@ -886,6 +886,15 @@ public class Game {
     }
 
     /**
+     * Returns whether an all-in auto-advance to showdown is currently scheduled.
+     *
+     * @return {@code true} if the auto-advance task has a scheduled deadline
+     */
+    public boolean isAutoAdvancing() {
+        return scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE) != null;
+    }
+
+    /**
      * Returns the current monotonic schedule count for {@code task}.
      *
      * @param task delayed task type

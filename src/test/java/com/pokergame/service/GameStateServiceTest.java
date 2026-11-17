@@ -505,17 +505,17 @@ class GameStateServiceTest {
         assertEquals("Minimum bet is 10", actionError.message());
     }
 
-    // ==================== recordGameEnd / sendGameEnd Tests ====================
+    // ==================== advanceRevisionAndBuildGameEnd / sendGameEnd Tests ====================
 
     /**
-     * Protects the contract that recordGameEnd + sendGameEnd publishes winner info and increments stateRevision.
+     * Protects the contract that advanceRevisionAndBuildGameEnd + sendGameEnd publishes winner info and increments stateRevision.
      */
     @Test
-    void recordGameEnd_AndSendGameEnd_ShouldPublishWinnerInfo() {
+    void advanceRevisionAndBuildGameEnd_AndSendGameEnd_ShouldPublishWinnerInfo() {
         Player winner = testPlayers.getFirst();
         winner.addChips(50);
 
-        GameEndResponse recorded = gameStateService.recordGameEnd(testGame, winner, false);
+        GameEndResponse recorded = gameStateService.advanceRevisionAndBuildGameEnd(testGame, winner, false);
         gameStateService.sendGameEnd(recorded);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
@@ -544,14 +544,14 @@ class GameStateServiceTest {
     }
 
     /**
-     * Protects the contract that recordGameEnd and buildGameEndResponse reject null game or winner.
+     * Protects the contract that advanceRevisionAndBuildGameEnd and buildGameEndResponse reject null game or winner.
      */
     @Test
-    void recordGameEnd_WithNullGameOrWinner_ThrowsNullPointerException() {
+    void advanceRevisionAndBuildGameEnd_WithNullGameOrWinner_ThrowsNullPointerException() {
         Player winner = testPlayers.getFirst();
 
-        assertThrows(NullPointerException.class, () -> gameStateService.recordGameEnd(null, winner, false));
-        assertThrows(NullPointerException.class, () -> gameStateService.recordGameEnd(testGame, null, false));
+        assertThrows(NullPointerException.class, () -> gameStateService.advanceRevisionAndBuildGameEnd(null, winner, false));
+        assertThrows(NullPointerException.class, () -> gameStateService.advanceRevisionAndBuildGameEnd(testGame, null, false));
         assertThrows(NullPointerException.class, () -> gameStateService.buildGameEndResponse(null, winner, false));
         assertThrows(NullPointerException.class, () -> gameStateService.buildGameEndResponse(testGame, null, false));
         assertDoesNotThrow(() -> gameStateService.sendGameEnd(null));
@@ -562,12 +562,12 @@ class GameStateServiceTest {
      * Protects the contract that a fold-win game end keeps hole cards private.
      */
     @Test
-    void recordGameEnd_FoldWinKeepsHoleCardsPrivate() {
+    void advanceRevisionAndBuildGameEnd_FoldWinKeepsHoleCardsPrivate() {
         Player winner = testPlayers.getFirst();
         Player loser = testPlayers.get(1);
         loser.setIsOut();
 
-        GameEndResponse gameEndResponse = gameStateService.recordGameEnd(testGame, winner, false);
+        GameEndResponse gameEndResponse = gameStateService.advanceRevisionAndBuildGameEnd(testGame, winner, false);
         PublicGameStateResponse finalState = gameEndResponse.finalState();
         assertNotNull(finalState);
 
@@ -580,7 +580,7 @@ class GameStateServiceTest {
     }
 
     @Test
-    void recordGameEnd_ContestedShowdownRevealsWinnerCards() {
+    void advanceRevisionAndBuildGameEnd_ContestedShowdownRevealsWinnerCards() {
         Player winner = testPlayers.getFirst();
         Player other = testPlayers.get(1);
         List<Card> board = List.of(new Card(Rank.ACE, Suit.SPADES),
@@ -606,14 +606,14 @@ class GameStateServiceTest {
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .build();
 
-        GameEndResponse event = gameStateService.recordGameEnd(contested, winner, false);
+        GameEndResponse event = gameStateService.advanceRevisionAndBuildGameEnd(contested, winner, false);
 
         assertNotNull(event.finalState().players().stream().filter(player -> player.name().equals(winner.getName()))
                 .findFirst().orElseThrow().holeCards());
     }
 
     @Test
-    void recordGameEnd_ForfeitDuringReadyCountdownAfterContestedShowdown_RevealsShowdownWinnerHoleCards() {
+    void advanceRevisionAndBuildGameEnd_ForfeitDuringReadyCountdownAfterContestedShowdown_RevealsShowdownWinnerHoleCards() {
         Player p1 = new Player("Player1", "p1", 100);
         Player p2 = new Player("Player2", "p2", 100);
         Game game = new Game(GAME_ID, List.of(p1, p2), 6, 5, 10);
@@ -635,7 +635,7 @@ class GameStateServiceTest {
         assertTrue(game.isReadyCountdownActive());
 
         Player gameWinner = game.settleGameEnd(showdownWinner, Set.of(showdownLoser.getName()));
-        GameEndResponse endResponse = gameStateService.recordGameEnd(game, gameWinner, true);
+        GameEndResponse endResponse = gameStateService.advanceRevisionAndBuildGameEnd(game, gameWinner, true);
 
         assertTrue(endResponse.isForfeit());
         PublicPlayerState winnerState = endResponse.finalState().players().stream()
@@ -685,7 +685,7 @@ class GameStateServiceTest {
         assertTrue(liveSnapshotView.players().stream().allMatch(p -> p.holeCards() == null),
                 "Live snapshot must not reveal hole cards on a fold win");
 
-        GameEndResponse endResponse = gameStateService.recordGameEnd(game, winner, false);
+        GameEndResponse endResponse = gameStateService.advanceRevisionAndBuildGameEnd(game, winner, false);
         assertTrue(endResponse.finalState().players().stream().allMatch(p -> p.holeCards() == null),
                 "Final game state must not reveal hole cards on a fold win");
     }
@@ -709,7 +709,7 @@ class GameStateServiceTest {
                 .scheduledTaskDeadlines(Map.of()).build();
         terminal.settleGameEnd(bb, Set.of());
 
-        GameEndResponse result = gameStateService.recordGameEnd(terminal, bb, true);
+        GameEndResponse result = gameStateService.advanceRevisionAndBuildGameEnd(terminal, bb, true);
         gameStateService.sendGameEnd(result);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
@@ -1253,10 +1253,10 @@ class GameStateServiceTest {
      * Protects the contract that a forfeit game end does not reveal any hole cards.
      */
     @Test
-    void recordGameEnd_ForfeitPath_ShouldNotRevealHoleCards() {
+    void advanceRevisionAndBuildGameEnd_ForfeitPath_ShouldNotRevealHoleCards() {
         Player winner = testPlayers.getFirst();
 
-        GameEndResponse gameEndResponse = gameStateService.recordGameEnd(testGame, winner, true);
+        GameEndResponse gameEndResponse = gameStateService.advanceRevisionAndBuildGameEnd(testGame, winner, true);
         assertTrue(gameEndResponse.isForfeit());
         PublicGameStateResponse finalState = gameEndResponse.finalState();
         assertNotNull(finalState);
@@ -1624,8 +1624,8 @@ class GameStateServiceTest {
     }
 
     @Test
-    @DisplayName("recordGameEnd preserves game's clamped [2, 10] capacity across restored out-of-range settings")
-    void recordGameEnd_PreservesClampedMaxPlayersFromGame() {
+    @DisplayName("advanceRevisionAndBuildGameEnd preserves game's clamped [2, 10] capacity across restored out-of-range settings")
+    void advanceRevisionAndBuildGameEnd_PreservesClampedMaxPlayersFromGame() {
         Player winner = testPlayers.getFirst();
         int[] outOfRangeValues = {
                 Integer.MIN_VALUE, -999999, -1, 0, 1, 11, 12, 100, 999999, Integer.MAX_VALUE
@@ -1669,13 +1669,13 @@ class GameStateServiceTest {
                 new Player("P2", "id-2", 100),
                 new Player("P3", "id-3", 100),
                 new Player("P4", "id-4", 100)), 8, 5, 10);
-        GameEndResponse response = gameStateService.recordGameEnd(validCapacityGame, validCapacityGame.getPlayers().getFirst(), false);
+        GameEndResponse response = gameStateService.advanceRevisionAndBuildGameEnd(validCapacityGame, validCapacityGame.getPlayers().getFirst(), false);
         assertEquals(8, response.finalState().maxPlayers());
         assertEquals(FIXED_INSTANT.toEpochMilli(), response.finalState().serverTimeEpochMs());
     }
 
     @Test
-    @DisplayName("buildGameEndResponse does not increment stateRevision while recordGameEnd increments it")
+    @DisplayName("buildGameEndResponse does not increment stateRevision while advanceRevisionAndBuildGameEnd increments it")
     void buildGameEndResponse_DoesNotIncrementStateRevision_WhileRecordGameEndDoes() {
         Player winner = testPlayers.getFirst();
         Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 100), Set.of(winner.getPlayerId()));
@@ -1686,15 +1686,15 @@ class GameStateServiceTest {
         assertEquals(revisionBefore, settled.getStateRevision(), "buildGameEndResponse must not increment stateRevision");
         assertEquals(revisionBefore, projected.finalState().stateRevision());
 
-        GameEndResponse recorded = gameStateService.recordGameEnd(settled, winner, false);
+        GameEndResponse recorded = gameStateService.advanceRevisionAndBuildGameEnd(settled, winner, false);
         assertNotNull(recorded);
-        assertEquals(revisionBefore + 1, settled.getStateRevision(), "recordGameEnd must increment stateRevision");
+        assertEquals(revisionBefore + 1, settled.getStateRevision(), "advanceRevisionAndBuildGameEnd must increment stateRevision");
         assertEquals(revisionBefore + 1, recorded.finalState().stateRevision());
     }
 
     @Test
-    @DisplayName("recordAbandonment and buildAbandonmentResponse build INACTIVITY closure and increment revision only on record")
-    void recordAbandonment_AndBuildAbandonmentResponse_IncrementRevisionOnlyOnRecord() {
+    @DisplayName("advanceRevisionAndBuildAbandonment and buildAbandonmentResponse build INACTIVITY closure and increment revision only on record")
+    void advanceRevisionAndBuildAbandonment_AndBuildAbandonmentResponse_IncrementRevisionOnlyOnRecord() {
         long revisionBefore = testGame.getStateRevision();
         GameEndResponse preview = gameStateService.buildAbandonmentResponse(testGame);
         assertEquals(revisionBefore, testGame.getStateRevision());
@@ -1702,7 +1702,7 @@ class GameStateServiceTest {
         assertEquals("INACTIVITY", preview.reason());
         assertNull(preview.winner());
 
-        GameEndResponse recorded = gameStateService.recordAbandonment(testGame);
+        GameEndResponse recorded = gameStateService.advanceRevisionAndBuildAbandonment(testGame);
         assertEquals(revisionBefore + 1, testGame.getStateRevision());
         assertEquals(revisionBefore + 1, recorded.finalState().stateRevision());
         assertTrue(recorded.abandoned());
