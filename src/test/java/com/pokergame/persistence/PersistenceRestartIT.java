@@ -16,6 +16,7 @@ import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.transaction.DurableMutation;
+import com.pokergame.persistence.transaction.RoomId;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameLifecycleService;
@@ -778,27 +779,27 @@ class PersistenceRestartIT {
             this.gameLifecycleService = gameLifecycleService;
         }
 
-        @DurableMutation(roomId = "#roomId")
-        public void mutateRoomAndThrow(String roomId, String dirtyPlayer) {
+        @DurableMutation
+        public void mutateRoomAndThrow(@RoomId String roomId, String dirtyPlayer) {
             roomService.getRoom(roomId).addPlayer(dirtyPlayer);
             throw new IllegalStateException("Simulated unchecked room failure");
         }
 
-        @DurableMutation(roomId = "#roomId")
-        public void mutateRoomAndThrowChecked(String roomId, String dirtyPlayer) throws IOException {
+        @DurableMutation
+        public void mutateRoomAndThrowChecked(@RoomId String roomId, String dirtyPlayer) throws IOException {
             roomService.getRoom(roomId).addPlayer(dirtyPlayer);
             throw new IOException("Simulated checked room failure");
         }
 
-        @DurableMutation(roomId = "#roomId")
-        public void mutateGameAndThrow(String roomId) {
+        @DurableMutation
+        public void mutateGameAndThrow(@RoomId String roomId) {
             Game game = gameLifecycleService.getGame(roomId);
             game.getPlayers().getFirst().addChips(888_888);
             throw new IllegalStateException("Simulated midway game failure");
         }
 
-        @DurableMutation(roomId = "#roomId")
-        public void createRoomAndThrow(String roomId, CreateRoomRequest request) {
+        @DurableMutation
+        public void createRoomAndThrow(@RoomId String roomId, CreateRoomRequest request) {
             roomService.createRoom(roomId, request);
             throw new IllegalStateException("Simulated post-create failure");
         }

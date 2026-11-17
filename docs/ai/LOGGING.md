@@ -114,7 +114,7 @@ logging.logback.rollingpolicy.clean-history-on-start=true
 2. **WebSocket Inbound Messages (`WebSocketAuthInterceptor`):** Extracted from `PlayerPrincipal` during STOMP frame handling in `preSend`, cleaned up in `afterSendCompletion`.
 3. **STOMP Event Listeners (`WebSocketEventListener`):** Managed safely via `MdcUtils.withMdc(...)` for connection, disconnection, subscription, and unsubscription events.
 4. **Scheduled Async Tasks & Timers (`AsyncConfiguration`):** Propagated automatically to execution worker threads using `MdcTaskDecorator` configured on `ThreadPoolTaskScheduler` and `ThreadPoolTaskExecutor`, ensuring clean domain logic without manual boilerplate in `GameLifecycleService`.
-5. **Durable Transactions (`DurableMutationAspect`):** Sets `roomId` on mutation entry and cleans up in the outer `finally` block.
+5. **Durable Transactions (`DurableMutationAspect`):** Sets `roomId` on mutation entry, with or without a storage bean, and restores the previous value in the outer `finally` block.
 
 > [!IMPORTANT]
 > **Always clear MDC in a `finally` block.** Since threads in thread pools are reused, failing to clear MDC causes context leakage across unrelated requests.

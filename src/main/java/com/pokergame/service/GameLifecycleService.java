@@ -15,6 +15,8 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.DurableMutation;
+import com.pokergame.persistence.transaction.GameId;
+import com.pokergame.persistence.transaction.RoomId;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -77,8 +79,8 @@ public class GameLifecycleService {
      * @param roomId      the unique ID of the room/game
      * @param playerNames names of players leaving or timing out
      */
-    @DurableMutation(roomId = "#roomId")
-    public void removePlayers(String roomId, Collection<String> playerNames) {
+    @DurableMutation
+    public void removePlayers(@RoomId String roomId, Collection<String> playerNames) {
         if (roomId.trim().isEmpty() || playerNames == null || playerNames.isEmpty()) {
             return;
         }
@@ -95,8 +97,8 @@ public class GameLifecycleService {
      * @throws BadRequestException         if the lobby expired or the game already started
      * @throws UnauthorisedActionException if fewer than 2 players are in the room
      */
-    @DurableMutation(roomId = "#roomId")
-    public String createGameFromRoom(String roomId) {
+    @DurableMutation
+    public String createGameFromRoom(@RoomId String roomId) {
         requireNonNull(roomId, "roomId must not be null");
         Room room = roomService.getRoom(roomId);
         if (room == null) {
@@ -157,8 +159,8 @@ public class GameLifecycleService {
      * @param outcome                    the turn outcome returned by {@link Game}
      * @param notifyImmediateAutoAdvance {@code true} to broadcast an immediate auto-advance notice
      */
-    @DurableMutation(roomId = "#gameId")
-    public void applyTurnOutcome(String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
+    @DurableMutation
+    public void applyTurnOutcome(@GameId String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
         if (handProgression.applyTurnOutcome(gameId, game, outcome, notifyImmediateAutoAdvance)) {
             readinessCoordinator.openReadyGate(gameId);
         }
@@ -171,8 +173,8 @@ public class GameLifecycleService {
      * @param gameId                  the unique ID of the game
      * @param expectedDeadlineEpochMs the inactivity deadline captured when the timer was scheduled
      */
-    @DurableMutation(roomId = "#gameId")
-    public void abandonGameIfInactive(String gameId, Long expectedDeadlineEpochMs) {
+    @DurableMutation
+    public void abandonGameIfInactive(@GameId String gameId, Long expectedDeadlineEpochMs) {
         if (expectedDeadlineEpochMs == null) {
             return;
         }
@@ -185,8 +187,8 @@ public class GameLifecycleService {
      *
      * @param gameId the unique ID of the game
      */
-    @DurableMutation(roomId = "#gameId")
-    public void abandonGameDueToInactivity(String gameId) {
+    @DurableMutation
+    public void abandonGameDueToInactivity(@GameId String gameId) {
         completionHandler.abandonGameDueToInactivity(gameId);
     }
 
@@ -195,8 +197,8 @@ public class GameLifecycleService {
      *
      * @param gameId the unique ID of the game
      */
-    @DurableMutation(roomId = "#gameId")
-    public void resetGameInactivity(String gameId) {
+    @DurableMutation
+    public void resetGameInactivity(@GameId String gameId) {
         taskScheduler.resetGameInactivity(gameId);
     }
 
@@ -220,9 +222,9 @@ public class GameLifecycleService {
      * @param expectedHandNumber the hand number active when the timer was scheduled
      * @param expectedGeneration the timer generation active when the timer was scheduled
      */
-    @DurableMutation(roomId = "#gameId")
+    @DurableMutation
     public void executeScheduledTask(
-            String gameId,
+            @GameId String gameId,
             ScheduledGameTask task,
             long expectedDeadline,
             long expectedHandNumber,
@@ -344,8 +346,8 @@ public class GameLifecycleService {
      * @param playerName                the disconnected player's name
      * @param disconnectDeadlineEpochMs reconnect grace deadline epoch time in milliseconds
      */
-    @DurableMutation(roomId = "#gameId")
-    public void markPlayerDisconnected(String gameId, String playerName, long disconnectDeadlineEpochMs) {
+    @DurableMutation
+    public void markPlayerDisconnected(@GameId String gameId, String playerName, long disconnectDeadlineEpochMs) {
         departureHandler.markPlayerDisconnected(gameId, playerName, disconnectDeadlineEpochMs);
     }
 
@@ -356,8 +358,8 @@ public class GameLifecycleService {
      * @param gameId     the unique ID of the game
      * @param playerName the reconnecting player's name
      */
-    @DurableMutation(roomId = "#gameId")
-    public void markPlayerReconnected(String gameId, String playerName) {
+    @DurableMutation
+    public void markPlayerReconnected(@GameId String gameId, String playerName) {
         departureHandler.markPlayerReconnected(gameId, playerName);
     }
 
@@ -368,8 +370,8 @@ public class GameLifecycleService {
      * @param gameId     the unique ID of the game
      * @param playerName the player marking ready
      */
-    @DurableMutation(roomId = "#gameId")
-    public void markPlayerReadyForNextHand(String gameId, String playerName) {
+    @DurableMutation
+    public void markPlayerReadyForNextHand(@GameId String gameId, String playerName) {
         readinessCoordinator.markPlayerReadyForNextHand(gameId, playerName);
     }
 
@@ -379,8 +381,8 @@ public class GameLifecycleService {
      * @param gameId     the unique ID of the game
      * @param playerName the player unmarking ready
      */
-    @DurableMutation(roomId = "#gameId")
-    public void unmarkPlayerReadyForNextHand(String gameId, String playerName) {
+    @DurableMutation
+    public void unmarkPlayerReadyForNextHand(@GameId String gameId, String playerName) {
         readinessCoordinator.unmarkPlayerReadyForNextHand(gameId, playerName);
     }
 
@@ -401,8 +403,8 @@ public class GameLifecycleService {
      * @param playerName the claiming player's name
      * @return the final {@link GameEndResponse}
      */
-    @DurableMutation(roomId = "#gameId")
-    public GameEndResponse claimWin(String gameId, String playerName) {
+    @DurableMutation
+    public GameEndResponse claimWin(@GameId String gameId, String playerName) {
         return departureHandler.claimWin(gameId, playerName);
     }
 
@@ -427,9 +429,9 @@ public class GameLifecycleService {
      * @param expectedMembershipId    the membership ID active when grace expiration was scheduled
      * @param expectedDeadlineEpochMs the expected reconnect deadline epoch time in milliseconds
      */
-    @DurableMutation(roomId = "#gameId")
+    @DurableMutation
     public void removeDisconnectedPlayer(
-            String gameId, String playerName, String expectedMembershipId, long expectedDeadlineEpochMs) {
+            @GameId String gameId, String playerName, String expectedMembershipId, long expectedDeadlineEpochMs) {
         if (playerName == null || expectedMembershipId == null) {
             return;
         }

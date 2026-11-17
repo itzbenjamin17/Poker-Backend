@@ -15,6 +15,7 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.persistence.transaction.DurableMutation;
+import com.pokergame.persistence.transaction.GameId;
 import java.time.Clock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,8 +64,8 @@ public class PlayerActionService {
      * @throws UnauthorisedActionException if it is not {@code playerName}'s turn or the player is
      *                                     marked disconnected
      */
-    @DurableMutation(roomId = "#gameId")
-    public void processPlayerAction(String gameId, PlayerActionRequest actionRequest, String playerName) {
+    @DurableMutation
+    public void processPlayerAction(@GameId String gameId, PlayerActionRequest actionRequest, String playerName) {
         requireNonNull(gameId, "gameId must not be null");
         requireNonNull(playerName, "playerName must not be null");
         if (isGameInactivityExpired(gameId)) {

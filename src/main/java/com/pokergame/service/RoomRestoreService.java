@@ -12,6 +12,7 @@ import com.pokergame.persistence.RecoveryDecision;
 import com.pokergame.persistence.RoomRecoveryHandler;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.transaction.DurableMutation;
+import com.pokergame.persistence.transaction.GameId;
 import com.pokergame.persistence.transaction.PostSaveActions;
 import com.pokergame.service.GameTaskScheduler.ScheduledTimer;
 import com.pokergame.util.MdcUtils;
@@ -150,8 +151,8 @@ public class RoomRestoreService implements RoomRecoveryHandler {
      *
      * @param gameId the unique ID of the recovered game
      */
-    @DurableMutation(roomId = "#gameId")
-    public void resumeRecoveredTimers(String gameId) {
+    @DurableMutation
+    public void resumeRecoveredTimers(@GameId String gameId) {
         Game game = activeGames.get(gameId);
         if (game == null) {
             return;

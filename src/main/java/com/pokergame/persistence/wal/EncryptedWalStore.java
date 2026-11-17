@@ -164,8 +164,10 @@ public final class EncryptedWalStore {
     }
 
     /**
-     * Reads the file to find the latest valid game state.
-     * It's okay if the very last save got cut off during a crash, but any other file issues will cause this to fail safely.
+     * Reads the file to find the latest valid game state, and repairs the file for further writes.
+     * It's okay if the very last save got cut off during a crash: the cut-off bytes are removed and the room
+     * then needs a full checkpoint. A leftover half-written compaction file is deleted too.
+     * Any other file issues will cause this to fail safely.
      * Caller must hold the room lock for {@code roomId}.
      *
      * @param roomId the room to restore
@@ -182,13 +184,29 @@ public final class EncryptedWalStore {
         }
         try {
             Recovery recovery = readWal(path, roomId);
+            repairIncompleteTail(path, roomId, recovery);
             nextSequences.put(roomId, recovery.nextSequence());
-            if (recovery.incompleteTail()) checkpointRooms.add(roomId);
             return Optional.ofNullable(recovery.latestPayload()).map(byte[]::clone);
         } catch (RuntimeException e) {
             recordWriteFailure(roomId, e);
             throw e;
         }
+    }
+
+    /**
+     * Reports whether the room's save file holds at least one committed state, without changing anything:
+     * no file is repaired, truncated or deleted, and no room tracking or failure state is touched.
+     * Caller must hold the room lock for {@code roomId}.
+     *
+     * @param roomId the room to check
+     * @return {@code true} if a committed state exists for the room
+     * @throws PersistenceException if the save file looks corrupted or tampered with
+     */
+    public boolean hasCommittedState(String roomId) {
+        validateRoomId(roomId);
+        roomCoordinator.assertHeldByCurrentThread(roomId);
+        Path path = walPath(roomId);
+        return Files.exists(path) && readWal(path, roomId).latestPayload() != null;
     }
 
     /**
@@ -550,22 +568,19 @@ public final class EncryptedWalStore {
         }
     }
 
+    /** Parses the file without changing it; {@link #repairIncompleteTail} fixes up a cut-off tail. */
     private Recovery readWal(Path path, String expectedRoomId) {
-        deleteCompactingFileQuietly(expectedRoomId);
         try {
             byte[] file = Files.readAllBytes(path);
             ByteBuffer bytes = ByteBuffer.wrap(file);
             List<WalRecord> records = new ArrayList<>();
             long previousSequence = 0;
             boolean incompleteTail = false;
+            long validLength = file.length;
             while (bytes.hasRemaining()) {
                 if (bytes.remaining() < 8) {
                     incompleteTail = true;
-                    long validLength = (long) bytes.position();
-                    int partialHeaderLength = bytes.remaining();
-                    truncateWalAt(path, validLength);
-                    logger.warn("Truncated partial frame header of length {} at EOF for room {} to validLength {}",
-                            partialHeaderLength, expectedRoomId, validLength);
+                    validLength = bytes.position();
                     break;
                 }
                 int magic = bytes.getInt();
@@ -575,9 +590,7 @@ public final class EncryptedWalStore {
                 }
                 if (bytes.remaining() < frameLength) {
                     incompleteTail = true;
-                    long validLength = (long) bytes.position() - 8;
-                    truncateWalAt(path, validLength);
-                    logger.warn("Truncated torn trailing WAL frame for room {} to validLength {}", expectedRoomId, validLength);
+                    validLength = (long) bytes.position() - 8;
                     break; // The save file was cut off right at the end (like from a power outage), which is okay. We just ignore this last partial save.
                 }
                 ByteBuffer frame = bytes.slice(bytes.position(), frameLength);
@@ -604,17 +617,24 @@ public final class EncryptedWalStore {
                     pending = null;
                 }
             }
-            return new Recovery(latest, previousSequence + 1, incompleteTail);
+            return new Recovery(latest, previousSequence + 1, incompleteTail, validLength);
         } catch (IOException e) {
             throw new PersistenceException("Cannot read WAL for room " + expectedRoomId, e);
         }
     }
 
-    private static void truncateWalAt(Path path, long validLength) throws IOException {
+    /** Cuts a torn trailing frame off the file, and requires a full checkpoint before further appends. */
+    private void repairIncompleteTail(Path path, String roomId, Recovery recovery) {
+        if (!recovery.incompleteTail()) return;
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
-            channel.truncate(validLength);
+            channel.truncate(recovery.validLength());
             channel.force(true);
+        } catch (IOException e) {
+            throw new PersistenceException("Cannot repair WAL for room " + roomId, e);
         }
+        logger.warn("Truncated incomplete trailing WAL bytes for room {} to validLength {}",
+                roomId, recovery.validLength());
+        checkpointRooms.add(roomId);
     }
 
     private WalRecord decodeFrame(ByteBuffer frame, String expectedRoomId) {
@@ -812,7 +832,8 @@ public final class EncryptedWalStore {
      * @param latestPayload the final valid game data, or null
      * @param nextSequence  the next number to use when saving new data
      * @param incompleteTail whether ignored partial bytes require replacement before appending
+     * @param validLength    the number of bytes at the start of the file that hold complete records
      */
-    private record Recovery(byte[] latestPayload, long nextSequence, boolean incompleteTail) {
+    private record Recovery(byte[] latestPayload, long nextSequence, boolean incompleteTail, long validLength) {
     }
 }

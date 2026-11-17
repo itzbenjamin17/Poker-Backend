@@ -23,6 +23,7 @@ import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.persistence.transaction.PostSaveActions;
+import com.pokergame.persistence.transaction.RoomId;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.persistence.wal.WalFaultInjector;
@@ -859,8 +860,8 @@ class PersistenceCoordinationIT {
             void run() throws Exception;
         }
 
-        @DurableMutation(roomId = "#roomId")
-        public void executeDirtyFailingMutation(String roomId, RoomService rooms, GameLifecycleService games,
+        @DurableMutation
+        public void executeDirtyFailingMutation(@RoomId String roomId, RoomService rooms, GameLifecycleService games,
                 ThrowingRunnable onInsideLock) throws Exception {
             Room room = rooms.getRoom(roomId);
             room.addPlayer("DirtyRogue");
@@ -871,13 +872,13 @@ class PersistenceCoordinationIT {
             throw new IllegalStateException("Simulated dirty mutation failure");
         }
 
-        @DurableMutation(roomId = "#roomId")
-        public void succeedWithEffect(String roomId, Runnable mutation) {
+        @DurableMutation
+        public void succeedWithEffect(@RoomId String roomId, Runnable mutation) {
             mutation.run();
         }
 
-        @DurableMutation(roomId = "#roomId")
-        public void mutateConnectivityAndIntentsThenThrow(String roomId, RoomService rooms,
+        @DurableMutation
+        public void mutateConnectivityAndIntentsThenThrow(@RoomId String roomId, RoomService rooms,
                 GameLifecycleService games, String playerName, List<String> effects) {
             PostSaveActions.runAfterSave(() -> effects.add("rejected"));
             Room room = rooms.getRoom(roomId);
@@ -888,8 +889,8 @@ class PersistenceCoordinationIT {
             throw new IllegalStateException("Simulated failure after connectivity and progression change");
         }
 
-        @DurableMutation(roomId = "#roomId")
-        public void failWithoutPreExistingRoom(String roomId) {
+        @DurableMutation
+        public void failWithoutPreExistingRoom(@RoomId String roomId) {
             throw new IllegalStateException("Simulated rejection against missing room");
         }
     }
@@ -903,8 +904,8 @@ class PersistenceCoordinationIT {
             this.expectedRoomId = expectedRoomId;
         }
 
-        @DurableMutation(roomId = "#roomId")
-        public void runCoordinated(String roomId, Runnable action) {
+        @DurableMutation
+        public void runCoordinated(@RoomId String roomId, Runnable action) {
             roomCoordinator.assertHeldByCurrentThread(expectedRoomId);
             action.run();
         }

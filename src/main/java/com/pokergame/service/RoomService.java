@@ -17,6 +17,7 @@ import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.persistence.transaction.PostSaveActions;
+import com.pokergame.persistence.transaction.RoomId;
 import com.pokergame.service.event.RoomDestroyed;
 import com.pokergame.service.event.RoomMemberRegistered;
 import com.pokergame.service.event.RoomMembershipRetired;
@@ -98,8 +99,8 @@ public class RoomService {
      * @throws BadRequestException if the room name is already taken, the password is invalid,
      *                             or the blind/buy-in ratios are invalid
      */
-    @DurableMutation(roomId = "#roomId")
-    public RoomEntryResult createRoom(String roomId, CreateRoomRequest request) {
+    @DurableMutation
+    public RoomEntryResult createRoom(@RoomId String roomId, CreateRoomRequest request) {
         requireNonNull(roomId, "roomId must not be null");
         requireNonNull(request, "request must not be null");
         RoomPasswordPolicy.validateLength(request.getPassword());
@@ -180,8 +181,8 @@ public class RoomService {
      * @throws BadRequestException       if the game started, lobby expired, room is full,
      *                                   password is wrong, or player name is already taken
      */
-    @DurableMutation(roomId = "#roomId")
-    public RoomEntryResult joinRoom(String roomId, JoinRoomRequest joinRequest) {
+    @DurableMutation
+    public RoomEntryResult joinRoom(@RoomId String roomId, JoinRoomRequest joinRequest) {
         requireNonNull(roomId, "roomId must not be null");
         requireNonNull(joinRequest, "joinRequest must not be null");
         RoomPasswordPolicy.validateLength(joinRequest.password());
@@ -265,8 +266,8 @@ public class RoomService {
      * @throws ResourceNotFoundException if the room does not exist
      * @throws BadRequestException       if the player is not currently in the room
      */
-    @DurableMutation(roomId = "#roomId")
-    public void leaveRoom(String roomId, String playerName) {
+    @DurableMutation
+    public void leaveRoom(@RoomId String roomId, String playerName) {
         requireNonNull(roomId, "roomId must not be null");
         requireNonNull(playerName, "playerName must not be null");
         Room room = rooms.get(roomId);
@@ -327,8 +328,8 @@ public class RoomService {
      * @param playerNames   the departing player names
      * @param survivingHost the preselected next host when host transfer occurs, or {@code null}
      */
-    @DurableMutation(roomId = "#roomId")
-    public void leavePlayersBatch(String roomId, List<String> playerNames, String survivingHost) {
+    @DurableMutation
+    public void leavePlayersBatch(@RoomId String roomId, List<String> playerNames, String survivingHost) {
         roomCoordinator.assertHeldByCurrentThread(roomId);
         Room room = rooms.get(roomId);
         if (room == null || playerNames == null || playerNames.isEmpty()) {
@@ -487,8 +488,8 @@ public class RoomService {
      *
      * @param roomId the unique ID of the room to destroy
      */
-    @DurableMutation(roomId = "#roomId")
-    public void destroyRoom(String roomId) {
+    @DurableMutation
+    public void destroyRoom(@RoomId String roomId) {
         cancelLobbyInactivity(roomId);
         Room room = rooms.remove(roomId);
         if (room != null) {
@@ -554,8 +555,8 @@ public class RoomService {
      *
      * @param roomId the unique ID of the room
      */
-    @DurableMutation(roomId = "#roomId")
-    public void closeLobbyDueToInactivity(String roomId) {
+    @DurableMutation
+    public void closeLobbyDueToInactivity(@RoomId String roomId) {
         Room room = rooms.get(roomId);
         if (room == null || room.isGameStarted()) {
             return;

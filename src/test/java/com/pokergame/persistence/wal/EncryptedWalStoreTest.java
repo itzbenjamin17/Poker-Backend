@@ -310,6 +310,154 @@ class EncryptedWalStoreTest {
         });
     }
 
+    /** Recovery of a room that never committed returns nothing, repairs a torn tail and demands a checkpoint. */
+    @Test
+    void recoverLatestOfNeverCommittedWalWithTornTailReturnsEmptyAfterTruncatingTail() throws Exception {
+        EncryptedWalStore writer = new EncryptedWalStore(directory, keyring("current", (byte) 14), roomCoordinator);
+        Path wal = directory.resolve("room-never-committed.wal");
+        withRoomLock(roomCoordinator, "room-never-committed", () -> writer.prepare("room-never-committed"));
+        long completeLength = Files.size(wal);
+        Files.write(wal, new byte[]{1, 2, 3}, StandardOpenOption.APPEND);
+
+        EncryptedWalStore recovering = new EncryptedWalStore(directory, keyring("current", (byte) 14), roomCoordinator);
+        withRoomLock(roomCoordinator, "room-never-committed", () -> {
+            assertTrue(recovering.recoverLatest("room-never-committed").isEmpty());
+            assertTrue(recovering.requiresCheckpoint("room-never-committed"));
+            return null;
+        });
+        assertEquals(completeLength, Files.size(wal), "Recovery removes the torn bytes");
+    }
+
+    /** A complete prepare-only WAL recovers as empty without any repair or checkpoint requirement. */
+    @Test
+    void recoverLatestOfNeverCommittedCompleteWalLeavesFileAndCheckpointStateAlone() throws Exception {
+        EncryptedWalStore writer = new EncryptedWalStore(directory, keyring("current", (byte) 15), roomCoordinator);
+        Path wal = directory.resolve("room-prepare-only.wal");
+        withRoomLock(roomCoordinator, "room-prepare-only", () -> writer.prepare("room-prepare-only"));
+        byte[] before = Files.readAllBytes(wal);
+
+        EncryptedWalStore recovering = new EncryptedWalStore(directory, keyring("current", (byte) 15), roomCoordinator);
+        withRoomLock(roomCoordinator, "room-prepare-only", () -> {
+            assertTrue(recovering.recoverLatest("room-prepare-only").isEmpty());
+            assertFalse(recovering.requiresCheckpoint("room-prepare-only"));
+            return null;
+        });
+        assertArrayEquals(before, Files.readAllBytes(wal));
+    }
+
+    /** A cold store that meets a torn tail while appending refuses without touching the file. */
+    @Test
+    void appendingToColdStoreWithTornTailRequiresCheckpointAndLeavesFileUntouched() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 18);
+        EncryptedWalStore writer = new EncryptedWalStore(directory, keys, roomCoordinator);
+        Path wal = directory.resolve("room-cold-torn.wal");
+        withRoomLock(roomCoordinator, "room-cold-torn", () -> {
+            writer.commit(writer.prepare("room-cold-torn"), new byte[]{1});
+            return null;
+        });
+        Files.write(wal, new byte[]{9, 9, 9}, StandardOpenOption.APPEND);
+        byte[] before = Files.readAllBytes(wal);
+
+        EncryptedWalStore cold = new EncryptedWalStore(directory, keys, roomCoordinator);
+        withRoomLock(roomCoordinator, "room-cold-torn", () -> {
+            PersistenceException ex = assertThrows(PersistenceException.class, () -> cold.prepare("room-cold-torn"));
+            assertTrue(ex.getMessage().contains("full checkpoint"));
+            assertTrue(cold.requiresCheckpoint("room-cold-torn"));
+            return null;
+        });
+        assertArrayEquals(before, Files.readAllBytes(wal));
+    }
+
+    /** A torn tail does not get repaired in a file that fails validation; recoverAll quarantines it intact. */
+    @Test
+    void recoverAllQuarantinesUnpairedCommitWithTornTailWithoutTruncatingIt() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 19);
+        EncryptedWalStore writer = new EncryptedWalStore(directory, keys, roomCoordinator);
+        Path wal = directory.resolve("room-unpaired.wal");
+        withRoomLock(roomCoordinator, "room-unpaired", () -> {
+            WalTransaction prepared = writer.prepare("room-unpaired");
+            WalTransaction forged = new WalTransaction("room-unpaired", java.util.UUID.randomUUID(),
+                    prepared.prepareSequence());
+            writer.commit(forged, new byte[]{1});
+            return null;
+        });
+        Files.write(wal, new byte[]{9, 9, 9}, StandardOpenOption.APPEND);
+        byte[] before = Files.readAllBytes(wal);
+
+        EncryptedWalStore recovering = new EncryptedWalStore(directory, keys, roomCoordinator);
+        assertTrue(recovering.recoverAll().isEmpty());
+
+        assertFalse(Files.exists(wal));
+        assertArrayEquals(before, Files.readAllBytes(directory.resolve("room-unpaired.wal.corrupted")));
+    }
+
+    /** The side-effect-free committed-state check distinguishes committed, prepare-only and missing WALs. */
+    @Test
+    void hasCommittedStateReportsCommittedStateWithoutTouchingFilesOrTracking() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 16);
+        EncryptedWalStore writer = new EncryptedWalStore(directory, keys, roomCoordinator);
+        Path committedWal = directory.resolve("room-has-state.wal");
+        Path prepareOnlyWal = directory.resolve("room-no-state.wal");
+        withRoomLock(roomCoordinator, "room-has-state", () -> {
+            writer.commit(writer.prepare("room-has-state"), new byte[]{1});
+            writer.prepare("room-has-state");
+            return null;
+        });
+        withRoomLock(roomCoordinator, "room-no-state", () -> writer.prepare("room-no-state"));
+        // Torn tails on both files: a recovery would truncate them and require a checkpoint.
+        Files.write(committedWal, new byte[]{9, 9, 9}, StandardOpenOption.APPEND);
+        Files.write(prepareOnlyWal, new byte[]{9, 9, 9}, StandardOpenOption.APPEND);
+        Path compacting = directory.resolve("room-has-state.wal.compacting");
+        byte[] committedBytes = Files.readAllBytes(committedWal);
+        byte[] prepareOnlyBytes = Files.readAllBytes(prepareOnlyWal);
+
+        EncryptedWalStore checking = new EncryptedWalStore(directory, keys, roomCoordinator);
+        // Written after construction, which deletes orphaned compaction files.
+        Files.write(compacting, new byte[]{4, 5, 6});
+        withRoomLock(roomCoordinator, "room-has-state", () -> {
+            assertTrue(checking.hasCommittedState("room-has-state"));
+            assertFalse(checking.requiresCheckpoint("room-has-state"));
+            return null;
+        });
+        withRoomLock(roomCoordinator, "room-no-state", () -> {
+            assertFalse(checking.hasCommittedState("room-no-state"));
+            assertFalse(checking.requiresCheckpoint("room-no-state"));
+            return null;
+        });
+        withRoomLock(roomCoordinator, "room-missing", () -> {
+            assertFalse(checking.hasCommittedState("room-missing"));
+            return null;
+        });
+
+        assertArrayEquals(committedBytes, Files.readAllBytes(committedWal), "No torn-tail truncation");
+        assertArrayEquals(prepareOnlyBytes, Files.readAllBytes(prepareOnlyWal), "No torn-tail truncation");
+        assertArrayEquals(new byte[]{4, 5, 6}, Files.readAllBytes(compacting), "No compaction file deletion");
+        assertFalse(Files.exists(directory.resolve("room-missing.wal")));
+        assertTrue(checking.isHealthy());
+    }
+
+    /** A tampered file makes the check fail without marking the store unhealthy, unlike a real recovery. */
+    @Test
+    void hasCommittedStateFailsOnCorruptWalWithoutRecordingAFailure() throws Exception {
+        EncryptionKeyring keys = keyring("current", (byte) 17);
+        EncryptedWalStore store = new EncryptedWalStore(directory, keys, roomCoordinator);
+        Path wal = directory.resolve("room-corrupt-check.wal");
+        withRoomLock(roomCoordinator, "room-corrupt-check", () -> {
+            store.commit(store.prepare("room-corrupt-check"), new byte[]{1});
+            return null;
+        });
+        byte[] corrupt = Files.readAllBytes(wal);
+        corrupt[corrupt.length / 2] ^= 1;
+        Files.write(wal, corrupt);
+
+        withRoomLock(roomCoordinator, "room-corrupt-check", () -> {
+            assertThrows(PersistenceException.class, () -> store.hasCommittedState("room-corrupt-check"));
+            return null;
+        });
+        assertTrue(store.isHealthy());
+        assertArrayEquals(corrupt, Files.readAllBytes(wal));
+    }
+
     /** One room's repair cannot declare other unsaved rooms healthy. */
     @Test
     void checkpointOnlyClearsItsOwnRoomFailure() {
@@ -860,6 +1008,7 @@ class EncryptedWalStoreTest {
         assertThrows(IllegalStateException.class, () -> store.prepare(roomId));
         assertThrows(IllegalStateException.class, () -> store.commit(tx, payload));
         assertThrows(IllegalStateException.class, () -> store.recoverLatest(roomId));
+        assertThrows(IllegalStateException.class, () -> store.hasCommittedState(roomId));
         assertThrows(IllegalStateException.class, () -> store.compact(roomId, payload));
         assertThrows(IllegalStateException.class, () -> store.checkpoint(roomId, payload));
         assertThrows(IllegalStateException.class, () -> store.delete(roomId));

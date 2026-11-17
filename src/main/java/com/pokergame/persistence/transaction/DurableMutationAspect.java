@@ -10,30 +10,23 @@ import com.pokergame.persistence.snapshot.AggregateStateImage;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.WalTransaction;
+import com.pokergame.util.LockLease;
+import com.pokergame.util.MdcUtils;
 import com.pokergame.util.RoomCoordinator;
-import com.pokergame.util.MdcKeys;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
-import org.springframework.core.DefaultParameterNameDiscoverer;
-import org.springframework.expression.EvaluationContext;
-import org.springframework.expression.ExpressionParser;
-import org.springframework.expression.spel.standard.SpelExpressionParser;
-import org.springframework.expression.spel.support.StandardEvaluationContext;
-
-import java.lang.reflect.Method;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
-import com.pokergame.util.LockLease;
 import org.springframework.scheduling.annotation.Scheduled;
 
-import static java.util.Objects.requireNonNull;
+import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Automatically saves the poker game to disk after certain methods finish running.
@@ -47,6 +40,9 @@ import static java.util.Objects.requireNonNull;
 @Aspect
 public final class DurableMutationAspect {
     private static final Logger logger = LoggerFactory.getLogger(DurableMutationAspect.class);
+    /** A save appends a prepare record and a commit record to the room's log. */
+    private static final int WAL_RECORDS_PER_SAVE = 2;
+
     private final EncryptedWalStore store;
     private final AggregateSnapshotMapper snapshotMapper;
     private final RoomAggregates aggregates;
@@ -54,8 +50,7 @@ public final class DurableMutationAspect {
     private final RoomCoordinator roomCoordinator;
     private final ConcurrentHashMap<String, AtomicInteger> recordsSinceCompaction = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, PendingSave> pendingSaves = new ConcurrentHashMap<>();
-    private final ExpressionParser expressionParser = new SpelExpressionParser();
-    private final DefaultParameterNameDiscoverer parameterNames = new DefaultParameterNameDiscoverer();
+    private final ConcurrentHashMap<Method, Integer> roomIdParameterIndexes = new ConcurrentHashMap<>();
 
     /**
      * Creates this aspect.
@@ -79,86 +74,92 @@ public final class DurableMutationAspect {
      * Serializes the method with other operations on the room. When storage is configured,
      * saves accepted state and releases effects even if persistence is temporarily unavailable.
      * Without storage, executes under the same lease without snapshots or transaction buffering.
+     * The room is the one named by the method's {@link RoomId} or {@link GameId} parameter.
      *
      * @param joinPoint the intercepted method
-     * @param mutation details about the method
      * @return the result of the method
      * @throws Throwable if the domain mutation itself fails
      */
-    @Around("@annotation(mutation)")
-    public Object persist(ProceedingJoinPoint joinPoint, DurableMutation mutation) throws Throwable {
-        String roomId = resolveRoomId(joinPoint, mutation.roomId());
-        if (store == null) {
-            LockLease lease = roomCoordinator.acquire(roomId);
-            try {
-                return joinPoint.proceed();
-            } finally {
-                lease.close();
-            }
+    @Around("@annotation(com.pokergame.persistence.transaction.DurableMutation)")
+    public Object persist(ProceedingJoinPoint joinPoint) throws Throwable {
+        String roomId = resolveRoomId(joinPoint);
+        try (MdcUtils.MdcScope _ = MdcUtils.withRoomId(roomId)) {
+            return store == null ? runWithoutStorage(joinPoint, roomId) : runWithStorage(joinPoint, roomId);
         }
-        String previousRoom = MDC.get(MdcKeys.ROOM_ID);
-        MDC.put(MdcKeys.ROOM_ID, roomId);
-        try {
-            logger.debug("Durable mutation enter: method={} roomId={}", joinPoint.getSignature().toShortString(), roomId);
-            String activeRoom = PostSaveActions.currentRoomId();
-            if (activeRoom != null) {
-                if (!activeRoom.equals(roomId)) {
-                    throw new PersistenceException("Nested durable mutations cannot cross room boundaries");
-                }
-                logger.debug("Nested durable mutation joined existing transaction for roomId={}", roomId);
-                return joinPoint.proceed();
+    }
+
+    private Object runWithoutStorage(ProceedingJoinPoint joinPoint, String roomId) throws Throwable {
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
+            return joinPoint.proceed();
+        }
+    }
+
+    private Object runWithStorage(ProceedingJoinPoint joinPoint, String roomId) throws Throwable {
+        logger.debug("Durable mutation enter: method={} roomId={}", joinPoint.getSignature().toShortString(), roomId);
+        String activeRoom = PostSaveActions.currentRoomId();
+        if (activeRoom != null) {
+            if (!activeRoom.equals(roomId)) {
+                throw new PersistenceException("Nested durable mutations cannot cross room boundaries");
             }
+            logger.debug("Nested durable mutation joined existing transaction for roomId={}", roomId);
+            return joinPoint.proceed();
+        }
 
-            try (LockLease _ = roomCoordinator.acquire(roomId)) {
-                PostSaveActions.begin(roomId);
-                RollbackState beforeMutation = null;
+        try (LockLease _ = roomCoordinator.acquire(roomId)) {
+            PostSaveActions.begin(roomId);
+            RollbackState beforeMutation = null;
+            try {
+                beforeMutation = captureRollbackState(roomId);
+            } catch (RuntimeException captureFailure) {
+                // Snapshot trouble must not refuse an otherwise valid in-memory command.
+                recordStorageFailure(roomId, captureFailure);
+            }
+            boolean hasPreExistingRoom = beforeMutation != null && beforeMutation.image() != null;
+            boolean prepareFailed = false;
+            WalTransaction transaction = null;
+            if (hasPreExistingRoom && store.isHealthy(roomId) && !store.requiresCheckpoint(roomId)) {
                 try {
-                    beforeMutation = captureRollbackState(roomId);
-                } catch (RuntimeException captureFailure) {
-                    // Snapshot trouble must not refuse an otherwise valid in-memory command.
-                    recordStorageFailure(roomId, captureFailure);
+                    transaction = store.prepare(roomId);
+                } catch (RuntimeException failure) {
+                    // The store has already recorded this failure.
+                    prepareFailed = true;
+                    logStorageUnavailable(roomId, failure);
                 }
-                boolean hasPreExistingRoom = beforeMutation != null && beforeMutation.image() != null;
-                boolean prepareFailed = false;
-                WalTransaction transaction = null;
-                if (hasPreExistingRoom && store.isHealthy(roomId) && !store.requiresCheckpoint(roomId)) {
-                    try {
-                        transaction = store.prepare(roomId);
-                    } catch (RuntimeException failure) {
-                        prepareFailed = true;
-                        recordStorageFailure(roomId, failure);
-                    }
-                }
-                Object result;
-                try {
-                    result = joinPoint.proceed();
-                } catch (Throwable failure) {
-                    logger.debug("Durable mutation discarded due to failure: class={} roomId={}", failure.getClass().getSimpleName(), roomId);
-                    PostSaveActions.clear();
-                    rollbackOrEvictAggregate(roomId, beforeMutation, prepareFailed, transaction != null);
-                    throw failure;
-                }
-
-                // An accepted newer mutation supersedes any old retry image before serialization starts.
-                pendingSaves.put(roomId, new PendingSave(null, false));
-                try {
-                    PendingSave pending = captureState(roomId);
-                    pendingSaves.put(roomId, pending);
-                    saveState(roomId, pending, transaction);
-                } catch (RuntimeException saveFailure) {
-                    recordStorageFailure(roomId, saveFailure);
-                }
-                PostSaveActions.executeAll();
-                return result;
-            } finally {
+            }
+            Object result;
+            try {
+                result = joinPoint.proceed();
+            } catch (Throwable failure) {
+                logger.debug("Durable mutation discarded due to failure: class={} roomId={}", failure.getClass().getSimpleName(), roomId);
                 PostSaveActions.clear();
+                rollbackOrEvictAggregate(roomId, beforeMutation, prepareFailed, transaction != null);
+                throw failure;
             }
+
+            captureAndSave(roomId, transaction);
+            PostSaveActions.executeAll();
+            return result;
         } finally {
-            if (previousRoom == null) {
-                MDC.remove(MdcKeys.ROOM_ID);
-            } else {
-                MDC.put(MdcKeys.ROOM_ID, previousRoom);
-            }
+            PostSaveActions.clear();
+        }
+    }
+
+    private void captureAndSave(String roomId, WalTransaction transaction) {
+        // An accepted newer mutation supersedes any old retry image before serialization starts.
+        pendingSaves.put(roomId, PendingSave.needsCapture());
+        PendingSave pending;
+        try {
+            pending = captureState(roomId);
+        } catch (RuntimeException captureFailure) {
+            recordStorageFailure(roomId, captureFailure);
+            return;
+        }
+        pendingSaves.put(roomId, pending);
+        try {
+            saveState(roomId, pending, transaction);
+        } catch (RuntimeException saveFailure) {
+            // The store has already recorded this failure.
+            logStorageUnavailable(roomId, saveFailure);
         }
     }
 
@@ -172,16 +173,22 @@ public final class DurableMutationAspect {
             LockLease lease = roomCoordinator.tryAcquire(roomId);
             if (lease == null) continue;
             try (lease) {
-                try {
-                    PendingSave pending = pendingSaves.get(roomId);
-                    if (pending == null) continue;
-                    if (pending.image() == null) {
+                PendingSave pending = pendingSaves.get(roomId);
+                if (pending == null) continue;
+                if (pending.image() == null) {
+                    try {
                         pending = captureState(roomId);
-                        pendingSaves.put(roomId, pending);
+                    } catch (RuntimeException captureFailure) {
+                        recordStorageFailure(roomId, captureFailure);
+                        continue;
                     }
+                    pendingSaves.put(roomId, pending);
+                }
+                try {
                     saveState(roomId, pending, null);
-                } catch (RuntimeException failure) {
-                    recordStorageFailure(roomId, failure);
+                } catch (RuntimeException saveFailure) {
+                    // The store has already recorded this failure.
+                    logStorageUnavailable(roomId, saveFailure);
                 }
             }
         }
@@ -215,14 +222,27 @@ public final class DurableMutationAspect {
         pendingSaves.remove(roomId, pending);
     }
 
+    /**
+     * Records a failure that happened in this aspect (snapshot, serialization or restore) so the store
+     * marks the room unsaved. Failures inside store calls are recorded by the store itself.
+     */
     private void recordStorageFailure(String roomId, RuntimeException failure) {
         store.recordWriteFailure(roomId, failure);
+        logStorageUnavailable(roomId, failure);
+    }
+
+    private void logStorageUnavailable(String roomId, RuntimeException failure) {
         logger.warn("Persistence unavailable for room {}; continuing in memory ({})",
                 roomId, failure.getClass().getSimpleName());
     }
 
     private record PendingSave(byte[] image, boolean deleted) {
         private PendingSave { image = image == null ? null : image.clone(); }
+
+        /** A placeholder meaning "no image yet; take a fresh snapshot before saving". */
+        static PendingSave needsCapture() {
+            return new PendingSave(null, false);
+        }
     }
 
     private RollbackState captureRollbackState(String roomId) {
@@ -284,7 +304,7 @@ public final class DurableMutationAspect {
         try {
             pendingSaves.put(roomId, captureState(roomId));
         } catch (RuntimeException captureFailure) {
-            pendingSaves.putIfAbsent(roomId, new PendingSave(null, false));
+            pendingSaves.putIfAbsent(roomId, PendingSave.needsCapture());
             recordStorageFailure(roomId, captureFailure);
         }
     }
@@ -305,7 +325,7 @@ public final class DurableMutationAspect {
         try {
             if (aggregates.find(roomId) == null) {
                 recordsSinceCompaction.remove(roomId);
-                if (prepared && store.isHealthy(roomId) && store.recoverLatest(roomId).isEmpty()) {
+                if (prepared && store.isHealthy(roomId) && !store.hasCommittedState(roomId)) {
                     store.delete(roomId);
                 }
             }
@@ -316,25 +336,35 @@ public final class DurableMutationAspect {
 
     private boolean shouldCompact(String roomId) {
         int records = recordsSinceCompaction.computeIfAbsent(roomId, ignored -> new AtomicInteger())
-                .addAndGet(2);
+                .addAndGet(WAL_RECORDS_PER_SAVE);
         return records >= properties.getCompactAfterRecords()
                 || store.walSize(roomId) >= properties.getCompactAfterBytes();
     }
 
-    private String resolveRoomId(ProceedingJoinPoint joinPoint, String expression) {
+    private String resolveRoomId(ProceedingJoinPoint joinPoint) {
         Method method = ((MethodSignature) joinPoint.getSignature()).getMethod();
-        String[] names = parameterNames.getParameterNames(method);
-        EvaluationContext context = new StandardEvaluationContext();
-        Object[] arguments = joinPoint.getArgs();
-        if (names != null) {
-            for (int i = 0; i < names.length; i++) {
-                context.setVariable(names[i], arguments[i]);
-            }
-        }
-        Object value = expressionParser.parseExpression(expression).getValue(context);
-        if (!(value instanceof String roomId) || roomId.isBlank()) {
+        int index = roomIdParameterIndexes.computeIfAbsent(method, DurableMutationAspect::findRoomIdParameter);
+        if (!(joinPoint.getArgs()[index] instanceof String roomId) || roomId.isBlank()) {
             throw new PersistenceException("Durable mutation did not resolve a room ID");
         }
         return roomId;
+    }
+
+    /** Finds the one parameter marked {@link RoomId} or {@link GameId}; the result is cached per method. */
+    private static int findRoomIdParameter(Method method) {
+        Parameter[] parameters = method.getParameters();
+        int found = -1;
+        int markers = 0;
+        for (int i = 0; i < parameters.length; i++) {
+            int onParameter = (parameters[i].isAnnotationPresent(RoomId.class) ? 1 : 0)
+                    + (parameters[i].isAnnotationPresent(GameId.class) ? 1 : 0);
+            if (onParameter > 0) found = i;
+            markers += onParameter;
+        }
+        if (markers != 1) {
+            throw new IllegalStateException("@DurableMutation method " + method.toGenericString()
+                    + " must mark exactly one parameter with @RoomId or @GameId, but marks " + markers);
+        }
+        return found;
     }
 }
