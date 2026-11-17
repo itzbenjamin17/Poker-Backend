@@ -99,6 +99,16 @@ class ShowdownResolverTest {
     }
 
     @Test
+    void determineWinners_ThreePlayersOfSameRank_BestKeptAndEqualHandsShareInSeatOrder() {
+        Player weakest = player("a", 0, HandRank.ONE_PAIR, PAIR_TWOS_HAND);
+        Player best = player("b", 0, HandRank.ONE_PAIR, PAIR_ACES_HAND);
+        Player alsoBest = player("c", 0, HandRank.ONE_PAIR, PAIR_ACES_HAND);
+
+        assertEquals(List.of(best, alsoBest),
+                ShowdownResolver.determineWinners(List.of(weakest, best, alsoBest)));
+    }
+
+    @Test
     void distribute_SingleWinner_TakesWholePot() {
         Player a = player("a", 0, HandRank.FLUSH);
         Player b = player("b", 0, HandRank.ONE_PAIR);

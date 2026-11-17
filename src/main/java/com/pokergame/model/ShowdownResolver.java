@@ -162,21 +162,16 @@ final class ShowdownResolver {
         for (int i = 1; i < sortablePlayers.size(); i++) {
             Player currentPlayer = sortablePlayers.get(i);
             if (currentPlayer.getHandRank() == bestPlayer.getHandRank()) {
-                boolean challengerBeatsBest = HAND_EVALUATOR.isBetterHandOfSameRank(
+                int comparison = HAND_EVALUATOR.compareSameRank(
                         currentPlayer.getBestHand(),
                         bestPlayer.getBestHand(),
                         bestPlayer.getHandRank());
 
-                boolean bestBeatsChallenger = HAND_EVALUATOR.isBetterHandOfSameRank(
-                        bestPlayer.getBestHand(),
-                        currentPlayer.getBestHand(),
-                        bestPlayer.getHandRank());
-
-                if (challengerBeatsBest && !bestBeatsChallenger) {
+                if (comparison > 0) {
                     bestPlayer = currentPlayer;
                     winners.clear();
                     winners.add(currentPlayer);
-                } else if (!challengerBeatsBest && !bestBeatsChallenger) {
+                } else if (comparison == 0) {
                     winners.add(currentPlayer);
                 }
             } else {

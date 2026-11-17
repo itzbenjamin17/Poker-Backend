@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -47,8 +48,8 @@ class HandEvaluatorTest {
                                 ranksOf(ace.bestHand()));
                 assertEquals(List.of(Rank.SEVEN, Rank.EIGHT, Rank.NINE, Rank.JACK, Rank.KING),
                                 ranksOf(king.bestHand()));
-                assertTrue(service.isBetterHandOfSameRank(ace.bestHand(), king.bestHand(), HandRank.HIGH_CARD));
-                assertFalse(service.isBetterHandOfSameRank(king.bestHand(), ace.bestHand(), HandRank.HIGH_CARD));
+                assertTrue(service.compareSameRank(ace.bestHand(), king.bestHand(), HandRank.HIGH_CARD) > 0);
+                assertTrue(service.compareSameRank(king.bestHand(), ace.bestHand(), HandRank.HIGH_CARD) < 0);
                 assertEquals(aceBefore, aceHole);
                 assertEquals(kingBefore, kingHole);
         }
@@ -64,10 +65,10 @@ class HandEvaluatorTest {
                 List<Card> mutableDescending = new ArrayList<>(aceHigh);
                 List<Card> before = List.copyOf(mutableDescending);
 
-                assertFalse(service.isBetterHandOfSameRank(mutableDescending, sameRanksOtherSuits, HandRank.HIGH_CARD));
-                assertFalse(service.isBetterHandOfSameRank(sameRanksOtherSuits, mutableDescending, HandRank.HIGH_CARD));
-                assertTrue(service.isBetterHandOfSameRank(mutableDescending, lowerKicker, HandRank.HIGH_CARD));
-                assertFalse(service.isBetterHandOfSameRank(lowerKicker, mutableDescending, HandRank.HIGH_CARD));
+                assertEquals(0, service.compareSameRank(mutableDescending, sameRanksOtherSuits, HandRank.HIGH_CARD));
+                assertEquals(0, service.compareSameRank(sameRanksOtherSuits, mutableDescending, HandRank.HIGH_CARD));
+                assertTrue(service.compareSameRank(mutableDescending, lowerKicker, HandRank.HIGH_CARD) > 0);
+                assertTrue(service.compareSameRank(lowerKicker, mutableDescending, HandRank.HIGH_CARD) < 0);
                 assertEquals(before, mutableDescending);
         }
 
@@ -127,7 +128,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.KING, Suit.SPADES),
                                 new Card(Rank.ACE, Suit.SPADES));
 
-                assertEquals(HandRank.ROYAL_FLUSH, service.evaluateHand(royalFlush));
+                assertEquals(HandRank.ROYAL_FLUSH, rankOf(royalFlush));
         }
 
         /**
@@ -142,7 +143,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.EIGHT, Suit.HEARTS),
                                 new Card(Rank.NINE, Suit.HEARTS));
 
-                assertEquals(HandRank.STRAIGHT_FLUSH, service.evaluateHand(straightFlush));
+                assertEquals(HandRank.STRAIGHT_FLUSH, rankOf(straightFlush));
         }
 
         /**
@@ -157,7 +158,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.FIVE, Suit.DIAMONDS),
                                 new Card(Rank.ACE, Suit.DIAMONDS));
 
-                assertEquals(HandRank.STRAIGHT_FLUSH, service.evaluateHand(lowAceStraightFlush));
+                assertEquals(HandRank.STRAIGHT_FLUSH, rankOf(lowAceStraightFlush));
         }
 
         /**
@@ -172,7 +173,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.NINE, Suit.SPADES),
                                 new Card(Rank.KING, Suit.HEARTS));
 
-                assertEquals(HandRank.FOUR_OF_A_KIND, service.evaluateHand(fourOfAKind));
+                assertEquals(HandRank.FOUR_OF_A_KIND, rankOf(fourOfAKind));
         }
 
         /**
@@ -187,7 +188,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.FIVE, Suit.SPADES),
                                 new Card(Rank.FIVE, Suit.HEARTS));
 
-                assertEquals(HandRank.FULL_HOUSE, service.evaluateHand(fullHouse));
+                assertEquals(HandRank.FULL_HOUSE, rankOf(fullHouse));
         }
 
         /**
@@ -202,7 +203,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.NINE, Suit.CLUBS),
                                 new Card(Rank.KING, Suit.CLUBS));
 
-                assertEquals(HandRank.FLUSH, service.evaluateHand(flush));
+                assertEquals(HandRank.FLUSH, rankOf(flush));
         }
 
         /**
@@ -217,7 +218,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.EIGHT, Suit.SPADES),
                                 new Card(Rank.NINE, Suit.HEARTS));
 
-                assertEquals(HandRank.STRAIGHT, service.evaluateHand(straight));
+                assertEquals(HandRank.STRAIGHT, rankOf(straight));
         }
 
         /**
@@ -232,7 +233,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.FIVE, Suit.HEARTS),
                                 new Card(Rank.ACE, Suit.HEARTS));
 
-                assertEquals(HandRank.STRAIGHT, service.evaluateHand(lowAceStraight));
+                assertEquals(HandRank.STRAIGHT, rankOf(lowAceStraight));
         }
 
         /**
@@ -247,7 +248,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.KING, Suit.SPADES),
                                 new Card(Rank.THREE, Suit.HEARTS));
 
-                assertEquals(HandRank.THREE_OF_A_KIND, service.evaluateHand(threeOfAKind));
+                assertEquals(HandRank.THREE_OF_A_KIND, rankOf(threeOfAKind));
         }
 
         /**
@@ -262,7 +263,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.THREE, Suit.SPADES),
                                 new Card(Rank.KING, Suit.HEARTS));
 
-                assertEquals(HandRank.TWO_PAIR, service.evaluateHand(twoPair));
+                assertEquals(HandRank.TWO_PAIR, rankOf(twoPair));
         }
 
         /**
@@ -277,7 +278,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.SEVEN, Suit.SPADES),
                                 new Card(Rank.KING, Suit.HEARTS));
 
-                assertEquals(HandRank.ONE_PAIR, service.evaluateHand(onePair));
+                assertEquals(HandRank.ONE_PAIR, rankOf(onePair));
         }
 
         /**
@@ -292,22 +293,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.NINE, Suit.SPADES),
                                 new Card(Rank.KING, Suit.HEARTS));
 
-                assertEquals(HandRank.HIGH_CARD, service.evaluateHand(highCard));
-        }
-
-        /**
-         * Protects the expected behavior for evaluate hand invalid size.
-         */
-        @Test
-        void testEvaluateHandInvalidSize() {
-                List<Card> tooFewCards = List.of(
-                                new Card(Rank.ACE, Suit.SPADES),
-                                new Card(Rank.KING, Suit.HEARTS));
-
-                IllegalStateException exception = assertThrows(
-                                IllegalStateException.class,
-                                () -> service.evaluateHand(tooFewCards));
-                assertTrue(exception.getMessage().contains("Invalid number of cards"));
+                assertEquals(HandRank.HIGH_CARD, rankOf(highCard));
         }
 
         // Test getBestHand
@@ -425,15 +411,15 @@ class HandEvaluatorTest {
                                 ranksOf(aceQueen.bestHand()));
                 assertEquals(List.of(Rank.SEVEN, Rank.TEN, Rank.JACK, Rank.KING, Rank.ACE),
                                 ranksOf(aceTen.bestHand()));
-                assertTrue(service.isBetterHandOfSameRank(aceQueen.bestHand(), aceTen.bestHand(), HandRank.HIGH_CARD));
-                assertFalse(service.isBetterHandOfSameRank(aceTen.bestHand(), aceQueen.bestHand(), HandRank.HIGH_CARD));
-                assertFalse(service.isBetterHandOfSameRank(aceQueen.bestHand(), aceQueenTie.bestHand(),
-                                HandRank.HIGH_CARD));
-                assertFalse(service.isBetterHandOfSameRank(aceQueenTie.bestHand(), aceQueen.bestHand(),
-                                HandRank.HIGH_CARD));
+                assertTrue(service.compareSameRank(aceQueen.bestHand(), aceTen.bestHand(), HandRank.HIGH_CARD) > 0);
+                assertTrue(service.compareSameRank(aceTen.bestHand(), aceQueen.bestHand(), HandRank.HIGH_CARD) < 0);
+                assertEquals(0, service.compareSameRank(aceQueen.bestHand(), aceQueenTie.bestHand(),
+                        HandRank.HIGH_CARD));
+                assertEquals(0, service.compareSameRank(aceQueenTie.bestHand(), aceQueen.bestHand(),
+                        HandRank.HIGH_CARD));
         }
 
-        // Test isBetterHandOfSameRank - One Pair
+        // Test compareSameRank - One Pair
         /**
          * Protects the expected behavior for compare one pair higher pair wins.
          */
@@ -453,8 +439,8 @@ class HandEvaluatorTest {
                                 new Card(Rank.JACK, Suit.CLUBS),
                                 new Card(Rank.TEN, Suit.SPADES));
 
-                assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.ONE_PAIR));
-                assertFalse(service.isBetterHandOfSameRank(hand2, hand1, HandRank.ONE_PAIR));
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.ONE_PAIR) > 0);
+                assertTrue(service.compareSameRank(hand2, hand1, HandRank.ONE_PAIR) < 0);
         }
 
         /**
@@ -476,8 +462,8 @@ class HandEvaluatorTest {
                                 new Card(Rank.ACE, Suit.HEARTS),
                                 new Card(Rank.ACE, Suit.SPADES));
 
-                assertTrue(service.isBetterHandOfSameRank(hand2, hand1, HandRank.ONE_PAIR));
-                assertFalse(service.isBetterHandOfSameRank(hand1, hand2, HandRank.ONE_PAIR));
+                assertTrue(service.compareSameRank(hand2, hand1, HandRank.ONE_PAIR) > 0);
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.ONE_PAIR) < 0);
         }
 
         /**
@@ -499,10 +485,10 @@ class HandEvaluatorTest {
                                 new Card(Rank.JACK, Suit.DIAMONDS),
                                 new Card(Rank.TEN, Suit.HEARTS));
 
-                assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.ONE_PAIR));
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.ONE_PAIR) > 0);
         }
 
-        // Test isBetterHandOfSameRank - Two Pair
+        // Test compareSameRank - Two Pair
         /**
          * Protects the expected behavior for compare two pair higher top pair wins.
          */
@@ -522,7 +508,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.QUEEN, Suit.CLUBS),
                                 new Card(Rank.JACK, Suit.SPADES));
 
-                assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.TWO_PAIR));
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.TWO_PAIR) > 0);
         }
 
         /**
@@ -544,10 +530,10 @@ class HandEvaluatorTest {
                                 new Card(Rank.QUEEN, Suit.DIAMONDS),
                                 new Card(Rank.JACK, Suit.HEARTS));
 
-                assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.TWO_PAIR));
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.TWO_PAIR) > 0);
         }
 
-        // Test isBetterHandOfSameRank - Three of a Kind
+        // Test compareSameRank - Three of a Kind
         /**
          * Protects the expected behavior for compare three of a kind higher triplet wins.
          */
@@ -567,10 +553,10 @@ class HandEvaluatorTest {
                                 new Card(Rank.ACE, Suit.CLUBS),
                                 new Card(Rank.QUEEN, Suit.HEARTS));
 
-                assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.THREE_OF_A_KIND));
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.THREE_OF_A_KIND) > 0);
         }
 
-        // Test isBetterHandOfSameRank - Straight
+        // Test compareSameRank - Straight
         /**
          * Protects the expected behavior for compare straight higher top card wins.
          */
@@ -590,7 +576,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.EIGHT, Suit.CLUBS),
                                 new Card(Rank.NINE, Suit.HEARTS));
 
-                assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.STRAIGHT));
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.STRAIGHT) > 0);
         }
 
         /**
@@ -612,10 +598,10 @@ class HandEvaluatorTest {
                                 new Card(Rank.SIX, Suit.CLUBS),
                                 new Card(Rank.SEVEN, Suit.HEARTS));
 
-                assertFalse(service.isBetterHandOfSameRank(lowAceStraight, regularStraight, HandRank.STRAIGHT));
+                assertTrue(service.compareSameRank(lowAceStraight, regularStraight, HandRank.STRAIGHT) < 0);
         }
 
-        // Test isBetterHandOfSameRank - Flush
+        // Test compareSameRank - Flush
         /**
          * Protects the expected behavior for compare flush higher cards win.
          */
@@ -635,10 +621,10 @@ class HandEvaluatorTest {
                                 new Card(Rank.NINE, Suit.HEARTS),
                                 new Card(Rank.KING, Suit.HEARTS));
 
-                assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.FLUSH));
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.FLUSH) > 0);
         }
 
-        // Test isBetterHandOfSameRank - Full House
+        // Test compareSameRank - Full House
         /**
          * Protects the expected behavior for compare full house higher triplet wins.
          */
@@ -658,7 +644,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.ACE, Suit.CLUBS),
                                 new Card(Rank.ACE, Suit.SPADES));
 
-                assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.FULL_HOUSE));
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.FULL_HOUSE) > 0);
         }
 
         /**
@@ -680,10 +666,10 @@ class HandEvaluatorTest {
                                 new Card(Rank.QUEEN, Suit.CLUBS),
                                 new Card(Rank.QUEEN, Suit.SPADES));
 
-                assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.FULL_HOUSE));
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.FULL_HOUSE) > 0);
         }
 
-        // Test isBetterHandOfSameRank - Four of a Kind
+        // Test compareSameRank - Four of a Kind
         /**
          * Protects the expected behavior for compare four of a kind higher quad wins.
          */
@@ -703,7 +689,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.KING, Suit.CLUBS),
                                 new Card(Rank.ACE, Suit.HEARTS));
 
-                assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.FOUR_OF_A_KIND));
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.FOUR_OF_A_KIND) > 0);
         }
 
         /**
@@ -725,7 +711,7 @@ class HandEvaluatorTest {
                                 new Card(Rank.ACE, Suit.CLUBS),
                                 new Card(Rank.QUEEN, Suit.HEARTS));
 
-                assertTrue(service.isBetterHandOfSameRank(hand1, hand2, HandRank.FOUR_OF_A_KIND));
+                assertTrue(service.compareSameRank(hand1, hand2, HandRank.FOUR_OF_A_KIND) > 0);
         }
 
         // Test edge cases
@@ -748,8 +734,8 @@ class HandEvaluatorTest {
                                 new Card(Rank.QUEEN, Suit.HEARTS),
                                 new Card(Rank.JACK, Suit.DIAMONDS));
 
-                assertFalse(service.isBetterHandOfSameRank(hand1, hand2, HandRank.ONE_PAIR));
-                assertFalse(service.isBetterHandOfSameRank(hand2, hand1, HandRank.ONE_PAIR));
+                assertEquals(0, service.compareSameRank(hand1, hand2, HandRank.ONE_PAIR));
+                assertEquals(0, service.compareSameRank(hand2, hand1, HandRank.ONE_PAIR));
         }
 
         /**
@@ -771,8 +757,8 @@ class HandEvaluatorTest {
                                 new Card(Rank.JACK, Suit.DIAMONDS),
                                 new Card(Rank.KING, Suit.HEARTS));
 
-                assertTrue(service.isBetterHandOfSameRank(aceHigh, kingHigh, HandRank.HIGH_CARD));
-                assertFalse(service.isBetterHandOfSameRank(kingHigh, aceHigh, HandRank.HIGH_CARD));
+                assertTrue(service.compareSameRank(aceHigh, kingHigh, HandRank.HIGH_CARD) > 0);
+                assertTrue(service.compareSameRank(kingHigh, aceHigh, HandRank.HIGH_CARD) < 0);
         }
 
         /**
@@ -794,8 +780,8 @@ class HandEvaluatorTest {
                                 new Card(Rank.QUEEN, Suit.HEARTS),
                                 new Card(Rank.ACE, Suit.DIAMONDS));
 
-                assertTrue(service.isBetterHandOfSameRank(betterKicker, weakerKicker, HandRank.HIGH_CARD));
-                assertFalse(service.isBetterHandOfSameRank(weakerKicker, betterKicker, HandRank.HIGH_CARD));
+                assertTrue(service.compareSameRank(betterKicker, weakerKicker, HandRank.HIGH_CARD) > 0);
+                assertTrue(service.compareSameRank(weakerKicker, betterKicker, HandRank.HIGH_CARD) < 0);
         }
 
         /**
@@ -817,8 +803,8 @@ class HandEvaluatorTest {
                                 new Card(Rank.JACK, Suit.HEARTS),
                                 new Card(Rank.KING, Suit.DIAMONDS));
 
-                assertFalse(service.isBetterHandOfSameRank(hand1, hand2, HandRank.HIGH_CARD));
-                assertFalse(service.isBetterHandOfSameRank(hand2, hand1, HandRank.HIGH_CARD));
+                assertEquals(0, service.compareSameRank(hand1, hand2, HandRank.HIGH_CARD));
+                assertEquals(0, service.compareSameRank(hand2, hand1, HandRank.HIGH_CARD));
         }
 
         /**
@@ -866,12 +852,17 @@ class HandEvaluatorTest {
 
         private static List<Card> hand(Card... cards) { return List.of(cards); }
 
+        /** The hand rank a 5-card hand makes, found through the public best-hand lookup. */
+        private HandRank rankOf(List<Card> fiveCards) {
+                return service.getBestHand(List.of(), fiveCards).handRank();
+        }
+
         private static List<Rank> ranksOf(List<Card> cards) {
                 return cards.stream().map(Card::rank).toList();
         }
 
         @Test
-        @DisplayName("Royal flushes of different suits tie through the default comparison arm")
+        @DisplayName("Royal flushes of different suits tie")
         void royalFlushesOfDifferentSuitsTie() {
                 List<Card> spades = hand(card(Rank.TEN, Suit.SPADES), card(Rank.JACK, Suit.SPADES),
                                 card(Rank.QUEEN, Suit.SPADES), card(Rank.KING, Suit.SPADES),
@@ -880,10 +871,10 @@ class HandEvaluatorTest {
                                 card(Rank.QUEEN, Suit.HEARTS), card(Rank.KING, Suit.HEARTS),
                                 card(Rank.ACE, Suit.HEARTS));
 
-                assertEquals(HandRank.ROYAL_FLUSH, service.evaluateHand(spades));
-                assertEquals(HandRank.ROYAL_FLUSH, service.evaluateHand(hearts));
-                assertFalse(service.isBetterHandOfSameRank(spades, hearts, HandRank.ROYAL_FLUSH));
-                assertFalse(service.isBetterHandOfSameRank(hearts, spades, HandRank.ROYAL_FLUSH));
+                assertEquals(HandRank.ROYAL_FLUSH, rankOf(spades));
+                assertEquals(HandRank.ROYAL_FLUSH, rankOf(hearts));
+                assertEquals(0, service.compareSameRank(spades, hearts, HandRank.ROYAL_FLUSH));
+                assertEquals(0, service.compareSameRank(hearts, spades, HandRank.ROYAL_FLUSH));
         }
 
         @Test
@@ -901,8 +892,8 @@ class HandEvaluatorTest {
                 assertEquals(HandRank.ROYAL_FLUSH, first.handRank());
                 assertEquals(HandRank.ROYAL_FLUSH, second.handRank());
                 assertEquals(first.bestHand(), second.bestHand());
-                assertFalse(service.isBetterHandOfSameRank(first.bestHand(), second.bestHand(), first.handRank()));
-                assertFalse(service.isBetterHandOfSameRank(second.bestHand(), first.bestHand(), second.handRank()));
+                assertEquals(0, service.compareSameRank(first.bestHand(), second.bestHand(), first.handRank()));
+                assertEquals(0, service.compareSameRank(second.bestHand(), first.bestHand(), second.handRank()));
         }
 
         @Test
@@ -945,8 +936,8 @@ class HandEvaluatorTest {
                                 card(Rank.FOUR, Suit.CLUBS), card(Rank.FIVE, Suit.SPADES),
                                 card(Rank.ACE, Suit.HEARTS));
 
-                assertFalse(service.isBetterHandOfSameRank(first, second, HandRank.STRAIGHT));
-                assertFalse(service.isBetterHandOfSameRank(second, first, HandRank.STRAIGHT));
+                assertEquals(0, service.compareSameRank(first, second, HandRank.STRAIGHT));
+                assertEquals(0, service.compareSameRank(second, first, HandRank.STRAIGHT));
         }
 
         @Test
@@ -959,8 +950,8 @@ class HandEvaluatorTest {
                                 card(Rank.FOUR, Suit.SPADES), card(Rank.FIVE, Suit.HEARTS),
                                 card(Rank.SIX, Suit.DIAMONDS));
 
-                assertTrue(service.isBetterHandOfSameRank(sixHigh, wheel, HandRank.STRAIGHT));
-                assertFalse(service.isBetterHandOfSameRank(wheel, sixHigh, HandRank.STRAIGHT));
+                assertTrue(service.compareSameRank(sixHigh, wheel, HandRank.STRAIGHT) > 0);
+                assertTrue(service.compareSameRank(wheel, sixHigh, HandRank.STRAIGHT) < 0);
         }
 
         @Test
@@ -973,8 +964,8 @@ class HandEvaluatorTest {
                                 card(Rank.FOUR, Suit.SPADES), card(Rank.FIVE, Suit.SPADES),
                                 card(Rank.SIX, Suit.SPADES));
 
-                assertTrue(service.isBetterHandOfSameRank(sixHigh, wheel, HandRank.STRAIGHT_FLUSH));
-                assertFalse(service.isBetterHandOfSameRank(wheel, sixHigh, HandRank.STRAIGHT_FLUSH));
+                assertTrue(service.compareSameRank(sixHigh, wheel, HandRank.STRAIGHT_FLUSH) > 0);
+                assertTrue(service.compareSameRank(wheel, sixHigh, HandRank.STRAIGHT_FLUSH) < 0);
         }
 
         @Test
@@ -987,8 +978,8 @@ class HandEvaluatorTest {
                                 card(Rank.KING, Suit.SPADES), card(Rank.ACE, Suit.DIAMONDS),
                                 card(Rank.ACE, Suit.HEARTS));
 
-                assertTrue(service.isBetterHandOfSameRank(queenKicker, jackKicker, HandRank.TWO_PAIR));
-                assertFalse(service.isBetterHandOfSameRank(jackKicker, queenKicker, HandRank.TWO_PAIR));
+                assertTrue(service.compareSameRank(queenKicker, jackKicker, HandRank.TWO_PAIR) > 0);
+                assertTrue(service.compareSameRank(jackKicker, queenKicker, HandRank.TWO_PAIR) < 0);
         }
 
         @Test
@@ -1001,8 +992,8 @@ class HandEvaluatorTest {
                                 card(Rank.KING, Suit.SPADES), card(Rank.ACE, Suit.DIAMONDS),
                                 card(Rank.ACE, Suit.HEARTS));
 
-                assertFalse(service.isBetterHandOfSameRank(first, second, HandRank.TWO_PAIR));
-                assertFalse(service.isBetterHandOfSameRank(second, first, HandRank.TWO_PAIR));
+                assertEquals(0, service.compareSameRank(first, second, HandRank.TWO_PAIR));
+                assertEquals(0, service.compareSameRank(second, first, HandRank.TWO_PAIR));
         }
 
         @Test
@@ -1022,10 +1013,8 @@ class HandEvaluatorTest {
                 assertFalse(ranksOf(aceKicker.bestHand()).contains(Rank.JACK));
                 assertEquals(HandRank.TWO_PAIR, jackKicker.handRank());
                 assertEquals(1, ranksOf(jackKicker.bestHand()).stream().filter(Rank.JACK::equals).count());
-                assertTrue(service.isBetterHandOfSameRank(aceKicker.bestHand(), jackKicker.bestHand(),
-                                HandRank.TWO_PAIR));
-                assertFalse(service.isBetterHandOfSameRank(jackKicker.bestHand(), aceKicker.bestHand(),
-                                HandRank.TWO_PAIR));
+                assertTrue(service.compareSameRank(aceKicker.bestHand(), jackKicker.bestHand(), HandRank.TWO_PAIR) > 0);
+                assertTrue(service.compareSameRank(jackKicker.bestHand(), aceKicker.bestHand(), HandRank.TWO_PAIR) < 0);
         }
 
         @Test
@@ -1038,8 +1027,8 @@ class HandEvaluatorTest {
                                 card(Rank.NINE, Suit.HEARTS), card(Rank.KING, Suit.HEARTS),
                                 card(Rank.ACE, Suit.HEARTS));
 
-                assertFalse(service.isBetterHandOfSameRank(spades, hearts, HandRank.FLUSH));
-                assertFalse(service.isBetterHandOfSameRank(hearts, spades, HandRank.FLUSH));
+                assertEquals(0, service.compareSameRank(spades, hearts, HandRank.FLUSH));
+                assertEquals(0, service.compareSameRank(hearts, spades, HandRank.FLUSH));
         }
 
         @Test
@@ -1058,12 +1047,12 @@ class HandEvaluatorTest {
                                 card(Rank.NINE, Suit.DIAMONDS), card(Rank.KING, Suit.DIAMONDS),
                                 card(Rank.ACE, Suit.DIAMONDS));
 
-                assertTrue(service.isBetterHandOfSameRank(aceKingNine, aceKingEight, HandRank.FLUSH));
-                assertFalse(service.isBetterHandOfSameRank(aceKingEight, aceKingNine, HandRank.FLUSH));
-                assertTrue(service.isBetterHandOfSameRank(aceKingNine, aceQueen, HandRank.FLUSH));
-                assertFalse(service.isBetterHandOfSameRank(aceQueen, aceKingNine, HandRank.FLUSH));
-                assertTrue(service.isBetterHandOfSameRank(aceKingNine, lowestCardDiffers, HandRank.FLUSH));
-                assertFalse(service.isBetterHandOfSameRank(lowestCardDiffers, aceKingNine, HandRank.FLUSH));
+                assertTrue(service.compareSameRank(aceKingNine, aceKingEight, HandRank.FLUSH) > 0);
+                assertTrue(service.compareSameRank(aceKingEight, aceKingNine, HandRank.FLUSH) < 0);
+                assertTrue(service.compareSameRank(aceKingNine, aceQueen, HandRank.FLUSH) > 0);
+                assertTrue(service.compareSameRank(aceQueen, aceKingNine, HandRank.FLUSH) < 0);
+                assertTrue(service.compareSameRank(aceKingNine, lowestCardDiffers, HandRank.FLUSH) > 0);
+                assertTrue(service.compareSameRank(lowestCardDiffers, aceKingNine, HandRank.FLUSH) < 0);
         }
 
         @Test
@@ -1094,10 +1083,10 @@ class HandEvaluatorTest {
                                 card(Rank.ACE, Suit.HEARTS), card(Rank.ACE, Suit.DIAMONDS),
                                 card(Rank.ACE, Suit.CLUBS));
 
-                assertTrue(service.isBetterHandOfSameRank(kingKicker, queenKicker, HandRank.FOUR_OF_A_KIND));
-                assertFalse(service.isBetterHandOfSameRank(queenKicker, kingKicker, HandRank.FOUR_OF_A_KIND));
-                assertFalse(service.isBetterHandOfSameRank(kingKicker, kingKickerOtherSuit, HandRank.FOUR_OF_A_KIND));
-                assertFalse(service.isBetterHandOfSameRank(kingKickerOtherSuit, kingKicker, HandRank.FOUR_OF_A_KIND));
+                assertTrue(service.compareSameRank(kingKicker, queenKicker, HandRank.FOUR_OF_A_KIND) > 0);
+                assertTrue(service.compareSameRank(queenKicker, kingKicker, HandRank.FOUR_OF_A_KIND) < 0);
+                assertEquals(0, service.compareSameRank(kingKicker, kingKickerOtherSuit, HandRank.FOUR_OF_A_KIND));
+                assertEquals(0, service.compareSameRank(kingKickerOtherSuit, kingKicker, HandRank.FOUR_OF_A_KIND));
         }
 
         @Test
@@ -1116,14 +1105,14 @@ class HandEvaluatorTest {
 
                 assertEquals(HandRank.FOUR_OF_A_KIND, kingKicker.handRank());
                 assertEquals(HandRank.FOUR_OF_A_KIND, fourKicker.handRank());
-                assertTrue(service.isBetterHandOfSameRank(kingKicker.bestHand(), fourKicker.bestHand(),
-                                HandRank.FOUR_OF_A_KIND));
-                assertFalse(service.isBetterHandOfSameRank(fourKicker.bestHand(), kingKicker.bestHand(),
-                                HandRank.FOUR_OF_A_KIND));
-                assertFalse(service.isBetterHandOfSameRank(kingKicker.bestHand(), alsoKingKicker.bestHand(),
-                                HandRank.FOUR_OF_A_KIND));
-                assertFalse(service.isBetterHandOfSameRank(alsoKingKicker.bestHand(), kingKicker.bestHand(),
-                                HandRank.FOUR_OF_A_KIND));
+                assertTrue(service.compareSameRank(kingKicker.bestHand(), fourKicker.bestHand(),
+                        HandRank.FOUR_OF_A_KIND) > 0);
+                assertTrue(service.compareSameRank(fourKicker.bestHand(), kingKicker.bestHand(),
+                        HandRank.FOUR_OF_A_KIND) < 0);
+                assertEquals(0, service.compareSameRank(kingKicker.bestHand(), alsoKingKicker.bestHand(),
+                        HandRank.FOUR_OF_A_KIND));
+                assertEquals(0, service.compareSameRank(alsoKingKicker.bestHand(), kingKicker.bestHand(),
+                        HandRank.FOUR_OF_A_KIND));
         }
 
         @Test
@@ -1139,12 +1128,12 @@ class HandEvaluatorTest {
                                 card(Rank.QUEEN, Suit.CLUBS), card(Rank.KING, Suit.SPADES),
                                 card(Rank.KING, Suit.HEARTS), card(Rank.KING, Suit.CLUBS));
 
-                assertTrue(service.isBetterHandOfSameRank(kingsOverQueens, kingsOverJacks, HandRank.FULL_HOUSE));
-                assertFalse(service.isBetterHandOfSameRank(kingsOverJacks, kingsOverQueens, HandRank.FULL_HOUSE));
-                assertFalse(service.isBetterHandOfSameRank(kingsOverQueens, kingsOverQueensOtherSuits,
-                                HandRank.FULL_HOUSE));
-                assertFalse(service.isBetterHandOfSameRank(kingsOverQueensOtherSuits, kingsOverQueens,
-                                HandRank.FULL_HOUSE));
+                assertTrue(service.compareSameRank(kingsOverQueens, kingsOverJacks, HandRank.FULL_HOUSE) > 0);
+                assertTrue(service.compareSameRank(kingsOverJacks, kingsOverQueens, HandRank.FULL_HOUSE) < 0);
+                assertEquals(0, service.compareSameRank(kingsOverQueens, kingsOverQueensOtherSuits,
+                        HandRank.FULL_HOUSE));
+                assertEquals(0, service.compareSameRank(kingsOverQueensOtherSuits, kingsOverQueens,
+                        HandRank.FULL_HOUSE));
         }
 
         @Test
@@ -1161,8 +1150,8 @@ class HandEvaluatorTest {
 
                 assertEquals(HandRank.FULL_HOUSE, queens.handRank());
                 assertEquals(HandRank.FULL_HOUSE, jacks.handRank());
-                assertTrue(service.isBetterHandOfSameRank(queens.bestHand(), jacks.bestHand(), HandRank.FULL_HOUSE));
-                assertFalse(service.isBetterHandOfSameRank(jacks.bestHand(), queens.bestHand(), HandRank.FULL_HOUSE));
+                assertTrue(service.compareSameRank(queens.bestHand(), jacks.bestHand(), HandRank.FULL_HOUSE) > 0);
+                assertTrue(service.compareSameRank(jacks.bestHand(), queens.bestHand(), HandRank.FULL_HOUSE) < 0);
         }
 
         @Test
@@ -1196,12 +1185,12 @@ class HandEvaluatorTest {
                                 card(Rank.JACK, Suit.HEARTS), card(Rank.QUEEN, Suit.CLUBS),
                                 card(Rank.KING, Suit.HEARTS));
 
-                assertTrue(service.isBetterHandOfSameRank(aceKingFive, aceKingFour, HandRank.ONE_PAIR));
-                assertFalse(service.isBetterHandOfSameRank(aceKingFour, aceKingFive, HandRank.ONE_PAIR));
-                assertTrue(service.isBetterHandOfSameRank(aceKingFive, aceQueenFive, HandRank.ONE_PAIR));
-                assertFalse(service.isBetterHandOfSameRank(aceQueenFive, aceKingFive, HandRank.ONE_PAIR));
-                assertTrue(service.isBetterHandOfSameRank(aceQueenFive, kingQueenJack, HandRank.ONE_PAIR));
-                assertFalse(service.isBetterHandOfSameRank(kingQueenJack, aceQueenFive, HandRank.ONE_PAIR));
+                assertTrue(service.compareSameRank(aceKingFive, aceKingFour, HandRank.ONE_PAIR) > 0);
+                assertTrue(service.compareSameRank(aceKingFour, aceKingFive, HandRank.ONE_PAIR) < 0);
+                assertTrue(service.compareSameRank(aceKingFive, aceQueenFive, HandRank.ONE_PAIR) > 0);
+                assertTrue(service.compareSameRank(aceQueenFive, aceKingFive, HandRank.ONE_PAIR) < 0);
+                assertTrue(service.compareSameRank(aceQueenFive, kingQueenJack, HandRank.ONE_PAIR) > 0);
+                assertTrue(service.compareSameRank(kingQueenJack, aceQueenFive, HandRank.ONE_PAIR) < 0);
         }
 
         @Test
@@ -1220,10 +1209,10 @@ class HandEvaluatorTest {
                                 card(Rank.SEVEN, Suit.HEARTS), card(Rank.SEVEN, Suit.CLUBS),
                                 card(Rank.KING, Suit.DIAMONDS));
 
-                assertTrue(service.isBetterHandOfSameRank(aceThree, kingQueen, HandRank.THREE_OF_A_KIND));
-                assertFalse(service.isBetterHandOfSameRank(kingQueen, aceThree, HandRank.THREE_OF_A_KIND));
-                assertTrue(service.isBetterHandOfSameRank(kingFive, kingFour, HandRank.THREE_OF_A_KIND));
-                assertFalse(service.isBetterHandOfSameRank(kingFour, kingFive, HandRank.THREE_OF_A_KIND));
+                assertTrue(service.compareSameRank(aceThree, kingQueen, HandRank.THREE_OF_A_KIND) > 0);
+                assertTrue(service.compareSameRank(kingQueen, aceThree, HandRank.THREE_OF_A_KIND) < 0);
+                assertTrue(service.compareSameRank(kingFive, kingFour, HandRank.THREE_OF_A_KIND) > 0);
+                assertTrue(service.compareSameRank(kingFour, kingFive, HandRank.THREE_OF_A_KIND) < 0);
         }
 
         @Test
@@ -1236,7 +1225,122 @@ class HandEvaluatorTest {
                                 card(Rank.SEVEN, Suit.HEARTS), card(Rank.SEVEN, Suit.CLUBS),
                                 card(Rank.KING, Suit.DIAMONDS));
 
-                assertFalse(service.isBetterHandOfSameRank(first, second, HandRank.THREE_OF_A_KIND));
-                assertFalse(service.isBetterHandOfSameRank(second, first, HandRank.THREE_OF_A_KIND));
+                assertEquals(0, service.compareSameRank(first, second, HandRank.THREE_OF_A_KIND));
+                assertEquals(0, service.compareSameRank(second, first, HandRank.THREE_OF_A_KIND));
+        }
+
+        // ---- Characterization of every hand rank, the straights and shared boards ----
+
+        /** Compares two same-rank hands: positive if first wins, negative if second wins, 0 for a tie. */
+        private int compare(List<Card> first, List<Card> second, HandRank rank) {
+                return Integer.signum(service.compareSameRank(first, second, rank));
+        }
+
+        /** Compares two evaluated hands of any rank: the rank decides first, then the same-rank comparison. */
+        private int compare(HandEvaluationResult first, HandEvaluationResult second) {
+                if (first.handRank() != second.handRank()) {
+                        return Integer.signum(first.handRank().getRank() - second.handRank().getRank());
+                }
+                return compare(first.bestHand(), second.bestHand(), first.handRank());
+        }
+
+        /** Parses cards such as {@code "AS TD 9C"} (rank character then suit character). */
+        private static List<Card> cards(String spec) {
+                List<Card> result = new ArrayList<>();
+                for (String token : spec.split(" ")) {
+                        int value = "23456789TJQKA".indexOf(token.charAt(0)) + 2;
+                        Rank rank = Arrays.stream(Rank.values())
+                                        .filter(r -> r.getValue() == value).findFirst().orElseThrow();
+                        Suit suit = Arrays.stream(Suit.values())
+                                        .filter(s -> s.name().charAt(0) == token.charAt(1)).findFirst().orElseThrow();
+                        result.add(new Card(rank, suit));
+                }
+                return result;
+        }
+
+        private HandEvaluationResult best(String board, String hole) {
+                return service.getBestHand(cards(board), cards(hole));
+        }
+
+        @Test
+        @DisplayName("Comparing hands that do not have exactly five cards throws")
+        void compareSameRankRejectsHandsWithoutFiveCards() {
+                List<Card> five = cards("2S 5H 7D 9C KS");
+                assertThrows(IllegalStateException.class,
+                                () -> service.compareSameRank(List.of(), five, HandRank.HIGH_CARD));
+                assertThrows(IllegalStateException.class,
+                                () -> service.compareSameRank(five, cards("2S 5H 7D 9C"), HandRank.HIGH_CARD));
+        }
+
+        @Test
+        @DisplayName("Every hand rank is found in seven cards and outranks every rank below it")
+        void everyHandRankIsRecognisedAndOutranksTheRanksBelowIt() {
+                String[][] sevenCardHands = {
+                                { "HIGH_CARD", "AS KD 9C 7H 5S", "3D 2C" },
+                                { "ONE_PAIR", "AS AD 9C 7H 5S", "3D 2C" },
+                                { "TWO_PAIR", "AS AD 9C 9H 5S", "3D 2C" },
+                                { "THREE_OF_A_KIND", "AS AD AC 9H 5S", "3D 2C" },
+                                { "STRAIGHT", "9S 8D 7C 6H 5S", "5D 2C" },
+                                { "FLUSH", "AS 9S 7S 5S 3S", "KD KH" },
+                                { "FULL_HOUSE", "KS KD KC 5H 5S", "5D 2C", "5H 5S KS KD KC" },
+                                { "FOUR_OF_A_KIND", "9S 9D 9C 9H 5S", "5D 5C", "5S 9S 9D 9C 9H" },
+                                { "STRAIGHT_FLUSH", "9H 8H 7H 6H 5H", "5S 5D" },
+                                { "ROYAL_FLUSH", "AS KS QS JS TS", "9S 2D" } };
+                HandRank previous = null;
+                for (String[] row : sevenCardHands) {
+                        HandRank expected = HandRank.valueOf(row[0]);
+                        HandEvaluationResult result = best(row[1], row[2]);
+                        assertEquals(expected, result.handRank(), row[0]);
+                        if (row.length > 3) {
+                                assertEquals(ranksOf(cards(row[3])), ranksOf(result.bestHand()), row[0]);
+                        }
+                        if (previous != null) {
+                                assertTrue(expected.beats(previous), row[0] + " should beat " + previous);
+                        }
+                        previous = expected;
+                }
+        }
+
+        @Test
+        @DisplayName("Straights are ranked by their top card, and the ace is low only in the wheel")
+        void straightsAreRankedByTopCardWithAceLowOnlyInTheWheel() {
+                List<Card> broadway = cards("TS JH QD KC AS");
+                List<Card> broadwayOtherSuits = cards("TH JD QC KS AH");
+                List<Card> nineHigh = cards("5S 6H 7D 8C 9S");
+                List<Card> wheel = cards("2H 3S 4D 5C AH");
+
+                assertTrue(compare(broadway, nineHigh, HandRank.STRAIGHT) > 0);
+                assertTrue(compare(broadway, wheel, HandRank.STRAIGHT) > 0);
+                assertTrue(compare(nineHigh, wheel, HandRank.STRAIGHT) > 0);
+                assertTrue(compare(wheel, broadway, HandRank.STRAIGHT) < 0);
+                assertEquals(0, compare(broadway, broadwayOtherSuits, HandRank.STRAIGHT));
+                assertEquals(HandRank.STRAIGHT, best("TS JH QD KC AS", "2C 2D").handRank());
+                // The ace does not wrap round: Q-K-A-2-3 is not a straight.
+                assertEquals(HandRank.HIGH_CARD, best("QS KH AD 2C 3S", "7C 9D").handRank());
+
+                List<Card> nineHighFlush = cards("5S 6S 7S 8S 9S");
+                List<Card> nineHighFlushOtherSuit = cards("5H 6H 7H 8H 9H");
+                List<Card> wheelFlush = cards("2D 3D 4D 5D AD");
+                assertTrue(compare(nineHighFlush, wheelFlush, HandRank.STRAIGHT_FLUSH) > 0);
+                assertTrue(compare(wheelFlush, nineHighFlush, HandRank.STRAIGHT_FLUSH) < 0);
+                assertEquals(0, compare(nineHighFlush, nineHighFlushOtherSuit, HandRank.STRAIGHT_FLUSH));
+        }
+
+        @Test
+        @DisplayName("When the board is each player's best hand, they tie for every kind of board")
+        void playersWhoBothPlayTheBoardTie() {
+                String[][] boardsAndHoles = {
+                                { "STRAIGHT", "5S 6H 7D 8C 9S", "2H 2D", "KC 3C" },
+                                { "FLUSH", "KS QS 9S 6S 3S", "2H 4D", "5C 7D" },
+                                { "FULL_HOUSE", "KS KD KC QH QS", "2H 3D", "4C 5D" },
+                                { "HIGH_CARD", "AS KD JC 9H 7S", "2H 3D", "4C 3S" } };
+                for (String[] row : boardsAndHoles) {
+                        HandEvaluationResult first = best(row[1], row[2]);
+                        HandEvaluationResult second = best(row[1], row[3]);
+                        assertEquals(HandRank.valueOf(row[0]), first.handRank(), row[0]);
+                        assertEquals(first.handRank(), second.handRank(), row[0]);
+                        assertEquals(0, compare(first, second), row[0]);
+                        assertEquals(0, compare(second, first), row[0]);
+                }
         }
 }
