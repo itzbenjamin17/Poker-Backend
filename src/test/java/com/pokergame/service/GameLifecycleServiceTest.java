@@ -328,7 +328,7 @@ class GameLifecycleServiceTest {
             when(roomService.isLobbyExpired(expiredLobby)).thenReturn(true);
             assertThrows(BadRequestException.class,
                     () -> withRoomLock("expired", () -> gameLifecycleService.createGameFromRoom("expired")));
-            verify(roomService, never()).checkAndCloseIfExpired("expired");
+            verify(roomService, never()).closeLobbyIfExpired("expired");
 
             Room onePlayerRoom = new Room("one", "One", "Host", 6, 5, 10, 100, null);
             onePlayerRoom.addPlayer("Host");

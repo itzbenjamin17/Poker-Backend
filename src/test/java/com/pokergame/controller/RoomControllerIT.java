@@ -193,7 +193,7 @@ class RoomControllerIT {
                 .andExpect(jsonPath("$.data.playerName").value("Player2"));
 
         verify(roomService).resolveRoomIdByName("Room1");
-        verify(roomService).checkAndCloseIfExpired(roomId);
+        verify(roomService).closeLobbyIfExpired(roomId);
         verify(roomService).joinRoom(eq(roomId), any(JoinRoomRequest.class));
         verify(jwtService).generateToken("Player2", roomId);
     }
@@ -204,7 +204,7 @@ class RoomControllerIT {
         JoinRoomRequest request = new JoinRoomRequest("Room1", "Player2", null);
         String roomId = "room-123";
         when(roomService.resolveRoomIdByName("Room1")).thenReturn(roomId);
-        when(roomService.checkAndCloseIfExpired(roomId)).thenReturn(true);
+        when(roomService.closeLobbyIfExpired(roomId)).thenReturn(true);
 
         mockMvc.perform(post("/api/room/join")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -212,7 +212,7 @@ class RoomControllerIT {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Room has expired due to inactivity."));
 
-        verify(roomService).checkAndCloseIfExpired(roomId);
+        verify(roomService).closeLobbyIfExpired(roomId);
         verify(roomService, never()).joinRoom(anyString(), any(JoinRoomRequest.class));
         verify(jwtService, never()).generateToken(anyString(), anyString());
     }
@@ -242,14 +242,14 @@ class RoomControllerIT {
         String roomId = "room-123";
         PlayerPrincipal principal = new PlayerPrincipal("Player1", roomId, "mem-1");
         Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(roomService.checkAndCloseIfExpired(roomId)).thenReturn(true);
+        when(roomService.closeLobbyIfExpired(roomId)).thenReturn(true);
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
                 .principal(auth))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("Room not found"));
 
-        verify(roomService).checkAndCloseIfExpired(roomId);
+        verify(roomService).closeLobbyIfExpired(roomId);
         verifyNoInteractions(gameLifecycleService);
     }
 
@@ -340,13 +340,13 @@ class RoomControllerIT {
         String roomId = "room-123";
         PlayerPrincipal principal = new PlayerPrincipal("Player1", roomId, "mem-1");
         Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(roomService.checkAndCloseIfExpired(roomId)).thenReturn(true);
+        when(roomService.closeLobbyIfExpired(roomId)).thenReturn(true);
 
         mockMvc.perform(get("/api/room/{roomId}", roomId)
                 .principal(auth))
                 .andExpect(status().isNotFound());
 
-        verify(roomService).checkAndCloseIfExpired(roomId);
+        verify(roomService).closeLobbyIfExpired(roomId);
         verify(roomService, never()).getRoomData(anyString());
         verifyNoInteractions(gameLifecycleService);
     }
@@ -740,14 +740,14 @@ class RoomControllerIT {
         String roomId = "room-123";
         PlayerPrincipal principal = new PlayerPrincipal("HostPlayer", roomId, "mem-1");
         Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(roomService.checkAndCloseIfExpired(roomId)).thenReturn(true);
+        when(roomService.closeLobbyIfExpired(roomId)).thenReturn(true);
 
         mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
                 .principal(auth))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("Room not found"));
 
-        verify(roomService).checkAndCloseIfExpired(roomId);
+        verify(roomService).closeLobbyIfExpired(roomId);
         verifyNoInteractions(gameLifecycleService);
     }
 

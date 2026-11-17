@@ -107,7 +107,7 @@ public class RoomController {
         String targetRoomId = roomService.resolveRoomIdByName(joinRequest.roomName());
         RoomEntryResult entry;
         try (LockLease _ = roomCoordinator.acquire(targetRoomId)) {
-            if (roomService.checkAndCloseIfExpired(targetRoomId)) {
+            if (roomService.closeLobbyIfExpired(targetRoomId)) {
                 throw new BadRequestException("Room has expired due to inactivity.");
             }
             entry = roomService.joinRoom(targetRoomId, joinRequest);
@@ -145,7 +145,7 @@ public class RoomController {
         playerPrincipal.assertBoundTo(roomId);
 
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            if (roomService.checkAndCloseIfExpired(roomId)) {
+            if (roomService.closeLobbyIfExpired(roomId)) {
                 throw new ResourceNotFoundException("Room not found");
             }
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
@@ -171,7 +171,7 @@ public class RoomController {
         playerPrincipal.assertBoundTo(roomId);
 
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            if (roomService.checkAndCloseIfExpired(roomId)) {
+            if (roomService.closeLobbyIfExpired(roomId)) {
                 logger.warn("Room has expired: {}", roomId);
                 return ResponseEntity.notFound().build();
             }
@@ -211,7 +211,7 @@ public class RoomController {
         playerPrincipal.assertBoundTo(roomId);
 
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            if (roomService.checkAndCloseIfExpired(roomId)) {
+            if (roomService.closeLobbyIfExpired(roomId)) {
                 throw new ResourceNotFoundException("Room not found");
             }
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());

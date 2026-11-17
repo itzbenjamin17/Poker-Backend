@@ -183,7 +183,7 @@ class LifecycleCoordinationIT {
             assertThatThrownBy(() -> roomService.isRoomHost(roomId, "Host"))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("does not hold room lock for room: " + roomId);
-            assertThatThrownBy(() -> roomService.checkAndCloseIfExpired(roomId))
+            assertThatThrownBy(() -> roomService.closeLobbyIfExpired(roomId))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("does not hold room lock for room: " + roomId);
 
