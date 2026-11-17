@@ -399,7 +399,7 @@ class PlayerDepartureHandlerTest {
                     .findFirst()
                     .orElseThrow()
                     .getName();
-            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom, testRoom, null);
+            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom, null);
 
             assertDoesNotThrow(() -> withRoomLock(ROOM_ID,
                     () -> gameLifecycleService.removePlayers(ROOM_ID, List.of(nonCurrent))));
@@ -1595,6 +1595,10 @@ class PlayerDepartureHandlerTest {
                             r.removePlayer(p);
                         }
                     });
+                    String nextHost = inv.getArgument(2);
+                    if (nextHost != null) {
+                        r.setHostName(nextHost);
+                    }
                 }
                 return null;
             }).when(roomService).leavePlayersBatch(anyString(), any(), any());
@@ -1704,6 +1708,11 @@ class PlayerDepartureHandlerTest {
                     });
                     hostLeave.get(5, TimeUnit.SECONDS);
                     succLeave.get(5, TimeUnit.SECONDS);
+
+                    Room remaining = activeRooms.get(roomId);
+                    assertNotNull(remaining.getHostName(), "Current host must not be null while players remain");
+                    assertTrue(remaining.getPlayers().contains(remaining.getHostName()),
+                            "Current host must be a member of the room, was: " + remaining.getHostName());
                 }
             }
         }

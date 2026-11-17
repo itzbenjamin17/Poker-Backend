@@ -197,18 +197,7 @@ public class RoomService {
         }
 
         long now = clock.millis();
-        String membershipId;
-        try {
-            membershipId = registerMember(room, sanitizedPlayerName, now);
-        } catch (IllegalStateException e) {
-            if ("Room is full".equals(e.getMessage())
-                    || (e.getMessage() != null && e.getMessage().contains("full"))) {
-                logger.warn("Join attempt failed: room {} capacity exceeded: {}",
-                        room.getRoomName(), e.getMessage());
-                throw new BadRequestException("Room is full");
-            }
-            throw e;
-        }
+        String membershipId = registerMember(room, sanitizedPlayerName, now);
         extendLobbyInactivity(room, now);
 
         logger.info("Player {} joined room: {}", sanitizedPlayerName, room.getRoomName());
@@ -218,13 +207,12 @@ public class RoomService {
     }
 
     /**
-     * Removes a player from a lobby room. If the host leaves or the room becomes empty, the
-     * room is closed and cleaned up unless the game has already finished and is awaiting cleanup.
+     * Closes a lobby room because its host left: broadcasts {@code ROOM_CLOSED} and destroys the
+     * room. The other members need no separate removal.
      *
      * @param roomId     the unique ID of the room
-     * @param playerName the name of the departing player
+     * @param playerName the departing host's name
      * @throws ResourceNotFoundException if the room does not exist
-     * @throws BadRequestException       if the player is not currently in the room
      */
     @DurableMutation
     public void leaveRoom(@RoomId String roomId, String playerName) {
@@ -235,44 +223,11 @@ public class RoomService {
             logger.warn("Leave attempt failed: room not found for id {} (player: {})", roomId, playerName);
             throw new ResourceNotFoundException("Room not found");
         }
-        if (!room.hasPlayer(playerName)) {
-            logger.warn("Leave attempt failed: player {} not in room {}", playerName, roomId);
-            throw new BadRequestException(
-                    String.format("Cannot remove %s from room as they are not already in the room", playerName));
-        }
 
-        boolean isHost = playerName.equals(room.getHostName());
-        String membershipId = room.getMembershipId(playerName);
-
-        if (isHost) {
-            cancelLobbyInactivity(roomId);
-            logger.info("Host {} leaving room {} during lobby phase, destroying room",
-                    playerName, room.getRoomName());
-            broadcastRoomEvent(roomId, ResponseMessage.ROOM_CLOSED, null);
-            destroyRoom(roomId);
-            return;
-        }
-
-        room.removePlayer(playerName);
-        PostSaveActions.runAfterSave(() ->
-                eventPublisher.publishEvent(new RoomMembershipRetired(roomId, playerName, membershipId)));
-        logger.info("Player {} left room: {}", playerName, room.getRoomName());
-
-        if (room.getPlayers().isEmpty()) {
-            cancelLobbyInactivity(roomId);
-            if (room.isTerminal()) {
-                logger.info("No players remaining in finished room {}, keeping container until cleanup",
-                        room.getRoomName());
-                broadcastRoomEvent(roomId, ResponseMessage.ROOM_CLOSED, null);
-            } else {
-                logger.info("No players remaining in room {}, destroying room", room.getRoomName());
-                broadcastRoomEvent(roomId, ResponseMessage.ROOM_CLOSED, null);
-                destroyRoom(roomId);
-            }
-        } else {
-            extendLobbyInactivity(room, clock.millis());
-            broadcastRoomEvent(roomId, ResponseMessage.PLAYER_LEFT, getRoomData(roomId));
-        }
+        logger.info("Host {} leaving room {} during lobby phase, destroying room",
+                playerName, room.getRoomName());
+        broadcastRoomEvent(roomId, ResponseMessage.ROOM_CLOSED, null);
+        destroyRoom(roomId);
     }
 
     /**
@@ -281,8 +236,8 @@ public class RoomService {
      *
      * @param roomId      the unique ID of the room
      * @param playerNames the departing player names; names not in the room are ignored
-     * @param nextHost    the preselected next host, or {@code null}; ignored if that player is not
-     *                    in the room after the departures
+     * @param nextHost    the next host, who must remain in the room after the departures, or
+     *                    {@code null} to keep the current host
      */
     @DurableMutation
     public void leavePlayersBatch(@RoomId String roomId, List<String> playerNames, String nextHost) {
@@ -322,10 +277,8 @@ public class RoomService {
         if (!room.isGameStarted()) {
             extendLobbyInactivity(room, clock.millis());
         }
-        if (nextHost != null && room.getPlayers().contains(nextHost)) {
+        if (nextHost != null) {
             room.setHostName(nextHost);
-        } else if (room.getHostName() == null || !room.getPlayers().contains(room.getHostName())) {
-            room.setHostName(room.getPlayers().getFirst());
         }
 
         broadcastRoomEvent(roomId, ResponseMessage.PLAYER_LEFT, getRoomData(roomId));

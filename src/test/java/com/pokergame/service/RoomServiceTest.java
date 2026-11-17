@@ -10,10 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -23,7 +21,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.pokergame.config.RoomTimingProperties;
 import com.pokergame.dto.internal.RoomEntryResult;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
@@ -57,7 +54,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.awaitility.Awaitility;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -486,22 +482,6 @@ class RoomServiceTest {
     class LeaveRoom {
 
         @Test
-        @DisplayName("should remove a non-host player and keep the room open")
-        void givenRegularPlayer_whenLeaveRoom_thenOnlyThatPlayerIsRemoved() {
-            String roomId = createRoom(roomService, validCreateRequest).roomId();
-            withRoomLock(roomId, () -> {
-                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
-                reset(messagingTemplate);
-                roomService.leaveRoom(roomId, "Player2");
-            });
-
-            Room room = coordinatedGetRoom(roomId);
-            assertThat(room).isNotNull();
-            assertThat(room.getPlayers()).containsExactly("HostPlayer");
-            verify(messagingTemplate).convertAndSend(eq("/room/" + roomId), ArgumentMatchers.any(Object.class));
-        }
-
-        @Test
         @DisplayName("should destroy the room when the host leaves the lobby")
         void givenHostLeavesLobby_whenLeaveRoom_thenRoomIsDestroyed() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
@@ -542,55 +522,44 @@ class RoomServiceTest {
         }
 
         @Test
+        @DisplayName("keeps a terminal room registered and broadcasts ROOM_CLOSED when the last members leave")
+        void givenTerminalRoom_whenLastMembersLeaveByBatch_thenRoomContainerIsPreserved() {
+            String roomId = createRoom(roomService, validCreateRequest).roomId();
+            withRoomLock(roomId, () -> {
+                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "G1", null));
+                coordinatedGetRoom(roomId).setTerminal(true);
+                reset(messagingTemplate);
+                roomService.leavePlayersBatch(roomId, List.of("HostPlayer", "G1"), null);
+            });
+
+            Room room = coordinatedGetRoom(roomId);
+            assertThat(room).isNotNull();
+            assertThat(room.getPlayers()).isEmpty();
+            verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
+                    eq(new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null)));
+        }
+
+        @Test
+        @DisplayName("destroys a non-terminal room and broadcasts ROOM_CLOSED when the last members leave")
+        void givenNonTerminalRoom_whenLastMembersLeaveByBatch_thenRoomIsDestroyed() {
+            String roomId = createRoom(roomService, validCreateRequest).roomId();
+            withRoomLock(roomId, () -> {
+                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "G1", null));
+                reset(messagingTemplate);
+                roomService.leavePlayersBatch(roomId, List.of("HostPlayer", "G1"), null);
+            });
+
+            assertThat(coordinatedGetRoom(roomId)).isNull();
+            verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
+                    eq(new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null)));
+        }
+
+        @Test
         @DisplayName("should reject leave requests for missing rooms")
         void givenMissingRoom_whenLeaveRoom_thenThrowResourceNotFoundException() {
             assertThatThrownBy(() -> withRoomLock("missing-room", () -> roomService.leaveRoom("missing-room", "Player")))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessage("Room not found");
-        }
-
-        @Test
-        @DisplayName("concurrent active-host and successor departures never select an absent host")
-        void givenConcurrentHostAndSuccessorLeave_whenLeavePlayersBatch_thenNeverSelectsAbsentHost()
-                throws Exception {
-            for (int i = 0; i < 50; i++) {
-                String roomName = "Concurrent Room " + i;
-                String roomId = createRoom(roomService,
-                        new CreateRoomRequest(roomName, "Host", 6, 10, 20, 1000, null)).roomId();
-                withRoomLock(roomId, () -> {
-                    roomService.joinRoom(roomId, new JoinRoomRequest(roomName, "Successor", null));
-                    roomService.joinRoom(roomId, new JoinRoomRequest(roomName, "Player3", null));
-                });
-
-                CyclicBarrier startBarrier = new CyclicBarrier(2);
-                try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
-                    Future<?> f1 = executor.submit(() -> {
-                        startBarrier.await(5, TimeUnit.SECONDS);
-                        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-                            roomService.leavePlayersBatch(roomId, List.of("Host"), "Successor");
-                        }
-                        return null;
-                    });
-                    Future<?> f2 = executor.submit(() -> {
-                        startBarrier.await(5, TimeUnit.SECONDS);
-                        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-                            roomService.leavePlayersBatch(roomId, List.of("Successor"), "Player3");
-                        }
-                        return null;
-                    });
-
-                    f1.get(5, TimeUnit.SECONDS);
-                    f2.get(5, TimeUnit.SECONDS);
-                }
-
-                Room room = coordinatedGetRoom(roomId);
-                assertNotNull(room);
-                String currentHost = hostOf(roomId);
-                assertNotNull(currentHost, "Current host must not be null while players remain");
-                assertTrue(room.getPlayers().contains(currentHost),
-                        "Current host must be a member of the room, was: " + currentHost);
-                assertEquals("Player3", currentHost);
-            }
         }
     }
 
@@ -1140,14 +1109,14 @@ class RoomServiceTest {
     }
 
     @Test
-    @DisplayName("leaveRoom publishes retirement of exactly the leaving member's membership")
-    void leaveRoom_PublishesMembershipRetired() {
+    @DisplayName("leavePlayersBatch publishes retirement of exactly the leaving member's membership")
+    void leavePlayersBatch_PublishesMembershipRetired() {
         String roomId = createRoom(roomService, validCreateRequest).roomId();
         withRoomLock(roomId, () ->
                 roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null)));
         String p2MembershipId = coordinatedGetRoom(roomId).getMembershipId("Player2");
 
-        withRoomLock(roomId, () -> roomService.leaveRoom(roomId, "Player2"));
+        withRoomLock(roomId, () -> roomService.leavePlayersBatch(roomId, List.of("Player2"), "HostPlayer"));
 
         verify(eventPublisher).publishEvent(new RoomMembershipRetired(roomId, "Player2", p2MembershipId));
     }
@@ -1226,121 +1195,6 @@ class RoomServiceTest {
         assertThat(r1.getPlayers()).contains("P2");
         assertThat(r2.getPlayers()).contains("P3");
         verify(mockEncoder, never()).matches(any(), any());
-    }
-
-    /** Groups join failures raised defensively by the Room aggregate. */
-    @Nested
-    @DisplayName("join failures raised by the room aggregate")
-    class JoinAddPlayerFailures {
-
-        private Room registerSpiedRoom() {
-            String roomId = createRoom(roomService, validCreateRequest).roomId();
-            Room spied = spy(coordinatedGetRoom(roomId));
-            withRoomLock(roomId, () -> roomRegistry.put(spied));
-            return spied;
-        }
-
-        @Test
-        @DisplayName("maps the exact 'Room is full' IllegalStateException to BadRequestException")
-        void joinRoom_AddPlayerReportsRoomIsFull_ThrowsBadRequestException() {
-            Room spied = registerSpiedRoom();
-            doThrow(new IllegalStateException("Room is full")).when(spied).addPlayer("Guest");
-
-            assertThatThrownBy(() -> withRoomLock(spied.getRoomId(), () -> roomService.joinRoom(spied.getRoomId(),
-                    new JoinRoomRequest("Test Room", "Guest", null))))
-                    .isExactlyInstanceOf(BadRequestException.class)
-                    .hasMessage("Room is full");
-            assertThat(spied.getPlayers()).containsExactly("HostPlayer");
-        }
-
-        @Test
-        @DisplayName("maps any IllegalStateException message containing 'full' to BadRequestException")
-        void joinRoom_AddPlayerMessageContainsFull_ThrowsBadRequestException() {
-            Room spied = registerSpiedRoom();
-            doThrow(new IllegalStateException("Table is full right now")).when(spied).addPlayer("Guest");
-
-            assertThatThrownBy(() -> withRoomLock(spied.getRoomId(), () -> roomService.joinRoom(spied.getRoomId(),
-                    new JoinRoomRequest("Test Room", "Guest", null))))
-                    .isExactlyInstanceOf(BadRequestException.class)
-                    .hasMessage("Room is full");
-            assertThat(spied.getPlayers()).containsExactly("HostPlayer");
-        }
-
-        @Test
-        @DisplayName("re-throws an unrelated IllegalStateException unchanged")
-        void joinRoom_AddPlayerUnrelatedFailure_RethrowsOriginal() {
-            Room spied = registerSpiedRoom();
-            IllegalStateException failure = new IllegalStateException("Corrupt membership table");
-            doThrow(failure).when(spied).addPlayer("Guest");
-
-            assertThatThrownBy(() -> withRoomLock(spied.getRoomId(), () -> roomService.joinRoom(spied.getRoomId(),
-                    new JoinRoomRequest("Test Room", "Guest", null))))
-                    .isSameAs(failure);
-        }
-
-        @Test
-        @DisplayName("re-throws an IllegalStateException without a message unchanged")
-        void joinRoom_AddPlayerFailureWithoutMessage_RethrowsOriginal() {
-            Room spied = registerSpiedRoom();
-            IllegalStateException failure = new IllegalStateException();
-            doThrow(failure).when(spied).addPlayer("Guest");
-
-            assertThatThrownBy(() -> withRoomLock(spied.getRoomId(), () -> roomService.joinRoom(spied.getRoomId(),
-                    new JoinRoomRequest("Test Room", "Guest", null))))
-                    .isSameAs(failure);
-        }
-    }
-
-    /** Groups leave scenarios where the last remaining player is not the host. */
-    @Nested
-    @DisplayName("last non-host player leaving")
-    class LastPlayerLeaving {
-
-        private Room roomWithOnlyNonHostPlayerLeft(boolean terminal) {
-            String roomId = createRoom(roomService, validCreateRequest).roomId();
-            withRoomLock(roomId, () -> {
-                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "G1", null));
-                roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "G2", null));
-                roomService.leavePlayersBatch(roomId, List.of("HostPlayer"), "G1");
-                Room room = roomService.getRoom(roomId);
-                room.removePlayer("G1");
-                room.setTerminal(terminal);
-                assertThat(room.getPlayers()).containsExactly("G2");
-                assertThat(hostOf(roomId)).isEqualTo("G1");
-                reset(messagingTemplate);
-            });
-            return coordinatedGetRoom(roomId);
-        }
-
-        @Test
-        @DisplayName("keeps a terminal room registered and broadcasts ROOM_CLOSED")
-        void leaveRoom_LastPlayerLeavesTerminalRoom_PreservesRoomContainer() {
-            Room room = roomWithOnlyNonHostPlayerLeft(true);
-            String roomId = room.getRoomId();
-
-            withRoomLock(roomId, () -> {
-                roomService.leaveRoom(roomId, "G2");
-                assertThat(hostOf(roomId)).isEqualTo("G1");
-            });
-
-            assertThat(coordinatedGetRoom(roomId)).isSameAs(room);
-            assertThat(room.getPlayers()).isEmpty();
-            verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
-                    eq(new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null)));
-        }
-
-        @Test
-        @DisplayName("destroys a non-terminal room and broadcasts ROOM_CLOSED when the last player leaves")
-        void leaveRoom_LastPlayerLeavesNonTerminalRoom_DestroysRoom() {
-            Room room = roomWithOnlyNonHostPlayerLeft(false);
-            String roomId = room.getRoomId();
-
-            withRoomLock(roomId, () -> roomService.leaveRoom(roomId, "G2"));
-
-            assertThat(coordinatedGetRoom(roomId)).isNull();
-            verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
-                    eq(new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null)));
-        }
     }
 
     /**

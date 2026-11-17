@@ -165,7 +165,7 @@ class PlayerDepartureHandler {
         for (Player departingPlayer : departingGamePlayers) {
             game.removePlayer(departingPlayer);
         }
-        detachRoomMembersIfRoomPresent(roomId, room, game, departingRoomMembers);
+        detachRoomMembers(roomId, room, game, departingRoomMembers);
 
         if (contendersRemaining <= 0) {
             completion.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
@@ -430,7 +430,7 @@ class PlayerDepartureHandler {
         if (survivor.getIsDisconnected()) {
             game.pauseForDisconnectedSurvivor(departingGamePlayers);
             runtimeTimers.cancelAllForGame(roomId, false);
-            detachRoomMembersIfRoomPresent(roomId, room, game, departingRoomMembers);
+            detachRoomMembers(roomId, room, game, departingRoomMembers);
             if (roomService.getRoom(roomId) != null) {
                 gameStateService.broadcastGameState(game);
             }
@@ -443,20 +443,13 @@ class PlayerDepartureHandler {
                 .collect(Collectors.toSet());
         completion.handleGameEndWithForfeits(roomId, survivor, forfeitedNames);
         room.setTerminal(true);
-        detachRoomMembersIfRoomPresent(roomId, room, game, departingRoomMembers);
+        detachRoomMembers(roomId, room, game, departingRoomMembers);
     }
 
     private void detachRoomMembers(String roomId, Room room, Game game, List<String> departingRoomMembers) {
         if (!departingRoomMembers.isEmpty()) {
             String survivingHost = selectNextHost(room, game, departingRoomMembers);
             roomService.leavePlayersBatch(roomId, departingRoomMembers, survivingHost);
-        }
-    }
-
-    private void detachRoomMembersIfRoomPresent(
-            String roomId, Room room, Game game, List<String> departingRoomMembers) {
-        if (roomService.getRoom(roomId) != null) {
-            detachRoomMembers(roomId, room, game, departingRoomMembers);
         }
     }
 
