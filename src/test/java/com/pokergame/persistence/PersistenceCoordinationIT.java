@@ -16,7 +16,6 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.persistence.config.PersistenceException;
 import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
@@ -844,7 +843,7 @@ class PersistenceCoordinationIT {
         @Primary
         EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring,
                 RoomCoordinator roomCoordinator) {
-            return new EncryptedWalStore(properties.getDirectory(), keyring,
+            return new EncryptedWalStore(properties.directory(), keyring,
                     (point, roomId) -> FAULT_INJECTOR.get().check(point, roomId), roomCoordinator);
         }
 

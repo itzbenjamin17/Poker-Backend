@@ -8,7 +8,6 @@ import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.Game;
-import com.pokergame.persistence.config.PersistenceException;
 import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.persistence.wal.EncryptedWalStore;
@@ -321,7 +320,7 @@ class PersistenceAvailabilityTransportIT {
         @Primary
         EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring,
                 RoomCoordinator roomCoordinator) {
-            return new EncryptedWalStore(properties.getDirectory(), keyring, (point, roomId) -> {
+            return new EncryptedWalStore(properties.directory(), keyring, (point, roomId) -> {
                 if (UNAVAILABLE_STORAGE.get()) {
                     throw new PersistenceException("injected transport-test storage outage");
                 }

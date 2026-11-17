@@ -53,7 +53,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.pokergame.config.RoomTimingProperties;
 import com.pokergame.enums.HandRank;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.persistence.PersistenceException;
 import com.pokergame.service.RoomService;
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicReference;
@@ -464,16 +464,15 @@ class AggregateSnapshotMapperTest {
     }
 
     @Test
-    @DisplayName("toState handles null game, null player, and null player elements safely")
-    void toState_NullAndEdgeCases_HandledSafely() {
+    @DisplayName("toGameState returns null for a lobby without a game, and toPlayerState captures a fresh player")
+    void toGameState_NullGameAndFreshPlayer_AreHandled() {
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
-        assertNull(mapper.toState((Game) null));
-        assertNull(mapper.toState((Player) null));
+        assertNull(mapper.toGameState(null));
 
         Player normalPlayer = new Player("PlayerOne", "p-one", 100);
-        AggregateStateImage.PlayerState playerState = mapper.toState(normalPlayer);
+        AggregateStateImage.PlayerState playerState = mapper.toPlayerState(normalPlayer);
         assertNotNull(playerState);
         assertEquals("PlayerOne", playerState.name());
         assertEquals("p-one", playerState.playerId());
@@ -693,6 +692,18 @@ class AggregateSnapshotMapperTest {
     }
 
     @Test
+    @DisplayName("deserialize rejects a snapshot with a null card element")
+    void deserialize_NullCardElement_IsRejected() {
+        ObjectNode snapshot = validTerminalSnapshotTree();
+        ((ObjectNode) snapshot.get("game")).set("communityCards", cardArray(new ObjectNode[] {null}));
+
+        PersistenceException ex = assertThrows(PersistenceException.class,
+                () -> newMapper().deserialize(JSON.writeValueAsBytes(snapshot)));
+
+        assertEquals("Null card in aggregate snapshot", ex.getMessage());
+    }
+
+    @Test
     void abandonedGameRoundTripPreservesOutcomeWithoutWinner() {
         Room room = new Room("room-abandoned", "Night Game", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
@@ -882,11 +893,9 @@ class AggregateSnapshotMapperTest {
     }
 
     @Test
-    @DisplayName("restoreRoom returns null for null input, restores a state without join times, and capture keeps the host")
-    void restoreRoom_NullAndMissingJoinTimes_AreHandled() {
+    @DisplayName("restoreRoom restores a state without join times, and capture keeps the host")
+    void restoreRoom_MissingJoinTimes_AreHandled() {
         AggregateSnapshotMapper mapper = newMapper();
-
-        assertNull(mapper.restoreRoom(null));
 
         Room restored = mapper.restoreRoom(new AggregateStateImage.RoomState("r", "Room", "Host", 6, 5, 10, 100,
                 null, null, null, Map.of(), false, null));
@@ -1407,7 +1416,7 @@ class AggregateSnapshotMapperTest {
         Player bob = new Player("Bob", "p2", 1000);
         Player departing = new Player("Charlie", "p3", 1000);
         Game game = new Game("snapshot-room", List.of(alice, bob, departing), 6, 10, 20);
-        AggregateStateImage.GameState before = mapper.toState(game);
+        AggregateStateImage.GameState before = mapper.toGameState(game);
         RoomCoordinator coordinator = new RoomCoordinator();
 
         try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
@@ -1416,7 +1425,7 @@ class AggregateSnapshotMapperTest {
                 alice.setDisconnected(true);
                 capture = executor.submit(() -> {
                     try (LockLease _ = coordinator.acquire("snapshot-room")) {
-                        return mapper.toState(game);
+                        return mapper.toGameState(game);
                     }
                 });
                 Awaitility.await().until(() -> coordinator.lockReservationCount("snapshot-room") >= 2);

@@ -1,23 +1,22 @@
 package com.pokergame.persistence.snapshot;
 
-import tools.jackson.core.JacksonException;
-import tools.jackson.databind.DeserializationFeature;
-import tools.jackson.databind.ObjectMapper;
-import com.pokergame.model.Card;
-import com.pokergame.model.Game;
-import com.pokergame.model.Player;
-import com.pokergame.model.Room;
-import org.springframework.stereotype.Component;
-
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.time.LocalDateTime;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
-import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.model.Card;
+import com.pokergame.model.Game;
 import com.pokergame.model.HandSettlementResult;
+import com.pokergame.model.Player;
+import com.pokergame.model.Room;
+import com.pokergame.persistence.PersistenceException;
+import org.springframework.stereotype.Component;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.ObjectMapper;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Converts live game data (Rooms and Games) into a clean snapshot format for saving to disk,
@@ -58,7 +57,7 @@ public final class AggregateSnapshotMapper {
         if (room == null) {
             throw new PersistenceException("Room cannot be null for aggregate state capture");
         }
-        return new AggregateStateImage(false, toRoomState(room), toState(game));
+        return new AggregateStateImage(false, toRoomState(room), toGameState(game));
     }
 
     private AggregateStateImage.RoomState toRoomState(Room room) {
@@ -169,18 +168,12 @@ public final class AggregateSnapshotMapper {
      * @param game the running game
      * @return a simple snapshot of the game
      */
-    AggregateStateImage.GameState toState(Game game) {
+    AggregateStateImage.GameState toGameState(Game game) {
         if (game == null) {
             return null;
         }
-        List<Player> playerList = game.getPlayers();
-        List<AggregateStateImage.PlayerState> playerStates = playerList != null
-                ? playerList.stream().filter(Objects::nonNull).map(this::toState).toList()
-                : List.of();
-        List<Player> activeList = game.getActivePlayers();
-        List<String> activePlayerIds = activeList != null
-                ? activeList.stream().filter(Objects::nonNull).map(Player::getPlayerId).toList()
-                : List.of();
+        List<AggregateStateImage.PlayerState> playerStates = game.getPlayers().stream().map(this::toPlayerState).toList();
+        List<String> activePlayerIds = game.getActivePlayers().stream().map(Player::getPlayerId).toList();
         return new AggregateStateImage.GameState(
             game.getGameId(), playerStates, activePlayerIds,
             cards(game.getRemainingDeckSnapshot()), cards(game.getCommunityCards()), game.getPot(),
@@ -204,10 +197,7 @@ public final class AggregateSnapshotMapper {
      * @param player the player to save
      * @return a simple snapshot of the player
      */
-    AggregateStateImage.PlayerState toState(Player player) {
-        if (player == null) {
-            return null;
-        }
+    AggregateStateImage.PlayerState toPlayerState(Player player) {
         return new AggregateStateImage.PlayerState(
                 player.getName(), player.getPlayerId(), cards(player.getHoleCards()), cards(player.getBestHand()),
                 player.getHandRank(), player.getChips(), player.getCurrentBet(), player.getHasFolded(),
@@ -222,9 +212,6 @@ public final class AggregateSnapshotMapper {
      * @return reconstructed room instance
      */
     Room restoreRoom(AggregateStateImage.RoomState state) {
-        if (state == null) {
-            return null;
-        }
         // Room membership is authoritative; the host must be one of the members.
         Map<String, LocalDateTime> joinTimes = state.playersWithJoinTime() == null
                 ? Map.of() : state.playersWithJoinTime();
@@ -351,7 +338,6 @@ public final class AggregateSnapshotMapper {
     }
 
     private AggregateStateImage.FinalPlayerState toFinalPlayerState(PublicPlayerState player) {
-        if (player == null) return null;
         return new AggregateStateImage.FinalPlayerState(
                 player.id(),
                 player.name(),
@@ -453,7 +439,6 @@ public final class AggregateSnapshotMapper {
     }
 
     private static AggregateStateImage.CardState toCardState(Card card) {
-        if (card == null) return null;
         return new AggregateStateImage.CardState(card.rank(), card.suit());
     }
 
@@ -464,11 +449,18 @@ public final class AggregateSnapshotMapper {
 
     private static List<AggregateStateImage.CardState> cards(List<Card> cards) {
         if (cards == null) return null;
-        return cards.stream().filter(Objects::nonNull).map(AggregateSnapshotMapper::toCardState).toList();
+        return cards.stream().map(AggregateSnapshotMapper::toCardState).toList();
+    }
+
+    private static Card requiredCard(AggregateStateImage.CardState state) {
+        if (state == null) {
+            throw new PersistenceException("Null card in aggregate snapshot");
+        }
+        return fromCardState(state);
     }
 
     private static List<Card> cardsFromState(List<AggregateStateImage.CardState> cards) {
         if (cards == null) return null;
-        return cards.stream().map(AggregateSnapshotMapper::fromCardState).toList();
+        return cards.stream().map(AggregateSnapshotMapper::requiredCard).toList();
     }
 }

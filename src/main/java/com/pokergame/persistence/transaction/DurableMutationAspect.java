@@ -3,7 +3,7 @@ package com.pokergame.persistence.transaction;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.RoomAggregate;
 import com.pokergame.persistence.RoomAggregates;
-import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.persistence.PersistenceException;
 import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.AggregateStateImage;
@@ -166,8 +166,8 @@ public final class DurableMutationAspect {
     /**
      * Periodically retries pending room saves that previously failed due to transient storage errors.
      */
-    @Scheduled(fixedDelayString = "#{@'poker.persistence-com.pokergame.persistence.config.PersistenceProperties'.retryIntervalMs}",
-            initialDelayString = "#{@'poker.persistence-com.pokergame.persistence.config.PersistenceProperties'.retryIntervalMs}")
+    @Scheduled(fixedDelayString = "#{@'poker.persistence-com.pokergame.persistence.config.PersistenceProperties'.retryIntervalMs()}",
+            initialDelayString = "#{@'poker.persistence-com.pokergame.persistence.config.PersistenceProperties'.retryIntervalMs()}")
     public void retryPendingSaves() {
         for (String roomId : pendingSaves.keySet()) {
             LockLease lease = roomCoordinator.tryAcquire(roomId);
@@ -337,8 +337,8 @@ public final class DurableMutationAspect {
     private boolean shouldCompact(String roomId) {
         int records = recordsSinceCompaction.computeIfAbsent(roomId, ignored -> new AtomicInteger())
                 .addAndGet(WAL_RECORDS_PER_SAVE);
-        return records >= properties.getCompactAfterRecords()
-                || store.walSize(roomId) >= properties.getCompactAfterBytes();
+        return records >= properties.compactAfterRecords()
+                || store.walSize(roomId) >= properties.compactAfterBytes();
     }
 
     private String resolveRoomId(ProceedingJoinPoint joinPoint) {

@@ -1,6 +1,5 @@
 package com.pokergame.persistence;
 
-import com.pokergame.persistence.config.PersistenceException;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
 import com.pokergame.persistence.wal.EncryptedWalStore;

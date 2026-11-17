@@ -48,7 +48,7 @@ import org.junit.jupiter.api.DisplayName;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.persistence.config.PersistenceProperties;
-import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.persistence.PersistenceException;
 import java.util.concurrent.Callable;
 import org.mockito.Mockito;
 import org.slf4j.MDC;
@@ -91,7 +91,7 @@ class DurableMutationAspectTest {
 
     @BeforeEach
     void setUp() {
-        properties = new PersistenceProperties();
+        properties = new PersistenceProperties(false, Path.of("data", "poker-wal"), null, Map.of(), 1000, 16L * 1024 * 1024, 5000);
         roomCoordinator = new RoomCoordinator();
         AggregateStateImage mockImage = Mockito.mock(AggregateStateImage.class);
         Mockito.lenient().when(snapshotMapper.captureStateImage(any(), any())).thenReturn(mockImage);

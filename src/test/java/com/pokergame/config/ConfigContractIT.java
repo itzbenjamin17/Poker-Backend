@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
@@ -124,12 +125,12 @@ class ConfigContractIT {
     @DisplayName("should default poker.persistence.enabled to false when environment variable is unset")
     void givenUnsetEnvironmentVariable_whenResolvingPersistenceProperty_thenDefaultsToFalse() {
         new ApplicationContextRunner()
-                .withUserConfiguration(PropertySourcesPlaceholderConfigurer.class, PersistenceProperties.class)
+                .withUserConfiguration(PropertySourcesPlaceholderConfigurer.class, PersistencePropertiesConfig.class)
                 .withPropertyValues("poker.persistence.enabled=${POKER_PERSISTENCE_ENABLED:false}")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     PersistenceProperties properties = context.getBean(PersistenceProperties.class);
-                    assertThat(properties.isEnabled()).isFalse();
+                    assertThat(properties.enabled()).isFalse();
                     assertThat(context.getEnvironment().getProperty("poker.persistence.enabled", Boolean.class)).isFalse();
                 });
     }
@@ -195,4 +196,8 @@ class ConfigContractIT {
 
     @Configuration
     static class E2eTestConfig {}
+
+    @Configuration
+    @EnableConfigurationProperties(PersistenceProperties.class)
+    static class PersistencePropertiesConfig {}
 }

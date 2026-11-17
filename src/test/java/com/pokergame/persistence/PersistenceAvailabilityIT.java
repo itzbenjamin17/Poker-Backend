@@ -7,7 +7,6 @@ import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;
-import com.pokergame.persistence.config.PersistenceException;
 import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
 import com.pokergame.persistence.snapshot.RecoveredAggregate;
@@ -203,7 +202,7 @@ class PersistenceAvailabilityIT {
         @Primary
         EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring,
                 RoomCoordinator roomCoordinator) {
-            return new EncryptedWalStore(properties.getDirectory(), keyring, (point, roomId) -> {
+            return new EncryptedWalStore(properties.directory(), keyring, (point, roomId) -> {
                 if (UNAVAILABLE_STORAGE.get()
                         && (point == WalFaultPoint.BEFORE_COMMIT_WRITE || point == WalFaultPoint.BEFORE_FLUSH)) {
                     throw new PersistenceException("injected availability outage");

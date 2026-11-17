@@ -28,7 +28,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
-import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.persistence.PersistenceException;
 import com.pokergame.util.LockLease;
 import com.pokergame.util.RoomCoordinator;
 import com.pokergame.util.VisibleForTesting;

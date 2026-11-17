@@ -1,6 +1,6 @@
 package com.pokergame.persistence.wal;
 
-import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.persistence.PersistenceException;
 import com.pokergame.util.LockLease;
 import com.pokergame.util.RoomCoordinator;
 import org.junit.jupiter.api.Tag;

@@ -1,11 +1,12 @@
 package com.pokergame.persistence.wal;
 
-import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.persistence.PersistenceException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
+import java.util.Base64;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -63,6 +64,21 @@ class EncryptionKeyringTest {
                 .isInstanceOf(PersistenceException.class);
         assertThatThrownBy(() -> new EncryptionKeyring("current",
                 Map.of("current", aes256Key((byte) 1), "legacy", aes128)))
+                .isInstanceOf(PersistenceException.class);
+    }
+
+    @Test
+    void fromBase64DecodesKeysAndRejectsInvalidBase64() {
+        String valid = Base64.getEncoder().encodeToString(new byte[32]);
+
+        EncryptionKeyring keyring = EncryptionKeyring.fromBase64("v1", Map.of("v1", valid));
+
+        assertThat(keyring.currentKey().getEncoded()).hasSize(32);
+        assertThatThrownBy(() -> EncryptionKeyring.fromBase64("v1", Map.of("v1", "not base64!")))
+                .isInstanceOf(PersistenceException.class)
+                .hasMessage("Persistence key v1 is not valid Base64");
+        assertThatThrownBy(() -> EncryptionKeyring.fromBase64("v1",
+                Map.of("v1", Base64.getEncoder().encodeToString(new byte[16]))))
                 .isInstanceOf(PersistenceException.class);
     }
 }

@@ -1,16 +1,43 @@
 package com.pokergame.persistence.wal;
 
+import com.pokergame.persistence.PersistenceException;
+
 import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
+import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import com.pokergame.persistence.config.PersistenceException;
 
 /**
  * Holds the encryption keys for the save files. 
  * We keep old keys around so we can still read older save files, but use a new key for any new saves.
  */
 public final class EncryptionKeyring {
+    private static final int AES_256_KEY_BYTES = 32;
+
     private final String currentKeyId;
     private final Map<String, SecretKey> keys;
+
+    /**
+     * Builds a keyring from Base64-encoded key text, as it appears in the application settings.
+     * Decoding and the key-length check both happen here so a bad key stops the server at startup.
+     *
+     * @param currentKeyId the ID of the key to use for new saves
+     * @param base64Keys   all the old and new keys as Base64 text, by their IDs
+     * @return the keyring holding the decoded keys
+     * @throws PersistenceException if a key is not valid Base64, is not 256-bit, or the current key is missing
+     */
+    public static EncryptionKeyring fromBase64(String currentKeyId, Map<String, String> base64Keys) {
+        Map<String, SecretKey> keys = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : base64Keys.entrySet()) {
+            try {
+                keys.put(entry.getKey(), new SecretKeySpec(Base64.getDecoder().decode(entry.getValue()), "AES"));
+            } catch (IllegalArgumentException e) {
+                throw new PersistenceException("Persistence key " + entry.getKey() + " is not valid Base64", e);
+            }
+        }
+        return new EncryptionKeyring(currentKeyId, keys);
+    }
 
     /**
      * Creates a new keyring and checks that all keys are valid AES-256 keys.
@@ -26,12 +53,10 @@ public final class EncryptionKeyring {
         }
         this.keys = Map.copyOf(keys);
         this.currentKeyId = currentKeyId;
-        SecretKey current = key(currentKeyId);
-        if (current.getEncoded() == null || current.getEncoded().length != 32) {
-            throw new PersistenceException("Persistence keys must be 256-bit AES keys");
-        }
+        key(currentKeyId);
         for (Map.Entry<String, SecretKey> entry : this.keys.entrySet()) {
-            if (entry.getValue().getEncoded() == null || entry.getValue().getEncoded().length != 32) {
+            byte[] encoded = entry.getValue().getEncoded();
+            if (encoded == null || encoded.length != AES_256_KEY_BYTES) {
                 throw new PersistenceException("Persistence key " + entry.getKey() + " is not 256-bit");
             }
         }

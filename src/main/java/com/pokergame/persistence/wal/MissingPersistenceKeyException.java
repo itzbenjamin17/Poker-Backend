@@ -1,6 +1,6 @@
 package com.pokergame.persistence.wal;
 
-import com.pokergame.persistence.config.PersistenceException;
+import com.pokergame.persistence.PersistenceException;
 
 /**
  * Signals an incomplete operator keyring, rather than corruption of a room's WAL.
