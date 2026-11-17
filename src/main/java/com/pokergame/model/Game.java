@@ -603,6 +603,23 @@ public class Game {
         gameOver = true;
     }
 
+    /**
+     * Pauses the game after its other contenders leave, because the only contender left is
+     * disconnected. Marks {@code leavingPlayers} out, holds the game with a pending forfeit until
+     * the survivor reconnects or their grace period ends, and drops queued hand tasks. The cleanup
+     * task is kept.
+     *
+     * @param leavingPlayers the players who are leaving the game
+     */
+    public void pauseForDisconnectedSurvivor(List<Player> leavingPlayers) {
+        for (Player leavingPlayer : leavingPlayers) {
+            leavingPlayer.setIsOut();
+        }
+        forfeitPending = true;
+        waitForReadyPlayers();
+        invalidateProgressionTasks();
+    }
+
     public void setForfeitPending(boolean value) {
         this.forfeitPending = value;
     }

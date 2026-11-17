@@ -129,6 +129,19 @@ class GameReadinessCoordinator {
     }
 
     /**
+     * Completes the ready countdown if one is open and every eligible player is now ready; does
+     * nothing otherwise. Call after a player leaves or disconnects, since that can leave only
+     * ready players.
+     *
+     * @param game the active game instance
+     */
+    void completeReadyCountdownIfEveryoneReady(Game game) {
+        if (game.isReadyCountdownActive() && game.areAllEligiblePlayersReady()) {
+            completeReadyCountdown(game);
+        }
+    }
+
+    /**
      * Closes the ready gate for {@code game} and immediately deals the next hand.
      *
      * @param game the active game instance

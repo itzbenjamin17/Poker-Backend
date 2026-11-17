@@ -2336,6 +2336,28 @@ class GameTest {
         }
 
         @Test
+        void pauseForDisconnectedSurvivor_MarksLeaversOutHoldsGameAndKeepsCleanup() {
+            Game pauseGame = createStandardGame(3, 1000);
+            dealToRiverAndShowdown(pauseGame);
+            pauseGame.openOrWaitReadyGate(50_000L);
+            pauseGame.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 1500L);
+            pauseGame.scheduleTask(ScheduledGameTask.CLEANUP, 60000L);
+            Player survivor = pauseGame.getPlayers().get(2);
+            survivor.setDisconnected(true);
+            List<Player> leaving = List.of(pauseGame.getPlayers().get(0), pauseGame.getPlayers().get(1));
+
+            pauseGame.pauseForDisconnectedSurvivor(leaving);
+
+            assertTrue(leaving.stream().allMatch(Player::getIsOut));
+            assertFalse(survivor.getIsOut());
+            assertTrue(pauseGame.isForfeitPending());
+            assertFalse(pauseGame.isGameOver());
+            assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, pauseGame.getReadyGateState());
+            assertNull(pauseGame.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(60000L, pauseGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+        }
+
+        @Test
         void readyGateExcludesZeroChipPlayersAndHandlesRepairAndTransitions() {
             Game readyGame = createStandardGame(3, 1000);
             dealToRiverAndShowdown(readyGame);

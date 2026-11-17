@@ -216,6 +216,20 @@ class PlayerDepartureHandlerTest {
         });
     }
 
+    private Game createShowdownGameWithOpenReadyGate(List<Player> players) {
+        Game game = new Game(ROOM_ID, players, 6, 5, 10);
+        withRoomLock(ROOM_ID, () -> {
+            activeGames.replace(game);
+            handProgression.startNewHand(ROOM_ID);
+            game.dealFlop();
+            game.dealTurn();
+            game.dealRiver();
+            game.conductShowdown();
+            readinessCoordinator.openReadyGate(ROOM_ID);
+        });
+        return game;
+    }
+
     private void verifyNobodyRemovedFromRoom() {
         verify(roomService, never()).leavePlayersBatch(anyString(), anyList(), any());
         verify(roomService, never()).leaveRoom(anyString(), anyString());
@@ -652,6 +666,28 @@ class PlayerDepartureHandlerTest {
         }
 
         @Test
+        void removePlayers_NonReadyPlayerLeavesDuringReadyCountdown_StartsNextHandForReadyPlayers() {
+            testRoom.addPlayer("Player3");
+            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+            Game game = createShowdownGameWithOpenReadyGate(List.of(
+                    new Player("Host", "p1", 1000),
+                    new Player("Player2", "p2", 1000),
+                    new Player("Player3", "p3", 1000)));
+            withRoomLock(ROOM_ID, () -> {
+                readinessCoordinator.markPlayerReadyForNextHand(ROOM_ID, "Host");
+                readinessCoordinator.markPlayerReadyForNextHand(ROOM_ID, "Player2");
+            });
+            assertTrue(game.isReadyCountdownActive());
+            long handBefore = game.getHandNumber();
+
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Player3")));
+
+            assertEquals(handBefore + 1, game.getHandNumber());
+            assertTrue(game.getPlayers().stream().noneMatch(p -> p.getName().equals("Player3")));
+            assertEquals(2, game.getPlayers().size());
+        }
+
+        @Test
         void removePlayers_HostSuccessionPriorityOrder() {
             // 1. Chooses later connected contender over earlier busted member
             testRoom.addPlayer("Player3");
@@ -790,6 +826,28 @@ class PlayerDepartureHandlerTest {
             stubGameEndCapture();
             withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReconnected(ROOM_ID, "Host"));
             verify(gameStateService, never()).broadcastGameState(any(Game.class));
+        }
+
+        @Test
+        void markPlayerDisconnected_NonReadyPlayerDisconnectsDuringReadyCountdown_StartsNextHandForReadyPlayers() {
+            testRoom.addPlayer("Player3");
+            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+            Game game = createShowdownGameWithOpenReadyGate(List.of(
+                    new Player("Host", "p1", 1000),
+                    new Player("Player2", "p2", 1000),
+                    new Player("Player3", "p3", 1000)));
+            withRoomLock(ROOM_ID, () -> {
+                readinessCoordinator.markPlayerReadyForNextHand(ROOM_ID, "Host");
+                readinessCoordinator.markPlayerReadyForNextHand(ROOM_ID, "Player2");
+            });
+            assertTrue(game.isReadyCountdownActive());
+            long handBefore = game.getHandNumber();
+
+            withRoomLock(ROOM_ID, () ->
+                    gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", BASE_EPOCH_MS + 120_000L));
+
+            assertEquals(handBefore + 1, game.getHandNumber());
+            assertTrue(findGamePlayer(game, "Player3").getIsDisconnected());
         }
 
         @Test

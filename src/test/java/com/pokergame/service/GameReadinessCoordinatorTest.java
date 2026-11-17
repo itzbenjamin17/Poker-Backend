@@ -364,4 +364,46 @@ class GameReadinessCoordinatorTest {
             assertFalse(game.isReadyCountdownActive());
         }
     }
+
+    @Nested
+    @DisplayName("completeReadyCountdownIfEveryoneReady")
+    class CompleteReadyCountdownIfEveryoneReadyTests {
+
+        @Test
+        @DisplayName("deals the next hand only when the countdown is open and every eligible player is ready")
+        void completesCountdownOnlyWhenCountdownOpenAndEveryoneReady() {
+            Player host = new Player("Host", "host", 1000);
+            Player p2 = new Player("Player2", "p2", 1000);
+            Game game = createShowdownGame(List.of(host, p2));
+            long handBefore = game.getHandNumber();
+
+            // Countdown not open yet: nothing happens even though everyone is ready
+            host.setReadyForNextHand(true);
+            p2.setReadyForNextHand(true);
+            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                readinessCoordinator.completeReadyCountdownIfEveryoneReady(game);
+            }
+            assertEquals(handBefore, game.getHandNumber());
+
+            // Countdown open but one player not ready: nothing happens
+            host.setReadyForNextHand(false);
+            p2.setReadyForNextHand(false);
+            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                readinessCoordinator.openReadyGate(GAME_ID);
+            }
+            host.setReadyForNextHand(true);
+            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                readinessCoordinator.completeReadyCountdownIfEveryoneReady(game);
+            }
+            assertTrue(game.isReadyCountdownActive());
+            assertEquals(handBefore, game.getHandNumber());
+
+            // Countdown open and everyone ready: next hand is dealt
+            p2.setReadyForNextHand(true);
+            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                readinessCoordinator.completeReadyCountdownIfEveryoneReady(game);
+            }
+            assertEquals(handBefore + 1, game.getHandNumber());
+        }
+    }
 }
