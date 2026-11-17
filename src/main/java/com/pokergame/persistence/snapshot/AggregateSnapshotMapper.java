@@ -189,7 +189,7 @@ public final class AggregateSnapshotMapper {
             game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs(),
             game.hasAllPlayersHadInitialTurn(), game.getActedPlayerIdsSnapshot(),
             game.getScheduledTaskDeadlinesSnapshot(), game.getCarryOverPot(),
-            game.getLastFullRaiseByStreetSnapshot(), game.getLastActedWagerByPlayerSnapshot(),
+            game.getLastFullRaise(), game.getLastActedWagerByPlayerSnapshot(),
             game.getHandSeatOrderSnapshot(), game.getDealerPlayerId(), game.getSmallBlindPlayerId(),
             game.getBigBlindPlayerId(), game.getCurrentPlayerId(), settlementState(game.getLastSettlementResult()),
             game.isFinalPotSettled(), game.getReadyGateState(), game.getHandNumber(),
@@ -288,7 +288,7 @@ public final class AggregateSnapshotMapper {
                 .scheduledTaskDeadlines(state.scheduledTaskDeadlines())
                 .scheduledTaskGenerations(state.scheduledTaskGenerations())
                 .preHandCarryOver(state.preHandCarryOver())
-                .lastFullRaiseByStreet(state.lastFullRaiseByStreet())
+                .lastFullRaise(state.lastFullRaise())
                 .lastActedWagerByPlayer(state.lastActedWagerByPlayer())
                 .handSeatOrder(state.handSeatOrder())
                 .dealerAnchorPlayerId(state.dealerAnchorPlayerId())

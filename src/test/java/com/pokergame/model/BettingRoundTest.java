@@ -35,21 +35,21 @@ class BettingRoundTest {
         TableSeating seating = new TableSeating(players, players);
 
         BettingRound shortRaiseRound = new BettingRound(
-                30, false, Set.of("a"), Map.of(), Map.of("a", 20));
+                30, false, Set.of("a"), 0, Map.of("a", 20));
         assertFalse(shortRaiseRound.legalActionsFor(alice, players, players, seating, GamePhase.FLOP, 20)
                 .contains(PlayerAction.RAISE));
-        assertEquals(50, shortRaiseRound.getMinimumRaiseAmount(alice, GamePhase.FLOP, 20));
+        assertEquals(50, shortRaiseRound.getMinimumRaiseAmount(alice, 20));
         ActionFeedbackException error = assertThrows(ActionFeedbackException.class, () ->
                 shortRaiseRound.prepareDecision(alice, new PlayerDecision(PlayerAction.RAISE, 60, "a"),
-                        players, GamePhase.FLOP, 20));
+                        players, 20));
         assertEquals("RAISE_NOT_REOPENED", error.actionErrorCode());
 
         BettingRound fullRaiseRound = new BettingRound(
-                40, false, Set.of("a"), Map.of(), Map.of("a", 20));
+                40, false, Set.of("a"), 0, Map.of("a", 20));
         assertTrue(fullRaiseRound.legalActionsFor(alice, players, players, seating, GamePhase.FLOP, 20)
                 .contains(PlayerAction.RAISE));
         var prepared = fullRaiseRound.prepareDecision(alice, new PlayerDecision(PlayerAction.RAISE, 60, "a"),
-                players, GamePhase.FLOP, 20);
+                players, 20);
         assertEquals(PlayerAction.RAISE, prepared.decision().action());
     }
 
@@ -72,7 +72,7 @@ class BettingRoundTest {
 
         ActionFeedbackException error = assertThrows(ActionFeedbackException.class, () ->
                 checkedPot.prepareDecision(alice, new PlayerDecision(PlayerAction.CHECK, 0, "a"),
-                        players, GamePhase.FLOP, 20));
+                        players, 20));
         assertEquals("CHECK_NOT_AVAILABLE", error.actionErrorCode());
     }
 
@@ -80,10 +80,10 @@ class BettingRoundTest {
     void shortCallIsPreparedAsAllInWithoutMutatingPlayer() {
         Player alice = new Player("Alice", "a", 10);
         Player bob = new Player("Bob", "b", 100);
-        BettingRound round = new BettingRound(20, false, Set.of(), Map.of(), Map.of());
+        BettingRound round = new BettingRound(20, false, Set.of(), 0, Map.of());
 
         var result = round.prepareDecision(alice, new PlayerDecision(PlayerAction.CALL, 0, "a"),
-                List.of(alice, bob), GamePhase.FLOP, 20);
+                List.of(alice, bob), 20);
         assertEquals(PlayerAction.ALL_IN, result.decision().action());
         assertEquals(0, result.amount());
         assertNotNull(result.conversionMessage());
@@ -98,14 +98,14 @@ class BettingRoundTest {
         Player carol = new Player("Carol", "c", 100);
         carol.doAction(PlayerAction.FOLD, 0, 0);
         List<Player> players = List.of(alice, bob, carol);
-        BettingRound round = new BettingRound(20, true, Set.of(), Map.of(), Map.of());
+        BettingRound round = new BettingRound(20, true, Set.of(), 0, Map.of());
 
         assertTrue(BettingRound.hasActionablePlayerOwingCall(players, 20));
         assertEquals(BettingRound.ForcedBlindProgression.SELECT_ACTOR, round.afterForcedBlinds(players, false));
         assertEquals(TurnOutcomeType.NEXT_PLAYER, round.nextProgression(players, false, GamePhase.FLOP));
 
         alice.doAction(PlayerAction.CALL, 20, 20);
-        round.recordAppliedDecision(alice, GamePhase.FLOP, 20, 0);
+        round.recordAppliedDecision(alice, 20, 0);
 
         assertFalse(BettingRound.hasActionablePlayerOwingCall(players, 20));
         assertEquals(BettingRound.ForcedBlindProgression.AUTO_RUNOUT, round.afterForcedBlinds(players, false));
@@ -119,7 +119,7 @@ class BettingRoundTest {
         bob.doAction(PlayerAction.ALL_IN, 0, 0);
         List<Player> remaining = List.of(alice, bob);
 
-        BettingRound round = new BettingRound(50, false, Set.of("d"), Map.of(), Map.of("d", 50));
+        BettingRound round = new BettingRound(50, false, Set.of("d"), 0, Map.of("d", 50));
         round.removePlayer("d");
         round.reconcileHighestBetAfterRemoval(remaining);
 
@@ -129,7 +129,7 @@ class BettingRoundTest {
         assertEquals(TurnOutcomeType.NEXT_PLAYER, round.nextProgression(remaining, false, GamePhase.FLOP));
 
         alice.doAction(PlayerAction.CALL, 20, 20);
-        round.recordAppliedDecision(alice, GamePhase.FLOP, 20, 0);
+        round.recordAppliedDecision(alice, 20, 0);
         assertEquals(TurnOutcomeType.AUTO_ADVANCING, round.nextProgression(remaining, false, GamePhase.FLOP));
     }
 
@@ -172,9 +172,9 @@ class BettingRoundTest {
             List<Player> activePlayers,
             int highestBet,
             Map<String, Integer> lastActedWagerByPlayer) {
-        BettingRound round = new BettingRound(highestBet, false, Set.of(), Map.of(), lastActedWagerByPlayer);
+        BettingRound round = new BettingRound(highestBet, false, Set.of(), 0, lastActedWagerByPlayer);
         ActionFeedbackException error = assertThrows(expectedType, () ->
-                round.prepareDecision(actor, decision, activePlayers, GamePhase.FLOP, 20),
+                round.prepareDecision(actor, decision, activePlayers, 20),
                 scenario);
         assertEquals(expectedCode, error.actionErrorCode(), scenario);
     }
@@ -250,26 +250,29 @@ class BettingRoundTest {
             List<Player> players,
             int highestBet,
             Map<String, Integer> lastActedWagerByPlayer) {
-        BettingRound round = new BettingRound(highestBet, false, Set.of(), Map.of(), lastActedWagerByPlayer);
+        BettingRound round = new BettingRound(highestBet, false, Set.of(), 0, lastActedWagerByPlayer);
         ActionFeedbackException error = assertThrows(ActionFeedbackException.class, () ->
-                round.prepareDecision(actor, new PlayerDecision(action, amount, "a"), players, GamePhase.FLOP, 20));
+                round.prepareDecision(actor, new PlayerDecision(action, amount, "a"), players, 20));
         assertEquals(code, error.actionErrorCode());
     }
 
     @Test
     void fullRaiseHistoryIsScopedToTheStreet() {
         Player actor = new Player("Actor", "a", 200);
-        BettingRound round = new BettingRound(50, true, Set.of(), Map.of(GamePhase.FLOP.name(), 50), Map.of());
+        BettingRound round = new BettingRound(50, true, Set.of(), 50, Map.of());
 
-        assertEquals(100, round.getMinimumRaiseAmount(actor, GamePhase.FLOP, 20));
-        assertEquals(70, round.getMinimumRaiseAmount(actor, GamePhase.TURN, 20));
+        assertEquals(100, round.getMinimumRaiseAmount(actor, 20));
+        round.resetForNewRound(List.of(actor));
+        assertEquals(20, round.getMinimumRaiseAmount(actor, 20));
 
-        BettingRound recordedRound = new BettingRound(20, true, Set.of(), Map.of(), Map.of());
+        BettingRound recordedRound = new BettingRound(20, true, Set.of(), 0, Map.of());
         actor.doAction(PlayerAction.RAISE, 70, 20);
-        recordedRound.recordAppliedDecision(actor, GamePhase.FLOP, 20, 20);
+        recordedRound.recordAppliedDecision(actor, 20, 20);
         assertEquals(70, recordedRound.getCurrentHighestBet());
-        assertEquals(50, recordedRound.getLastFullRaiseByStreetSnapshot().get(GamePhase.FLOP.name()));
-        assertFalse(recordedRound.getLastFullRaiseByStreetSnapshot().containsKey(GamePhase.TURN.name()));
+        assertEquals(50, recordedRound.getLastFullRaise());
+        recordedRound.resetForNewRound(List.of(actor));
+        assertEquals(0, recordedRound.getLastFullRaise());
+        assertEquals(20, recordedRound.getMinimumRaiseAmount(actor, 20));
     }
 
     @Test
@@ -280,7 +283,7 @@ class BettingRoundTest {
         allIn.doAction(PlayerAction.ALL_IN, 0, 0);
 
         BettingRound round = new BettingRound();
-        assertEquals(BettingRound.ForcedBlindProgression.RECONCILE,
+        assertEquals(BettingRound.ForcedBlindProgression.HAND_OVER,
                 round.afterForcedBlinds(List.of(activeOne), true));
         assertEquals(BettingRound.ForcedBlindProgression.AUTO_RUNOUT,
                 round.afterForcedBlinds(List.of(activeOne, allIn), false));
@@ -294,13 +297,29 @@ class BettingRoundTest {
         Player bob = new Player("Bob", "b", 100);
         List<Player> players = List.of(alice, bob);
 
-        BettingRound completedRound = new BettingRound(0, true, Set.of("a", "b"), Map.of(), Map.of());
+        BettingRound completedRound = new BettingRound(0, true, Set.of("a", "b"), 0, Map.of());
         assertEquals(TurnOutcomeType.SHOWDOWN, completedRound.nextProgression(players, false, GamePhase.RIVER));
         assertEquals(TurnOutcomeType.PHASE_ADVANCED, completedRound.nextProgression(players, false, GamePhase.FLOP));
         assertEquals(TurnOutcomeType.SHOWDOWN, completedRound.nextProgression(players, true, GamePhase.FLOP));
 
-        BettingRound openRound = new BettingRound(0, false, Set.of("a"), Map.of(), Map.of());
+        BettingRound openRound = new BettingRound(0, false, Set.of("a"), 0, Map.of());
         assertEquals(TurnOutcomeType.NEXT_PLAYER, openRound.nextProgression(players, false, GamePhase.FLOP));
+    }
+
+    @Test
+    void initialTurnIsMarkedByAnExplicitStepAndProgressionOnlyReports() {
+        Player alice = new Player("Alice", "a", 100);
+        Player bob = new Player("Bob", "b", 100);
+        List<Player> players = List.of(alice, bob);
+        BettingRound round = new BettingRound(0, false, Set.of("a", "b"), 0, Map.of());
+
+        round.markInitialTurnsIfAllActed(players);
+        assertTrue(round.hasAllPlayersHadInitialTurn());
+        assertEquals(TurnOutcomeType.PHASE_ADVANCED, round.nextProgression(players, false, GamePhase.FLOP));
+
+        BettingRound pending = new BettingRound(0, false, Set.of("a"), 0, Map.of());
+        pending.markInitialTurnsIfAllActed(players);
+        assertFalse(pending.hasAllPlayersHadInitialTurn());
     }
 
     @Test
@@ -310,11 +329,11 @@ class BettingRoundTest {
         Player folded = new Player("Folded", "f", 100);
         folded.doAction(PlayerAction.FOLD, 0, 0);
 
-        BettingRound round = new BettingRound(0, true, Set.of("a", "b"), Map.of(), Map.of());
+        BettingRound round = new BettingRound(0, true, Set.of("a", "b"), 0, Map.of());
         assertEquals(TurnOutcomeType.PHASE_ADVANCED,
                 round.nextProgression(List.of(actor, opponent, folded), false, GamePhase.FLOP));
 
-        BettingRound onlyFoldedActed = new BettingRound(0, false, Set.of("f"), Map.of(), Map.of());
+        BettingRound onlyFoldedActed = new BettingRound(0, false, Set.of("f"), 0, Map.of());
         assertEquals(TurnOutcomeType.NEXT_PLAYER,
                 onlyFoldedActed.nextProgression(List.of(actor, opponent, folded), false, GamePhase.FLOP));
     }
@@ -323,7 +342,7 @@ class BettingRoundTest {
     void resetsRoundAndHandStateCleanly() {
         Player blindPoster = new Player("Blind", "b", 100);
         blindPoster.doAction(PlayerAction.CALL, 20, 20);
-        BettingRound round = new BettingRound(20, true, Set.of("a"), Map.of("FLOP", 40), Map.of("a", 20));
+        BettingRound round = new BettingRound(20, true, Set.of("a"), 40, Map.of("a", 20));
 
         round.resetForNewRound(List.of(blindPoster));
         assertEquals(0, blindPoster.getCurrentBet());
@@ -334,6 +353,177 @@ class BettingRoundTest {
 
         round.resetForNewHand();
         assertFalse(round.hasAllPlayersHadInitialTurn());
-        assertTrue(round.getLastFullRaiseByStreetSnapshot().isEmpty());
+        assertEquals(0, round.getLastFullRaise());
+    }
+
+    // ---- One rule set: legalActionsFor and prepareDecision must agree ----
+
+    private record Scenario(Player actor, List<Player> players, BettingRound round, List<PlayerAction> expectedLegal) {
+    }
+
+    private static BettingRound roundOnFlop(
+            int highestBet, int lastFullRaise, Set<String> acted, Map<String, Integer> lastActedWagers) {
+        return new BettingRound(highestBet, false, acted, lastFullRaise, lastActedWagers);
+    }
+
+    private static List<PlayerAction> legalOnFlop(BettingRound round, Player actor, List<Player> players) {
+        return round.legalActionsFor(actor, players, players, new TableSeating(players, players), GamePhase.FLOP, 20);
+    }
+
+    private static BettingRound.DecisionResult prepareOnFlop(
+            BettingRound round, Player actor, List<Player> players, PlayerAction action, int amount) {
+        return round.prepareDecision(actor, new PlayerDecision(action, amount, actor.getPlayerId()),
+                players, 20);
+    }
+
+    private static Player playerWhoPosted(String name, String id, int chips, int posted) {
+        Player player = new Player(name, id, chips);
+        player.doAction(PlayerAction.BET, posted, 0);
+        return player;
+    }
+
+    private static Player allInPlayer(String name, String id, int chips) {
+        Player player = new Player(name, id, chips);
+        player.doAction(PlayerAction.ALL_IN, 0, 0);
+        return player;
+    }
+
+    private static Arguments scenario(
+            String name, Player actor, List<Player> players, BettingRound round, PlayerAction... expectedLegal) {
+        return Arguments.of(name, new Scenario(actor, players, round, List.of(expectedLegal)));
+    }
+
+    private static Stream<Arguments> pinnedBettingStates() {
+        Player a = new Player("Alice", "a", 100);
+        Player b = new Player("Bob", "b", 100);
+
+        Player shortStack = new Player("Alice", "a", 10);
+        Player exactStack = new Player("Alice", "a", 20);
+        Player bigBlind = playerWhoPosted("Alice", "a", 100, 20);
+        Player openedForTwenty = playerWhoPosted("Alice", "a", 100, 20);
+        Player reopened = playerWhoPosted("Alice", "a", 100, 20);
+        Player belowMinRaise = new Player("Alice", "a", 90);
+        Player foldedActor = new Player("Alice", "a", 100);
+        foldedActor.doAction(PlayerAction.FOLD, 0, 0);
+
+        return Stream.of(
+                scenario("opening: nothing bet", a, List.of(a, b), new BettingRound(),
+                        PlayerAction.FOLD, PlayerAction.CHECK, PlayerAction.BET, PlayerAction.ALL_IN),
+                scenario("facing a bet", a, List.of(a, b), roundOnFlop(20, 0, Set.of(), Map.of()),
+                        PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.RAISE, PlayerAction.ALL_IN),
+                scenario("call exceeds stack", shortStack, List.of(shortStack, b),
+                        roundOnFlop(20, 0, Set.of(), Map.of()),
+                        PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.ALL_IN),
+                scenario("stack equals call", exactStack, List.of(exactStack, b),
+                        roundOnFlop(20, 0, Set.of(), Map.of()),
+                        PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.ALL_IN),
+                scenario("big blind option", bigBlind, List.of(bigBlind, b),
+                        roundOnFlop(20, 0, Set.of(), Map.of()),
+                        PlayerAction.FOLD, PlayerAction.CHECK, PlayerAction.RAISE, PlayerAction.ALL_IN),
+                scenario("short all-in raise leaves betting closed", openedForTwenty, List.of(openedForTwenty, b),
+                        roundOnFlop(30, 0, Set.of("a"), Map.of("a", 20)),
+                        PlayerAction.FOLD, PlayerAction.CALL),
+                scenario("full raise reopens betting", reopened, List.of(reopened, b),
+                        roundOnFlop(40, 0, Set.of("a"), Map.of("a", 20)),
+                        PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.RAISE, PlayerAction.ALL_IN),
+                scenario("stack below the minimum raise", belowMinRaise, List.of(belowMinRaise, b),
+                        roundOnFlop(50, 50, Set.of(), Map.of()),
+                        PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.RAISE, PlayerAction.ALL_IN),
+                scenario("folded player", foldedActor, List.of(foldedActor, b), new BettingRound()));
+    }
+
+    private static Stream<Arguments> pinnedBettingStatesWithUncontestableOpponent() {
+        Player callerOnly = new Player("Alice", "a", 100);
+        Player checkerOnly = playerWhoPosted("Alice", "a", 100, 20);
+        return Stream.of(
+                scenario("only opponent is all-in, call owed", callerOnly,
+                        List.of(callerOnly, allInPlayer("AllIn", "ai", 20)),
+                        roundOnFlop(20, 0, Set.of(), Map.of()),
+                        PlayerAction.FOLD, PlayerAction.CALL),
+                scenario("only opponent is all-in, nothing owed", checkerOnly,
+                        List.of(checkerOnly, allInPlayer("AllIn", "ai", 20)),
+                        roundOnFlop(20, 0, Set.of(), Map.of()),
+                        PlayerAction.FOLD, PlayerAction.CHECK));
+    }
+
+    @ParameterizedTest(name = "[{index}] {0}")
+    @MethodSource({"pinnedBettingStates", "pinnedBettingStatesWithUncontestableOpponent"})
+    void everyOfferedActionIsAcceptedAndEveryOtherActionIsRejected(String name, Scenario state) {
+        List<PlayerAction> legal = legalOnFlop(state.round(), state.actor(), state.players());
+        assertEquals(state.expectedLegal(), legal, name);
+
+        for (PlayerAction action : PlayerAction.values()) {
+            assertEquals(legal.contains(action), isAcceptedForSomeAmount(state, action),
+                    name + ": " + action + " offered=" + legal.contains(action));
+        }
+    }
+
+    private static boolean isAcceptedForSomeAmount(Scenario state, PlayerAction action) {
+        boolean wagers = action == PlayerAction.BET || action == PlayerAction.RAISE;
+        int maxAmount = wagers ? state.actor().getChips() : 0;
+        for (int amount = wagers ? 1 : 0; amount <= maxAmount; amount++) {
+            try {
+                prepareOnFlop(state.round(), state.actor(), state.players(), action, amount);
+                return true;
+            } catch (ActionFeedbackException rejected) {
+                // try the next amount
+            }
+        }
+        return false;
+    }
+
+    @Test
+    void raiseIsAcceptedAtTheExactMinimumAndRejectedBelowIt() {
+        Player actor = new Player("Actor", "a", 100);
+        List<Player> players = List.of(actor, new Player("Opponent", "b", 100));
+        BettingRound round = roundOnFlop(20, 0, Set.of(), Map.of());
+
+        assertEquals(40, round.getMinimumRaiseAmount(actor, 20));
+        assertEquals(PlayerAction.RAISE, prepareOnFlop(round, actor, players, PlayerAction.RAISE, 40).decision().action());
+        assertEquals(40, prepareOnFlop(round, actor, players, PlayerAction.RAISE, 40).amount());
+        BadRequestException tooSmall = assertThrows(BadRequestException.class,
+                () -> prepareOnFlop(round, actor, players, PlayerAction.RAISE, 39));
+        assertEquals("MIN_RAISE", tooSmall.actionErrorCode());
+    }
+
+    @Test
+    void shortAllInsAreAcceptedEvenWhenTheyAreNotAFullRaiseOrBet() {
+        Player belowMinRaise = new Player("Actor", "a", 90);
+        List<Player> players = List.of(belowMinRaise, new Player("Opponent", "b", 100));
+        BettingRound facingFifty = roundOnFlop(50, 50, Set.of(), Map.of());
+
+        assertEquals(PlayerAction.RAISE, prepareOnFlop(facingFifty, belowMinRaise, players, PlayerAction.RAISE, 90)
+                .decision().action());
+        assertEquals(PlayerAction.ALL_IN, prepareOnFlop(facingFifty, belowMinRaise, players, PlayerAction.ALL_IN, 0)
+                .decision().action());
+
+        Player tinyStack = new Player("Tiny", "t", 15);
+        List<Player> tinyTable = List.of(tinyStack, new Player("Opponent", "b", 100));
+        BettingRound opening = new BettingRound();
+        assertEquals(15, prepareOnFlop(opening, tinyStack, tinyTable, PlayerAction.BET, 15).amount());
+        BadRequestException belowBigBlind = assertThrows(BadRequestException.class,
+                () -> prepareOnFlop(opening, tinyStack, tinyTable, PlayerAction.BET, 10));
+        assertEquals("MIN_BET", belowBigBlind.actionErrorCode());
+    }
+
+    @Test
+    void shortRaiseKeepsTheMinimumRaiseButFullRaiseChangesItUntilTheStreetEnds() {
+        Player raiser = new Player("Raiser", "a", 200);
+        Player other = new Player("Other", "b", 200);
+        List<Player> players = List.of(raiser, other);
+        BettingRound round = roundOnFlop(20, 0, Set.of(), Map.of());
+
+        raiser.doAction(PlayerAction.RAISE, 30, 0);
+        round.recordAppliedDecision(raiser, 20, 20);
+        assertEquals(30, round.getCurrentHighestBet());
+        assertEquals(50, round.getMinimumRaiseAmount(other, 20));
+
+        raiser.doAction(PlayerAction.RAISE, 40, 0);
+        round.recordAppliedDecision(raiser, 20, 30);
+        assertEquals(70, round.getCurrentHighestBet());
+        assertEquals(110, round.getMinimumRaiseAmount(other, 20));
+
+        round.resetForNewRound(players);
+        assertEquals(20, round.getMinimumRaiseAmount(other, 20));
     }
 }

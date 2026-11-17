@@ -78,7 +78,7 @@ public record AggregateStateImage(boolean deleted, RoomState room, GameState gam
      * @param actedPlayerIds                who has already made a move this round
      * @param scheduledTaskDeadlines        when upcoming automatic actions are supposed to happen
      * @param preHandCarryOver               explicit chips carried from a completed prior hand
-     * @param lastFullRaiseByStreet          full-raise increments governing the current betting history
+     * @param lastFullRaise                  last full-raise increment this street, or 0 if none yet
      * @param lastActedWagerByPlayer         each player's wager baseline for raise-reopening decisions
      * @param handSeatOrder                  stable seats retained across departures during this hand
      * @param dealerAnchorPlayerId           original dealer identity for correct clockwise position recovery
@@ -100,7 +100,7 @@ public record AggregateStateImage(boolean deleted, RoomState room, GameState gam
             Map<String, Integer> handContributions, boolean readyCountdownActive,
             Long readyCountdownDeadlineEpochMs, boolean everyoneHasHadInitialTurn, Set<String> actedPlayerIds,
             Map<ScheduledGameTask, Long> scheduledTaskDeadlines, int preHandCarryOver,
-            Map<String, Integer> lastFullRaiseByStreet, Map<String, Integer> lastActedWagerByPlayer,
+            int lastFullRaise, Map<String, Integer> lastActedWagerByPlayer,
             List<String> handSeatOrder, String dealerAnchorPlayerId, String smallBlindPlayerId,
             String bigBlindPlayerId, String currentPlayerId, SettlementState lastSettlementResult,
             boolean terminalCarryOverSettled, ReadyGateState readyGateState, long handNumber,

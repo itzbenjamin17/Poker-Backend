@@ -178,7 +178,7 @@ public class Game {
                 builder.getCurrentHighestBet(),
                 builder.isEveryoneHasHadInitialTurn(),
                 builder.getActedPlayersInRound(),
-                builder.getLastFullRaiseByStreet(),
+                builder.getLastFullRaise(),
                 builder.getLastActedWagerByPlayer());
         this.readyGate = new ReadyGate(
                 this.players,
@@ -317,7 +317,7 @@ public class Game {
             return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null);
         }
         BettingRound.ForcedBlindProgression progression = bettingRound.afterForcedBlinds(activePlayers, isHandOver());
-        if (progression == BettingRound.ForcedBlindProgression.RECONCILE) {
+        if (progression == BettingRound.ForcedBlindProgression.HAND_OVER) {
             return advanceTurnOrPhase(null, false);
         }
         if (progression == BettingRound.ForcedBlindProgression.AUTO_RUNOUT) {
@@ -353,7 +353,7 @@ public class Game {
                 bettingRound.getCurrentHighestBet(), pot);
 
         BettingRound.DecisionResult result = bettingRound.prepareDecision(
-                player, decision, activePlayers, currentPhase, bigBlind);
+                player, decision, activePlayers, bigBlind);
         PlayerDecision actualDecision = result.decision();
 
         int potBeforeDecision = this.pot;
@@ -366,7 +366,7 @@ public class Game {
         }
 
         PotCalculator.trackContribution(handContributions, player, this.pot - potBeforeDecision, gameId);
-        bettingRound.recordAppliedDecision(player, currentPhase, bigBlind, wagerBeforeDecision);
+        bettingRound.recordAppliedDecision(player, bigBlind, wagerBeforeDecision);
 
         logger.debug(
                 "Decision applied in game {} | player={} | action={} | potDelta={} | potNow={} | playerBet={} | playerChips={} | currentHighestBet={} | contributions={}",
@@ -435,6 +435,7 @@ public class Game {
 
         logger.info("Conducting showdown for game {}", gameId);
         currentPhase = GamePhase.SHOWDOWN;
+        bettingRound.clearLastFullRaise();
 
         List<Player> showdownPlayers = activePlayers.stream()
                 .filter(Player::isInHand)
@@ -750,7 +751,7 @@ public class Game {
      * @return additional chips required for a full raise
      */
     public int getMinimumRaiseAmount(Player player) {
-        return bettingRound.getMinimumRaiseAmount(player, currentPhase, bigBlind);
+        return bettingRound.getMinimumRaiseAmount(player, bigBlind);
     }
 
     /**
@@ -791,8 +792,8 @@ public class Game {
         return Map.copyOf(handContributions);
     }
 
-    public Map<String, Integer> getLastFullRaiseByStreetSnapshot() {
-        return bettingRound.getLastFullRaiseByStreetSnapshot();
+    public int getLastFullRaise() {
+        return bettingRound.getLastFullRaise();
     }
 
     public Map<String, Integer> getLastActedWagerByPlayerSnapshot() {
@@ -1021,6 +1022,7 @@ public class Game {
     }
 
     private TurnOutcome advanceTurnOrPhase(String conversionMessage, boolean moveToNextPlayer) {
+        bettingRound.markInitialTurnsIfAllActed(activePlayers);
         TurnOutcome.TurnOutcomeType outcome = bettingRound.nextProgression(activePlayers, isHandOver(), currentPhase);
         if (outcome == TurnOutcome.TurnOutcomeType.SHOWDOWN) {
             conductShowdown();

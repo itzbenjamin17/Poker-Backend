@@ -91,7 +91,7 @@
       "CLEANUP" : 999999
     },
     "preHandCarryOver" : 0,
-    "lastFullRaiseByStreet" : { },
+    "lastFullRaise" : 0,
     "lastActedWagerByPlayer" : { },
     "handSeatOrder" : [ "a", "b" ],
     "dealerAnchorPlayerId" : "a",

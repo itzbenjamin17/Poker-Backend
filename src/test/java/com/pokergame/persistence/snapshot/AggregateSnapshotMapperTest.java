@@ -145,7 +145,7 @@ class AggregateSnapshotMapperTest {
                 .remainingDeck(List.of()).communityCards(List.of()).pot(3).currentPlayerId("a").currentHighestBet(0)
                 .currentPhase(GamePhase.SHOWDOWN)
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(3)
-                .lastFullRaiseByStreet(Map.of("PRE_FLOP", 10)).lastActedWagerByPlayer(Map.of("a", 20))
+                .lastFullRaise(10).lastActedWagerByPlayer(Map.of("a", 20))
                 .handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a").smallBlindPlayerId("a")
                 .bigBlindPlayerId("b").lastSettlementResult(new HandSettlementResult(Map.of("a", 50), Map.of("b", 2),
                         Set.of("a"), 3, true))
@@ -166,7 +166,7 @@ class AggregateSnapshotMapperTest {
         Game restored = mapper.deserialize(snapshot).game();
         assertEquals(3, restored.getCarryOverPot());
         assertEquals(game.getLastSettlementResult(), restored.getLastSettlementResult());
-        assertEquals(Map.of("PRE_FLOP", 10), restored.getLastFullRaiseByStreetSnapshot());
+        assertEquals(10, restored.getLastFullRaise());
         assertEquals(List.of("a", "b"), restored.getHandSeatOrderSnapshot());
         assertTrue(restored.isFinalPotSettled());
         assertEquals(7, restored.getHandNumber());
@@ -233,7 +233,7 @@ class AggregateSnapshotMapperTest {
                 .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
                 .currentPlayerId("a").currentHighestBet(0)
                 .currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10).handContributions(Map.of())
-                .preHandCarryOver(0).lastFullRaiseByStreet(Map.of()).lastActedWagerByPlayer(Map.of())
+                .preHandCarryOver(0).lastFullRaise(0).lastActedWagerByPlayer(Map.of())
                 .handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                 .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
@@ -284,7 +284,7 @@ class AggregateSnapshotMapperTest {
                 .communityCards(List.of()).pot(500).currentPlayerId("a")
                 .currentHighestBet(150).currentPhase(GamePhase.PRE_FLOP).gameOver(false)
                 .smallBlind(5).bigBlind(10).handContributions(Map.of("a", 100, "b", 100, "s1", 150, "s2", 150))
-                .preHandCarryOver(0).lastFullRaiseByStreet(Map.of("PRE_FLOP", 100))
+                .preHandCarryOver(0).lastFullRaise(100)
                 .lastActedWagerByPlayer(Map.of("a", 100)).handSeatOrder(List.of("a", "b", "s1", "s2"))
                 .dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                 .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of("a"))
@@ -622,7 +622,7 @@ class AggregateSnapshotMapperTest {
                 .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
                 .currentPlayerId("a")
                 .currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10)
-                .handContributions(Map.of()).preHandCarryOver(0).lastFullRaiseByStreet(Map.of())
+                .handContributions(Map.of()).preHandCarryOver(0).lastFullRaise(0)
                 .lastActedWagerByPlayer(Map.of()).handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a")
                 .smallBlindPlayerId("a").bigBlindPlayerId("b").readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())

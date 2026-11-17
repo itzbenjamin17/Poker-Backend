@@ -125,7 +125,7 @@ class GameTest {
             int highestBet,
             int currentPlayerPosition,
             Map<String, Integer> contributions,
-            Map<String, Integer> lastFullRaiseByStreet,
+            int lastFullRaise,
             Map<String, Integer> lastActedWagerByPlayer) {
         return Game.restoreBuilder()
                 .gameId(id)
@@ -145,7 +145,7 @@ class GameTest {
                 .bigBlind(10)
                 .handContributions(contributions)
                 .preHandCarryOver(0)
-                .lastFullRaiseByStreet(lastFullRaiseByStreet)
+                .lastFullRaise(lastFullRaise)
                 .lastActedWagerByPlayer(lastActedWagerByPlayer)
                 .readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(false)
@@ -628,11 +628,11 @@ class GameTest {
             Player b = restoredPlayer("B", "b", 900, 10, false);
             Player c = restoredPlayer("C", "c", 900, 10, false);
             Game hand = restoredBettingGame("raise-increment", List.of(a, b, c), 30, 10, 0,
-                    Map.of("a", 10, "b", 10, "c", 10), Map.of(), Map.of());
+                    Map.of("a", 10, "b", 10, "c", 10), 0, Map.of());
 
             hand.processPlayerDecision(a, new PlayerDecision(PlayerAction.RAISE, 40, "a"));
             assertEquals(50, a.getCurrentBet());
-            assertEquals(40, hand.getLastFullRaiseByStreetSnapshot().get("PRE_FLOP"));
+            assertEquals(40, hand.getLastFullRaise());
             assertEquals(80, hand.getMinimumRaiseAmount(b));
 
             int bChipsBefore = b.getChips();
@@ -648,13 +648,27 @@ class GameTest {
         }
 
         @Test
+        void minimumRaiseAtShowdownFallsBackToTheBigBlindEvenAfterARaise() {
+            Player a = restoredPlayer("A", "a", 900, 10, false);
+            Player b = restoredPlayer("B", "b", 900, 50, false);
+            Game hand = restoredBettingGame("showdown-min-raise", List.of(a, b), 60, 50, 0,
+                    Map.of("a", 10, "b", 50), 40, Map.of("b", 50));
+
+            hand.processPlayerDecision(a, new PlayerDecision(PlayerAction.FOLD, 0, "a"));
+
+            assertEquals(GamePhase.SHOWDOWN, hand.getCurrentPhase());
+            int owed = Math.max(0, hand.getCurrentHighestBet() - b.getCurrentBet());
+            assertEquals(owed + 10, hand.getMinimumRaiseAmount(b));
+        }
+
+        @Test
         void shortAllInDoesNotReopenAlreadyActedPlayerButCumulativeShortRaisesDo() {
             Player a = restoredPlayer("A", "a", 900, 100, false);
             Player b = restoredPlayer("B", "b", 900, 100, false);
             Player shortOne = restoredPlayer("Short1", "s1", 0, 150, true);
             Player shortTwo = restoredPlayer("Short2", "s2", 0, 200, true);
             Game hand = restoredBettingGame("short-raise-reopening", List.of(a, b, shortOne, shortTwo), 550, 200, 0,
-                    Map.of("a", 100, "b", 100, "s1", 150, "s2", 200), Map.of("PRE_FLOP", 100), Map.of("a", 100));
+                    Map.of("a", 100, "b", 100, "s1", 150, "s2", 200), 100, Map.of("a", 100));
 
             assertTrue(hand.getLegalActionsFor(a).contains(PlayerAction.RAISE));
             assertTrue(hand.getLegalActionsFor(a).contains(PlayerAction.ALL_IN));
@@ -666,7 +680,7 @@ class GameTest {
             Player shortOne = restoredPlayer("Short", "s", 0, 150, true);
             Player b = restoredPlayer("B", "b", 900, 100, false);
             Game hand = restoredBettingGame("short-raise-closed", List.of(a, shortOne, b), 350, 150, 0,
-                    Map.of("a", 100, "s", 150, "b", 100), Map.of("PRE_FLOP", 100), Map.of("a", 100));
+                    Map.of("a", 100, "s", 150, "b", 100), 100, Map.of("a", 100));
 
             assertFalse(hand.getLegalActionsFor(a).contains(PlayerAction.RAISE));
             assertFalse(hand.getLegalActionsFor(a).contains(PlayerAction.ALL_IN));
@@ -681,7 +695,7 @@ class GameTest {
             Player shortA = restoredPlayer("A", "a", 50, 100, false);
             Game shortHand = restoredBettingGame("short-call-allin",
                     List.of(shortA, restoredPlayer("Short", "s", 0, 150, true), restoredPlayer("B", "b", 900, 100, false)),
-                    350, 150, 0, Map.of("a", 100, "s", 150, "b", 100), Map.of("PRE_FLOP", 100), Map.of("a", 100));
+                    350, 150, 0, Map.of("a", 100, "s", 150, "b", 100), 100, Map.of("a", 100));
             assertTrue(shortHand.getLegalActionsFor(shortA).contains(PlayerAction.ALL_IN));
             shortHand.processPlayerDecision(shortA, new PlayerDecision(PlayerAction.ALL_IN, 0, "a"));
             assertEquals(150, shortA.getCurrentBet());
@@ -694,7 +708,7 @@ class GameTest {
             Player wagerLeader = restoredPlayer("Leader", "leader", 900, 100, false);
             Player other = restoredPlayer("Other", "other", 900, 100, false);
             Game exactCall = restoredBettingGame("exact-call-actions", List.of(exactCaller, wagerLeader, other), 220, 100, 0,
-                    Map.of("exact", 20, "leader", 100, "other", 100), Map.of("PRE_FLOP", 100), Map.of());
+                    Map.of("exact", 20, "leader", 100, "other", 100), 100, Map.of());
 
             List<PlayerAction> exactActions = exactCall.getLegalActionsFor(exactCaller);
             assertTrue(exactActions.contains(PlayerAction.CALL));
@@ -707,7 +721,7 @@ class GameTest {
             Player leader2 = restoredPlayer("Leader2", "leader2", 900, 100, false);
             Player other2 = restoredPlayer("Other2", "other2", 900, 100, false);
             Game shortRaise = restoredBettingGame("short-all-in-raise-actions", List.of(shortRaiser, leader2, other2), 220, 100, 0,
-                    Map.of("shortRaise", 20, "leader2", 100, "other2", 100), Map.of("PRE_FLOP", 100), Map.of());
+                    Map.of("shortRaise", 20, "leader2", 100, "other2", 100), 100, Map.of());
 
             assertTrue(shortRaise.getLegalActionsFor(shortRaiser).contains(PlayerAction.RAISE));
             assertTrue(shortRaise.getLegalActionsFor(shortRaiser).contains(PlayerAction.ALL_IN));
@@ -1531,7 +1545,7 @@ class GameTest {
             Player retained = restoredPlayer("A", "a", 500, 100, false);
             Player departing = restoredPlayer("B", "b", 300, 200, false);
             Game capUncallable = restoredBettingGame("departure-uncallable-top", List.of(shortStack, retained, departing),
-                    350, 200, 1, Map.of("s", 50, "a", 100, "b", 200), Map.of("PRE_FLOP", 100), Map.of());
+                    350, 200, 1, Map.of("s", 50, "a", 100, "b", 200), 100, Map.of());
             capUncallable.removePlayer(departing);
             TurnOutcome runout = capUncallable.advanceAfterPlayerRemoval();
             assertEquals(100, capUncallable.getCurrentHighestBet());
@@ -1543,7 +1557,7 @@ class GameTest {
             Player retained2 = restoredPlayer("A", "a", 100, 100, false);
             Player departing2 = restoredPlayer("B", "b", 700, 300, false);
             Game capGenuine = restoredBettingGame("departure-genuine-call", List.of(shortCallAi, retained2, departing2),
-                    600, 300, 1, Map.of("s", 200, "a", 100, "b", 300), Map.of("PRE_FLOP", 100), Map.of());
+                    600, 300, 1, Map.of("s", 200, "a", 100, "b", 300), 100, Map.of());
             capGenuine.removePlayer(departing2);
             TurnOutcome nextTurn = capGenuine.advanceAfterPlayerRemoval();
             assertEquals(200, capGenuine.getCurrentHighestBet());
@@ -1557,7 +1571,7 @@ class GameTest {
             Player actorDeep = restoredPlayer("Actor", "a", 500, 0, false);
             Player allInOpp = restoredPlayer("All-in", "b", 0, 100, true);
             Game aggressionBlocked = restoredBettingGame("uncallable-aggression", List.of(actorDeep, allInOpp),
-                    100, 100, 0, Map.of("b", 100), Map.of("PRE_FLOP", 100), Map.of());
+                    100, 100, 0, Map.of("b", 100), 100, Map.of());
             assertEquals(List.of(PlayerAction.FOLD, PlayerAction.CALL), aggressionBlocked.getLegalActionsFor(actorDeep));
             assertThrows(UnauthorisedActionException.class, () ->
                     aggressionBlocked.processPlayerDecision(actorDeep, new PlayerDecision(PlayerAction.RAISE, 100, "a")));
@@ -1566,7 +1580,7 @@ class GameTest {
 
             Player actorExact = restoredPlayer("Actor", "a", 100, 0, false);
             Game callingAllIn = restoredBettingGame("calling-allin", List.of(actorExact, restoredPlayer("All-in", "b", 0, 100, true)),
-                    100, 100, 0, Map.of("b", 100), Map.of("PRE_FLOP", 100), Map.of());
+                    100, 100, 0, Map.of("b", 100), 100, Map.of());
             assertTrue(callingAllIn.getLegalActionsFor(actorExact).contains(PlayerAction.ALL_IN));
             callingAllIn.processPlayerDecision(actorExact, new PlayerDecision(PlayerAction.ALL_IN, 0, "a"));
             assertEquals(100, actorExact.getCurrentBet());
