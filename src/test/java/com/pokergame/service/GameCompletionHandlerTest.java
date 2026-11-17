@@ -55,7 +55,7 @@ class GameCompletionHandlerTest {
     private static final String ROOM_ID = "test-room-id";
     private static final long BASE_EPOCH_MS = Instant.parse("2026-01-01T00:00:00Z").toEpochMilli();
     private static final GameTimingProperties DEFAULT_TIMINGS =
-            new GameTimingProperties(30_000L, 4_000L, 10_000L);
+            TestTimings.game(30_000L, 4_000L, 10_000L);
 
     @Mock
     private TaskScheduler taskScheduler;
@@ -86,7 +86,7 @@ class GameCompletionHandlerTest {
         activeGames = new ActiveGameRegistry(roomCoordinator);
         runtimeTimers = new GameTimerRegistry(taskScheduler, mutableClock);
         taskSchedulerFacade = new GameTaskScheduler(
-                activeGames, runtimeTimers, roomService, mutableClock, lifecycleProvider);
+                activeGames, runtimeTimers, roomService, mutableClock, DEFAULT_TIMINGS, lifecycleProvider);
         realGameStateService = new GameStateService(roomService, messagingTemplate, mutableClock);
         completion = new GameCompletionHandler(
                 activeGames, roomService, realGameStateService, runtimeTimers,

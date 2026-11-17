@@ -105,6 +105,11 @@ All required runtime settings in [`application.properties`](src/main/resources/a
 | `POKER_ROUND_END_DISPLAY_DELAY_MS` | `0` | Delay before opening the ready gate after showdown |
 | `POKER_READY_COUNTDOWN_MS` | `30000` (30 seconds) | Shared inter-hand ready countdown duration |
 | `POKER_GAME_END_DISPLAY_DELAY_MS` | `20000` (20 seconds) | Retention delay before destroying a finished room/game |
+| `POKER_GAME_TURN_ALLOWANCE_MS` | `60000` (optional; default applies when unset) | Time the player to act has before being timed out |
+| `POKER_GAME_AUTO_ADVANCE_STEP_DELAY_MS` | `4000` (optional) | Pause between automatically dealt streets when all remaining players are all-in |
+| `POKER_GAME_FINAL_SHOWDOWN_DISPLAY_DELAY_MS` | `6000` (optional) | How long the final showdown stays on screen before the game ends |
+| `POKER_GAME_GAME_INACTIVITY_ALLOWANCE_MS` | `900000` (optional, 15 minutes) | Idle time before an active game is abandoned |
+| `POKER_ROOM_LOBBY_INACTIVITY_MS` | `1800000` (optional, 30 minutes) | Idle time before a lobby is deleted |
 | `POKER_RATE_LIMITING_ENABLED` | `true` | Enable Bucket4j REST and STOMP rate limiting |
 | `POKER_PERSISTENCE_ENABLED` | `false` | Enable encrypted per-room state-image WAL recovery |
 | `POKER_PERSISTENCE_DIRECTORY` | `./data/poker-wal` | Directory for encrypted per-room WAL files |
@@ -112,6 +117,7 @@ All required runtime settings in [`application.properties`](src/main/resources/a
 | `POKER_PERSISTENCE_KEY_CURRENT` | *(Base64, 256-bit / 32-byte AES key)* | AES-256-GCM key for `current` key ID |
 | `POKER_PERSISTENCE_COMPACT_AFTER_RECORDS` | `1000` | Record threshold before WAL compaction |
 | `POKER_PERSISTENCE_COMPACT_AFTER_BYTES` | `16777216` (16 MB) | Byte threshold before WAL compaction |
+| `POKER_PERSISTENCE_RETRY_INTERVAL_MS` | `5000` (optional) | Delay between retries of failed room saves |
 
 ## 📡 API Reference
 

@@ -3,6 +3,7 @@ package com.pokergame.service;
 import static java.util.Objects.requireNonNull;
 
 import com.pokergame.config.GameTimingProperties;
+import com.pokergame.config.RoomTimingProperties;
 import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
@@ -21,7 +22,6 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.aop.framework.AopContext;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
@@ -41,7 +41,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
     private final RoomCoordinator roomCoordinator;
     private final Clock clock;
     private final GameTimingProperties timings;
-    private final long disconnectGracePeriodMs;
+    private final RoomTimingProperties roomTimings;
 
     public RoomRestoreService(
             RoomService roomService,
@@ -54,7 +54,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
             RoomCoordinator roomCoordinator,
             Clock clock,
             GameTimingProperties timings,
-            @Value("${poker.room.disconnect-grace-period-ms:120000}") long disconnectGracePeriodMs) {
+            RoomTimingProperties roomTimings) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.roomAggregates = roomAggregates;
@@ -65,7 +65,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
         this.roomCoordinator = roomCoordinator;
         this.clock = clock;
         this.timings = timings;
-        this.disconnectGracePeriodMs = disconnectGracePeriodMs;
+        this.roomTimings = roomTimings;
     }
 
     /**
@@ -110,7 +110,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
             }
         }
 
-        long freshDeadline = now + disconnectGracePeriodMs;
+        long freshDeadline = now + roomTimings.disconnectGracePeriodMs();
         try {
             roomAggregates.install(room, game);
             if (game != null) {

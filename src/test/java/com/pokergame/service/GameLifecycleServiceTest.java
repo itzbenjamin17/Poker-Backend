@@ -107,8 +107,7 @@ class GameLifecycleServiceTest {
     }
 
     private void wireLifecycle(long gameEndDisplayMs, long roundEndDisplayMs, long readyCountdownMs) {
-        GameTimingProperties timings = new GameTimingProperties(
-                gameEndDisplayMs, roundEndDisplayMs, readyCountdownMs);
+        GameTimingProperties timings = TestTimings.game(gameEndDisplayMs, roundEndDisplayMs, readyCountdownMs);
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);
         timerRegistry = new GameTimerRegistry(taskScheduler, mutableClock);
@@ -116,7 +115,7 @@ class GameLifecycleServiceTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<GameLifecycleService> lifecycleProvider = mock(ObjectProvider.class);
         lenient().when(lifecycleProvider.getObject()).thenAnswer(_ -> lifecycleRef.get());
-        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, lifecycleProvider);
+        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, timings, lifecycleProvider);
         completionHandler = new GameCompletionHandler(
                 activeGames, roomService, gameStateService, timerRegistry, scheduler, mutableClock, timings);
         handProgression = new HandProgressionService(
@@ -126,11 +125,11 @@ class GameLifecycleServiceTest {
                 completionHandler, handProgression, mutableClock, timings);
         departureHandler = new PlayerDepartureHandler(
                 roomService, gameStateService, completionHandler, handProgression,
-                readinessCoordinator, timerRegistry, activeGames, mutableClock);
+                readinessCoordinator, timerRegistry, activeGames, mutableClock, timings);
         gameLifecycleService = new GameLifecycleService(
                 roomService, activeGames, timerRegistry, scheduler,
                 completionHandler, handProgression, readinessCoordinator, departureHandler,
-                roomCoordinator, mutableClock);
+                roomCoordinator, mutableClock, timings);
         lifecycleRef.set(gameLifecycleService);
     }
 
@@ -286,7 +285,7 @@ class GameLifecycleServiceTest {
             assertFalse(game.isReadyCountdownActive());
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
-            assertEquals(BASE_EPOCH_MS + HandProgressionService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS,
+            assertEquals(BASE_EPOCH_MS + TestTimings.FINAL_SHOWDOWN_DISPLAY_DELAY_MS,
                     game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
             verify(gameStateService).broadcastShowdownResults(game);
         }
@@ -712,7 +711,7 @@ class GameLifecycleServiceTest {
             Game game = getGameLocked(ROOM_ID);
             long deadline = testRoom.getInactivityDeadlineEpochMs();
             assertNotNull(deadline);
-            assertEquals(deadline, BASE_EPOCH_MS + Room.GAME_INACTIVITY_ALLOWANCE_MS);
+            assertEquals(deadline, BASE_EPOCH_MS + TestTimings.GAME_INACTIVITY_ALLOWANCE_MS);
 
             // First scheduled timer is the game inactivity callback; early trigger must not abandon
             Runnable inactivityCallback = callbackCaptor.getAllValues().getFirst();
@@ -751,7 +750,7 @@ class GameLifecycleServiceTest {
             callbacks.clear();
             withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReadyForNextHand(ROOM_ID, "Host"));
             long replacedDeadline = testRoom.getInactivityDeadlineEpochMs();
-            assertEquals(BASE_EPOCH_MS + 5_000L + Room.GAME_INACTIVITY_ALLOWANCE_MS, replacedDeadline);
+            assertEquals(BASE_EPOCH_MS + 5_000L + TestTimings.GAME_INACTIVITY_ALLOWANCE_MS, replacedDeadline);
             assertEquals(1, callbacks.size());
             Runnable replacementCallback = callbacks.getFirst();
 

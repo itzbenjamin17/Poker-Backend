@@ -71,11 +71,11 @@ class GameReadinessCoordinatorTest {
     void setUp() {
         mutableClock = new MutableClock(BASE_EPOCH_MS);
 
-        GameTimingProperties timings = new GameTimingProperties(30_000L, 4_000L, READY_COUNTDOWN_MS);
+        GameTimingProperties timings = TestTimings.game(30_000L, 4_000L, READY_COUNTDOWN_MS);
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);
         timerRegistry = new GameTimerRegistry(springScheduler, mutableClock);
-        taskScheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, lifecycleProvider);
+        taskScheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, timings, lifecycleProvider);
         completionHandler = new GameCompletionHandler(
                 activeGames, roomService, gameStateService, timerRegistry, taskScheduler, mutableClock, timings);
         handProgression = new HandProgressionService(
@@ -90,7 +90,7 @@ class GameReadinessCoordinatorTest {
         room = new Room(GAME_ID, "Room", "Host", 6, 5, 10, 100, null);
         room.addPlayer("Host");
         room.addPlayer("Player2");
-        room.setInactivityDeadlineEpochMs(BASE_EPOCH_MS + Room.GAME_INACTIVITY_ALLOWANCE_MS);
+        room.setInactivityDeadlineEpochMs(BASE_EPOCH_MS + TestTimings.GAME_INACTIVITY_ALLOWANCE_MS);
         lenient().when(roomService.getRoom(GAME_ID)).thenReturn(room);
     }
 
@@ -245,7 +245,7 @@ class GameReadinessCoordinatorTest {
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Host");
             }
-            assertEquals(BASE_EPOCH_MS + 1_000L + Room.GAME_INACTIVITY_ALLOWANCE_MS,
+            assertEquals(BASE_EPOCH_MS + 1_000L + TestTimings.GAME_INACTIVITY_ALLOWANCE_MS,
                     room.getInactivityDeadlineEpochMs());
             assertEquals(handBefore, game.getHandNumber());
             verify(gameStateService).broadcastGameState(game);
@@ -263,7 +263,7 @@ class GameReadinessCoordinatorTest {
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Host");
             }
-            assertEquals(BASE_EPOCH_MS + 3_000L + Room.GAME_INACTIVITY_ALLOWANCE_MS,
+            assertEquals(BASE_EPOCH_MS + 3_000L + TestTimings.GAME_INACTIVITY_ALLOWANCE_MS,
                     room.getInactivityDeadlineEpochMs());
             assertNotEquals(initialInactivity, room.getInactivityDeadlineEpochMs());
 

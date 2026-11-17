@@ -79,9 +79,9 @@ class RoomRestoreServiceTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<GameLifecycleService> lifecycleProvider = mock(ObjectProvider.class);
         lenient().when(lifecycleProvider.getObject()).thenReturn(gameLifecycleService);
-        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, clock, lifecycleProvider);
+        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, clock, TestTimings.DEFAULT_GAME, lifecycleProvider);
 
-        GameTimingProperties timings = new GameTimingProperties(30_000L, 0L, READY_COUNTDOWN_MS);
+        GameTimingProperties timings = TestTimings.game(30_000L, 0L, READY_COUNTDOWN_MS);
         roomRestoreService = new RoomRestoreService(
                 roomService,
                 gameLifecycleService,
@@ -93,7 +93,7 @@ class RoomRestoreServiceTest {
                 roomCoordinator,
                 clock,
                 timings,
-                DISCONNECT_GRACE_MS);
+                TestTimings.room(DISCONNECT_GRACE_MS));
 
         lenient().when(taskScheduler.schedule(any(Runnable.class), any(Instant.class)))
                 .thenAnswer(_ -> mock(ScheduledFuture.class));

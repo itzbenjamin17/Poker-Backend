@@ -34,7 +34,7 @@ Configuration groups include:
 
 - `SERVER_PORT`, `JWT_SECRET`, and `JWT_EXPIRATION_MILLIS`.
 - `CORS_ALLOWED_ORIGINS` and `TRUST_PROXY` for browser origins and client-IP resolution.
-- `POKER_DISCONNECT_GRACE_PERIOD_MS`, `POKER_ROUND_END_DISPLAY_DELAY_MS`, `POKER_READY_COUNTDOWN_MS`, and `POKER_GAME_END_DISPLAY_DELAY_MS`.
+- `POKER_DISCONNECT_GRACE_PERIOD_MS`, `POKER_ROUND_END_DISPLAY_DELAY_MS`, `POKER_READY_COUNTDOWN_MS`, and `POKER_GAME_END_DISPLAY_DELAY_MS`, plus optional overrides (defaults apply when unset) `POKER_GAME_TURN_ALLOWANCE_MS`, `POKER_GAME_AUTO_ADVANCE_STEP_DELAY_MS`, `POKER_GAME_FINAL_SHOWDOWN_DISPLAY_DELAY_MS`, `POKER_GAME_GAME_INACTIVITY_ALLOWANCE_MS`, `POKER_ROOM_LOBBY_INACTIVITY_MS`, and `POKER_PERSISTENCE_RETRY_INTERVAL_MS`.
 - `POKER_RATE_LIMITING_ENABLED`.
 - `POKER_PERSISTENCE_ENABLED`, directory, current key ID/key material, and compaction thresholds.
 
@@ -79,7 +79,7 @@ Package-private model collaborators calculate betting rules (`BettingRound`), se
 
 `Game.restoreBuilder()` returns the top-level `GameRestoreBuilder`; code compiled against the former nested `Game.GameRestoreBuilder` must be updated and recompiled.
 
-`GameTimerRegistry` owns in-memory `TaskScheduler` registrations for game tasks and active-game inactivity. `Game` stores scheduled task deadlines and generation counters along with `lastSettlementResult` and `retainedTerminalResult`; `Room` owns mutable `hostName`, `GAME_INACTIVITY_ALLOWANCE_MS`, and game inactivity deadline checks (`extendGameInactivityDeadline`, `isInactivityExpired`, `hasInactivityDeadline`). `GameLifecycleService` handles startup game recovery and timer resumption directly. `GameTaskScheduler` records timer deadlines before saving, queues runtime registrations via `PostSaveActions.runAfterSave(...)`, and verifies hand/generation claims when timers fire. Scheduled callbacks re-enter `GameLifecycleService` through the Spring proxy (`ObjectProvider<GameLifecycleService>`).
+`GameTimerRegistry` owns in-memory `TaskScheduler` registrations for game tasks and active-game inactivity. `Game` stores scheduled task deadlines and generation counters along with `lastSettlementResult` and `retainedTerminalResult`; `Room` owns mutable `hostName` and game inactivity deadline checks (`extendGameInactivityDeadline`, `isInactivityExpired`, `hasInactivityDeadline`). `GameLifecycleService` handles startup game recovery and timer resumption directly. `GameTaskScheduler` records timer deadlines before saving, queues runtime registrations via `PostSaveActions.runAfterSave(...)`, and verifies hand/generation claims when timers fire. Scheduled callbacks re-enter `GameLifecycleService` through the Spring proxy (`ObjectProvider<GameLifecycleService>`).
 
 `GameReadinessCoordinator` owns readiness activity, gate transitions, and countdown effects. `HandProgressionService` deals hands, advances streets, and signals when the ready gate should open immediately. `PlayerDepartureHandler` owns departures, host transfer, turn timeout, reconnect, grace expiry, and disconnect win claims. `GameCompletionHandler` owns game settlement, inactivity abandonment, post-game review lookups, and game/room deletion.
 

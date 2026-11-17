@@ -30,7 +30,6 @@ import java.util.UUID;
  * </p>
  */
 public class Room {
-    public static final long GAME_INACTIVITY_ALLOWANCE_MS = 15 * 60_000L;
     private final String roomId;
     private final String roomName;
     private String hostName;
@@ -435,10 +434,11 @@ public class Room {
     /**
      * Extends the active game's inactivity deadline relative to {@code nowMs}.
      *
-     * @param nowMs current epoch time in milliseconds
+     * @param nowMs       current epoch time in milliseconds
+     * @param allowanceMs how long the game may stay idle before it expires, in milliseconds
      */
-    public void extendGameInactivityDeadline(long nowMs) {
-        inactivityDeadlineEpochMs = nowMs + GAME_INACTIVITY_ALLOWANCE_MS;
+    public void extendGameInactivityDeadline(long nowMs, long allowanceMs) {
+        inactivityDeadlineEpochMs = nowMs + allowanceMs;
     }
 
     /**

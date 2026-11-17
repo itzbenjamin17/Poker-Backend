@@ -75,7 +75,7 @@ class PlayerDepartureHandlerTest {
     private static final String ROOM_ID = "test-room-id";
     private static final long BASE_EPOCH_MS = 1_767_225_600_000L; // 2026-01-01T00:00:00Z
     private static final GameTimingProperties DEFAULT_TIMINGS =
-            new GameTimingProperties(30_000L, 0L, 10_000L);
+            TestTimings.game(30_000L, 0L, 10_000L);
 
     @Mock
     private RoomService roomService;
@@ -123,7 +123,7 @@ class PlayerDepartureHandlerTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<GameLifecycleService> lifecycleProvider = mock(ObjectProvider.class);
         lenient().when(lifecycleProvider.getObject()).thenAnswer(_ -> lifecycleRef.get());
-        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, lifecycleProvider);
+        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, DEFAULT_TIMINGS, lifecycleProvider);
         completionHandler = new GameCompletionHandler(
                 activeGames, roomService, stateService, timerRegistry, scheduler, mutableClock, DEFAULT_TIMINGS);
         handProgression = new HandProgressionService(
@@ -133,11 +133,11 @@ class PlayerDepartureHandlerTest {
                 completionHandler, handProgression, mutableClock, DEFAULT_TIMINGS);
         departureHandler = new PlayerDepartureHandler(
                 roomService, stateService, completionHandler, handProgression,
-                readinessCoordinator, timerRegistry, activeGames, mutableClock);
+                readinessCoordinator, timerRegistry, activeGames, mutableClock, DEFAULT_TIMINGS);
         gameLifecycleService = new GameLifecycleService(
                 roomService, activeGames, timerRegistry, scheduler,
                 completionHandler, handProgression, readinessCoordinator, departureHandler,
-                roomCoordinator, mutableClock);
+                roomCoordinator, mutableClock, DEFAULT_TIMINGS);
         lifecycleRef.set(gameLifecycleService);
     }
 

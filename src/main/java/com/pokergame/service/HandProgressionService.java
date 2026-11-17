@@ -16,7 +16,6 @@ import org.springframework.stereotype.Component;
 @Component
 class HandProgressionService {
     private static final Logger logger = LoggerFactory.getLogger(HandProgressionService.class);
-    static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = 6000;
     private final ActiveGameRegistry activeGames;
     private final GameTimerRegistry runtimeTimers;
     private final GameTaskScheduler scheduling;
@@ -220,7 +219,7 @@ class HandProgressionService {
 
     private boolean schedulePostShowdownProgression(String gameId, Game game) {
         if (game.isGameDecided()) {
-            scheduling.scheduleGameEnd(gameId, FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
+            scheduling.scheduleGameEnd(gameId, timings.finalShowdownDisplayDelayMs());
             return false;
         }
         return scheduling.scheduleReadyCountdownOpen(gameId, timings.roundEndDisplayDelayMs());

@@ -46,7 +46,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class RoomService {
     private static final Logger logger = LoggerFactory.getLogger(RoomService.class);
-    private static final long LOBBY_INACTIVITY_MS = 30 * 60_000L;
     private final SimpMessagingTemplate messagingTemplate;
     private final ApplicationEventPublisher eventPublisher;
     private final PasswordEncoder passwordEncoder;
@@ -150,7 +149,7 @@ public class RoomService {
 
             room.addPlayer(sanitizedPlayerName);
             membershipId = room.getMembershipId(sanitizedPlayerName);
-            room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
+            room.setInactivityDeadlineEpochMs(clock.millis() + timings.lobbyInactivityMs());
             scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
             long acceptanceDeadline = clock.millis() + timings.disconnectGracePeriodMs();
             room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
@@ -240,7 +239,7 @@ public class RoomService {
         }
 
         String membershipId = room.getMembershipId(sanitizedPlayerName);
-        room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
+        room.setInactivityDeadlineEpochMs(clock.millis() + timings.lobbyInactivityMs());
         scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
         long acceptanceDeadline = clock.millis() + timings.disconnectGracePeriodMs();
         room.setAbsenceDeadline(sanitizedPlayerName, acceptanceDeadline);
@@ -323,7 +322,7 @@ public class RoomService {
                 destroyRoom(roomId);
             }
         } else {
-            room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
+            room.setInactivityDeadlineEpochMs(clock.millis() + timings.lobbyInactivityMs());
             scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
             sendAfterSave("/room/" + roomId,
                     new ApiResponse<>(ResponseMessage.PLAYER_LEFT.getMessage(), getRoomData(roomId)));
@@ -374,7 +373,7 @@ public class RoomService {
         }
 
         if (!room.isGameStarted()) {
-            room.setInactivityDeadlineEpochMs(clock.millis() + LOBBY_INACTIVITY_MS);
+            room.setInactivityDeadlineEpochMs(clock.millis() + timings.lobbyInactivityMs());
             scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
         }
         if (survivingHost != null && room.getPlayers().contains(survivingHost)) {

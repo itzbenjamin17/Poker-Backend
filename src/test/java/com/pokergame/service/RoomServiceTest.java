@@ -112,7 +112,7 @@ class RoomServiceTest {
                 coordinator,
                 clock,
                 taskScheduler,
-                new RoomTimingProperties(DISCONNECT_GRACE_MS),
+                TestTimings.room(DISCONNECT_GRACE_MS),
                 null);
     }
 

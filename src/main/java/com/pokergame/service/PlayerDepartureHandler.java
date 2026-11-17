@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.ReadyGateState;
@@ -36,6 +37,7 @@ class PlayerDepartureHandler {
     private final GameTimerRegistry runtimeTimers;
     private final ActiveGameRegistry activeGames;
     private final Clock clock;
+    private final GameTimingProperties timings;
 
     PlayerDepartureHandler(
             RoomService roomService,
@@ -45,7 +47,8 @@ class PlayerDepartureHandler {
             GameReadinessCoordinator readiness,
             GameTimerRegistry runtimeTimers,
             ActiveGameRegistry activeGames,
-            Clock clock) {
+            Clock clock,
+            GameTimingProperties timings) {
         this.roomService = roomService;
         this.gameStateService = gameStateService;
         this.completion = completion;
@@ -54,6 +57,7 @@ class PlayerDepartureHandler {
         this.runtimeTimers = runtimeTimers;
         this.activeGames = activeGames;
         this.clock = clock;
+        this.timings = timings;
     }
 
     /**
@@ -384,7 +388,8 @@ class PlayerDepartureHandler {
         if (actor != null) {
             String actorToDepart = actor.getName();
             removePlayers(gameId, List.of(actorToDepart));
-            logger.info("Player {} timed out after 60 seconds in game {}; removing from seat", actorToDepart, gameId);
+            logger.info("Player {} timed out after {} ms in game {}; removing from seat",
+                    actorToDepart, timings.turnAllowanceMs(), gameId);
         }
     }
 

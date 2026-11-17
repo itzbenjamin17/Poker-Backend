@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.util.RoomCoordinator;
 
 import static java.util.Objects.requireNonNull;
@@ -42,6 +43,7 @@ public class GameLifecycleService {
     private final PlayerDepartureHandler departureHandler;
     private final RoomCoordinator roomCoordinator;
     private final Clock clock;
+    private final GameTimingProperties timings;
 
     GameLifecycleService(
             RoomService roomService,
@@ -53,7 +55,8 @@ public class GameLifecycleService {
             GameReadinessCoordinator readinessCoordinator,
             PlayerDepartureHandler departureHandler,
             RoomCoordinator roomCoordinator,
-            Clock clock) {
+            Clock clock,
+            GameTimingProperties timings) {
         this.roomService = roomService;
         this.activeGames = activeGames;
         this.runtimeTimers = runtimeTimers;
@@ -64,6 +67,7 @@ public class GameLifecycleService {
         this.departureHandler = departureHandler;
         this.roomCoordinator = roomCoordinator;
         this.clock = clock;
+        this.timings = timings;
     }
 
     /**
@@ -133,7 +137,7 @@ public class GameLifecycleService {
 
         room.setGameStarted(true);
         roomService.cancelLobbyInactivity(roomId);
-        room.extendGameInactivityDeadline(clock.millis());
+        room.extendGameInactivityDeadline(clock.millis(), timings.gameInactivityAllowanceMs());
         taskScheduler.scheduleGameInactivity(roomId, room.getInactivityDeadlineEpochMs());
         roomService.broadcastGameStarted(roomId);
 

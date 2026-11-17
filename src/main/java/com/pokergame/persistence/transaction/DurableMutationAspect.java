@@ -165,7 +165,8 @@ public final class DurableMutationAspect {
     /**
      * Periodically retries pending room saves that previously failed due to transient storage errors.
      */
-    @Scheduled(fixedDelay = 5000, initialDelay = 5000)
+    @Scheduled(fixedDelayString = "#{@'poker.persistence-com.pokergame.persistence.config.PersistenceProperties'.retryIntervalMs}",
+            initialDelayString = "#{@'poker.persistence-com.pokergame.persistence.config.PersistenceProperties'.retryIntervalMs}")
     public void retryPendingSaves() {
         for (String roomId : pendingSaves.keySet()) {
             LockLease lease = roomCoordinator.tryAcquire(roomId);

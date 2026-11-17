@@ -77,10 +77,10 @@ class HandProgressionServiceTest {
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);
         timerRegistry = new GameTimerRegistry(springScheduler, fixedClock);
-        taskScheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, fixedClock, lifecycleProvider);
+        taskScheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, fixedClock, TestTimings.DEFAULT_GAME, lifecycleProvider);
         completionHandler = new GameCompletionHandler(
                 activeGames, roomService, gameStateService, timerRegistry, taskScheduler,
-                fixedClock, new GameTimingProperties(30_000L, 4_000L, 10_000L));
+                fixedClock, TestTimings.game(30_000L, 4_000L, 10_000L));
 
         lenient().when(springScheduler.schedule(any(Runnable.class), any(Instant.class)))
                 .thenAnswer(_ -> mock(ScheduledFuture.class));
@@ -98,7 +98,7 @@ class HandProgressionServiceTest {
                 taskScheduler,
                 completionHandler,
                 gameStateService,
-                new GameTimingProperties(30_000L, roundEndDisplayDelayMs, 10_000L));
+                TestTimings.game(30_000L, roundEndDisplayDelayMs, 10_000L));
     }
 
     private Game createGame(List<Player> players) {
@@ -142,7 +142,7 @@ class HandProgressionServiceTest {
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertNotNull(game.getCurrentPlayer());
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
-            assertEquals(FIXED_NOW.toEpochMilli() + GameTaskScheduler.TURN_ALLOWANCE_MS,
+            assertEquals(FIXED_NOW.toEpochMilli() + TestTimings.TURN_ALLOWANCE_MS,
                     game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
             verify(gameStateService).broadcastGameState(game);
         }
@@ -385,7 +385,7 @@ class HandProgressionServiceTest {
                 assertFalse(delayedProgression.applyAutoAdvanceTimeout(GAME_ID, riverTournamentOver));
             }
             assertTrue(riverTournamentOver.isGameDecided());
-            assertEquals(FIXED_NOW.toEpochMilli() + HandProgressionService.FINAL_SHOWDOWN_DISPLAY_DELAY_MS,
+            assertEquals(FIXED_NOW.toEpochMilli() + TestTimings.FINAL_SHOWDOWN_DISPLAY_DELAY_MS,
                     riverTournamentOver.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
         }
 

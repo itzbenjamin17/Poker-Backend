@@ -60,7 +60,7 @@ class RoomAggregateStoreTest {
         GameTimerRegistry timers = new GameTimerRegistry(taskScheduler, clock);
         ObjectProvider<GameLifecycleService> lifecycleProvider = mock(ObjectProvider.class);
         lenient().when(lifecycleProvider.getObject()).thenReturn(gameLifecycleService);
-        GameTaskScheduler scheduler = new GameTaskScheduler(activeGames, timers, roomService, clock, lifecycleProvider);
+        GameTaskScheduler scheduler = new GameTaskScheduler(activeGames, timers, roomService, clock, TestTimings.DEFAULT_GAME, lifecycleProvider);
         store = new RoomAggregateStore(rooms, activeGames, timers, scheduler, roomService, coordinator);
         lenient().when(taskScheduler.schedule(any(Runnable.class), any(Instant.class)))
                 .thenAnswer(_ -> mock(ScheduledFuture.class));

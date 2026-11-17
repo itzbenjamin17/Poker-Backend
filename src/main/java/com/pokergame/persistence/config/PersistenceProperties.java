@@ -22,6 +22,7 @@ public class PersistenceProperties {
     private Map<String, String> keys = new LinkedHashMap<>();
     private int compactAfterRecords = 1000;
     private long compactAfterBytes = 16L * 1024 * 1024;
+    private long retryIntervalMs = 5000;
 
     /**
      * Checks if the autosave system is turned on.
@@ -129,5 +130,24 @@ public class PersistenceProperties {
      */
     public void setCompactAfterBytes(long compactAfterBytes) {
         this.compactAfterBytes = compactAfterBytes;
+    }
+
+    /**
+     * Gets how long to wait between attempts to re-save rooms whose last save failed.
+     * Also used as the delay before the first retry.
+     *
+     * @return the retry interval in milliseconds
+     */
+    public long getRetryIntervalMs() {
+        return retryIntervalMs;
+    }
+
+    /**
+     * Sets how long to wait between attempts to re-save rooms whose last save failed.
+     *
+     * @param retryIntervalMs the retry interval in milliseconds
+     */
+    public void setRetryIntervalMs(long retryIntervalMs) {
+        this.retryIntervalMs = retryIntervalMs;
     }
 }

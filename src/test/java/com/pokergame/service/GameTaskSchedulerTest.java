@@ -67,7 +67,7 @@ class GameTaskSchedulerTest {
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);
         timerRegistry = new GameTimerRegistry(springScheduler, mutableClock);
-        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, lifecycleProvider);
+        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, TestTimings.DEFAULT_GAME, lifecycleProvider);
 
         lenient().when(lifecycleProvider.getObject()).thenReturn(gameLifecycleService);
         lenient().when(springScheduler.schedule(any(Runnable.class), any(Instant.class)))
@@ -214,14 +214,14 @@ class GameTaskSchedulerTest {
             scheduler.scheduleGameCleanup(GAME_ID, 12_000L);
         }
 
-        assertEquals(BASE_EPOCH_MS + GameTaskScheduler.TURN_ALLOWANCE_MS,
+        assertEquals(BASE_EPOCH_MS + TestTimings.TURN_ALLOWANCE_MS,
                 game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
         assertEquals(BASE_EPOCH_MS + 4_000L,
                 game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
         assertEquals(BASE_EPOCH_MS + 12_000L,
                 game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
         verify(springScheduler).schedule(any(Runnable.class),
-                eq(Instant.ofEpochMilli(BASE_EPOCH_MS + GameTaskScheduler.TURN_ALLOWANCE_MS)));
+                eq(Instant.ofEpochMilli(BASE_EPOCH_MS + TestTimings.TURN_ALLOWANCE_MS)));
         verify(springScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 4_000L)));
         verify(springScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 12_000L)));
         verifyNoMoreInteractions(springScheduler);
@@ -240,7 +240,7 @@ class GameTaskSchedulerTest {
             scheduler.resetGameInactivity(GAME_ID);
         }
 
-        long expectedDeadline = BASE_EPOCH_MS + Room.GAME_INACTIVITY_ALLOWANCE_MS;
+        long expectedDeadline = BASE_EPOCH_MS + TestTimings.GAME_INACTIVITY_ALLOWANCE_MS;
         assertEquals(expectedDeadline, room.getInactivityDeadlineEpochMs());
         assertEquals(Instant.ofEpochMilli(expectedDeadline), instantCaptor.getValue());
 

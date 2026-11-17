@@ -40,6 +40,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Tag("unit")
 class WebSocketEventListenerTest {
+    private static final RoomTimingProperties ROOM_TIMINGS = new RoomTimingProperties(60_000L, 1_800_000L);
+
     @Test
     void reconnectAndRoomDestructionCompleteWithoutOppositeLockAcquisition() throws Exception {
         RoomService rooms = mock(RoomService.class);
@@ -47,7 +49,7 @@ class WebSocketEventListenerTest {
         var scheduler = mock(TaskScheduler.class);
         var roomCoordinator = spy(new RoomCoordinator());
         var listener = new WebSocketEventListener(rooms, games, mock(RateLimitService.class), scheduler,
-                roomCoordinator, 60_000);
+                roomCoordinator, ROOM_TIMINGS);
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
         listener.registerSession(principal, "original-session");
         var waiting = new CountDownLatch(1);
@@ -97,7 +99,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         var listener = new WebSocketEventListener(rooms, games, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         Room room = new Room("room", "Room", "Bob", 4, 10, 20, 500, null);
         String firstMembership = room.addPlayer("Bob");
         when(rooms.getRoom("room")).thenReturn(room);
@@ -145,7 +147,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         when(lifecycle.gameExists("room")).thenReturn(true);
         when(lifecycle.playerExistsInGame("room", "Alice")).thenReturn(true);
 
@@ -163,7 +165,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
         listener.handleWebSocketDisconnectListener(event(new SessionDisconnectEvent(this,
@@ -180,7 +182,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
 
         // Connect session-1 and session-2
@@ -204,7 +206,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Instant> instantCaptor = ArgumentCaptor.forClass(Instant.class);
         ArgumentCaptor<Long> deadlineCaptor = ArgumentCaptor.forClass(Long.class);
@@ -234,7 +236,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
@@ -268,7 +270,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         PlayerPrincipal alicePrincipal = new PlayerPrincipal("Alice", "room");
         PlayerPrincipal bobPrincipal = new PlayerPrincipal("Bob", "room");
 
@@ -292,7 +294,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Runnable> callback = ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
@@ -319,7 +321,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Runnable> callback = ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
@@ -354,7 +356,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), any(Instant.class));
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
@@ -389,7 +391,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Instant> instantCaptor = ArgumentCaptor.forClass(Instant.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
@@ -412,7 +414,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
 
         Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
         room.addPlayer("Alice");
@@ -438,7 +440,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Instant> instantCaptor = ArgumentCaptor.forClass(Instant.class);
         doReturn(future).when(scheduler).schedule(any(Runnable.class), instantCaptor.capture());
@@ -473,7 +475,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Runnable> callback = ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(scheduler).schedule(callback.capture(), any(Instant.class));
@@ -503,7 +505,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle, rateLimit, scheduler,
-                new RoomCoordinator(), 60_000);
+                new RoomCoordinator(), ROOM_TIMINGS);
 
         Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
         String activeMemId = room.addPlayer("Alice");
@@ -549,7 +551,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle,
-                rateLimit, scheduler, new RoomCoordinator(), 60_000L);
+                rateLimit, scheduler, new RoomCoordinator(), ROOM_TIMINGS);
 
         String roomId = "room-race-1";
         Room room = new Room(roomId, "Race Room", "Alice", 4, 10, 20, 1000, null);
@@ -582,7 +584,7 @@ class WebSocketEventListenerTest {
         GameLifecycleService lifecycle = mock(GameLifecycleService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle,
-                mock(RateLimitService.class), scheduler, new RoomCoordinator(), 60_000L);
+                mock(RateLimitService.class), scheduler, new RoomCoordinator(), ROOM_TIMINGS);
 
         String roomId = "room-race-2";
         Room room = new Room(roomId, "Race Room", "Alice", 4, 10, 20, 1000, null);
@@ -630,7 +632,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle,
-                rateLimit, scheduler, new RoomCoordinator(), 60_000L);
+                rateLimit, scheduler, new RoomCoordinator(), ROOM_TIMINGS);
 
         try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
             int iterations = 40;
@@ -696,7 +698,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle,
-                rateLimit, scheduler, new RoomCoordinator(), 60_000L);
+                rateLimit, scheduler, new RoomCoordinator(), ROOM_TIMINGS);
 
         String roomId = "room-destroy-1";
         Room room = new Room(roomId, "Destroy Room", "Host", 4, 10, 20, 1000, null);
@@ -753,7 +755,7 @@ class WebSocketEventListenerTest {
         RateLimitService rateLimit = mock(RateLimitService.class);
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle,
-                rateLimit, scheduler, new RoomCoordinator(), 60_000L);
+                rateLimit, scheduler, new RoomCoordinator(), ROOM_TIMINGS);
 
         int cycles = 50;
         for (int i = 0; i < cycles; i++) {
@@ -798,7 +800,7 @@ class WebSocketEventListenerTest {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         WebSocketEventListener listener = new WebSocketEventListener(roomService,
                 mock(GameLifecycleService.class), mock(RateLimitService.class), scheduler,
-                roomCoordinator, 60_000L);
+                roomCoordinator, ROOM_TIMINGS);
 
         String roomA = "room-iso-A";
         String roomB = "room-iso-B";
@@ -836,7 +838,7 @@ class WebSocketEventListenerTest {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         RoomCoordinator roomCoordinator = new RoomCoordinator();
         WebSocketEventListener listener = new WebSocketEventListener(roomService, lifecycle,
-                mock(RateLimitService.class), scheduler, roomCoordinator, 60_000L);
+                mock(RateLimitService.class), scheduler, roomCoordinator, ROOM_TIMINGS);
 
         String roomA = "room-pending-A";
         String roomB = "room-pending-B";

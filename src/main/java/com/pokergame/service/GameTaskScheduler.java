@@ -1,5 +1,6 @@
 package com.pokergame.service;
 
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;
@@ -19,12 +20,11 @@ import org.springframework.stereotype.Component;
 @Component
 class GameTaskScheduler {
     private static final Logger logger = LoggerFactory.getLogger(GameTaskScheduler.class);
-    private static final long AUTO_ADVANCE_STEP_DELAY_MS = 4000;
-    static final long TURN_ALLOWANCE_MS = 60_000;
     private final ActiveGameRegistry activeGames;
     private final GameTimerRegistry timerRegistry;
     private final RoomService roomService;
     private final Clock clock;
+    private final GameTimingProperties timings;
     private final ObjectProvider<GameLifecycleService> gameLifecycleProvider;
 
     GameTaskScheduler(
@@ -32,11 +32,13 @@ class GameTaskScheduler {
             GameTimerRegistry timerRegistry,
             RoomService roomService,
             Clock clock,
+            GameTimingProperties timings,
             ObjectProvider<GameLifecycleService> gameLifecycleProvider) {
         this.activeGames = activeGames;
         this.timerRegistry = timerRegistry;
         this.roomService = roomService;
         this.clock = clock;
+        this.timings = timings;
         this.gameLifecycleProvider = gameLifecycleProvider;
     }
 
@@ -112,7 +114,7 @@ class GameTaskScheduler {
      * @param gameId the room/game ID
      */
     void scheduleAutoAdvance(String gameId) {
-        scheduleTask(gameId, ScheduledGameTask.AUTO_ADVANCE, clock.millis() + AUTO_ADVANCE_STEP_DELAY_MS);
+        scheduleTask(gameId, ScheduledGameTask.AUTO_ADVANCE, clock.millis() + timings.autoAdvanceStepDelayMs());
     }
 
     /**
@@ -121,7 +123,7 @@ class GameTaskScheduler {
      * @param gameId the room/game ID
      */
     void scheduleTurnTimeout(String gameId) {
-        scheduleTask(gameId, ScheduledGameTask.TURN_TIMEOUT, clock.millis() + TURN_ALLOWANCE_MS);
+        scheduleTask(gameId, ScheduledGameTask.TURN_TIMEOUT, clock.millis() + timings.turnAllowanceMs());
     }
 
     /**
@@ -161,7 +163,7 @@ class GameTaskScheduler {
         long now = clock.millis();
         Room room = roomService.getRoom(gameId);
         if (room != null) {
-            room.extendGameInactivityDeadline(now);
+            room.extendGameInactivityDeadline(now, timings.gameInactivityAllowanceMs());
             long newDeadline = room.getInactivityDeadlineEpochMs();
             scheduleGameInactivity(gameId, newDeadline);
             logger.debug("Active-game inactivity deadline reset for game {} to {}", gameId, newDeadline);

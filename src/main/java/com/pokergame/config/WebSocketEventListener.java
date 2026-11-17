@@ -15,7 +15,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
@@ -58,7 +57,7 @@ public class WebSocketEventListener {
     private final RoomService roomService;
     private final GameLifecycleService gameLifecycleService;
     private final RateLimitService rateLimitService;
-    private final long disconnectGracePeriodMs;
+    private final RoomTimingProperties roomTimings;
     private final ConcurrentMap<String, Set<String>> activeSessionsByUser = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PlayerPrincipal> sessionToPrincipal = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PendingDisconnect> pendingDisconnects = new ConcurrentHashMap<>();
@@ -73,7 +72,7 @@ public class WebSocketEventListener {
      * @param rateLimitService         transient WebSocket rate-limit registry
      * @param taskScheduler            runtime grace-period scheduler
      * @param roomCoordinator          coordinator managing room-scoped concurrency boundaries
-     * @param disconnectGracePeriodMs  allowed reconnect interval
+     * @param roomTimings              room timing settings, including the allowed reconnect interval
      */
     @Autowired
     public WebSocketEventListener(RoomService roomService,
@@ -81,13 +80,13 @@ public class WebSocketEventListener {
             RateLimitService rateLimitService,
             @Qualifier("taskScheduler") TaskScheduler taskScheduler,
             RoomCoordinator roomCoordinator,
-            @Value("${poker.room.disconnect-grace-period-ms:120000}") long disconnectGracePeriodMs) {
+            RoomTimingProperties roomTimings) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.rateLimitService = rateLimitService;
         this.taskScheduler = taskScheduler;
         this.roomCoordinator = requireNonNull(roomCoordinator, "roomCoordinator cannot be null");
-        this.disconnectGracePeriodMs = disconnectGracePeriodMs;
+        this.roomTimings = roomTimings;
     }
     
     /**
@@ -209,7 +208,7 @@ public class WebSocketEventListener {
                     return;
                 }
 
-                long disconnectDeadlineEpochMs = System.currentTimeMillis() + disconnectGracePeriodMs;
+                long disconnectDeadlineEpochMs = System.currentTimeMillis() + roomTimings.disconnectGracePeriodMs();
                 Instant scheduleInstant = Instant.ofEpochMilli(disconnectDeadlineEpochMs);
 
                 Room room = roomService.getRoom(roomId);
@@ -237,7 +236,7 @@ public class WebSocketEventListener {
                 }
 
                 logger.info("WebSocket disconnected for user {}. Scheduling delayed cleanup ({} ms)",
-                        compositeName, disconnectGracePeriodMs);
+                        compositeName, roomTimings.disconnectGracePeriodMs());
 
                 PendingDisconnect registration = new PendingDisconnect(membershipId, disconnectDeadlineEpochMs);
                 pendingDisconnects.put(compositeName, registration);
