@@ -246,7 +246,7 @@ class PlayerDepartureHandler {
 
                 if (game.isForfeitPending() && game.countContenders() == 1
                         && game.isContender(player)) {
-                    game.setForfeitPending(false);
+                    game.clearForfeitPending();
                     completion.handleGameEndWithForfeits(gameId, player, Set.of());
                     markRoomMemberConnected(room, playerName);
                     return;
@@ -341,13 +341,10 @@ class PlayerDepartureHandler {
      */
     void handleTurnTimeout(Game game) {
         String gameId = game.getGameId();
-        Player actor = game.getCurrentPlayer();
-        if (actor != null) {
-            String actorToDepart = actor.getName();
-            removePlayers(gameId, List.of(actorToDepart));
-            logger.info("Player {} timed out after {} ms in game {}; removing from seat",
-                    actorToDepart, timings.turnAllowanceMs(), gameId);
-        }
+        String actorToDepart = game.getCurrentPlayer().getName();
+        removePlayers(gameId, List.of(actorToDepart));
+        logger.info("Player {} timed out after {} ms in game {}; removing from seat",
+                actorToDepart, timings.turnAllowanceMs(), gameId);
     }
 
     /**

@@ -153,7 +153,7 @@ class GameCompletionHandlerTest {
             game.dealFlop();
             game.dealTurn();
             game.dealRiver();
-            game.setForfeitPending(true);
+            game.markForfeitPending();
             clearInvocations(messagingTemplate, taskScheduler);
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
@@ -162,7 +162,7 @@ class GameCompletionHandlerTest {
             verifyNoInteractions(messagingTemplate);
             assertFalse(game.isGameOver());
 
-            game.setForfeitPending(false);
+            game.clearForfeitPending();
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 completion.handleGameEnd(ROOM_ID);
             }

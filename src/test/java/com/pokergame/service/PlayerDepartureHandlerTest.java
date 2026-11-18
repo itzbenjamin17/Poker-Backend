@@ -540,7 +540,7 @@ class PlayerDepartureHandlerTest {
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
             assertTrue(game.isHandSettled());
             survivor.setDisconnected(true);
-            game.setForfeitPending(true);
+            game.markForfeitPending();
             game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 10L);
             game.scheduleTask(ScheduledGameTask.GAME_END, 10L);
             game.scheduleTask(ScheduledGameTask.CLEANUP, 10L);

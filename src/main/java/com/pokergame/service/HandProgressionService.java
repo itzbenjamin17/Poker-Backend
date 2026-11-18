@@ -58,8 +58,7 @@ class HandProgressionService {
             completion.handleGameEnd(gameId);
             return false;
         }
-        boolean handStillInProgress = game.getCurrentPhase() != GamePhase.SHOWDOWN || !game.isHandSettled();
-        if (game.getHandNumber() > 0 && handStillInProgress) {
+        if (game.getHandNumber() > 0 && game.endedBeforeShowdown()) {
             logger.warn("Ignoring new-hand request for unsettled game {} hand {}", gameId, game.getHandNumber());
             return false;
         }
@@ -85,7 +84,7 @@ class HandProgressionService {
 
         logger.info("New hand started successfully for game: {} | Current player: {} | Phase: {} | Pot: {}",
                 gameId,
-                game.getCurrentPlayer() == null ? "none" : game.getCurrentPlayer().getName(),
+                game.getCurrentPlayer().getName(),
                 game.getCurrentPhase(),
                 game.getPot());
         return openReadyGateNow;
@@ -116,11 +115,7 @@ class HandProgressionService {
         switch (outcome.type()) {
             case NEXT_PLAYER, PHASE_ADVANCED -> {
                 scheduling.cancelTask(game, ScheduledGameTask.AUTO_ADVANCE);
-                if (game.getCurrentPlayer() != null) {
-                    scheduling.scheduleTurnTimeout(gameId);
-                } else {
-                    scheduling.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
-                }
+                scheduling.scheduleTurnTimeout(gameId);
                 gameStateService.broadcastGameState(game);
             }
             case AUTO_ADVANCING -> {

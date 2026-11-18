@@ -515,7 +515,7 @@ class PersistenceCoordinationIT {
             room.setPlayerConnected("Bob", false);
             room.setAbsenceDeadline("Bob", expectedAbsenceDeadline);
             Game game = gameLifecycleService.getGame(roomId);
-            game.setForfeitPending(true);
+            game.markForfeitPending();
             game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, expectedTurnDeadline);
             return null;
         });
@@ -883,7 +883,7 @@ class PersistenceCoordinationIT {
             Room room = rooms.getRoom(roomId);
             room.setPlayerConnected(playerName, true);
             Game game = games.getGame(roomId);
-            game.setForfeitPending(false);
+            game.clearForfeitPending();
             game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, System.currentTimeMillis() + 999_999L);
             throw new IllegalStateException("Simulated failure after connectivity and progression change");
         }

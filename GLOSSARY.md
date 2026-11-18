@@ -50,6 +50,32 @@ A counter (`1, 2, 3...`) that goes up every time the public game state changes, 
 **disconnectGracePeriodMs**:
 The time window (120 seconds by default) after a player's last browser tab disconnects during which their seat, chips, and cards are held before they are auto-folded and removed.
 
+### End-State Flags
+
+**`isGameOver()` (`gameOver`)**:
+True once the match has permanently ended (via `settleGameEnd`, `resetForNewHand`, or `markGameOver`), stopping gameplay and turn timers while keeping post-game review available until cleanup.
+
+**`isGameDecided()`**:
+True when one or zero non-out players still hold chips (`chips > 0`), meaning no further hand can begin even before `settleGameEnd` marks `gameOver`.
+
+**`isFinishedOrEliminated()`**:
+True when `!forfeitPending` and either `gameOver` is true or a settled hand has decided the winner (`isHandSettled() && isGameDecided()`), so player departures no longer affect live play.
+
+**`isFinalPotSettled()` (`finalPotSettled`)**:
+True once `settleGameEnd` has awarded any remaining carry-over or unsettled pot to the match winner, preventing duplicate final-pot payouts on retries or crash recovery.
+
+**`isHandSettled()`**:
+True when `lastSettlementResult != null`, meaning the current or most recent hand has completed pot distribution (by fold, void hand, or showdown) and is awaiting the next hand or game end.
+
+**`endedBeforeShowdown()`**:
+True when `currentPhase != GamePhase.SHOWDOWN || !isHandSettled()`, distinguishing an in-progress or pre-showdown hand from a completed showdown so mid-hand zero-chip contenders remain eligible and new-hand requests are rejected while a hand is still running.
+
+**`isForfeitPending()` (`forfeitPending`)**:
+True when all other contenders have departed and the sole remaining contender is disconnected, pausing hand progression, ready countdowns, and game-end settlement until that survivor reconnects or their grace period expires.
+
+**`Room.isTerminal()` (`isTerminal`)**:
+Room-level flag mirroring `gameOver` once the match finishes so `RoomService` keeps an empty room alive for post-game review instead of destroying it immediately.
+
 ## Client Payloads & Views
 
 **PublicGameStateResponse**:

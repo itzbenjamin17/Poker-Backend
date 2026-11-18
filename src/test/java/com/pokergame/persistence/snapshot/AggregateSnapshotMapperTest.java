@@ -188,7 +188,8 @@ class AggregateSnapshotMapperTest {
         assertEquals(0, restored.getPot());
         int aliceBeforeRetry = restored.getPlayers().getFirst().getChips();
         int bobBeforeRetry = restored.getPlayers().get(1).getChips();
-        assertEquals(List.of("a"), restored.conductShowdown().stream().map(Player::getPlayerId).toList());
+        restored.conductShowdown();
+        assertEquals(Set.of("a"), restored.getLastSettlementResult().winnerIds());
         assertEquals(aliceBeforeRetry, restored.getPlayers().getFirst().getChips());
         assertEquals(bobBeforeRetry, restored.getPlayers().get(1).getChips());
 

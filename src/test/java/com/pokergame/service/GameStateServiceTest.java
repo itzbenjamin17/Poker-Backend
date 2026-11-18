@@ -628,9 +628,13 @@ class GameStateServiceTest {
         game.dealTurn();
         game.dealRiver();
 
-        List<Player> showdownWinners = game.conductShowdown();
-        assertFalse(showdownWinners.isEmpty());
-        Player showdownWinner = showdownWinners.getFirst();
+        game.conductShowdown();
+        Set<String> winnerIds = game.getLastSettlementResult().winnerIds();
+        assertFalse(winnerIds.isEmpty());
+        Player showdownWinner = game.getPlayers().stream()
+                .filter(p -> winnerIds.contains(p.getPlayerId()))
+                .findFirst()
+                .orElseThrow();
         Player showdownLoser = showdownWinner.equals(p1) ? p2 : p1;
         assertEquals(ReadyCountdownStartOutcome.OPENED,
                 game.openOrWaitReadyGate(FIXED_INSTANT.toEpochMilli() + 10_000L));
@@ -1614,17 +1618,14 @@ class GameStateServiceTest {
     }
 
     @Test
-    @DisplayName("advanceRevisionAndBuildGameEnd preserves game's clamped [2, 10] capacity across restored out-of-range settings")
-    void advanceRevisionAndBuildGameEnd_PreservesClampedMaxPlayersFromGame() {
+    @DisplayName("advanceRevisionAndBuildGameEnd preserves game's configured [2, 10] capacity across restored and live games")
+    void advanceRevisionAndBuildGameEnd_PreservesMaxPlayersFromGame() {
         Player winner = testPlayers.getFirst();
-        int[] outOfRangeValues = {
-                Integer.MIN_VALUE, -999999, -1, 0, 1, 11, 12, 100, 999999, Integer.MAX_VALUE
-        };
 
-        for (int val : outOfRangeValues) {
+        for (int validCapacity : new int[]{Room.MIN_PLAYERS, 6, Room.MAX_PLAYERS}) {
             Game restored = Game.restoreBuilder()
                     .gameId(GAME_ID)
-                    .maxPlayers(val)
+                    .maxPlayers(validCapacity)
                     .players(testPlayers)
                     .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList())
                     .remainingDeck(List.of())
@@ -1644,13 +1645,10 @@ class GameStateServiceTest {
                     .everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
-                    
                     .build();
 
             GameEndResponse response = gameStateService.buildGameEndResponse(restored, winner, false);
-            int maxPlayers = response.finalState().maxPlayers();
-            assertEquals(2, maxPlayers,
-                    "val=" + val + " should clamp to retained player count (2), got: " + maxPlayers);
+            assertEquals(validCapacity, response.finalState().maxPlayers());
         }
 
         Game validCapacityGame = new Game("four-player-game", List.of(

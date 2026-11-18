@@ -199,7 +199,7 @@ class GameTaskSchedulerTest {
         }
 
         Game game = createAndRegisterGame();
-        game.setForfeitPending(true);
+        game.markForfeitPending();
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             scheduler.scheduleTurnTimeout(GAME_ID);
             scheduler.scheduleGameEnd(GAME_ID, 2_000L);
@@ -207,7 +207,7 @@ class GameTaskSchedulerTest {
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
         }
 
-        game.setForfeitPending(false);
+        game.clearForfeitPending();
         clearInvocations(springScheduler);
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             scheduler.scheduleTurnTimeout(GAME_ID);

@@ -18,7 +18,7 @@ import java.util.Set;
 public class GameRestoreBuilder {
 
     private String gameId;
-    private int maxPlayers;
+    private int maxPlayers = Room.MAX_PLAYERS;
     private List<Player> players;
     private List<String> activePlayerIds;
     private List<Card> remainingDeck;

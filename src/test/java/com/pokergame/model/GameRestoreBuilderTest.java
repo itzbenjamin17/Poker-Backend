@@ -161,8 +161,11 @@ class GameRestoreBuilderTest {
                 game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));         // 36
         assertEquals(taskGenerations, game.getScheduledTaskGenerationsSnapshot());    // 36
 
-        // A restored hand that already has a settlement returns its recorded winners without a second showdown
-        assertEquals(List.of(p1), game.conductShowdown());
+        // A restored hand that already has a settlement returns without modifying the recorded winners
+        game.conductShowdown();
+        assertEquals(Set.of("p1"), game.getLastSettlementResult().winnerIds());
+        assertEquals(1000, p1.getChips());
+        assertEquals(800, p2.getChips());
     }
 
     @Test
@@ -182,9 +185,11 @@ class GameRestoreBuilderTest {
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                 .build();
 
-        List<Player> winners = game.conductShowdown();
+        game.conductShowdown();
 
-        assertEquals(List.of(p1), winners);
+        assertEquals(Set.of("p1"), game.getLastSettlementResult().winnerIds());
+        assertEquals(1200, p1.getChips());
+        assertEquals(800, p2.getChips());
         assertEquals(HandRank.ROYAL_FLUSH, p1.getHandRank());
     }
 
@@ -237,6 +242,17 @@ class GameRestoreBuilderTest {
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, builder::build);
         assertEquals("Invalid players list. Please try again.", ex.getMessage());
+    }
+
+    @ParameterizedTest(name = "[{index}] maxPlayers={0}")
+    @ValueSource(ints = {1, 11})
+    @DisplayName("build_ThrowsWhenMaxPlayersOutOfRange: rejects values outside [2, 10]")
+    void build_ThrowsWhenMaxPlayersOutOfRange(int invalidMaxPlayers) {
+        GameRestoreBuilder builder = defaultBuilder()
+                .maxPlayers(invalidMaxPlayers);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, builder::build);
+        assertEquals("Max players must be between 2 and 10.", ex.getMessage());
     }
 
     @Test

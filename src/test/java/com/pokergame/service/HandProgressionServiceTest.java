@@ -166,9 +166,9 @@ class HandProgressionServiceTest {
                 assertEquals(1L, game.getHandNumber());
 
                 // Forfeit pending -> ignored
-                game.setForfeitPending(true);
+                game.markForfeitPending();
                 assertFalse(progression.startNewHand(GAME_ID));
-                game.setForfeitPending(false);
+                game.clearForfeitPending();
 
                 // Game over without settled final pot -> settles via completion handler
                 game.dealFlop();

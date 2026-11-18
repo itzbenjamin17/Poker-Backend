@@ -1040,7 +1040,8 @@ class GameTest {
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
-            assertEquals(List.of(a, b), deadUpper.conductShowdown());
+            deadUpper.conductShowdown();
+            assertEquals(Set.of("a", "b"), deadUpper.getLastSettlementResult().winnerIds());
             assertEquals(200, a.getChips());
             assertEquals(350, b.getChips());
             assertEquals(0, deadUpper.getPot());
@@ -1325,8 +1326,8 @@ class GameTest {
             game.getActivePlayers().get(0).doAction(PlayerAction.FOLD, 0);
             game.getActivePlayers().get(1).doAction(PlayerAction.FOLD, 0);
 
-            List<Player> uncalledWinners = game.conductShowdown();
-            assertTrue(uncalledWinners.isEmpty());
+            game.conductShowdown();
+            assertTrue(game.getLastSettlementResult().winnerIds().isEmpty());
             assertEquals(1000, game.getPlayers().get(2).getChips());
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
 
@@ -1347,9 +1348,10 @@ class GameTest {
                     new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.CLUBS),
                     new Card(Rank.THREE, Suit.DIAMONDS)));
 
-            List<Player> winners = multiGame.conductShowdown();
-            assertEquals(1, winners.size());
-            assertEquals(HandRank.ROYAL_FLUSH, winners.getFirst().getHandRank());
+            multiGame.conductShowdown();
+            assertEquals(Set.of("p0"), multiGame.getLastSettlementResult().winnerIds());
+            assertEquals(1200, multiGame.getActivePlayers().getFirst().getChips());
+            assertEquals(HandRank.ROYAL_FLUSH, multiGame.getActivePlayers().getFirst().getHandRank());
             assertEquals(HandRank.ONE_PAIR, multiGame.getActivePlayers().get(1).getHandRank());
             assertEquals(HandRank.ONE_PAIR, multiGame.getActivePlayers().get(2).getHandRank());
         }
@@ -1370,11 +1372,12 @@ class GameTest {
                     new Card(Rank.TWO, Suit.CLUBS)));
             headsUpGame.postBlinds();
 
-            List<Player> winners = headsUpGame.conductShowdown();
+            headsUpGame.conductShowdown();
             assertEquals(HandRank.ONE_PAIR, josh.getHandRank());
             assertEquals(HandRank.ONE_PAIR, benjamin.getHandRank());
-            assertEquals(1, winners.size());
-            assertEquals("Benjamin", winners.getFirst().getName());
+            assertEquals(Set.of("b1"), headsUpGame.getLastSettlementResult().winnerIds());
+            assertEquals(1010, benjamin.getChips());
+            assertEquals(990, josh.getChips());
         }
 
         @Test
@@ -1603,7 +1606,8 @@ class GameTest {
                     .everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
-            assertEquals(List.of(ace), realGame.conductShowdown());
+            realGame.conductShowdown();
+            assertEquals(Set.of("ace"), realGame.getLastSettlementResult().winnerIds());
             assertEquals(1050, ace.getChips());
             assertEquals(950, king.getChips());
             assertEquals(Map.of("ace", 100), realGame.getLastSettlementResult().contestedAwards());
@@ -1643,20 +1647,22 @@ class GameTest {
             p1.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
             p2.setHoleCards(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
 
-            List<Player> firstWinners = idemp.conductShowdown();
-            assertEquals(1, firstWinners.size());
+            idemp.conductShowdown();
+            Set<String> firstWinnerIds = idemp.getLastSettlementResult().winnerIds();
+            assertEquals(Set.of("p1"), firstWinnerIds);
             assertEquals(2000, p1.getChips());
             assertEquals(0, p2.getChips());
             assertEquals(0, idemp.getPot());
-            assertEquals(firstWinners.stream().map(Player::getPlayerId).toList(),
-                    idemp.conductShowdown().stream().map(Player::getPlayerId).toList());
+            idemp.conductShowdown();
+            assertEquals(firstWinnerIds, idemp.getLastSettlementResult().winnerIds());
             assertEquals(2000, p1.getChips());
 
             Game voidGame = createStandardGame(2, 100);
             voidGame.processPlayerDecision(voidGame.getPlayers().get(0), new PlayerDecision(PlayerAction.BET, 50, "p0"));
             voidGame.processPlayerDecision(voidGame.getPlayers().get(1), new PlayerDecision(PlayerAction.CALL, 50, "p1"));
             voidGame.getPlayers().forEach(pl -> pl.doAction(PlayerAction.FOLD, 0));
-            assertTrue(voidGame.conductShowdown().isEmpty());
+            voidGame.conductShowdown();
+            assertTrue(voidGame.getLastSettlementResult().winnerIds().isEmpty());
             assertEquals(100, voidGame.getLastSettlementResult().remainder());
             assertFalse(voidGame.resetForNewHand());
             assertEquals(100, voidGame.getCarryOverPot());
@@ -1868,10 +1874,14 @@ class GameTest {
             contested.dealFlop();
             contested.dealTurn();
             contested.dealRiver();
-            List<Player> winners = contested.conductShowdown();
+            contested.conductShowdown();
             assertTrue(contested.wasContestedShowdown());
 
-            Player winner = winners.getFirst();
+            Set<String> winnerIds = contested.getLastSettlementResult().winnerIds();
+            Player winner = contested.getPlayers().stream()
+                    .filter(p -> winnerIds.contains(p.getPlayerId()))
+                    .findFirst()
+                    .orElseThrow();
             Player loser = contested.getPlayers().stream()
                     .filter(p -> !p.equals(winner))
                     .findFirst()
@@ -2232,6 +2242,18 @@ class GameTest {
             assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, outcome.type());
             assertEquals("c", midHandOut.getCurrentPlayer().getPlayerId());
         }
+
+        @Test
+        void advanceAfterPlayerRemovalThrowsWhenNoActivePlayersRemain() {
+            Game emptying = createStandardGame(2, 1000);
+            emptying.removePlayer(emptying.getPlayers().get(1));
+            emptying.removePlayer(emptying.getPlayers().get(0));
+
+            IllegalStateException ex = assertThrows(
+                    IllegalStateException.class,
+                    emptying::advanceAfterPlayerRemoval);
+            assertEquals("No active players remain after removal", ex.getMessage());
+        }
     }
 
     @Nested
@@ -2243,7 +2265,7 @@ class GameTest {
             assertEquals(0L, revGame.getStateRevision());
             assertEquals(0L, revGame.getHandNumber());
 
-            assertEquals(1L, revGame.beginHand());
+            revGame.beginHand();
             assertEquals(1L, revGame.getHandNumber());
             assertEquals(1L, revGame.getStateRevision());
 
@@ -2252,7 +2274,7 @@ class GameTest {
             }
             assertEquals(26L, revGame.getStateRevision());
 
-            assertEquals(2L, revGame.beginHand());
+            revGame.beginHand();
             assertEquals(2L, revGame.getHandNumber());
             assertEquals(1L, revGame.getStateRevision());
 
@@ -2265,7 +2287,7 @@ class GameTest {
             assertEquals(199L, restored.getStateRevision());
             restored.incrementStateRevision();
             assertEquals(200L, restored.getStateRevision());
-            assertEquals(43L, restored.beginHand());
+            restored.beginHand();
             assertEquals(43L, restored.getHandNumber());
             assertEquals(1L, restored.getStateRevision());
         }

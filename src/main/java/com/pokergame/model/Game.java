@@ -27,6 +27,29 @@ import java.util.Set;
 /**
  * Aggregate root for a live poker game: owns the deck, players, pot accounting, hand phase,
  * and coordinates seating, betting, readiness, and scheduled-task collaborators.
+ *
+ * <h2>End-state flags</h2>
+ * <ul>
+ *   <li>{@link #isHandSettled()}: {@code true} once the current or most recent hand has finished
+ *       pot distribution ({@code lastSettlementResult != null}), before the next hand resets it.</li>
+ *   <li>{@link #endedBeforeShowdown()}: {@code true} while the current hand has not reached a
+ *       settled {@link GamePhase#SHOWDOWN}, distinguishing mid-hand play from post-hand state.</li>
+ *   <li>{@link #isGameDecided()}: {@code true} when at most one non-out player holds chips, meaning
+ *       another hand cannot start even before match-end cleanup marks the game over.</li>
+ *   <li>{@link #isForfeitPending()}: {@code true} when all opponents departed leaving one
+ *       disconnected contender, pausing hand progression and game-end settlement until reconnect or
+ *       grace expiry.</li>
+ *   <li>{@link #isGameOver()}: {@code true} once the match has permanently ended (via
+ *       {@link #settleGameEnd}, {@link #resetForNewHand}, or {@link #markGameOver()}), stopping
+ *       gameplay while retaining post-game review until cleanup.</li>
+ *   <li>{@link #isFinishedOrEliminated()}: {@code true} when {@code !forfeitPending} and either
+ *       the match is over or a settled hand has decided the winner, so departures no longer affect
+ *       live play.</li>
+ *   <li>{@link #isFinalPotSettled()}: {@code true} once {@link #settleGameEnd} has awarded any
+ *       remaining pot to the match winner, preventing duplicate final-pot payouts on retries.</li>
+ *   <li>{@link Room#isTerminal()}: room-level mirror of {@link #isGameOver()} that retains an
+ *       empty room for post-game review instead of destroying it immediately.</li>
+ * </ul>
  */
 public class Game {
     private static final Logger logger = LoggerFactory.getLogger(Game.class);
@@ -96,17 +119,8 @@ public class Game {
         this.activePlayers = new ArrayList<>(players);
         this.deck = new Deck();
         this.communityCards = new ArrayList<>();
-        this.pot = 0;
-        this.carryOverPot = 0;
         this.currentPhase = GamePhase.PRE_FLOP;
         this.handContributions = new HashMap<>();
-        this.lastSettlementResult = null;
-        this.handNumber = 0;
-        this.stateRevision = 0L;
-        this.gameOver = false;
-        this.finalPotSettled = false;
-        this.forfeitPending = false;
-        this.gameEndResult = null;
         this.seating = new TableSeating(this.activePlayers, this.players);
         this.bettingRound = new BettingRound();
         this.readyGate = new ReadyGate(this.players);
@@ -115,11 +129,11 @@ public class Game {
 
     /**
      * Reconstructs a {@link Game} from saved snapshot state supplied by {@link GameRestoreBuilder},
-     * clamping {@code maxPlayers} and restoring collaborator state without running live hand setup.
+     * validating {@code maxPlayers} and restoring collaborator state without running live hand setup.
      *
      * @param builder populated snapshot builder
-     * @throws IllegalStateException if {@code gameId} or {@code players} are invalid, an active
-     *                               player ID is unknown, or the snapshot has no deck
+     * @throws IllegalStateException if {@code gameId}, {@code maxPlayers}, or {@code players} are invalid,
+     *                               an active player ID is unknown, or the snapshot has no deck
      */
     Game(GameRestoreBuilder builder) {
         if (builder.getGameId() == null || builder.getGameId().trim().isEmpty()) {
@@ -129,12 +143,15 @@ public class Game {
         if (builderPlayers == null || builderPlayers.stream().anyMatch(Objects::isNull)) {
             throw new IllegalStateException("Invalid players list. Please try again.");
         }
+        int restoredMaxPlayers = builder.getMaxPlayers();
+        if (restoredMaxPlayers < Room.MIN_PLAYERS || restoredMaxPlayers > Room.MAX_PLAYERS) {
+            throw new IllegalStateException(
+                    "Max players must be between " + Room.MIN_PLAYERS + " and " + Room.MAX_PLAYERS + ".");
+        }
 
         this.gameId = builder.getGameId();
         this.players = new ArrayList<>(builderPlayers);
-        this.maxPlayers = (builder.getMaxPlayers() >= Room.MIN_PLAYERS && builder.getMaxPlayers() <= Room.MAX_PLAYERS)
-                ? builder.getMaxPlayers()
-                : Math.clamp(this.players.size(), Room.MIN_PLAYERS, Room.MAX_PLAYERS);
+        this.maxPlayers = restoredMaxPlayers;
 
         Map<String, Player> playersById = new HashMap<>();
         this.players.forEach(player -> playersById.put(player.getPlayerId(), player));
@@ -212,21 +229,10 @@ public class Game {
      * @return {@code true} if the game has ended (one or fewer active players remain), {@code false} otherwise
      */
     public boolean resetForNewHand() {
-        int previousPot = pot;
+        logger.debug("Resetting hand for game {} | carryOverPot={} | previousContributions={}",
+                gameId, pot, handContributions);
 
-        if (logger.isDebugEnabled()) {
-            logger.debug("Resetting hand for game {} | carryOverPot={} | previousContributions={}",
-                    gameId, previousPot, handContributions);
-        }
-
-        for (Player player : players) {
-            if (player.getChips() == 0) {
-                logger.info("Setting {} as out (0 chips)", player.getName());
-                player.setIsOut();
-            }
-        }
-        activePlayers.removeIf(Player::getIsOut);
-
+        eliminateBrokePlayers();
         if (activePlayers.size() <= 1) {
             logger.info("Game over - only {} active players remaining", activePlayers.size());
             gameOver = true;
@@ -237,10 +243,9 @@ public class Game {
         }
 
         // Only reclassify the pot as carry-over after confirming another hand can begin.
-        carryOverPot = previousPot;
+        carryOverPot = pot;
         deck = new Deck();
         communityCards.clear();
-        pot = previousPot;
         currentPhase = GamePhase.PRE_FLOP;
         bettingRound.resetForNewHand();
         handContributions.clear();
@@ -248,29 +253,31 @@ public class Game {
         finalPotSettled = false;
         closeReadyCountdown();
 
-        activePlayers.clear();
-        for (Player player : players) {
-            if (!player.getIsOut()) {
-                player.resetAttributes();
-                activePlayers.add(player);
-            }
-        }
-
-        gameOver = false;
+        activePlayers.forEach(Player::resetAttributes);
         seating.advancePositions(activePlayers);
         logger.debug("Hand reset complete for game {} | contributions cleared", gameId);
         return false;
     }
 
+    private void eliminateBrokePlayers() {
+        activePlayers.clear();
+        for (Player player : players) {
+            if (player.getChips() == 0) {
+                logger.info("Setting {} as out (0 chips)", player.getName());
+                player.setIsOut();
+            }
+            if (!player.getIsOut()) {
+                activePlayers.add(player);
+            }
+        }
+    }
+
     /**
      * Increments the hand number and resets the state revision for the new hand.
-     *
-     * @return the newly started hand number
      */
-    public long beginHand() {
-        this.handNumber = handNumber <= 0 ? 1L : handNumber + 1L;
+    public void beginHand() {
+        handNumber++;
         resetStateRevisionForNewHand();
-        return this.handNumber;
     }
 
     /**
@@ -317,9 +324,6 @@ public class Game {
      * @return the next turn or phase outcome
      */
     public TurnOutcome advanceAfterBlinds() {
-        if (activePlayers.isEmpty()) {
-            return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null);
-        }
         BettingRound.ForcedBlindProgression progression = bettingRound.afterForcedBlinds(activePlayers, isHandOver());
         if (progression == BettingRound.ForcedBlindProgression.HAND_OVER) {
             return advanceTurnOrPhase(null, false);
@@ -339,22 +343,14 @@ public class Game {
      * @param player   the acting player
      * @param decision the requested action and chip amount
      * @return a {@link TurnOutcome} describing the resulting progression
-     * @throws IllegalStateException       if {@code decision} is missing or has a negative amount
+     * @throws IllegalStateException       if {@code decision} is missing
      * @throws BadRequestException         if the wager amount violates bet or raise sizing rules
      * @throws UnauthorisedActionException if the action is not available to {@code player}
      */
     public TurnOutcome processPlayerDecision(Player player, PlayerDecision decision) {
-        if (decision == null || decision.action() == null) {
+        if (decision == null) {
             throw new IllegalStateException("Invalid player action");
         }
-        if (decision.amount() < 0) {
-            throw new IllegalStateException("Action amount cannot be negative");
-        }
-
-        logger.debug(
-                "Processing decision in game {} | player={} | decision={} | currentBet={} | currentHighestBet={} | pot={}",
-                gameId, player.getName(), decision, player.getCurrentBet(),
-                bettingRound.getCurrentHighestBet(), pot);
 
         BettingRound.DecisionResult result = bettingRound.prepareDecision(
                 player, decision, activePlayers, bigBlind);
@@ -363,20 +359,10 @@ public class Game {
         int potBeforeDecision = this.pot;
         int wagerBeforeDecision = bettingRound.getCurrentHighestBet();
 
-        switch (actualDecision.action()) {
-            case FOLD, CHECK -> player.doAction(actualDecision.action(), 0);
-            case CALL, BET, RAISE -> this.pot += player.doAction(actualDecision.action(), result.amount());
-            case ALL_IN -> this.pot += player.doAction(PlayerAction.ALL_IN, 0);
-        }
+        this.pot += player.doAction(actualDecision.action(), result.amount());
 
         PotCalculator.trackContribution(handContributions, player, this.pot - potBeforeDecision, gameId);
         bettingRound.recordAppliedDecision(player, bigBlind, wagerBeforeDecision);
-
-        logger.debug(
-                "Decision applied in game {} | player={} | action={} | potDelta={} | potNow={} | playerBet={} | playerChips={} | currentHighestBet={} | contributions={}",
-                gameId, player.getName(), actualDecision.action(), (this.pot - potBeforeDecision),
-                this.pot, player.getCurrentBet(), player.getChips(),
-                bettingRound.getCurrentHighestBet(), handContributions);
 
         return advanceTurnOrPhase(result.conversionMessage(), true);
     }
@@ -385,10 +371,11 @@ public class Game {
      * Advances turn or street progression after a player has been removed from the table.
      *
      * @return the resulting {@link TurnOutcome}
+     * @throws IllegalStateException if no active players remain
      */
     public TurnOutcome advanceAfterPlayerRemoval() {
         if (activePlayers.isEmpty()) {
-            return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null);
+            throw new IllegalStateException("No active players remain after removal");
         }
         bettingRound.reconcileHighestBetAfterRemoval(activePlayers);
         return advanceTurnOrPhase(null, false);
@@ -427,17 +414,12 @@ public class Game {
     /**
      * Evaluates remaining contenders, refunds uncalled chips, distributes contested side pots,
      * and records the settled hand result.
-     *
-     * @return list of winning players
      */
-    public List<Player> conductShowdown() {
+    public void conductShowdown() {
         if (lastSettlementResult != null) {
-            return players.stream()
-                    .filter(p -> lastSettlementResult.winnerIds().contains(p.getPlayerId()))
-                    .toList();
+            return;
         }
 
-        logger.info("Conducting showdown for game {}", gameId);
         currentPhase = GamePhase.SHOWDOWN;
         bettingRound.clearLastFullRaise();
 
@@ -445,35 +427,22 @@ public class Game {
                 .filter(Player::isInHand)
                 .toList();
 
-        logger.info("Showdown players: {}, Current pot: {}",
-                showdownPlayers.stream().map(Player::getName).toList(), pot);
-
         if (showdownPlayers.isEmpty()) {
             // Keep unclaimed chips as carry-over so the ready/new-hand flow can continue safely.
             lastSettlementResult = new HandSettlementResult(Map.of(), Map.of(), Set.of(), pot, false);
             resetHandAccountingAfterShowdown();
-            return List.of();
+            logger.debug("Showdown complete for game {} | contenders=0 | potRemainder={}", gameId, pot);
+            return;
         }
 
         if (showdownPlayers.size() > 1) {
-            logger.debug("Evaluating hands for {} players", showdownPlayers.size());
             ShowdownResolver.evaluateHands(communityCards, showdownPlayers);
         }
 
-        if (logger.isDebugEnabled()) {
-            showdownPlayers.forEach(p -> logger.debug("Player {}: {} with {}",
-                    p.getName(), p.getHandRank(), p.getBestHand()));
-        }
-
-        List<Player> winners = distributeSidePotsAtShowdown(showdownPlayers, showdownPlayers.size() > 1);
+        distributeSidePotsAtShowdown(showdownPlayers, showdownPlayers.size() > 1);
         resetHandAccountingAfterShowdown();
-
-        logger.debug("Pot after distribution: {}", pot);
-        if (logger.isDebugEnabled()) {
-            winners.forEach(p -> logger.debug("Player {} now has {} chips", p.getName(), p.getChips()));
-        }
-        logger.info("Showdown complete");
-        return winners;
+        logger.debug("Showdown complete for game {} | contenders={} | winners={} | potRemainder={}",
+                gameId, showdownPlayers.size(), lastSettlementResult.winnerIds(), pot);
     }
 
     /**
@@ -482,9 +451,6 @@ public class Game {
      * @param player player to remove
      */
     public void removePlayer(Player player) {
-        if (player == null) {
-            return;
-        }
         bettingRound.removePlayer(player.getPlayerId());
         players.remove(player);
         activePlayers.remove(player);
@@ -648,8 +614,18 @@ public class Game {
         invalidateProgressionTasks();
     }
 
-    public void setForfeitPending(boolean value) {
-        this.forfeitPending = value;
+    /**
+     * Marks the game as awaiting reconnect or grace expiry of the sole remaining disconnected contender.
+     */
+    public void markForfeitPending() {
+        this.forfeitPending = true;
+    }
+
+    /**
+     * Clears the pending forfeit hold once the remaining contender reconnects or forfeit settlement proceeds.
+     */
+    public void clearForfeitPending() {
+        this.forfeitPending = false;
     }
 
     /**
@@ -662,11 +638,9 @@ public class Game {
      * @throws IllegalStateException if no eligible winner can be resolved
      */
     public Player settleGameEnd(Player forfeitWinner, Set<String> forfeitedPlayerNames) {
-        if (forfeitedPlayerNames != null) {
-            for (Player player : players) {
-                if (forfeitedPlayerNames.contains(player.getName())) {
-                    player.setIsOut();
-                }
+        for (Player player : players) {
+            if (forfeitedPlayerNames.contains(player.getName())) {
+                player.setIsOut();
             }
         }
         if (!isHandSettled()) {
@@ -1112,9 +1086,9 @@ public class Game {
     }
 
     /**
-     * Returns whether an ended game without a saved end summary concluded before a settled showdown.
+     * Returns whether the current hand has not yet reached a settled {@link GamePhase#SHOWDOWN}.
      *
-     * @return {@code true} if the hand was not settled in {@link GamePhase#SHOWDOWN}
+     * @return {@code true} if the hand is still running or settled outside showdown
      */
     public boolean endedBeforeShowdown() {
         return currentPhase != GamePhase.SHOWDOWN || !isHandSettled();
@@ -1141,11 +1115,7 @@ public class Game {
      * @return matching player, or {@code null} if not found
      */
     static Player findPlayerByName(List<Player> tablePlayers, String playerName) {
-        if (tablePlayers == null) {
-            return null;
-        }
         return tablePlayers.stream()
-                .filter(Objects::nonNull)
                 .filter(player -> player.getName().equals(playerName))
                 .findFirst()
                 .orElse(null);
@@ -1153,7 +1123,7 @@ public class Game {
 
     private Player findActivePlayerById(String playerId) {
         return activePlayers.stream()
-                .filter(p -> p != null && p.getPlayerId().equals(playerId))
+                .filter(p -> p.getPlayerId().equals(playerId))
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("Blind player not found in active players: " + playerId));
     }
@@ -1202,8 +1172,7 @@ public class Game {
         return activePlayers.stream().filter(Player::isInHand).count() <= 1;
     }
 
-    private List<Player> distributeSidePotsAtShowdown(List<Player> showdownPlayers, boolean wentToShowdown) {
-        logger.info("Distributing side pots for game {}", gameId);
+    private void distributeSidePotsAtShowdown(List<Player> showdownPlayers, boolean wentToShowdown) {
         PotComputationResult computation = PotCalculator.computePotAllocationsAndUncalled(
                 pot, carryOverPot, handContributions, activePlayers, players, showdownPlayers, gameId);
         ShowdownResolver.Distribution distribution =
@@ -1211,12 +1180,10 @@ public class Game {
                         seating.getHandSeatOrderSnapshot(), seating.getDealerPlayerId(), wentToShowdown);
         pot = distribution.remainder();
         lastSettlementResult = distribution.settlement();
-        return distribution.winners();
     }
 
     private void resetHandAccountingAfterShowdown() {
         handContributions.clear();
         bettingRound.clearActedPlayers();
-        logger.debug("Reset hand accounting after showdown for game {} | potRemainder={}", gameId, pot);
     }
 }
