@@ -191,7 +191,7 @@ public final class RoomSnapshotMapper {
             game.getHandSeatOrderSnapshot(), game.getDealerPlayerId(), game.getSmallBlindPlayerId(),
             game.getBigBlindPlayerId(), game.getCurrentPlayerId(), settlementState(game.getLastSettlementResult()),
             game.isFinalPotSettled(), game.getReadyGateState(), game.getHandNumber(),
-            game.getTimerVersionsSnapshot(), game.isForfeitPending(), game.getStateRevision(),
+            game.getTimerVersionsSnapshot(), game.isPausedForDisconnectedSurvivor(), game.getStateRevision(),
             toGameResultState(game.getGameEndResult()));
     }
 
@@ -289,7 +289,7 @@ public final class RoomSnapshotMapper {
                 .finalPotSettled(state.finalPotSettled())
                 .readyGateState(state.readyGateState())
                 .handNumber(state.handNumber())
-                .forfeitPending(state.forfeitPending())
+                .pausedForDisconnectedSurvivor(state.pausedForDisconnectedSurvivor())
                 .stateRevision(state.stateRevision())
                 .gameEndResult(fromGameResultState(state.gameEndResult()))
                 .build();

@@ -227,7 +227,7 @@ class GameTaskScheduler {
         Game game = activeGames.get(gameId);
         // Quiet no-op by design: the game may already have been removed, and while a forfeit is
         // pending the game is paused for a disconnected survivor, so no timer may be scheduled.
-        if (game == null || game.isForfeitPending()) {
+        if (game == null || game.isPausedForDisconnectedSurvivor()) {
             return;
         }
         game.scheduleTask(task, deadline);

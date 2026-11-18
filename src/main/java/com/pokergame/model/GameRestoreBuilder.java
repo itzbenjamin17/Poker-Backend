@@ -40,7 +40,7 @@ public class GameRestoreBuilder {
     private String smallBlindPlayerId;
     private String bigBlindPlayerId;
     private boolean finalPotSettled;
-    private boolean forfeitPending;
+    private boolean pausedForDisconnectedSurvivor;
     private Long readyCountdownDeadlineEpochMs;
     private ReadyGateState readyGateState = ReadyGateState.CLOSED;
     private long handNumber;
@@ -173,8 +173,8 @@ public class GameRestoreBuilder {
         return this;
     }
 
-    public GameRestoreBuilder forfeitPending(boolean value) {
-        this.forfeitPending = value;
+    public GameRestoreBuilder pausedForDisconnectedSurvivor(boolean value) {
+        this.pausedForDisconnectedSurvivor = value;
         return this;
     }
 
@@ -319,8 +319,8 @@ public class GameRestoreBuilder {
         return finalPotSettled;
     }
 
-    boolean isForfeitPending() {
-        return forfeitPending;
+    boolean isPausedForDisconnectedSurvivor() {
+        return pausedForDisconnectedSurvivor;
     }
 
     Long getReadyCountdownDeadlineEpochMs() {

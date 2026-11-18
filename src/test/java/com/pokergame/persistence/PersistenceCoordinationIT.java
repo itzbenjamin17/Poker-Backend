@@ -513,7 +513,7 @@ class PersistenceCoordinationIT {
             room.setPlayerConnected("Bob", false);
             room.setAbsenceDeadline("Bob", expectedAbsenceDeadline);
             Game game = gameLifecycleService.getGame(roomId);
-            game.markForfeitPending();
+            game.markPausedForDisconnectedSurvivor();
             game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, expectedTurnDeadline);
             return null;
         });
@@ -530,7 +530,7 @@ class PersistenceCoordinationIT {
             Game game = gameLifecycleService.getGame(roomId);
             assertThat(room.isPlayerConnected("Bob")).isFalse();
             assertThat(room.getAbsenceDeadline("Bob")).isEqualTo(expectedAbsenceDeadline);
-            assertThat(game.isForfeitPending()).isTrue();
+            assertThat(game.isPausedForDisconnectedSurvivor()).isTrue();
             assertThat(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(expectedTurnDeadline);
             assertThat(room.getPlayers()).containsExactlyInAnyOrder("Host", "Alice", "Bob");
             return null;
@@ -881,7 +881,7 @@ class PersistenceCoordinationIT {
             Room room = rooms.getRoom(roomId);
             room.setPlayerConnected(playerName, true);
             Game game = games.getGame(roomId);
-            game.clearForfeitPending();
+            game.clearPausedForDisconnectedSurvivor();
             game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, System.currentTimeMillis() + 999_999L);
             throw new IllegalStateException("Simulated failure after connectivity and progression change");
         }

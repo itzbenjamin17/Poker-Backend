@@ -145,15 +145,15 @@ class GameCompletionHandlerTest {
         }
 
         @Test
-        @DisplayName("handleGameEnd skips when forfeit is pending or game is already finally settled")
-        void handleGameEnd_PendingForfeitOrAlreadySettled_NoOps() {
+        @DisplayName("handleGameEnd skips when paused for disconnected survivor or game is already finally settled")
+        void handleGameEnd_PausedForDisconnectedSurvivorOrAlreadySettled_NoOps() {
             Game game = createAndRegisterStartedGame(List.of(
                     new Player("Host", "host", 100),
                     new Player("Player2", "p2", 100)));
             game.dealFlop();
             game.dealTurn();
             game.dealRiver();
-            game.markForfeitPending();
+            game.markPausedForDisconnectedSurvivor();
             clearInvocations(messagingTemplate, taskScheduler);
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
@@ -162,7 +162,7 @@ class GameCompletionHandlerTest {
             verifyNoInteractions(messagingTemplate);
             assertFalse(game.isGameOver());
 
-            game.clearForfeitPending();
+            game.clearPausedForDisconnectedSurvivor();
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 completionHandler.handleGameEnd(ROOM_ID);
             }

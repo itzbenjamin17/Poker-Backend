@@ -97,14 +97,14 @@ final class ReadyGate {
     /**
      * Evaluates expiration of a scheduled ready countdown timer.
      *
-     * @param forfeitPending          whether a forfeit is pending
-     * @param expectedDeadlineEpochMs deadline captured when the timer was scheduled
-     * @param scheduling              game scheduler used to clear the ready-timeout task if waiting
+     * @param pausedForDisconnectedSurvivor whether the game is paused awaiting a disconnected survivor
+     * @param expectedDeadlineEpochMs       deadline captured when the timer was scheduled
+     * @param scheduling                    game scheduler used to clear the ready-timeout task if waiting
      * @return timeout evaluation outcome
      */
     ReadyCountdownTimeoutOutcome expireCountdown(
-            boolean forfeitPending, long expectedDeadlineEpochMs, GameScheduling scheduling) {
-        if (forfeitPending || !isCountdownActive()
+            boolean pausedForDisconnectedSurvivor, long expectedDeadlineEpochMs, GameScheduling scheduling) {
+        if (pausedForDisconnectedSurvivor || !isCountdownActive()
                 || !Objects.equals(countdownDeadlineEpochMs, expectedDeadlineEpochMs)) {
             return ReadyCountdownTimeoutOutcome.IGNORE_STALE;
         }

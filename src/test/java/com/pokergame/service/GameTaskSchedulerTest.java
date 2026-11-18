@@ -190,8 +190,8 @@ class GameTaskSchedulerTest {
     }
 
     @Test
-    @DisplayName("scheduling helpers record deadlines on game and ignore null or forfeit-pending games")
-    void schedulingHelpers_RespectForfeitPendingAndMissingGames() {
+    @DisplayName("scheduling helpers record deadlines on game and ignore null or paused-for-disconnected-survivor games")
+    void schedulingHelpers_RespectPausedForDisconnectedSurvivorAndMissingGames() {
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             scheduler.scheduleAutoAdvance(GAME_ID);
             scheduler.scheduleTurnTimeout(GAME_ID);
@@ -199,7 +199,7 @@ class GameTaskSchedulerTest {
         }
 
         Game game = createAndRegisterGame();
-        game.markForfeitPending();
+        game.markPausedForDisconnectedSurvivor();
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             scheduler.scheduleTurnTimeout(GAME_ID);
             scheduler.scheduleGameEnd(GAME_ID, 2_000L);
@@ -207,7 +207,7 @@ class GameTaskSchedulerTest {
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
         }
 
-        game.clearForfeitPending();
+        game.clearPausedForDisconnectedSurvivor();
         clearInvocations(springScheduler);
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             scheduler.scheduleTurnTimeout(GAME_ID);

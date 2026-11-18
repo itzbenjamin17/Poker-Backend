@@ -59,7 +59,7 @@ True once the match has permanently ended (via `settleGameEnd`, `resetForNewHand
 True when one or zero non-out players still hold chips (`chips > 0`), meaning no further hand can begin even before `settleGameEnd` marks `gameOver`.
 
 **`isFinishedOrEliminated()`**:
-True when `!forfeitPending` and either `gameOver` is true or a settled hand has decided the winner (`isHandSettled() && isGameDecided()`), so player departures no longer affect live play.
+True when `!pausedForDisconnectedSurvivor` and either `gameOver` is true or a settled hand has decided the winner (`isHandSettled() && isGameDecided()`), so player departures no longer affect live play.
 
 **`isFinalPotSettled()` (`finalPotSettled`)**:
 True once `settleGameEnd` has awarded any remaining carry-over or unsettled pot to the match winner, preventing duplicate final-pot payouts on retries or crash recovery.
@@ -70,8 +70,8 @@ True when `lastSettlementResult != null`, meaning the current or most recent han
 **`endedBeforeShowdown()`**:
 True when `currentPhase != GamePhase.SHOWDOWN || !isHandSettled()`, distinguishing an in-progress or pre-showdown hand from a completed showdown so mid-hand zero-chip contenders remain eligible and new-hand requests are rejected while a hand is still running.
 
-**`isForfeitPending()` (`forfeitPending`)**:
-True when all other contenders have departed and the sole remaining contender is disconnected, pausing hand progression, ready countdowns, and game-end settlement until that survivor reconnects or their grace period expires.
+**`isPausedForDisconnectedSurvivor()` (`pausedForDisconnectedSurvivor`)**:
+True when all opponents leave or time out while one sole contender remains disconnected within their reconnect grace period. The game enters this holding state—pausing new hands, ready countdowns, and game-end settlement—until that survivor either reconnects (winning by forfeit) or their grace period expires (ending the abandoned match).
 
 **`Room.isFinished()` (`isFinished`)**:
 Room-level flag mirroring `gameOver` once the match finishes so `RoomService` keeps an empty room alive for post-game review instead of destroying it immediately.

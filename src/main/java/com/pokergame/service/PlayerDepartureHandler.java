@@ -126,8 +126,9 @@ class PlayerDepartureHandler {
             return;
         }
 
-        if (game.isForfeitPending()) {
-            handleDepartureDuringPendingForfeit(roomId, room, game, departingRoomMembers, departingGamePlayers);
+        if (game.isPausedForDisconnectedSurvivor()) {
+            handleDepartureWhilePausedForDisconnectedSurvivor(
+                    roomId, room, game, departingRoomMembers, departingGamePlayers);
             return;
         }
 
@@ -197,7 +198,7 @@ class PlayerDepartureHandler {
             logger.debug("Cannot mark player disconnected: game not found for gameId={}", gameId);
             return;
         }
-        if (game.isForfeitPending() || game.isGameOver()) {
+        if (game.isPausedForDisconnectedSurvivor() || game.isGameOver()) {
             return;
         }
         Player player = game.findPlayerByName(playerName);
@@ -244,9 +245,9 @@ class PlayerDepartureHandler {
                 player.setDisconnectDeadlineEpochMs(null);
                 logger.info("Player {} marked reconnected in game {}", playerName, gameId);
 
-                if (game.isForfeitPending() && game.countContenders() == 1
+                if (game.isPausedForDisconnectedSurvivor() && game.countContenders() == 1
                         && game.isContender(player)) {
-                    game.clearForfeitPending();
+                    game.clearPausedForDisconnectedSurvivor();
                     completionHandler.handleGameEndWithForfeits(gameId, player, Set.of());
                     markRoomMemberConnected(room, playerName);
                     return;
@@ -385,7 +386,7 @@ class PlayerDepartureHandler {
         return remaining.getFirst();
     }
 
-    private void handleDepartureDuringPendingForfeit(
+    private void handleDepartureWhilePausedForDisconnectedSurvivor(
             String roomId,
             Room room,
             Game game,

@@ -149,7 +149,7 @@ class HandProgressionServiceTest {
         }
 
         @Test
-        @DisplayName("guards missing game, pending forfeit, game over, unsettled hand, and terminal reset")
+        @DisplayName("guards missing game, paused for disconnected survivor, game over, unsettled hand, and terminal reset")
         void startNewHand_GuardsNonStartableStates() {
             HandProgressionService progression = createProgression(4_000L);
 
@@ -165,10 +165,10 @@ class HandProgressionServiceTest {
                 assertFalse(progression.startNewHand(GAME_ID));
                 assertEquals(1L, game.getHandNumber());
 
-                // Forfeit pending -> ignored
-                game.markForfeitPending();
+                // Paused for disconnected survivor -> ignored
+                game.markPausedForDisconnectedSurvivor();
                 assertFalse(progression.startNewHand(GAME_ID));
-                game.clearForfeitPending();
+                game.clearPausedForDisconnectedSurvivor();
 
                 // Game over without settled final pot -> settles via completion handler
                 game.dealFlop();

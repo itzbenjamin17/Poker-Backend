@@ -36,13 +36,13 @@ import java.util.Set;
  *       settled {@link GamePhase#SHOWDOWN}, distinguishing mid-hand play from post-hand state.</li>
  *   <li>{@link #isGameDecided()}: {@code true} when at most one non-out player holds chips, meaning
  *       another hand cannot start even before match-end cleanup marks the game over.</li>
- *   <li>{@link #isForfeitPending()}: {@code true} when all opponents departed leaving one
+ *   <li>{@link #isPausedForDisconnectedSurvivor()}: {@code true} when all opponents departed leaving one
  *       disconnected contender, pausing hand progression and game-end settlement until reconnect or
  *       grace expiry.</li>
  *   <li>{@link #isGameOver()}: {@code true} once the match has permanently ended (via
  *       {@link #settleGameEnd}, {@link #resetForNewHand}, or {@link #markGameOver()}), stopping
  *       gameplay while retaining post-game review until cleanup.</li>
- *   <li>{@link #isFinishedOrEliminated()}: {@code true} when {@code !forfeitPending} and either
+ *   <li>{@link #isFinishedOrEliminated()}: {@code true} when {@code !pausedForDisconnectedSurvivor} and either
  *       the match is over or a settled hand has decided the winner, so departures no longer affect
  *       live play.</li>
  *   <li>{@link #isFinalPotSettled()}: {@code true} once {@link #settleGameEnd} has awarded any
@@ -77,7 +77,7 @@ public class Game {
     private long stateRevision;
     private boolean gameOver;
     private boolean finalPotSettled;
-    private boolean forfeitPending;
+    private boolean pausedForDisconnectedSurvivor;
     private GameEndResponse gameEndResult;
 
     /**
@@ -186,7 +186,7 @@ public class Game {
                 : new HashMap<>();
         this.lastSettlementResult = builder.getLastSettlementResult();
         this.finalPotSettled = builder.isFinalPotSettled();
-        this.forfeitPending = builder.isForfeitPending();
+        this.pausedForDisconnectedSurvivor = builder.isPausedForDisconnectedSurvivor();
         this.handNumber = builder.getHandNumber();
         this.stateRevision = builder.getStateRevision();
         this.gameEndResult = builder.getGameEndResult();
@@ -475,7 +475,7 @@ public class Game {
      * @return outcome describing the resulting gate action
      */
     public ReadyCountdownStartOutcome openOrWaitReadyGate(long deadlineEpochMs) {
-        if (forfeitPending || gameOver) {
+        if (pausedForDisconnectedSurvivor || gameOver) {
             return ReadyCountdownStartOutcome.IGNORE;
         }
         if (isGameDecided()) {
@@ -494,7 +494,7 @@ public class Game {
      * @return outcome describing whether the expiration was stale, waiting, or forced ready
      */
     public ReadyCountdownTimeoutOutcome expireReadyCountdown(long expectedDeadlineEpochMs) {
-        return readyGate.expireCountdown(forfeitPending, expectedDeadlineEpochMs, scheduling);
+        return readyGate.expireCountdown(pausedForDisconnectedSurvivor, expectedDeadlineEpochMs, scheduling);
     }
 
     /**
@@ -573,7 +573,7 @@ public class Game {
             long expectedHandNumber,
             long expectedTimerVersion) {
         return scheduling.claimTask(
-                forfeitPending, gameOver, handNumber, task, expectedDeadline, expectedHandNumber, expectedTimerVersion);
+                pausedForDisconnectedSurvivor, gameOver, handNumber, task, expectedDeadline, expectedHandNumber, expectedTimerVersion);
     }
 
     /**
@@ -609,7 +609,7 @@ public class Game {
         for (Player leavingPlayer : leavingPlayers) {
             leavingPlayer.setIsOut();
         }
-        forfeitPending = true;
+        pausedForDisconnectedSurvivor = true;
         waitForReadyPlayers();
         invalidateProgressionTasks();
     }
@@ -617,15 +617,15 @@ public class Game {
     /**
      * Marks the game as awaiting reconnect or grace expiry of the sole remaining disconnected contender.
      */
-    public void markForfeitPending() {
-        this.forfeitPending = true;
+    public void markPausedForDisconnectedSurvivor() {
+        this.pausedForDisconnectedSurvivor = true;
     }
 
     /**
-     * Clears the pending forfeit hold once the remaining contender reconnects or forfeit settlement proceeds.
+     * Clears the disconnected-survivor pause once the remaining contender reconnects or forfeit settlement proceeds.
      */
-    public void clearForfeitPending() {
-        this.forfeitPending = false;
+    public void clearPausedForDisconnectedSurvivor() {
+        this.pausedForDisconnectedSurvivor = false;
     }
 
     /**
@@ -1072,17 +1072,17 @@ public class Game {
         return finalPotSettled;
     }
 
-    public boolean isForfeitPending() {
-        return forfeitPending;
+    public boolean isPausedForDisconnectedSurvivor() {
+        return pausedForDisconnectedSurvivor;
     }
 
     /**
-     * Returns whether the game is settled or over without a pending forfeit.
+     * Returns whether the game is settled or over without being paused for a disconnected survivor.
      *
-     * @return {@code true} if the game has finished or can finalize without a pending forfeit
+     * @return {@code true} if the game has finished or can finalize without waiting on a disconnected survivor
      */
     public boolean isFinishedOrEliminated() {
-        return !forfeitPending && (gameOver || (isHandSettled() && isGameDecided()));
+        return !pausedForDisconnectedSurvivor && (gameOver || (isHandSettled() && isGameDecided()));
     }
 
     /**

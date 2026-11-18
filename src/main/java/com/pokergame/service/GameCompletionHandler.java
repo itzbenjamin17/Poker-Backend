@@ -221,7 +221,7 @@ class GameCompletionHandler {
         if (game == null) {
             return;
         }
-        if (game.isForfeitPending() && preferredWinner == null) {
+        if (game.isPausedForDisconnectedSurvivor() && preferredWinner == null) {
             return;
         }
         if (game.isGameOver() && (game.isFinalPotSettled() || game.isAbandoned())) {

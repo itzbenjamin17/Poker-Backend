@@ -157,7 +157,7 @@ class RoomSnapshotMapperTest {
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 123L))
                 .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 9L))
-                .handNumber(7).readyGateState(ReadyGateState.WAITING_FOR_PLAYERS).forfeitPending(true).stateRevision(19)
+                .handNumber(7).readyGateState(ReadyGateState.WAITING_FOR_PLAYERS).pausedForDisconnectedSurvivor(true).stateRevision(19)
                 .build();
         game.markGameOver();
         game.settleGameEnd(players.getFirst(), Set.of());
@@ -177,7 +177,7 @@ class RoomSnapshotMapperTest {
         assertEquals(7, restored.getHandNumber());
         assertEquals(ReadyGateState.CLOSED, restored.getReadyGateState());
         assertEquals(9L, restored.getTimerVersion(ScheduledGameTask.CLEANUP));
-        assertTrue(restored.isForfeitPending());
+        assertTrue(restored.isPausedForDisconnectedSurvivor());
         assertEquals(19, restored.getStateRevision(), "Persisted same-hand public revision must survive restart");
         String json = new String(snapshot, StandardCharsets.UTF_8);
         assertTrue(json.contains("\"stateRevision\":19"));
@@ -244,7 +244,7 @@ class RoomSnapshotMapperTest {
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
                 .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 1L))
-                .handNumber(1).readyGateState(ReadyGateState.CLOSED).forfeitPending(false).stateRevision(42)
+                .handNumber(1).readyGateState(ReadyGateState.CLOSED).pausedForDisconnectedSurvivor(false).stateRevision(42)
                 .gameEndResult(terminalResult)
                 .build();
 
@@ -634,7 +634,7 @@ class RoomSnapshotMapperTest {
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
                 .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 1L))
-                .handNumber(1).readyGateState(ReadyGateState.CLOSED).forfeitPending(false).stateRevision(42)
+                .handNumber(1).readyGateState(ReadyGateState.CLOSED).pausedForDisconnectedSurvivor(false).stateRevision(42)
                 .gameEndResult(terminalResult).build();
 
         ObjectNode serialized = JSON.valueToTree(

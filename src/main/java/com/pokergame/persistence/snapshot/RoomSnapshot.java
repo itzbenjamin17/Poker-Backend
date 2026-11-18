@@ -89,7 +89,7 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
      * @param readyGateState                current ready-gate state machine phase
      * @param handNumber                    authoritative completed-hand count
      * @param timerVersions                 timer version tokens protecting asynchronous task executions
-     * @param forfeitPending                whether a pending forfeit preserves out standings
+     * @param pausedForDisconnectedSurvivor whether the game is paused awaiting a disconnected survivor, preserving out standings
      * @param stateRevision                 monotonically increasing public state revision
      * @param gameEndResult                 frozen immutable game result retained across post-game review
      */
@@ -103,7 +103,7 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
             List<String> handSeatOrder, String dealerPlayerId, String smallBlindPlayerId,
             String bigBlindPlayerId, String currentPlayerId, SettlementState lastSettlementResult,
             boolean finalPotSettled, ReadyGateState readyGateState, long handNumber,
-            Map<ScheduledGameTask, Long> timerVersions, boolean forfeitPending, long stateRevision,
+            Map<ScheduledGameTask, Long> timerVersions, boolean pausedForDisconnectedSurvivor, long stateRevision,
             GameResultState gameEndResult) {
     }
 

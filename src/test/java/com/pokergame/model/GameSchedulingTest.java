@@ -430,7 +430,7 @@ class GameSchedulingTest {
     class TaskClaimAndExpiryTests {
 
         @Test
-        void claimTask_WhenForfeitPending_ReturnsFalseWithoutClearing() {
+        void claimTask_WhenPausedForDisconnectedSurvivor_ReturnsFalseWithoutClearing() {
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
             long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND);
 

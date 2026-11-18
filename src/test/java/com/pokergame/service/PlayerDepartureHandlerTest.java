@@ -529,7 +529,7 @@ class PlayerDepartureHandlerTest {
         }
 
         @Test
-        void pendingForfeitSurvivorExpiryCleansSettledShowdownRoomGameAndTasks() {
+        void pausedForDisconnectedSurvivorExpiryCleansSettledShowdownRoomGameAndTasks() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
@@ -540,7 +540,7 @@ class PlayerDepartureHandlerTest {
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
             assertTrue(game.isHandSettled());
             survivor.setDisconnected(true);
-            game.markForfeitPending();
+            game.markPausedForDisconnectedSurvivor();
             game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 10L);
             game.scheduleTask(ScheduledGameTask.GAME_END, 10L);
             game.scheduleTask(ScheduledGameTask.CLEANUP, 10L);
@@ -572,7 +572,7 @@ class PlayerDepartureHandlerTest {
         }
 
         @Test
-        void pendingForfeitRetriesPreserveOutRowsAndSpectatorDepartureDoesNotAdvanceGame() {
+        void pausedForDisconnectedSurvivorRetriesPreserveOutRowsAndSpectatorDepartureDoesNotAdvanceGame() {
             testRoom.addPlayer("Spectator");
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
@@ -597,12 +597,12 @@ class PlayerDepartureHandlerTest {
 
             withRoomLock(ROOM_ID, () -> {
                 gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
-                assertTrue(game.isForfeitPending());
+                assertTrue(game.isPausedForDisconnectedSurvivor());
                 gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
                 gameLifecycleService.removePlayers(ROOM_ID, List.of("Spectator"));
                 assertTrue(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Host") && p.isOut()));
                 assertTrue(game.getPlayers().stream().anyMatch(p -> p.getName().equals("Spectator") && p.isOut()));
-                assertTrue(game.isForfeitPending());
+                assertTrue(game.isPausedForDisconnectedSurvivor());
                 assertTrue(gameLifecycleService.gameExists(ROOM_ID));
 
                 long p2ForfeitDeadline = BASE_EPOCH_MS - 100;
@@ -616,7 +616,7 @@ class PlayerDepartureHandlerTest {
         }
 
         @Test
-        void pendingForfeitInvalidatesCapturedProgressionCallbacksAndReconnectSettlesOnce() {
+        void pausedForDisconnectedSurvivorInvalidatesCapturedProgressionCallbacksAndReconnectSettlesOnce() {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
@@ -647,7 +647,7 @@ class PlayerDepartureHandlerTest {
 
             withRoomLock(ROOM_ID, () ->
                     gameLifecycleService.removePlayers(ROOM_ID, List.of(departing.getName())));
-            assertTrue(game.isForfeitPending());
+            assertTrue(game.isPausedForDisconnectedSurvivor());
             assertTrue(departing.isOut());
             assertFalse(testRoom.hasPlayer(departing.getName()));
 
@@ -662,14 +662,14 @@ class PlayerDepartureHandlerTest {
             assertEquals(handBefore, game.getHandNumber());
             assertEquals(potBefore, game.getPot());
             assertFalse(game.isGameOver());
-            assertTrue(game.isForfeitPending());
+            assertTrue(game.isPausedForDisconnectedSurvivor());
             verify(gameStateService, never()).sendGameEnd(any(GameEndResponse.class));
             verify(gameStateService, never()).broadcastGameState(any(Game.class));
 
             RoomSnapshotMapper mapper = new RoomSnapshotMapper(
                     JsonMapper.builder().findAndAddModules().build());
             Game restored = mapper.deserialize(mapper.serialize(mapper.captureStateImage(testRoom, game))).game();
-            assertTrue(restored.isForfeitPending());
+            assertTrue(restored.isPausedForDisconnectedSurvivor());
             assertTrue(restored.getPlayers().stream()
                     .anyMatch(player -> player.getName().equals(departing.getName()) && player.isOut()));
             assertFalse(mapper.deserialize(mapper.serialize(mapper.captureStateImage(testRoom, game)))
@@ -679,7 +679,7 @@ class PlayerDepartureHandlerTest {
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReconnected(ROOM_ID, restoredSurvivor.getName()));
             assertTrue(restored.isGameOver());
-            assertFalse(restored.isForfeitPending());
+            assertFalse(restored.isPausedForDisconnectedSurvivor());
             assertEquals(departingStackBefore, findGamePlayer(restored, departing.getName()).getChips());
             assertEquals(expectedSurvivorEndChips, restoredSurvivor.getChips());
             assertEquals(BASE_EPOCH_MS + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),

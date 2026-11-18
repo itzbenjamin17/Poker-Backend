@@ -2374,7 +2374,7 @@ class GameTest {
 
             assertTrue(leaving.stream().allMatch(Player::isOut));
             assertFalse(survivor.isOut());
-            assertTrue(pauseGame.isForfeitPending());
+            assertTrue(pauseGame.isPausedForDisconnectedSurvivor());
             assertFalse(pauseGame.isGameOver());
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, pauseGame.getReadyGateState());
             assertNull(pauseGame.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
@@ -2428,17 +2428,17 @@ class GameTest {
         }
 
         @Test
-        void openOrWaitReadyGate_IgnoresForfeitPendingGameOverNonShowdownAndStopsWhenDecided() {
+        void openOrWaitReadyGate_IgnoresPausedForDisconnectedSurvivorGameOverNonShowdownAndStopsWhenDecided() {
             Player p1 = restoredPlayer("Alice", "p1", 1000, 0, false);
             Player p2 = restoredPlayer("Bob", "p2", 1000, 0, false);
 
-            Game forfeitPendingGame = Game.restoreBuilder().gameId("rg-forfeit")
+            Game pausedGame = Game.restoreBuilder().gameId("rg-forfeit")
                     .players(List.of(p1, p2)).activePlayerIds(List.of("p1", "p2"))
                     .remainingDeck(List.of()).smallBlind(10).bigBlind(20)
-                    .currentPhase(GamePhase.SHOWDOWN).forfeitPending(true).build();
-            assertEquals(ReadyCountdownStartOutcome.IGNORE, forfeitPendingGame.openOrWaitReadyGate(50_000L));
-            assertEquals(ReadyGateState.CLOSED, forfeitPendingGame.getReadyGateState());
-            assertNull(forfeitPendingGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+                    .currentPhase(GamePhase.SHOWDOWN).pausedForDisconnectedSurvivor(true).build();
+            assertEquals(ReadyCountdownStartOutcome.IGNORE, pausedGame.openOrWaitReadyGate(50_000L));
+            assertEquals(ReadyGateState.CLOSED, pausedGame.getReadyGateState());
+            assertNull(pausedGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
 
             Game gameOverGame = Game.restoreBuilder().gameId("rg-over")
                     .players(List.of(p1, p2)).activePlayerIds(List.of("p1", "p2"))

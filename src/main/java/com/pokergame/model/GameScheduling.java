@@ -104,25 +104,25 @@ final class GameScheduling {
      * Validates whether a firing timer callback still matches current game state and claims
      * non-cleanup tasks for one-shot execution.
      *
-     * @param forfeitPending       whether a forfeit is currently pending
-     * @param gameOver             whether the game has concluded
-     * @param currentHandNumber    current hand number on the game
-     * @param task                 task type that fired
-     * @param expectedDeadline     deadline captured when the timer was scheduled
-     * @param expectedHandNumber   hand number captured when the timer was scheduled
-     * @param expectedTimerVersion schedule count captured when the timer was scheduled
+     * @param pausedForDisconnectedSurvivor whether the game is paused awaiting a disconnected survivor
+     * @param gameOver                      whether the game has concluded
+     * @param currentHandNumber             current hand number on the game
+     * @param task                          task type that fired
+     * @param expectedDeadline              deadline captured when the timer was scheduled
+     * @param expectedHandNumber            hand number captured when the timer was scheduled
+     * @param expectedTimerVersion          schedule count captured when the timer was scheduled
      * @return {@code true} if the task was claimed for execution, {@code false} if stale,
-     *         cancelled on game over, or blocked by a pending forfeit
+     *         cancelled on game over, or blocked while paused for a disconnected survivor
      */
     boolean claimTask(
-            boolean forfeitPending,
+            boolean pausedForDisconnectedSurvivor,
             boolean gameOver,
             long currentHandNumber,
             ScheduledGameTask task,
             long expectedDeadline,
             long expectedHandNumber,
             long expectedTimerVersion) {
-        if (forfeitPending) {
+        if (pausedForDisconnectedSurvivor) {
             return false;
         }
         if ((task != ScheduledGameTask.CLEANUP && currentHandNumber != expectedHandNumber)

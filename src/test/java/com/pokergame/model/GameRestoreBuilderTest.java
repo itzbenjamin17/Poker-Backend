@@ -103,7 +103,7 @@ class GameRestoreBuilderTest {
                 .smallBlindPlayerId("p3")                           // 23
                 .bigBlindPlayerId("p1")                             // 24
                 .finalPotSettled(true)                              // 25
-                .forfeitPending(true)                               // 26
+                .pausedForDisconnectedSurvivor(true)                // 26
                 .readyCountdownDeadlineEpochMs(1700000000000L)      // 27
                 .readyGateState(ReadyGateState.COUNTING_DOWN)       // 28
                 .handNumber(7L)                                     // 29
@@ -141,7 +141,7 @@ class GameRestoreBuilderTest {
         assertEquals("p3", game.getSmallBlindPlayerId());                            // 23
         assertEquals("p1", game.getBigBlindPlayerId());                              // 24
         assertTrue(game.isFinalPotSettled());                                        // 25
-        assertTrue(game.isForfeitPending());                                         // 26
+        assertTrue(game.isPausedForDisconnectedSurvivor());                          // 26
         assertTrue(game.isReadyCountdownActive());                                   // 27
         assertEquals(1700000000000L, game.getReadyCountdownDeadlineEpochMs());      // 28
         assertEquals(ReadyGateState.COUNTING_DOWN, game.getReadyGateState());        // 29
@@ -556,7 +556,7 @@ class GameRestoreBuilderTest {
                 .smallBlindPlayerId("p1")
                 .bigBlindPlayerId("p2")
                 .finalPotSettled(false)
-                .forfeitPending(false)
+                .pausedForDisconnectedSurvivor(false)
                 .readyCountdownDeadlineEpochMs(null)
                 .readyGateState(ReadyGateState.CLOSED)
                 .handNumber(1L)
@@ -1087,7 +1087,7 @@ class GameRestoreBuilderTest {
                     .smallBlindPlayerId("p1")
                     .bigBlindPlayerId("p2")
                     .finalPotSettled(false)
-                    .forfeitPending(false)
+                    .pausedForDisconnectedSurvivor(false)
                     .readyCountdownDeadlineEpochMs(null)
                     .readyGateState(ReadyGateState.CLOSED)
                     .handNumber(1L)

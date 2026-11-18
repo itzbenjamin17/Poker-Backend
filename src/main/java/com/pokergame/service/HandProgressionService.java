@@ -51,7 +51,7 @@ class HandProgressionService {
             logger.warn("Cannot start new hand - game {} not found", gameId);
             return false;
         }
-        if (game.isForfeitPending()) {
+        if (game.isPausedForDisconnectedSurvivor()) {
             return false;
         }
         if (game.isGameOver()) {
