@@ -32,7 +32,7 @@ import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Room;
 import com.pokergame.service.event.RoomDestroyed;
 import com.pokergame.service.event.RoomMemberRegistered;
-import com.pokergame.service.event.RoomMembershipRetired;
+import com.pokergame.service.event.RoomMembershipEnded;
 import com.pokergame.testutil.MutableClock;
 import com.pokergame.testutil.TestTimings;
 import com.pokergame.util.LockLease;
@@ -496,14 +496,14 @@ class RoomServiceTest {
         }
 
         @Test
-        @DisplayName("should transfer the host when the host leaves an active batch departure")
-        void givenHostLeavesActiveRoom_whenLeavePlayersBatch_thenHostTransfersToSuccessor() {
+        @DisplayName("should transfer the host when the host leaves in removeMembers")
+        void givenHostLeavesActiveRoom_whenRemoveMembers_thenHostTransfersToSuccessor() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
             withRoomLock(roomId, () -> {
                 roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null));
                 roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player3", null));
                 reset(messagingTemplate);
-                roomService.leavePlayersBatch(roomId, List.of("HostPlayer"), "Player2");
+                roomService.removeMembers(roomId, List.of("HostPlayer"), "Player2");
             });
 
             Room room = coordinatedGetRoom(roomId);
@@ -524,14 +524,14 @@ class RoomServiceTest {
         }
 
         @Test
-        @DisplayName("keeps a terminal room registered and broadcasts ROOM_CLOSED when the last members leave")
-        void givenTerminalRoom_whenLastMembersLeaveByBatch_thenRoomContainerIsPreserved() {
+        @DisplayName("keeps a finished room registered and broadcasts ROOM_CLOSED when the last members leave")
+        void givenFinishedRoom_whenLastMembersRemoved_thenRoomContainerIsPreserved() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
             withRoomLock(roomId, () -> {
                 roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "G1", null));
-                coordinatedGetRoom(roomId).setTerminal(true);
+                coordinatedGetRoom(roomId).setFinished(true);
                 reset(messagingTemplate);
-                roomService.leavePlayersBatch(roomId, List.of("HostPlayer", "G1"), null);
+                roomService.removeMembers(roomId, List.of("HostPlayer", "G1"), null);
             });
 
             Room room = coordinatedGetRoom(roomId);
@@ -542,13 +542,13 @@ class RoomServiceTest {
         }
 
         @Test
-        @DisplayName("destroys a non-terminal room and broadcasts ROOM_CLOSED when the last members leave")
-        void givenNonTerminalRoom_whenLastMembersLeaveByBatch_thenRoomIsDestroyed() {
+        @DisplayName("destroys an unfinished room and broadcasts ROOM_CLOSED when the last members leave")
+        void givenUnfinishedRoom_whenLastMembersRemoved_thenRoomIsDestroyed() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
             withRoomLock(roomId, () -> {
                 roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "G1", null));
                 reset(messagingTemplate);
-                roomService.leavePlayersBatch(roomId, List.of("HostPlayer", "G1"), null);
+                roomService.removeMembers(roomId, List.of("HostPlayer", "G1"), null);
             });
 
             assertThat(coordinatedGetRoom(roomId)).isNull();
@@ -701,7 +701,7 @@ class RoomServiceTest {
 
             Room roomAfterRead = coordinatedGetRoom(roomId);
             assertThat(roomAfterRead).isNotNull();
-            assertThat(roomAfterRead.isTerminal()).isFalse();
+            assertThat(roomAfterRead.isFinished()).isFalse();
             assertThat(roomNamed(roomName)).isNotNull();
         }
 
@@ -1020,7 +1020,7 @@ class RoomServiceTest {
 
             Room roomLookedUp = coordinatedGetRoom(roomId);
             assertThat(roomLookedUp).isNotNull();
-            assertThat(roomLookedUp.isTerminal()).isFalse();
+            assertThat(roomLookedUp.isFinished()).isFalse();
             assertThat(roomNamed(roomName)).isNotNull();
 
             assertThatThrownBy(() -> withRoomLock(roomId, () -> roomService.joinRoom(roomId,
@@ -1111,16 +1111,16 @@ class RoomServiceTest {
     }
 
     @Test
-    @DisplayName("leavePlayersBatch publishes retirement of exactly the leaving member's membership")
-    void leavePlayersBatch_PublishesMembershipRetired() {
+    @DisplayName("removeMembers publishes membership-ended event for exactly the leaving member's membership")
+    void removeMembers_PublishesMembershipEnded() {
         String roomId = createRoom(roomService, validCreateRequest).roomId();
         withRoomLock(roomId, () ->
                 roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null)));
         String p2MembershipId = coordinatedGetRoom(roomId).getMembershipId("Player2");
 
-        withRoomLock(roomId, () -> roomService.leavePlayersBatch(roomId, List.of("Player2"), "HostPlayer"));
+        withRoomLock(roomId, () -> roomService.removeMembers(roomId, List.of("Player2"), "HostPlayer"));
 
-        verify(eventPublisher).publishEvent(new RoomMembershipRetired(roomId, "Player2", p2MembershipId));
+        verify(eventPublisher).publishEvent(new RoomMembershipEnded(roomId, "Player2", p2MembershipId));
     }
 
     @Test

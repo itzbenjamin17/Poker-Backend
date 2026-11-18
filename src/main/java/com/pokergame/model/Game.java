@@ -47,7 +47,7 @@ import java.util.Set;
  *       live play.</li>
  *   <li>{@link #isFinalPotSettled()}: {@code true} once {@link #settleGameEnd} has awarded any
  *       remaining pot to the match winner, preventing duplicate final-pot payouts on retries.</li>
- *   <li>{@link Room#isTerminal()}: room-level mirror of {@link #isGameOver()} that retains an
+ *   <li>{@link Room#isFinished()}: room-level mirror of {@link #isGameOver()} that retains an
  *       empty room for post-game review instead of destroying it immediately.</li>
  * </ul>
  */

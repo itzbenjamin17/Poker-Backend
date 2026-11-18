@@ -206,7 +206,7 @@ class RoomSnapshotMapperTest {
         room.addPlayer("Alice");
         room.addPlayer("Bob");
         room.setGameStarted(true);
-        room.setTerminal(true);
+        room.setFinished(true);
 
         List<Player> players = List.of(
                 Player.restoreBuilder().name("Alice").playerId("a").chips(2000).currentBet(0)
@@ -595,7 +595,7 @@ class RoomSnapshotMapperTest {
         room.addPlayer("Alice");
         room.addPlayer("Bob");
         room.setGameStarted(true);
-        room.setTerminal(true);
+        room.setFinished(true);
 
         List<Player> players = List.of(
                 Player.restoreBuilder().name("Alice").playerId("a").chips(2000).currentBet(0)

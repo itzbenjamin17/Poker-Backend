@@ -429,7 +429,7 @@ class PersistenceRestartIT {
                 Room restoredRoom = rooms.getRoom(roomId);
                 Game restoredGame = games.getGame(roomId);
                 assertThat(restoredRoom).isNotNull();
-                assertThat(restoredRoom.isTerminal()).isTrue();
+                assertThat(restoredRoom.isFinished()).isTrue();
                 assertThat(restoredGame).isNotNull();
                 assertThat(restoredGame.isGameOver()).isTrue();
                 assertThat(restoredGame.isAbandoned()).isTrue();
@@ -623,7 +623,7 @@ class PersistenceRestartIT {
                 Room room = rooms.getRoom(roomId);
                 assertThat(room).isNotNull();
                 assertThat(room.getPlayers()).isEmpty();
-                assertThat(room.isTerminal()).isTrue();
+                assertThat(room.isFinished()).isTrue();
                 assertThat(games.getGame(roomId).getGameEndResult()).isNotNull();
                 return null;
             });
@@ -637,7 +637,7 @@ class PersistenceRestartIT {
                 Game restoredGame = games.getGame(roomId);
                 assertThat(restoredRoom).isNotNull();
                 assertThat(restoredRoom.getPlayers()).isEmpty();
-                assertThat(restoredRoom.isTerminal()).isTrue();
+                assertThat(restoredRoom.isFinished()).isTrue();
                 assertThat(restoredGame).isNotNull();
                 assertThat(restoredGame.isGameOver()).isTrue();
                 assertThat(restoredGame.getGameEndResult()).isEqualTo(originalResult);

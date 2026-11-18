@@ -231,7 +231,7 @@ class PlayerDepartureHandlerTest {
     }
 
     private void verifyNobodyRemovedFromRoom() {
-        verify(roomService, never()).leavePlayersBatch(anyString(), anyList(), any());
+        verify(roomService, never()).removeMembers(anyString(), anyList(), any());
         verify(roomService, never()).leaveRoom(anyString(), anyString());
     }
 
@@ -456,7 +456,7 @@ class PlayerDepartureHandlerTest {
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Host")));
             verify(roomService).leaveRoom(ROOM_ID, "Host");
-            verify(roomService, never()).leavePlayersBatch(anyString(), anyList(), any());
+            verify(roomService, never()).removeMembers(anyString(), anyList(), any());
 
             reset(roomService);
             testRoom.addPlayer("Player3");
@@ -466,7 +466,7 @@ class PlayerDepartureHandlerTest {
                 gameLifecycleService.createGameFromRoom(ROOM_ID);
                 gameLifecycleService.removePlayers(ROOM_ID, List.of("Player3", "Player4"));
             });
-            verify(roomService, times(1)).leavePlayersBatch(ROOM_ID, List.of("Player3", "Player4"), "Host");
+            verify(roomService, times(1)).removeMembers(ROOM_ID, List.of("Player3", "Player4"), "Host");
             assertEquals(2, getGameLocked(ROOM_ID).getPlayers().size());
             assertFalse(getGameLocked(ROOM_ID).isGameOver());
 
@@ -481,7 +481,7 @@ class PlayerDepartureHandlerTest {
                 gameLifecycleService.createGameFromRoom(ROOM_ID);
                 gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
             });
-            verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host"), "Player2");
+            verify(roomService).removeMembers(ROOM_ID, List.of("Host"), "Player2");
             assertFalse(getGameLocked(ROOM_ID).getPlayers().stream().anyMatch(p -> p.getName().equals("Host")));
 
             // Terminal state frozen: roster stays intact
@@ -493,7 +493,7 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Player2")));
-            verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
+            verify(roomService).removeMembers(eq(ROOM_ID), eq(List.of("Player2")), any());
             assertTrue(active.getPlayers().stream().anyMatch(p -> p.getName().equals("Player2")));
         }
 
@@ -518,7 +518,7 @@ class PlayerDepartureHandlerTest {
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Player2")));
 
             Game game = getGameLocked(ROOM_ID);
-            verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
+            verify(roomService).removeMembers(eq(ROOM_ID), eq(List.of("Player2")), any());
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertNull(game.getLastSettlementResult());
             assertTrue(game.getPlayers().stream()
@@ -556,7 +556,7 @@ class PlayerDepartureHandlerTest {
                     roomPresent.set(0);
                 }
                 return null;
-            }).when(roomService).leavePlayersBatch(eq(ROOM_ID), anyList(), any());
+            }).when(roomService).removeMembers(eq(ROOM_ID), anyList(), any());
 
             long p2Deadline = BASE_EPOCH_MS - 100;
             survivor.setDisconnectDeadlineEpochMs(p2Deadline);
@@ -593,7 +593,7 @@ class PlayerDepartureHandlerTest {
                     roomPresent.set(0);
                 }
                 return null;
-            }).when(roomService).leavePlayersBatch(eq(ROOM_ID), anyList(), any());
+            }).when(roomService).removeMembers(eq(ROOM_ID), anyList(), any());
 
             withRoomLock(ROOM_ID, () -> {
                 gameLifecycleService.removePlayers(ROOM_ID, List.of("Host"));
@@ -639,7 +639,7 @@ class PlayerDepartureHandlerTest {
                 List<String> leaving = invocation.getArgument(1);
                 leaving.forEach(testRoom::removePlayer);
                 return null;
-            }).when(roomService).leavePlayersBatch(eq(ROOM_ID), anyList(), any());
+            }).when(roomService).removeMembers(eq(ROOM_ID), anyList(), any());
             long handBefore = game.getHandNumber();
             int potBefore = game.getPot();
             int departingStackBefore = departing.getChips();
@@ -730,7 +730,7 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Host")));
-            verify(roomService).leavePlayersBatch(ROOM_ID, List.of("Host"), "Player3");
+            verify(roomService).removeMembers(ROOM_ID, List.of("Host"), "Player3");
 
             // 2. Chooses unsettled zero-stack all-in contender over later candidate
             String r2Id = "succ-allin";
@@ -747,7 +747,7 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             when(roomService.getRoom(r2Id)).thenReturn(r2);
             withRoomLock(r2Id, () -> gameLifecycleService.removePlayers(r2Id, List.of("Host")));
-            verify(roomService).leavePlayersBatch(r2Id, List.of("Host"), "Player2");
+            verify(roomService).removeMembers(r2Id, List.of("Host"), "Player2");
 
             // 3. Chooses disconnected contender over room-only spectator
             String r3Id = "succ-dc";
@@ -765,7 +765,7 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             when(roomService.getRoom(r3Id)).thenReturn(r3);
             withRoomLock(r3Id, () -> gameLifecycleService.removePlayers(r3Id, List.of("Host")));
-            verify(roomService).leavePlayersBatch(r3Id, List.of("Host"), "Player2");
+            verify(roomService).removeMembers(r3Id, List.of("Host"), "Player2");
 
             // 4. Chooses join-order fallback when no contenders remain + batch + null when empty
             String r4Id = "succ-fallback";
@@ -785,7 +785,7 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             when(roomService.getRoom(r4Id)).thenReturn(r4);
             withRoomLock(r4Id, () -> gameLifecycleService.removePlayers(r4Id, List.of("Host")));
-            verify(roomService).leavePlayersBatch(r4Id, List.of("Host"), "Player2");
+            verify(roomService).removeMembers(r4Id, List.of("Host"), "Player2");
 
             String r5Id = "succ-batch";
             Room r5 = new Room(r5Id, "R5", "Host", 6, 5, 10, 100, null);
@@ -798,7 +798,7 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             when(roomService.getRoom(r5Id)).thenReturn(r5);
             withRoomLock(r5Id, () -> gameLifecycleService.removePlayers(r5Id, List.of("Host", "Player2", "Player3")));
-            verify(roomService).leavePlayersBatch(r5Id, List.of("Host", "Player2", "Player3"), "Player4");
+            verify(roomService).removeMembers(r5Id, List.of("Host", "Player2", "Player3"), "Player4");
 
             String r6Id = "succ-empty";
             Room r6 = new Room(r6Id, "R6", "Host", 6, 5, 10, 100, null);
@@ -814,7 +814,7 @@ class PlayerDepartureHandlerTest {
             reset(roomService);
             when(roomService.getRoom(r6Id)).thenReturn(r6);
             withRoomLock(r6Id, () -> gameLifecycleService.removePlayers(r6Id, List.of("Host", "Player2")));
-            verify(roomService).leavePlayersBatch(r6Id, List.of("Host", "Player2"), null);
+            verify(roomService).removeMembers(r6Id, List.of("Host", "Player2"), null);
         }
     }
 
@@ -887,7 +887,7 @@ class PlayerDepartureHandlerTest {
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 departureHandler.handleTurnTimeout(game);
             }
-            verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of(actor)), any());
+            verify(roomService).removeMembers(eq(ROOM_ID), eq(List.of(actor)), any());
 
             // Inactivity expired takes precedence over actor removal
             String inactiveRoomId = "turn-inactive";
@@ -906,7 +906,7 @@ class PlayerDepartureHandlerTest {
             }
             assertTrue(inactiveGame.isGameOver());
             assertTrue(inactiveGame.getGameEndResult().abandoned());
-            verify(roomService, never()).leavePlayersBatch(anyString(), anyList(), any());
+            verify(roomService, never()).removeMembers(anyString(), anyList(), any());
         }
     }
 
@@ -938,7 +938,7 @@ class PlayerDepartureHandlerTest {
                     .anyMatch(p -> p.name().equals("Host") && Boolean.TRUE.equals(p.isWinner())));
             verify(gameStateService).sendGameEnd(
                     argThat(event -> event != null && "Host".equals(event.winner()) && event.isForfeit()));
-            verify(roomService, times(1)).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2", "Player3")), any());
+            verify(roomService, times(1)).removeMembers(eq(ROOM_ID), eq(List.of("Player2", "Player3")), any());
             verify(roomService, never()).leaveRoom(anyString(), anyString());
             verify(gameStateService).advanceRevisionAndBuildGameEnd(
                     argThat(game -> game.getPlayers().stream().map(Player::getName).collect(Collectors.toSet())
@@ -1075,7 +1075,7 @@ class PlayerDepartureHandlerTest {
                 String p2MembershipId = testRoom.getMembershipId("Player2");
                 gameLifecycleService.removeDisconnectedPlayer(ROOM_ID, "Player2", p2MembershipId, deadline);
             });
-            verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of("Player2")), any());
+            verify(roomService).removeMembers(eq(ROOM_ID), eq(List.of("Player2")), any());
 
             // Lobby host expired destroys room
             Room lobbyHost = new Room("lobby-1", "Lobby", "Host", 4, 10, 20, 1000, null);
@@ -1094,7 +1094,7 @@ class PlayerDepartureHandlerTest {
             lobbyGuest.setAbsenceDeadline("Guest", deadline);
             withRoomLock("lobby-2", () -> gameLifecycleService.removeDisconnectedPlayer(
                     "lobby-2", "Guest", lobbyGuest.getMembershipId("Guest"), deadline));
-            verify(roomService).leavePlayersBatch("lobby-2", List.of("Guest"), "Host");
+            verify(roomService).removeMembers("lobby-2", List.of("Guest"), "Host");
 
             // Busted room member expires even though playerExistsInGame is false
             String bustedRoomId = "busted-room";
@@ -1115,7 +1115,7 @@ class PlayerDepartureHandlerTest {
                 gameLifecycleService.removeDisconnectedPlayer(
                         bustedRoomId, "Player3", bustedRoom.getMembershipId("Player3"), deadline);
             });
-            verify(roomService).leavePlayersBatch(eq(bustedRoomId), eq(List.of("Player3")), any());
+            verify(roomService).removeMembers(eq(bustedRoomId), eq(List.of("Player3")), any());
 
             // Room-only spectator expired while active game runs leaves room only
             String specRoomId = "spec-active";
@@ -1130,7 +1130,7 @@ class PlayerDepartureHandlerTest {
                 gameLifecycleService.removeDisconnectedPlayer(
                         specRoomId, "Spectator", specRoom.getMembershipId("Spectator"), deadline);
             });
-            verify(roomService).leavePlayersBatch(eq(specRoomId), eq(List.of("Spectator")), any());
+            verify(roomService).removeMembers(eq(specRoomId), eq(List.of("Spectator")), any());
             assertEquals(2, getGameLocked(specRoomId).getPlayers().size());
         }
 
@@ -1383,7 +1383,7 @@ class PlayerDepartureHandlerTest {
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removeDisconnectedPlayer(
                     ROOM_ID, busted.getName(), testRoom.getMembershipId(busted.getName()), deadline));
 
-            verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of(busted.getName())), any());
+            verify(roomService).removeMembers(eq(ROOM_ID), eq(List.of(busted.getName())), any());
             assertTrue(game.isGameOver());
         }
 
@@ -1603,7 +1603,7 @@ class PlayerDepartureHandlerTest {
                     Game endedGame = getGameLocked(roomId);
                     assertNotNull(endedGame);
                     assertTrue(endedGame.isGameOver());
-                    assertTrue(room.isTerminal());
+                    assertTrue(room.isFinished());
                 }
             }
         }
@@ -1628,7 +1628,7 @@ class PlayerDepartureHandlerTest {
                     }
                 }
                 return null;
-            }).when(roomService).leavePlayersBatch(anyString(), any(), any());
+            }).when(roomService).removeMembers(anyString(), any(), any());
             lenient().doAnswer(inv -> {
                 String rid = inv.getArgument(0);
                 activeRooms.remove(rid);

@@ -113,7 +113,7 @@ class PlayerDepartureHandler {
             // players need no separate removal.
             roomService.leaveRoom(roomId, currentHost);
         } else {
-            roomService.leavePlayersBatch(roomId, departingRoomMembers, currentHost);
+            roomService.removeMembers(roomId, departingRoomMembers, currentHost);
         }
     }
 
@@ -132,7 +132,7 @@ class PlayerDepartureHandler {
         }
 
         if (game.isFinishedOrEliminated()) {
-            room.setTerminal(true);
+            room.setFinished(true);
             completionHandler.handleGameEnd(roomId);
             detachRoomMembers(roomId, room, game, departingRoomMembers);
             return;
@@ -404,7 +404,7 @@ class PlayerDepartureHandler {
                 ? room.getPlayers()
                 : roomMembersToLeave;
         String survivingHost = selectNextHost(room, game, membersToDetach);
-        roomService.leavePlayersBatch(roomId, membersToDetach, survivingHost);
+        roomService.removeMembers(roomId, membersToDetach, survivingHost);
         if (roomService.getRoom(roomId) != null) {
             gameStateService.broadcastGameState(game);
         }
@@ -433,14 +433,14 @@ class PlayerDepartureHandler {
                 .map(Player::getName)
                 .collect(Collectors.toSet());
         completionHandler.handleGameEndWithForfeits(roomId, survivor, forfeitedNames);
-        room.setTerminal(true);
+        room.setFinished(true);
         detachRoomMembers(roomId, room, game, departingRoomMembers);
     }
 
     private void detachRoomMembers(String roomId, Room room, Game game, List<String> departingRoomMembers) {
         if (!departingRoomMembers.isEmpty()) {
             String survivingHost = selectNextHost(room, game, departingRoomMembers);
-            roomService.leavePlayersBatch(roomId, departingRoomMembers, survivingHost);
+            roomService.removeMembers(roomId, departingRoomMembers, survivingHost);
         }
     }
 

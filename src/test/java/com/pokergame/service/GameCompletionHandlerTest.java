@@ -201,7 +201,7 @@ class GameCompletionHandlerTest {
             assertFalse(response.isForfeit());
             assertFalse(response.abandoned());
             assertTrue(game.isGameOver());
-            assertTrue(testRoom.isTerminal());
+            assertTrue(testRoom.isFinished());
             assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
         }
 
@@ -219,7 +219,7 @@ class GameCompletionHandlerTest {
 
             assertTrue(p2.isOut());
             assertTrue(game.isGameOver());
-            assertTrue(testRoom.isTerminal());
+            assertTrue(testRoom.isFinished());
 
             ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
             verify(messagingTemplate).convertAndSend(eq("/game/" + ROOM_ID), captor.capture());
@@ -340,7 +340,7 @@ class GameCompletionHandlerTest {
             }
 
             assertTrue(game.isGameOver());
-            assertTrue(testRoom.isTerminal());
+            assertTrue(testRoom.isFinished());
             assertNotNull(game.getGameEndResult());
             assertTrue(game.getGameEndResult().abandoned());
             assertEquals("INACTIVITY", game.getGameEndResult().reason());

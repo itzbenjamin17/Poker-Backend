@@ -22,7 +22,7 @@ import java.util.UUID;
  * <p>
  * Rooms are created with fixed game parameters (blinds, buy-in, max players)
  * that cannot be changed after creation. Each room can be password-protected
- * for private games. Callers hold the room-ID coordination lease when reading
+ * for private games. Callers hold the room lock when reading
  * or mutating a published room.
  * </p>
  */
@@ -41,24 +41,24 @@ public class Room {
     private String hostName;
     /**
      * Join-order and arrival timestamps for players in this room.
-     * Guarded by the room-ID coordination lease after publication.
+     * Guarded by the room lock after publication.
      */
     private final LinkedHashMap<String, LocalDateTime> playersWithJoinTime;
     /**
      * Session membership identities created per addPlayer and preserved across WAL snapshots.
-     * Reads and writes require the room-ID coordination lease after publication.
+     * Reads and writes require the room lock after publication.
      */
     private final Map<String, String> playerMembershipIds = new LinkedHashMap<>();
 
     /**
      * Process-local absence deadlines for players awaiting first connection or reconnect grace.
-     * Guarded by the room-ID coordination lease after publication. Excluded from WAL serialization.
+     * Guarded by the room lock after publication. Excluded from WAL serialization.
      */
     private final Map<String, Long> playerAbsenceDeadlines = new LinkedHashMap<>();
 
     /**
      * Process-local active socket presence bounded by room membership.
-     * Guarded by the room-ID coordination lease after publication. Excluded from WAL serialization.
+     * Guarded by the room lock after publication. Excluded from WAL serialization.
      */
     private final Set<String> connectedPlayers = new HashSet<>();
     private final int maxPlayers;
@@ -68,7 +68,7 @@ public class Room {
     private final String passwordHash;
     private final LocalDateTime createdAt;
     private boolean isGameStarted;
-    private boolean isTerminal;
+    private boolean isFinished;
     private Long inactivityDeadlineEpochMs;
 
     /**
@@ -552,17 +552,17 @@ public class Room {
      *
      * @return {@code true} if gameplay in this room has ended
      */
-    public boolean isTerminal() {
-        return isTerminal;
+    public boolean isFinished() {
+        return isFinished;
     }
 
     /**
      * Marks whether gameplay in this room has ended and the room is retained for post-game review.
      *
-     * @param terminal {@code true} if gameplay has ended
+     * @param finished {@code true} if gameplay has ended
      */
-    public void setTerminal(boolean terminal) {
-        this.isTerminal = terminal;
+    public void setFinished(boolean finished) {
+        this.isFinished = finished;
     }
 
     /**

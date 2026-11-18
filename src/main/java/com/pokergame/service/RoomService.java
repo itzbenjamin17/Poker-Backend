@@ -20,7 +20,7 @@ import com.pokergame.persistence.transaction.PostSaveActions;
 import com.pokergame.persistence.transaction.RoomId;
 import com.pokergame.service.event.RoomDestroyed;
 import com.pokergame.service.event.RoomMemberRegistered;
-import com.pokergame.service.event.RoomMembershipRetired;
+import com.pokergame.service.event.RoomMembershipEnded;
 import com.pokergame.util.InputSanitizer;
 import com.pokergame.util.RoomPasswordPolicy;
 import java.time.Clock;
@@ -241,7 +241,7 @@ public class RoomService {
      *                    {@code null} to keep the current host
      */
     @DurableMutation
-    public void leavePlayersBatch(@RoomId String roomId, List<String> playerNames, String nextHost) {
+    public void removeMembers(@RoomId String roomId, List<String> playerNames, String nextHost) {
         roomCoordinator.assertHeldByCurrentThread(roomId);
         Room room = rooms.get(roomId);
         if (room == null) {
@@ -257,19 +257,19 @@ public class RoomService {
             return;
         }
 
-        Map<String, String> retiredMemberships = new HashMap<>();
+        Map<String, String> endedMemberships = new HashMap<>();
         for (String name : present) {
-            retiredMemberships.put(name, room.getMembershipId(name));
+            endedMemberships.put(name, room.getMembershipId(name));
         }
         present.forEach(room::removePlayer);
 
-        PostSaveActions.runAfterSave(() -> retiredMemberships.forEach((name, mid) ->
-                eventPublisher.publishEvent(new RoomMembershipRetired(roomId, name, mid))));
+        PostSaveActions.runAfterSave(() -> endedMemberships.forEach((name, mid) ->
+                eventPublisher.publishEvent(new RoomMembershipEnded(roomId, name, mid))));
 
         if (room.getPlayers().isEmpty()) {
             cancelLobbyInactivity(roomId);
             broadcastRoomEvent(roomId, ResponseMessage.ROOM_CLOSED, null);
-            if (!room.isTerminal()) {
+            if (!room.isFinished()) {
                 destroyRoom(roomId);
             }
             return;

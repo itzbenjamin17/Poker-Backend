@@ -73,7 +73,7 @@ True when `currentPhase != GamePhase.SHOWDOWN || !isHandSettled()`, distinguishi
 **`isForfeitPending()` (`forfeitPending`)**:
 True when all other contenders have departed and the sole remaining contender is disconnected, pausing hand progression, ready countdowns, and game-end settlement until that survivor reconnects or their grace period expires.
 
-**`Room.isTerminal()` (`isTerminal`)**:
+**`Room.isFinished()` (`isFinished`)**:
 Room-level flag mirroring `gameOver` once the match finishes so `RoomService` keeps an empty room alive for post-game review instead of destroying it immediately.
 
 ## Client Payloads & Views

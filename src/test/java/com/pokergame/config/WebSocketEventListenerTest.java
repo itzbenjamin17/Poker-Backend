@@ -7,7 +7,7 @@ import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
 import com.pokergame.service.event.RoomDestroyed;
 import com.pokergame.service.event.RoomMemberRegistered;
-import com.pokergame.service.event.RoomMembershipRetired;
+import com.pokergame.service.event.RoomMembershipEnded;
 import com.pokergame.testutil.DeterministicTaskScheduler;
 import com.pokergame.testutil.DeterministicTaskScheduler.ScheduledTask;
 import com.pokergame.testutil.MutableClock;
@@ -137,16 +137,16 @@ class WebSocketEventListenerTest {
         assertEquals(1, scheduler.pendingCount());
     }
 
-    /** A retirement that runs late must not evict a player who has since re-joined. */
+    /** An ended-membership cleanup that runs late must not evict a player who has since re-joined. */
     @Test
-    void lateMembershipRetirementDoesNotEvictRejoinedPlayer() {
+    void lateMembershipEndedDoesNotEvictRejoinedPlayer() {
         Room room = new Room("room", "Room", "Bob", 4, 10, 20, 500, null);
         String firstMembership = room.addPlayer("Bob");
         when(roomService.getRoom("room")).thenReturn(room);
         listener.registerSession(new PlayerPrincipal("Bob", "room", firstMembership), "bob-session-1");
 
-        // The retirement is scheduled but has not run yet.
-        listener.publishMembershipRetired("room", "Bob", firstMembership);
+        // The membership-ended cleanup is scheduled but has not run yet.
+        listener.publishMembershipEnded("room", "Bob", firstMembership);
         assertEquals(1, scheduler.pendingCount());
 
         // Meanwhile Bob leaves and re-joins with a new membership and connects again.
@@ -771,7 +771,7 @@ class WebSocketEventListenerTest {
     }
 
     @Test
-    void eventListenerAdaptersStartInitialGraceRetireMembershipAndDestroyRoom() {
+    void eventListenerAdaptersStartInitialGraceEndMembershipAndDestroyRoom() {
         String roomId = "room-events";
         Room room = new Room(roomId, "Events Room", "Alice", 4, 10, 20, 1000, null);
         String aliceMem = room.addPlayer("Alice");
@@ -792,7 +792,7 @@ class WebSocketEventListenerTest {
             room.removePlayer("Bob");
             return null;
         });
-        listener.onRoomMembershipRetired(new RoomMembershipRetired(roomId, "Bob", bobMem));
+        listener.onRoomMembershipEnded(new RoomMembershipEnded(roomId, "Bob", bobMem));
         assertEquals(1, scheduler.runAllPending());
         verify(rateLimit).cleanUpWs("Bob:" + roomId);
 
@@ -809,8 +809,8 @@ class WebSocketEventListenerTest {
         assertDoesNotThrow(() -> listener.onRoomDestroyed(new RoomDestroyed("room-reject-1")));
 
         scheduler.setRejectNext(true);
-        assertDoesNotThrow(() -> listener.onRoomMembershipRetired(
-                new RoomMembershipRetired("room-reject-2", "Alice", "mem-1")));
+        assertDoesNotThrow(() -> listener.onRoomMembershipEnded(
+                new RoomMembershipEnded("room-reject-2", "Alice", "mem-1")));
 
         assertEquals(0, scheduler.pendingCount());
     }

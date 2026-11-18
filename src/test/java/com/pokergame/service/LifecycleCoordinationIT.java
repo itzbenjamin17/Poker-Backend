@@ -194,7 +194,7 @@ class LifecycleCoordinationIT {
 
             withRoomLock(roomCoordinator, roomId, () -> {
                 assertThatCode(() -> roomService.broadcastGameStarted(roomId)).doesNotThrowAnyException();
-                roomService.leavePlayersBatch(roomId, List.of("Guest"), "Host");
+                roomService.removeMembers(roomId, List.of("Guest"), "Host");
                 assertThat(roomService.getRoom(roomId).getPlayers()).containsExactly("Host");
                 return null;
             });
@@ -678,7 +678,7 @@ class LifecycleCoordinationIT {
             withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(gameLifecycleService.gameExists(roomId)).isTrue();
                 assertThat(gameLifecycleService.getGame(roomId).isGameOver()).isFalse();
-                assertThat(roomService.getRoom(roomId).isTerminal()).isFalse();
+                assertThat(roomService.getRoom(roomId).isFinished()).isFalse();
                 return null;
             });
         }
@@ -748,7 +748,7 @@ class LifecycleCoordinationIT {
             long cleanupDeadline = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = gameLifecycleService.getGame(roomId);
                 assertThat(game.isGameOver()).isTrue();
-                assertThat(roomService.getRoom(roomId).isTerminal()).isTrue();
+                assertThat(roomService.getRoom(roomId).isFinished()).isTrue();
                 return game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
             });
             long hand = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());

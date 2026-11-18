@@ -45,7 +45,7 @@ public final class RoomSnapshotMapper {
     }
 
     /**
-     * Captures an immutable room snapshot while the caller owns the room coordination lease.
+     * Captures an immutable room snapshot while the caller owns the room lock.
      * All live domain fields, players, and cards are converted into independent immutable records.
      * No JSON serialization or I/O is performed during capture.
      *

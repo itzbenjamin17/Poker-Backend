@@ -10,7 +10,7 @@ import com.pokergame.util.MdcUtils.MdcScope;
 import com.pokergame.util.SecurityUtils;
 import com.pokergame.service.event.RoomDestroyed;
 import com.pokergame.service.event.RoomMemberRegistered;
-import com.pokergame.service.event.RoomMembershipRetired;
+import com.pokergame.service.event.RoomMembershipEnded;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -502,10 +502,10 @@ public class WebSocketEventListener {
         return principal.playerName() + ":" + principal.roomId();
     }
 
-    /** Schedules cleanup scoped to the retired membership, preserving any replacement. */
-    public void publishMembershipRetired(String roomId, String playerName, String membershipId) {
+    /** Schedules cleanup scoped to the ended membership, preserving any replacement. */
+    public void publishMembershipEnded(String roomId, String playerName, String membershipId) {
         if (roomId == null || playerName == null) return;
-        scheduleCleanup("membership retirement", () -> processMembershipRetired(roomId, playerName, membershipId));
+        scheduleCleanup("membership end", () -> processMembershipEnded(roomId, playerName, membershipId));
     }
 
     /** Schedules removal of all transient sessions and deadlines for a destroyed room. */
@@ -525,13 +525,13 @@ public class WebSocketEventListener {
     }
 
     /**
-     * Schedules transient cleanup for a retired membership.
+     * Schedules transient cleanup for an ended membership.
      *
      * @param event accepted departure
      */
     @EventListener
-    public void onRoomMembershipRetired(RoomMembershipRetired event) {
-        publishMembershipRetired(event.roomId(), event.playerName(), event.membershipId());
+    public void onRoomMembershipEnded(RoomMembershipEnded event) {
+        publishMembershipEnded(event.roomId(), event.playerName(), event.membershipId());
     }
 
     /**
@@ -565,7 +565,7 @@ public class WebSocketEventListener {
         }
     }
 
-    private void processMembershipRetired(String roomId, String playerName, String membershipId) {
+    private void processMembershipEnded(String roomId, String playerName, String membershipId) {
         String compositeName = playerName + ":" + roomId;
         try (LockLease _ = acquireRoomLease(roomId)) {
             Room room = roomService.getRoom(roomId);
@@ -577,7 +577,7 @@ public class WebSocketEventListener {
                     }
                 }
             }
-            retireMembershipUnderLock(roomId, playerName, membershipId, compositeName);
+            endMembershipUnderLock(roomId, playerName, membershipId, compositeName);
         }
     }
 
@@ -629,7 +629,7 @@ public class WebSocketEventListener {
             for (String user : usersToClean) {
                 int colonIdx = user.lastIndexOf(':');
                 String playerName = colonIdx >= 0 ? user.substring(0, colonIdx) : user;
-                retireMembershipUnderLock(roomId, playerName, null, user);
+                endMembershipUnderLock(roomId, playerName, null, user);
             }
             sessionToPrincipal.entrySet().removeIf(entry -> {
                 PlayerPrincipal p = entry.getValue();
@@ -638,7 +638,7 @@ public class WebSocketEventListener {
         }
     }
 
-    private void retireMembershipUnderLock(String roomId, String playerName, String membershipId, String compositeName) {
+    private void endMembershipUnderLock(String roomId, String playerName, String membershipId, String compositeName) {
         PendingDisconnect pending = pendingDisconnects.get(compositeName);
         if (pending != null && (membershipId == null || Objects.equals(pending.membershipId(), membershipId))) {
             pending.cancel();

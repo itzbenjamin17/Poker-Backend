@@ -96,10 +96,10 @@ class RoomAggregateStore implements RoomAggregates {
         if (game == null) {
             activeGames.remove(roomId);
             room.setGameStarted(false);
-            room.setTerminal(false);
+            room.setFinished(false);
         } else {
             activeGames.replace(game);
-            room.setTerminal(game.isGameOver());
+            room.setFinished(game.isGameOver());
             room.setGameStarted(true);
         }
     }

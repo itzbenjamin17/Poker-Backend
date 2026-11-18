@@ -7,7 +7,7 @@ package com.pokergame.service.event;
  *
  * @param roomId       the unique ID of the room the player left
  * @param playerName   the sanitized player name
- * @param membershipId the retired membership ID
+ * @param membershipId the ended membership ID
  */
-public record RoomMembershipRetired(String roomId, String playerName, String membershipId) {
+public record RoomMembershipEnded(String roomId, String playerName, String membershipId) {
 }

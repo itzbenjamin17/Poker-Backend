@@ -115,7 +115,7 @@ class RoomAggregateStoreTest {
             assertThat(activeGames.get(ROOM_ID)).isNull();
         }
         assertThat(room.isGameStarted()).isFalse();
-        assertThat(room.isTerminal()).isFalse();
+        assertThat(room.isFinished()).isFalse();
     }
 
     @Test

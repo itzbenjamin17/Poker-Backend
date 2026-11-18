@@ -411,7 +411,7 @@ class PersistenceCoordinationIT {
         CountDownLatch insideReplacement = new CountDownLatch(1);
         CountDownLatch releaseReplacement = new CountDownLatch(1);
         withRoomLock(roomCoordinator, roomId, () -> {
-            roomService.leavePlayersBatch(roomId, List.of("Alice"), "Host");
+            roomService.removeMembers(roomId, List.of("Alice"), "Host");
             return null;
         });
 

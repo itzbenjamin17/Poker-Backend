@@ -116,7 +116,7 @@ class GameCompletionHandler {
         game.setGameEndResult(event);
 
         if (room != null) {
-            room.setTerminal(true);
+            room.setFinished(true);
         }
         gameStateService.sendGameEnd(event);
         long displayDelayMs = timings.gameEndDisplayDelayMs();
@@ -233,7 +233,7 @@ class GameCompletionHandler {
 
         Room room = roomService.getRoom(gameId);
         if (room != null) {
-            room.setTerminal(true);
+            room.setFinished(true);
         }
 
         GameEndResponse event = game.getGameEndResult();
