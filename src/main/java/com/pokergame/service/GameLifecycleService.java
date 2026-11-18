@@ -40,7 +40,6 @@ public class GameLifecycleService {
     private final GameTimerRegistry runtimeTimers;
     private final GameTaskScheduler taskScheduler;
     private final GameCompletionHandler completionHandler;
-    private final HandProgressionService handProgression;
     private final GameReadinessCoordinator readinessCoordinator;
     private final PlayerDepartureHandler departureHandler;
     private final RoomCoordinator roomCoordinator;
@@ -53,7 +52,6 @@ public class GameLifecycleService {
             GameTimerRegistry runtimeTimers,
             GameTaskScheduler taskScheduler,
             GameCompletionHandler completionHandler,
-            HandProgressionService handProgression,
             GameReadinessCoordinator readinessCoordinator,
             PlayerDepartureHandler departureHandler,
             RoomCoordinator roomCoordinator,
@@ -64,7 +62,6 @@ public class GameLifecycleService {
         this.runtimeTimers = runtimeTimers;
         this.taskScheduler = taskScheduler;
         this.completionHandler = completionHandler;
-        this.handProgression = handProgression;
         this.readinessCoordinator = readinessCoordinator;
         this.departureHandler = departureHandler;
         this.roomCoordinator = roomCoordinator;
@@ -113,7 +110,7 @@ public class GameLifecycleService {
             logger.warn("Game creation failed: game already exists for room {}", roomId);
             throw new BadRequestException("Game has already started for this room.");
         }
-        if (room.getPlayers().size() < 2) {
+        if (room.getPlayers().size() < Room.MIN_PLAYERS) {
             logger.warn("Game creation failed: not enough players in room {} (count: {})",
                     roomId, room.getPlayers().size());
             throw new UnauthorisedActionException(
@@ -144,9 +141,7 @@ public class GameLifecycleService {
         roomService.broadcastGameStarted(roomId);
 
         logger.info("Game created and started for room: {} with {} players", roomId, room.getPlayers().size());
-        if (handProgression.startNewHand(roomId)) {
-            readinessCoordinator.openReadyGate(roomId);
-        }
+        readinessCoordinator.startNewHandAndOpenReadyGateIfNeeded(roomId);
         return roomId;
     }
 
@@ -161,9 +156,7 @@ public class GameLifecycleService {
      */
     @DurableMutation
     public void applyTurnOutcome(@GameId String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
-        if (handProgression.applyTurnOutcome(gameId, game, outcome, notifyImmediateAutoAdvance)) {
-            readinessCoordinator.openReadyGate(gameId);
-        }
+        readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, outcome, notifyImmediateAutoAdvance);
     }
 
     /**
@@ -237,19 +230,11 @@ public class GameLifecycleService {
             return;
         }
         switch (task) {
-            case TURN_TIMEOUT -> departureHandler.handleTurnTimeout(gameId, game);
-            case AUTO_ADVANCE -> {
-                if (handProgression.applyAutoAdvanceTimeout(gameId, game)) {
-                    readinessCoordinator.openReadyGate(gameId);
-                }
-            }
+            case TURN_TIMEOUT -> departureHandler.handleTurnTimeout(game);
+            case AUTO_ADVANCE -> readinessCoordinator.applyAutoAdvanceTimeoutAndOpenReadyGateIfNeeded(game);
             case READY_TIMEOUT -> readinessCoordinator.handleReadyTimeout(gameId, game, expectedDeadline);
-            case NEW_HAND -> {
-                if (handProgression.startNewHand(gameId)) {
-                    readinessCoordinator.openReadyGate(gameId);
-                }
-            }
-            case READY_OPEN -> readinessCoordinator.openReadyGate(gameId);
+            case NEW_HAND -> readinessCoordinator.startNewHandAndOpenReadyGateIfNeeded(gameId);
+            case READY_OPEN -> readinessCoordinator.openReadyGate(game);
             case GAME_END -> completionHandler.handleGameEnd(gameId);
             case CLEANUP -> completionHandler.deleteGameAndRoom(gameId);
         }

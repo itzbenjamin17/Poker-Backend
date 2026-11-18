@@ -30,6 +30,15 @@ import java.util.UUID;
  * </p>
  */
 public class Room {
+    /** Fewest players a room can be created for, and the fewest a game can start with. */
+    public static final int MIN_PLAYERS = 2;
+    /** Most players a room can seat. */
+    public static final int MAX_PLAYERS = 10;
+    /** Smallest allowed small blind. */
+    public static final int MIN_SMALL_BLIND = 1;
+    /** The big blind must be at least this many times the small blind. */
+    public static final int BIG_BLIND_MULTIPLE = 2;
+
     private final String roomId;
     private final String roomName;
     private String hostName;
@@ -122,13 +131,14 @@ public class Room {
         if (hostName == null || hostName.trim().isEmpty()) {
             throw new IllegalStateException("Host name cannot be null or empty.");
         }
-        if (maxPlayers < 2 || maxPlayers > 10) {
-            throw new IllegalStateException("Max players must be between 2 and 10.");
+        if (maxPlayers < MIN_PLAYERS || maxPlayers > MAX_PLAYERS) {
+            throw new IllegalStateException(
+                    "Max players must be between " + MIN_PLAYERS + " and " + MAX_PLAYERS + ".");
         }
-        if (smallBlind < 1) {
-            throw new IllegalStateException("Small blind must be at least 1.");
+        if (smallBlind < MIN_SMALL_BLIND) {
+            throw new IllegalStateException("Small blind must be at least " + MIN_SMALL_BLIND + ".");
         }
-        if (bigBlind < 2 * smallBlind) {
+        if (bigBlind < BIG_BLIND_MULTIPLE * smallBlind) {
             throw new IllegalStateException("Big blind must be at least twice the small blind.");
         }
         if (buyIn < bigBlind) {

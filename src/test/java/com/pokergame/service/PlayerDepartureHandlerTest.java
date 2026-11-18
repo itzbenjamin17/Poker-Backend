@@ -124,20 +124,20 @@ class PlayerDepartureHandlerTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<GameLifecycleService> lifecycleProvider = mock(ObjectProvider.class);
         lenient().when(lifecycleProvider.getObject()).thenAnswer(_ -> lifecycleRef.get());
-        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, DEFAULT_TIMINGS, lifecycleProvider);
+        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, roomCoordinator, mutableClock, DEFAULT_TIMINGS, lifecycleProvider);
         completionHandler = new GameCompletionHandler(
                 activeGames, roomService, stateService, timerRegistry, scheduler, mutableClock, DEFAULT_TIMINGS);
         handProgression = new HandProgressionService(
                 activeGames, timerRegistry, scheduler, completionHandler, stateService, DEFAULT_TIMINGS);
         readinessCoordinator = new GameReadinessCoordinator(
-                activeGames, roomService, stateService, timerRegistry, scheduler,
+                activeGames, stateService, timerRegistry, scheduler,
                 completionHandler, handProgression, mutableClock, DEFAULT_TIMINGS);
         departureHandler = new PlayerDepartureHandler(
-                roomService, stateService, completionHandler, handProgression,
+                roomService, stateService, completionHandler,
                 readinessCoordinator, timerRegistry, activeGames, mutableClock, DEFAULT_TIMINGS);
         gameLifecycleService = new GameLifecycleService(
                 roomService, activeGames, timerRegistry, scheduler,
-                completionHandler, handProgression, readinessCoordinator, departureHandler,
+                completionHandler, readinessCoordinator, departureHandler,
                 roomCoordinator, mutableClock, DEFAULT_TIMINGS);
         lifecycleRef.set(gameLifecycleService);
     }
@@ -225,7 +225,7 @@ class PlayerDepartureHandlerTest {
             game.dealTurn();
             game.dealRiver();
             game.conductShowdown();
-            readinessCoordinator.openReadyGate(ROOM_ID);
+            readinessCoordinator.openReadyGate(game);
         });
         return game;
     }
@@ -368,6 +368,33 @@ class PlayerDepartureHandlerTest {
             assertEquals(2, remaining.getPlayers().size());
             assertNotNull(remaining.getCurrentPlayer());
             verify(gameStateService).broadcastGameState(any(Game.class));
+        }
+
+        @Test
+        void removePlayers_DepartureEndsRiverBetting_OpensReadyGateInSameCallWithoutRoundEndDelay() {
+            testRoom.addPlayer("Player3");
+            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
+            Game game = getGameLocked(ROOM_ID);
+            game.dealFlop();
+            game.dealTurn();
+            game.dealRiver();
+            for (int i = 0; i < 2; i++) {
+                Player actor = game.getCurrentPlayer();
+                game.processPlayerDecision(actor, new PlayerDecision(PlayerAction.CHECK, 0, actor.getPlayerId()));
+            }
+            String lastToAct = game.getCurrentPlayer().getName();
+            reset(gameStateService);
+            stubGameEndCapture();
+
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of(lastToAct)));
+
+            assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+            assertTrue(game.isReadyCountdownActive());
+            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+            var broadcasts = inOrder(gameStateService);
+            broadcasts.verify(gameStateService).broadcastShowdownResults(game);
+            broadcasts.verify(gameStateService).broadcastGameState(game);
         }
 
         @Test
@@ -858,7 +885,7 @@ class PlayerDepartureHandlerTest {
             String actor = game.getCurrentPlayer().getName();
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                departureHandler.handleTurnTimeout(ROOM_ID, game);
+                departureHandler.handleTurnTimeout(game);
             }
             verify(roomService).leavePlayersBatch(eq(ROOM_ID), eq(List.of(actor)), any());
 
@@ -875,7 +902,7 @@ class PlayerDepartureHandlerTest {
             when(roomService.getRoom(inactiveRoomId)).thenReturn(inactiveRoom);
 
             try (LockLease _ = roomCoordinator.acquire(inactiveRoomId)) {
-                departureHandler.handleTurnTimeout(inactiveRoomId, inactiveGame);
+                departureHandler.handleTurnTimeout(inactiveGame);
             }
             assertTrue(inactiveGame.isGameOver());
             assertTrue(inactiveGame.getGameEndResult().abandoned());

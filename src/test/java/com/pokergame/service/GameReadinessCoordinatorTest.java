@@ -3,6 +3,7 @@ package com.pokergame.service;
 import com.pokergame.util.RoomCoordinator;
 
 import com.pokergame.config.GameTimingProperties;
+import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
@@ -76,13 +77,13 @@ class GameReadinessCoordinatorTest {
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);
         timerRegistry = new GameTimerRegistry(springScheduler, mutableClock);
-        taskScheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, timings, lifecycleProvider);
+        taskScheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, roomCoordinator, mutableClock, timings, lifecycleProvider);
         completionHandler = new GameCompletionHandler(
                 activeGames, roomService, gameStateService, timerRegistry, taskScheduler, mutableClock, timings);
         handProgression = new HandProgressionService(
                 activeGames, timerRegistry, taskScheduler, completionHandler, gameStateService, timings);
         readinessCoordinator = new GameReadinessCoordinator(
-                activeGames, roomService, gameStateService, timerRegistry, taskScheduler,
+                activeGames, gameStateService, timerRegistry, taskScheduler,
                 completionHandler, handProgression, mutableClock, timings);
 
         lenient().when(springScheduler.schedule(any(Runnable.class), any(Instant.class)))
@@ -121,7 +122,7 @@ class GameReadinessCoordinatorTest {
             clearInvocations(gameStateService, springScheduler);
 
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.openReadyGate(GAME_ID);
+                readinessCoordinator.openReadyGate(game);
             }
 
             assertTrue(game.isReadyCountdownActive());
@@ -142,7 +143,7 @@ class GameReadinessCoordinatorTest {
             clearInvocations(gameStateService);
 
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.openReadyGate(GAME_ID);
+                readinessCoordinator.openReadyGate(game);
             }
 
             assertFalse(game.isReadyCountdownActive());
@@ -159,12 +160,78 @@ class GameReadinessCoordinatorTest {
             Game game = createShowdownGame(List.of(host, p2));
 
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.openReadyGate(GAME_ID);
+                readinessCoordinator.openReadyGate(game);
             }
 
             assertTrue(game.isGameOver());
             verify(gameStateService).advanceRevisionAndBuildGameEnd(game, host, false);
             verify(gameStateService).sendGameEnd(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("hand progression calls that open the ready gate when the hand ends at once")
+    class OpenReadyGateWhenHandEndsAtOnceTests {
+
+        private HandProgressionService progressionStub;
+        private GameReadinessCoordinator coordinator;
+        private Game game;
+
+        @BeforeEach
+        void setUpCoordinatorOverStubbedProgression() {
+            GameTimingProperties timings = TestTimings.game(30_000L, 0L, READY_COUNTDOWN_MS);
+            progressionStub = mock(HandProgressionService.class);
+            coordinator = new GameReadinessCoordinator(
+                    activeGames, gameStateService, timerRegistry, taskScheduler,
+                    completionHandler, progressionStub, mutableClock, timings);
+            game = createShowdownGame(List.of(
+                    new Player("Host", "host", 1000),
+                    new Player("Player2", "p2", 1000)));
+        }
+
+        @Test
+        @DisplayName("startNewHandAndOpenReadyGateIfNeeded opens the gate in the same call only when asked to")
+        void startNewHand_OpensGateOnlyWhenHandProgressionSaysSo() {
+            when(progressionStub.startNewHand(GAME_ID)).thenReturn(false, true);
+
+            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                coordinator.startNewHandAndOpenReadyGateIfNeeded(GAME_ID);
+                assertFalse(game.isReadyCountdownActive());
+
+                coordinator.startNewHandAndOpenReadyGateIfNeeded(GAME_ID);
+                assertTrue(game.isReadyCountdownActive());
+                assertEquals(BASE_EPOCH_MS + READY_COUNTDOWN_MS,
+                        game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            }
+        }
+
+        @Test
+        @DisplayName("applyTurnOutcomeAndOpenReadyGateIfNeeded opens the gate in the same call only when asked to")
+        void applyTurnOutcome_OpensGateOnlyWhenHandProgressionSaysSo() {
+            TurnOutcome outcome = new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null);
+            when(progressionStub.applyTurnOutcome(game, outcome, true)).thenReturn(false, true);
+
+            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                coordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, outcome, true);
+                assertFalse(game.isReadyCountdownActive());
+
+                coordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, outcome, true);
+                assertTrue(game.isReadyCountdownActive());
+            }
+        }
+
+        @Test
+        @DisplayName("applyAutoAdvanceTimeoutAndOpenReadyGateIfNeeded opens the gate in the same call only when asked to")
+        void applyAutoAdvanceTimeout_OpensGateOnlyWhenHandProgressionSaysSo() {
+            when(progressionStub.applyAutoAdvanceTimeout(game)).thenReturn(false, true);
+
+            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                coordinator.applyAutoAdvanceTimeoutAndOpenReadyGateIfNeeded(game);
+                assertFalse(game.isReadyCountdownActive());
+
+                coordinator.applyAutoAdvanceTimeoutAndOpenReadyGateIfNeeded(game);
+                assertTrue(game.isReadyCountdownActive());
+            }
         }
     }
 
@@ -198,7 +265,7 @@ class GameReadinessCoordinatorTest {
                 assertThrows(UnauthorisedActionException.class,
                         () -> readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Host"));
 
-                readinessCoordinator.openReadyGate(GAME_ID);
+                readinessCoordinator.openReadyGate(game);
 
                 // Unknown player
                 assertThrows(UnauthorisedActionException.class,
@@ -235,7 +302,7 @@ class GameReadinessCoordinatorTest {
                     new Player("Host", "host", 1000),
                     new Player("Player2", "p2", 1000)));
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.openReadyGate(GAME_ID);
+                readinessCoordinator.openReadyGate(game);
             }
             long handBefore = game.getHandNumber();
             long initialInactivity = room.getInactivityDeadlineEpochMs();
@@ -285,7 +352,7 @@ class GameReadinessCoordinatorTest {
                     new Player("Host", "host", 1000),
                     new Player("Player2", "p2", 1000)));
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.openReadyGate(GAME_ID);
+                readinessCoordinator.openReadyGate(game);
             }
             mutableClock.setMillis(room.getInactivityDeadlineEpochMs());
 
@@ -319,7 +386,7 @@ class GameReadinessCoordinatorTest {
                     new Player("Host", "host", 1000),
                     new Player("Player2", "p2", 1000)));
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.openReadyGate(GAME_ID);
+                readinessCoordinator.openReadyGate(game);
             }
             long expectedDeadline = game.getReadyCountdownDeadlineEpochMs();
             long handBefore = game.getHandNumber();
@@ -338,7 +405,7 @@ class GameReadinessCoordinatorTest {
             Player p2 = new Player("Player2", "p2", 1000);
             Game game = createShowdownGame(List.of(host, p2));
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.openReadyGate(GAME_ID);
+                readinessCoordinator.openReadyGate(game);
             }
             long deadline = game.getReadyCountdownDeadlineEpochMs();
             long hand1 = game.getHandNumber();
@@ -356,7 +423,7 @@ class GameReadinessCoordinatorTest {
             // Reconnect, showdown hand 1 again, open gate, let timeout force hand 2
             p2.setDisconnected(false);
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.openReadyGate(GAME_ID);
+                readinessCoordinator.openReadyGate(game);
                 long secondDeadline = game.getReadyCountdownDeadlineEpochMs();
                 readinessCoordinator.handleReadyTimeout(GAME_ID, game, secondDeadline);
             }
@@ -389,7 +456,7 @@ class GameReadinessCoordinatorTest {
             host.setReadyForNextHand(false);
             p2.setReadyForNextHand(false);
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.openReadyGate(GAME_ID);
+                readinessCoordinator.openReadyGate(game);
             }
             host.setReadyForNextHand(true);
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {

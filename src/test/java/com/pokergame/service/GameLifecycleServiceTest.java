@@ -116,20 +116,20 @@ class GameLifecycleServiceTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<GameLifecycleService> lifecycleProvider = mock(ObjectProvider.class);
         lenient().when(lifecycleProvider.getObject()).thenAnswer(_ -> lifecycleRef.get());
-        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, timings, lifecycleProvider);
+        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, roomCoordinator, mutableClock, timings, lifecycleProvider);
         completionHandler = new GameCompletionHandler(
                 activeGames, roomService, gameStateService, timerRegistry, scheduler, mutableClock, timings);
         handProgression = new HandProgressionService(
                 activeGames, timerRegistry, scheduler, completionHandler, gameStateService, timings);
         readinessCoordinator = new GameReadinessCoordinator(
-                activeGames, roomService, gameStateService, timerRegistry, scheduler,
+                activeGames, gameStateService, timerRegistry, scheduler,
                 completionHandler, handProgression, mutableClock, timings);
         departureHandler = new PlayerDepartureHandler(
-                roomService, gameStateService, completionHandler, handProgression,
+                roomService, gameStateService, completionHandler,
                 readinessCoordinator, timerRegistry, activeGames, mutableClock, timings);
         gameLifecycleService = new GameLifecycleService(
                 roomService, activeGames, timerRegistry, scheduler,
-                completionHandler, handProgression, readinessCoordinator, departureHandler,
+                completionHandler, readinessCoordinator, departureHandler,
                 roomCoordinator, mutableClock, timings);
         lifecycleRef.set(gameLifecycleService);
     }
@@ -699,6 +699,50 @@ class GameLifecycleServiceTest {
             assertEquals(chipsP2Before, game.getPlayers().get(1).getChips());
             verify(gameStateService, never()).broadcastShowdownResults(any());
             verify(gameStateService, never()).broadcastAutoAdvanceComplete(any());
+        }
+
+        @Test
+        void executeScheduledTask_AutoAdvanceFinishingHand_OpensReadyGateInSameCallOnlyWithoutDelay() {
+            Game immediate = autoAdvanceToRiver();
+            long deadline = BASE_EPOCH_MS + 4_000L;
+            immediate.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, deadline);
+            long gen = immediate.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
+            reset(gameStateService);
+            stubGameEndCapture();
+
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
+                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, deadline, immediate.getHandNumber(), gen));
+
+            assertEquals(GamePhase.SHOWDOWN, immediate.getCurrentPhase());
+            assertTrue(immediate.isReadyCountdownActive());
+            assertNull(immediate.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+            var broadcasts = inOrder(gameStateService);
+            broadcasts.verify(gameStateService).broadcastShowdownResults(immediate);
+            broadcasts.verify(gameStateService).broadcastGameState(immediate);
+
+            wireLifecycle(DEFAULT_GAME_END_DISPLAY_MS, 2_500L, DEFAULT_READY_COUNTDOWN_MS);
+            stubGameEndCapture();
+            Game delayed = autoAdvanceToRiver();
+            delayed.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, deadline);
+            long delayedGen = delayed.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
+
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
+                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, deadline, delayed.getHandNumber(), delayedGen));
+
+            assertEquals(GamePhase.SHOWDOWN, delayed.getCurrentPhase());
+            assertFalse(delayed.isReadyCountdownActive());
+            assertEquals(BASE_EPOCH_MS + 2_500L, delayed.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+        }
+
+        private Game autoAdvanceToRiver() {
+            when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+            testRoom.setGameStarted(false);
+            withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
+            Game game = getGameLocked(ROOM_ID);
+            game.dealFlop();
+            game.dealTurn();
+            game.dealRiver();
+            return game;
         }
 
         @Test

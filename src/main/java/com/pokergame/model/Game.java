@@ -72,14 +72,16 @@ public class Game {
         if (gameId == null || gameId.trim().isEmpty()) {
             throw new IllegalStateException("Game ID cannot be null or empty");
         }
-        if (players == null || players.size() < 2) {
-            throw new IllegalStateException("At least 2 players are required to start a game");
+        if (players == null || players.size() < Room.MIN_PLAYERS) {
+            throw new IllegalStateException(
+                    "At least " + Room.MIN_PLAYERS + " players are required to start a game");
         }
         if (players.stream().anyMatch(Objects::isNull)) {
             throw new IllegalStateException("Invalid players list. Please try again.");
         }
-        if (maxPlayers < 2 || maxPlayers > 10) {
-            throw new IllegalStateException("Max players must be between 2 and 10.");
+        if (maxPlayers < Room.MIN_PLAYERS || maxPlayers > Room.MAX_PLAYERS) {
+            throw new IllegalStateException(
+                    "Max players must be between " + Room.MIN_PLAYERS + " and " + Room.MAX_PLAYERS + ".");
         }
 
         this.gameId = gameId;
@@ -125,9 +127,9 @@ public class Game {
 
         this.gameId = builder.getGameId();
         this.players = new ArrayList<>(builderPlayers);
-        this.maxPlayers = (builder.getMaxPlayers() >= 2 && builder.getMaxPlayers() <= 10)
+        this.maxPlayers = (builder.getMaxPlayers() >= Room.MIN_PLAYERS && builder.getMaxPlayers() <= Room.MAX_PLAYERS)
                 ? builder.getMaxPlayers()
-                : Math.clamp(this.players.size(), 2, 10);
+                : Math.clamp(this.players.size(), Room.MIN_PLAYERS, Room.MAX_PLAYERS);
 
         Map<String, Player> playersById = new HashMap<>();
         this.players.forEach(player -> playersById.put(player.getPlayerId(), player));

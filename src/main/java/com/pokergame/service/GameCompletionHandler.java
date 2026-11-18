@@ -190,11 +190,11 @@ class GameCompletionHandler {
      * Rejects late player activity when the room's game inactivity deadline has already expired
      * without mutating room or game state.
      *
-     * @param gameId the unique ID of the game
-     * @param room   the room holding the inactivity deadline, or {@code null}
+     * @param gameId the unique ID of the game; does nothing if its room no longer exists
      * @throws BadRequestException if the room's inactivity deadline has elapsed
      */
-    void rejectExpiredActivity(String gameId, Room room) {
+    void rejectExpiredActivity(String gameId) {
+        Room room = roomService.getRoom(gameId);
         if (room != null && room.isInactivityExpired(clock.millis())) {
             logger.warn("Rejecting activity for expired game {} (now={})", gameId, clock.millis());
             throw new BadRequestException(

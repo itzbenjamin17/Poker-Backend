@@ -1,6 +1,7 @@
 package com.pokergame.dto.request;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.pokergame.model.Room;
 import com.pokergame.util.RoomPasswordPolicy;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
@@ -33,12 +34,12 @@ public class CreateRoomRequest {
     private String playerName;
 
     @NotNull
-    @Min(value = 2, message = "Minimum 2 players required")
-    @Max(value = 10, message = "Maximum 10 players allowed")
+    @Min(value = Room.MIN_PLAYERS, message = "Minimum 2 players required")
+    @Max(value = Room.MAX_PLAYERS, message = "Maximum 10 players allowed")
     private final Integer maxPlayers;
 
     @NotNull
-    @Min(value = 1, message = "Small blind must be at least 1")
+    @Min(value = Room.MIN_SMALL_BLIND, message = "Small blind must be at least 1")
     @Max(value = 10000, message = "Small blind cannot exceed 10,000")
     private final Integer smallBlind;
 
@@ -170,7 +171,7 @@ public class CreateRoomRequest {
     @JsonIgnore
     @AssertTrue(message = "Big blind must be at least twice the small blind.")
     public boolean isBigBlindAtLeastTwiceSmallBlind() {
-        return smallBlind == null || bigBlind == null || bigBlind >= 2L * smallBlind;
+        return smallBlind == null || bigBlind == null || bigBlind >= (long) Room.BIG_BLIND_MULTIPLE * smallBlind;
     }
 
     /**

@@ -68,7 +68,7 @@ class GameTaskSchedulerTest {
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);
         timerRegistry = new GameTimerRegistry(springScheduler, mutableClock);
-        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, mutableClock, TestTimings.DEFAULT_GAME, lifecycleProvider);
+        scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, roomCoordinator, mutableClock, TestTimings.DEFAULT_GAME, lifecycleProvider);
 
         lenient().when(lifecycleProvider.getObject()).thenReturn(gameLifecycleService);
         lenient().when(springScheduler.schedule(any(Runnable.class), any(Instant.class)))
@@ -98,12 +98,12 @@ class GameTaskSchedulerTest {
     @DisplayName("listActiveTimers captures all scheduled deadlines with matching hand and generation")
     void listActiveTimers_CapturesAllScheduledTasks() {
         Game game = createAndRegisterGame();
-        assertTrue(GameTaskScheduler.listActiveTimers(GAME_ID, game).isEmpty());
+        assertTrue(GameTaskScheduler.listActiveTimers(game).isEmpty());
 
         game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, BASE_EPOCH_MS + 4_000L);
         game.scheduleTask(ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 60_000L);
 
-        List<ScheduledTimer> timers = GameTaskScheduler.listActiveTimers(GAME_ID, game);
+        List<ScheduledTimer> timers = GameTaskScheduler.listActiveTimers(game);
         assertEquals(2, timers.size());
 
         ScheduledTimer autoAdvance = timers.stream()
@@ -255,6 +255,24 @@ class GameTaskSchedulerTest {
             scheduler.resetGameInactivity(GAME_ID, game);
         }
         assertEquals(expectedDeadline, room.getInactivityDeadlineEpochMs());
+    }
+
+    @Test
+    @DisplayName("cancelTask clears the recorded deadline and cancels the runtime timer")
+    void cancelTask_ClearsDeadlineAndCancelsRuntimeTimer() {
+        Game game = createAndRegisterGame();
+        @SuppressWarnings("unchecked")
+        ScheduledFuture<Object> autoFuture = mock(ScheduledFuture.class);
+        doReturn(autoFuture).when(springScheduler).schedule(any(Runnable.class), any(Instant.class));
+        try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+            scheduler.scheduleAutoAdvance(GAME_ID);
+        }
+        assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+
+        scheduler.cancelTask(game, ScheduledGameTask.AUTO_ADVANCE);
+
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+        verify(autoFuture).cancel(false);
     }
 
     @Test

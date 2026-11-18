@@ -5,6 +5,7 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.PostSaveActions;
+import com.pokergame.util.RoomCoordinator;
 import java.time.Clock;
 import java.util.List;
 import java.util.Objects;
@@ -23,6 +24,7 @@ class GameTaskScheduler {
     private final ActiveGameRegistry activeGames;
     private final GameTimerRegistry timerRegistry;
     private final RoomService roomService;
+    private final RoomCoordinator roomCoordinator;
     private final Clock clock;
     private final GameTimingProperties timings;
     private final ObjectProvider<GameLifecycleService> gameLifecycleProvider;
@@ -31,12 +33,14 @@ class GameTaskScheduler {
             ActiveGameRegistry activeGames,
             GameTimerRegistry timerRegistry,
             RoomService roomService,
+            RoomCoordinator roomCoordinator,
             Clock clock,
             GameTimingProperties timings,
             ObjectProvider<GameLifecycleService> gameLifecycleProvider) {
         this.activeGames = activeGames;
         this.timerRegistry = timerRegistry;
         this.roomService = roomService;
+        this.roomCoordinator = roomCoordinator;
         this.clock = clock;
         this.timings = timings;
         this.gameLifecycleProvider = gameLifecycleProvider;
@@ -46,27 +50,39 @@ class GameTaskScheduler {
      * Captures a timer descriptor for {@code task} tied to {@code game}'s current hand and
      * schedule count so callbacks from cancelled or replaced timers are ignored.
      *
-     * @param gameId   the room/game ID
      * @param game     the active game instance
      * @param task     the timer type
      * @param deadline target execution epoch time in milliseconds
      * @return an immutable timer descriptor
      */
-    static ScheduledTimer createTimer(String gameId, Game game, ScheduledGameTask task, long deadline) {
-        return new ScheduledTimer(gameId, task, deadline, game.getHandNumber(), game.getScheduledTaskGeneration(task));
+    static ScheduledTimer createTimer(Game game, ScheduledGameTask task, long deadline) {
+        return new ScheduledTimer(
+                game.getGameId(), task, deadline, game.getHandNumber(), game.getScheduledTaskGeneration(task));
     }
 
     /**
      * Lists all active timer descriptors currently recorded on {@code game}.
      *
-     * @param gameId the room/game ID
-     * @param game   the active game instance
+     * @param game the active game instance
      * @return immutable descriptors for every timer stored on {@code game}
      */
-    static List<ScheduledTimer> listActiveTimers(String gameId, Game game) {
+    static List<ScheduledTimer> listActiveTimers(Game game) {
         return game.getScheduledTaskDeadlinesSnapshot().entrySet().stream()
-                .map(entry -> createTimer(gameId, game, entry.getKey(), entry.getValue()))
+                .map(entry -> createTimer(game, entry.getKey(), entry.getValue()))
                 .toList();
+    }
+
+    /**
+     * Cancels {@code task} on {@code game}: clears its recorded deadline (which also makes any
+     * callback already in flight stale) and cancels its runtime timer. Does nothing for a task
+     * that is not scheduled.
+     *
+     * @param game the active game instance
+     * @param task the timer type to cancel
+     */
+    void cancelTask(Game game, ScheduledGameTask task) {
+        game.clearScheduledTask(task);
+        timerRegistry.cancelTask(game.getGameId(), task);
     }
 
     /**
@@ -133,7 +149,7 @@ class GameTaskScheduler {
      * @param deadlineEpochMs target inactivity expiration epoch time in milliseconds
      */
     void scheduleGameInactivity(String gameId, Long deadlineEpochMs) {
-        roomService.getRoom(gameId);
+        roomCoordinator.assertHeldByCurrentThread(gameId);
         timerRegistry.scheduleInactivity(gameId, deadlineEpochMs, clock.millis(),
                 () -> gameLifecycleProvider.getObject().abandonGameIfInactive(gameId, deadlineEpochMs));
     }
@@ -157,7 +173,7 @@ class GameTaskScheduler {
      * @param game   the active game instance
      */
     void resetGameInactivity(String gameId, Game game) {
-        if (game == null || game.isGameOver()) {
+        if (game.isGameOver()) {
             return;
         }
         long now = clock.millis();
@@ -220,11 +236,13 @@ class GameTaskScheduler {
 
     private void scheduleTask(String gameId, ScheduledGameTask task, long deadline) {
         Game game = activeGames.get(gameId);
+        // Quiet no-op by design: the game may already have been removed, and while a forfeit is
+        // pending the game is paused for a disconnected survivor, so no timer may be scheduled.
         if (game == null || game.isForfeitPending()) {
             return;
         }
         game.scheduleTask(task, deadline);
-        registerTimerAfterSave(createTimer(gameId, game, task, deadline));
+        registerTimerAfterSave(createTimer(game, task, deadline));
     }
 
     private static long requireNonNegativeDelay(long delayMs) {

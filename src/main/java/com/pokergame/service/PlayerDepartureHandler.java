@@ -34,7 +34,6 @@ class PlayerDepartureHandler {
     private final RoomService roomService;
     private final GameStateService gameStateService;
     private final GameCompletionHandler completion;
-    private final HandProgressionService handProgression;
     private final GameReadinessCoordinator readiness;
     private final GameTimerRegistry runtimeTimers;
     private final ActiveGameRegistry activeGames;
@@ -45,7 +44,6 @@ class PlayerDepartureHandler {
             RoomService roomService,
             GameStateService gameStateService,
             GameCompletionHandler completion,
-            HandProgressionService handProgression,
             GameReadinessCoordinator readiness,
             GameTimerRegistry runtimeTimers,
             ActiveGameRegistry activeGames,
@@ -54,7 +52,6 @@ class PlayerDepartureHandler {
         this.roomService = roomService;
         this.gameStateService = gameStateService;
         this.completion = completion;
-        this.handProgression = handProgression;
         this.readiness = readiness;
         this.runtimeTimers = runtimeTimers;
         this.activeGames = activeGames;
@@ -181,9 +178,7 @@ class PlayerDepartureHandler {
         if (game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive()) {
             gameStateService.broadcastGameState(game);
         } else {
-            if (handProgression.applyTurnOutcome(roomId, game, game.advanceAfterPlayerRemoval())) {
-                readiness.openReadyGate(roomId);
-            }
+            readiness.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, game.advanceAfterPlayerRemoval(), false);
         }
 
         readiness.completeReadyCountdownIfEveryoneReady(game);
@@ -262,8 +257,8 @@ class PlayerDepartureHandler {
                     gameStateService.broadcastGameState(game);
                 }
                 if (game.getReadyGateState() == ReadyGateState.WAITING_FOR_PLAYERS
-                        && game.getReadyEligibleCount() >= 2) {
-                    readiness.openReadyGate(gameId);
+                        && game.getReadyEligibleCount() >= Room.MIN_PLAYERS) {
+                    readiness.openReadyGate(game);
                 }
             }
         }
@@ -291,7 +286,7 @@ class PlayerDepartureHandler {
             throw new ResourceNotFoundException("Room not found");
         }
 
-        completion.rejectExpiredActivity(gameId, room);
+        completion.rejectExpiredActivity(gameId);
         if (game.isGameOver()) {
             GameEndResponse retained = game.getGameEndResult();
             if (retained != null && retained.abandoned()) {
@@ -343,10 +338,10 @@ class PlayerDepartureHandler {
     /**
      * Handles a claimed turn timeout by forfeiting the current player or abandoning an expired game.
      *
-     * @param gameId the unique ID of the game
-     * @param game   the active game instance
+     * @param game the active game instance
      */
-    void handleTurnTimeout(String gameId, Game game) {
+    void handleTurnTimeout(Game game) {
+        String gameId = game.getGameId();
         Player actor = game.getCurrentPlayer();
         if (actor != null) {
             String actorToDepart = actor.getName();

@@ -336,7 +336,7 @@ public class RoomService {
                 currentHost,
                 playerObjects,
                 playerObjects.size(),
-                !room.isGameStarted() && playerObjects.size() >= 2,
+                !room.isGameStarted() && playerObjects.size() >= Room.MIN_PLAYERS,
                 room.isGameStarted(),
                 room.getInactivityDeadlineEpochMs(),
                 clock.millis());

@@ -159,7 +159,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
         }
         try (MdcScope _ = MdcUtils.withRoomId(gameId)) {
             boolean normalized = game.repairRecoveredReadyGate(clock.millis() + timings.readyCountdownMs());
-            List<ScheduledTimer> timers = GameTaskScheduler.listActiveTimers(gameId, game);
+            List<ScheduledTimer> timers = GameTaskScheduler.listActiveTimers(game);
             PostSaveActions.runAfterSave(() -> timers.forEach(taskScheduler::registerTimer));
             if (normalized) {
                 gameStateService.broadcastGameState(game);

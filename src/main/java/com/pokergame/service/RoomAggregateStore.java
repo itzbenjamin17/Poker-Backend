@@ -58,7 +58,7 @@ class RoomAggregateStore implements RoomAggregates {
         // Start the timers now, not through PostSaveActions. The failed change's queue is already
         // discarded, so a queued timer would never start.
         String roomId = aggregate.room().getRoomId();
-        GameTaskScheduler.listActiveTimers(roomId, game).forEach(taskScheduler::registerTimer);
+        GameTaskScheduler.listActiveTimers(game).forEach(taskScheduler::registerTimer);
         if (aggregate.room().getInactivityDeadlineEpochMs() != null && !game.isGameOver()) {
             taskScheduler.scheduleGameInactivity(roomId, aggregate.room().getInactivityDeadlineEpochMs());
         }

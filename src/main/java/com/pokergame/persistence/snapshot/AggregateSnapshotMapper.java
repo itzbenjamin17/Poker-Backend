@@ -133,8 +133,10 @@ public final class AggregateSnapshotMapper {
         if (state == null || state.roomId() == null || state.roomId().trim().isEmpty()) {
             throw new PersistenceException("Missing required room state in aggregate snapshot");
         }
-        if (state.maxPlayers() < 2 || state.maxPlayers() > 10 || state.smallBlind() < 1
-                || state.bigBlind() < 2 * state.smallBlind() || state.buyIn() < state.bigBlind()) {
+        if (state.maxPlayers() < Room.MIN_PLAYERS || state.maxPlayers() > Room.MAX_PLAYERS
+                || state.smallBlind() < Room.MIN_SMALL_BLIND
+                || state.bigBlind() < Room.BIG_BLIND_MULTIPLE * state.smallBlind()
+                || state.buyIn() < state.bigBlind()) {
             throw new PersistenceException("Invalid room parameters in snapshot");
         }
 

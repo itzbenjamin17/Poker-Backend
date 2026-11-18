@@ -82,7 +82,7 @@ class HandProgressionService {
         game.beginHand();
         game.dealHoleCards();
         game.postBlinds();
-        boolean openReadyGateNow = applyTurnOutcome(gameId, game, game.advanceAfterBlinds());
+        boolean openReadyGateNow = applyTurnOutcome(game, game.advanceAfterBlinds());
 
         logger.info("New hand started successfully for game: {} | Current player: {} | Phase: {} | Pot: {}",
                 gameId,
@@ -95,42 +95,37 @@ class HandProgressionService {
     /**
      * Applies the result of forced blinds or a player departure without an immediate auto-advance alert.
      *
-     * @param gameId  the unique ID of the game
      * @param game    the active game instance
      * @param outcome the resulting turn state
      * @return {@code true} if the ready gate should open immediately, {@code false} otherwise
      */
-    boolean applyTurnOutcome(String gameId, Game game, TurnOutcome outcome) {
-        return applyTurnOutcome(gameId, game, outcome, false);
+    boolean applyTurnOutcome(Game game, TurnOutcome outcome) {
+        return applyTurnOutcome(game, outcome, false);
     }
 
     /**
      * Applies a turn, forced-blind, or departure outcome by scheduling the next timer and
      * broadcasting the resulting table state.
      *
-     * @param gameId                     the unique ID of the game
      * @param game                       the active game instance
      * @param outcome                    the resulting turn state
      * @param notifyImmediateAutoAdvance {@code true} to send an immediate all-in notice banner
      * @return {@code true} if the ready gate should open immediately, {@code false} otherwise
      */
-    boolean applyTurnOutcome(
-            String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
+    boolean applyTurnOutcome(Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
+        String gameId = game.getGameId();
         switch (outcome.type()) {
             case NEXT_PLAYER, PHASE_ADVANCED -> {
-                game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
-                runtimeTimers.cancelTask(gameId, ScheduledGameTask.AUTO_ADVANCE);
+                scheduling.cancelTask(game, ScheduledGameTask.AUTO_ADVANCE);
                 if (game.getCurrentPlayer() != null) {
                     scheduling.scheduleTurnTimeout(gameId);
                 } else {
-                    game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-                    runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
+                    scheduling.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
                 }
                 gameStateService.broadcastGameState(game);
             }
             case AUTO_ADVANCING -> {
-                game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-                runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
+                scheduling.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
                 if (!game.isAutoAdvancing()) {
                     scheduling.scheduleAutoAdvance(gameId);
                 }
@@ -141,11 +136,10 @@ class HandProgressionService {
                 }
             }
             case SHOWDOWN -> {
-                game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
-                game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-                runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
+                scheduling.cancelTask(game, ScheduledGameTask.AUTO_ADVANCE);
+                scheduling.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
                 gameStateService.broadcastShowdownResults(game);
-                return schedulePostShowdownProgression(gameId, game);
+                return schedulePostShowdownProgression(game);
             }
         }
         return false;
@@ -200,24 +194,25 @@ class HandProgressionService {
      * Executes an auto-advance timer step and either schedules the next street or transitions to
      * post-hand readiness/game-end handling when showdown completes.
      *
-     * @param gameId the unique ID of the game
-     * @param game   the active game instance
+     * @param game the active game instance
      * @return {@code true} if the ready gate should open immediately, {@code false} otherwise
      */
-    boolean applyAutoAdvanceTimeout(String gameId, Game game) {
+    boolean applyAutoAdvanceTimeout(Game game) {
+        String gameId = game.getGameId();
         if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
             game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
             return false;
         }
         boolean complete = advanceAutoAdvanceStep(gameId);
         if (complete) {
-            return schedulePostShowdownProgression(gameId, game);
+            return schedulePostShowdownProgression(game);
         }
         scheduling.scheduleAutoAdvance(gameId);
         return false;
     }
 
-    private boolean schedulePostShowdownProgression(String gameId, Game game) {
+    private boolean schedulePostShowdownProgression(Game game) {
+        String gameId = game.getGameId();
         if (game.isGameDecided()) {
             scheduling.scheduleGameEnd(gameId, timings.finalShowdownDisplayDelayMs());
             return false;

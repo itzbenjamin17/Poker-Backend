@@ -1,11 +1,11 @@
 package com.pokergame.service;
 
 import com.pokergame.config.GameTimingProperties;
+import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
-import com.pokergame.model.Room;
 import com.pokergame.service.GameTaskScheduler.ScheduledTimer;
 import java.time.Clock;
 import org.slf4j.Logger;
@@ -20,7 +20,6 @@ import org.springframework.stereotype.Component;
 class GameReadinessCoordinator {
     private static final Logger logger = LoggerFactory.getLogger(GameReadinessCoordinator.class);
     private final ActiveGameRegistry activeGames;
-    private final RoomService roomService;
     private final GameStateService gameStateService;
     private final GameTimerRegistry runtimeTimers;
     private final GameTaskScheduler taskScheduler;
@@ -31,7 +30,6 @@ class GameReadinessCoordinator {
 
     GameReadinessCoordinator(
             ActiveGameRegistry activeGames,
-            RoomService roomService,
             GameStateService gameStateService,
             GameTimerRegistry runtimeTimers,
             GameTaskScheduler taskScheduler,
@@ -40,7 +38,6 @@ class GameReadinessCoordinator {
             Clock clock,
             GameTimingProperties timings) {
         this.activeGames = activeGames;
-        this.roomService = roomService;
         this.gameStateService = gameStateService;
         this.runtimeTimers = runtimeTimers;
         this.taskScheduler = taskScheduler;
@@ -54,13 +51,10 @@ class GameReadinessCoordinator {
      * Opens the ready gate using the configured countdown duration and applies any resulting
      * next-hand or game-end progression.
      *
-     * @param gameId the unique ID of the game
+     * @param game the active game instance
      */
-    void openReadyGate(String gameId) {
-        Game game = activeGames.get(gameId);
-        if (game == null) {
-            return;
-        }
+    void openReadyGate(Game game) {
+        String gameId = game.getGameId();
         long deadline = clock.millis() + timings.readyCountdownMs();
         switch (game.openOrWaitReadyGate(deadline)) {
             case IGNORE -> {
@@ -76,10 +70,49 @@ class GameReadinessCoordinator {
             }
             case OPENED -> {
                 ScheduledTimer timer = GameTaskScheduler.createTimer(
-                        gameId, game, ScheduledGameTask.READY_TIMEOUT, deadline);
+                        game, ScheduledGameTask.READY_TIMEOUT, deadline);
                 gameStateService.broadcastGameState(game);
                 taskScheduler.registerTimerAfterSave(timer);
             }
+        }
+    }
+
+    /**
+     * Deals the next hand and, if that hand ends at once (only possible when the round-end display
+     * delay is zero), opens the ready gate in this same call.
+     *
+     * @param gameId the unique ID of the game
+     */
+    void startNewHandAndOpenReadyGateIfNeeded(String gameId) {
+        if (handProgression.startNewHand(gameId)) {
+            openReadyGate(activeGames.get(gameId));
+        }
+    }
+
+    /**
+     * Applies a turn, forced-blind, or departure outcome and, if it ends the hand and the round-end
+     * display delay is zero, opens the ready gate in this same call.
+     *
+     * @param game                       the active game instance
+     * @param outcome                    the resulting turn state
+     * @param notifyImmediateAutoAdvance {@code true} to send an immediate all-in notice banner
+     */
+    void applyTurnOutcomeAndOpenReadyGateIfNeeded(
+            Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
+        if (handProgression.applyTurnOutcome(game, outcome, notifyImmediateAutoAdvance)) {
+            openReadyGate(game);
+        }
+    }
+
+    /**
+     * Runs an auto-advance timer step and, if it ends the hand and the round-end display delay is
+     * zero, opens the ready gate in this same call.
+     *
+     * @param game the active game instance
+     */
+    void applyAutoAdvanceTimeoutAndOpenReadyGateIfNeeded(Game game) {
+        if (handProgression.applyAutoAdvanceTimeout(game)) {
+            openReadyGate(game);
         }
     }
 
@@ -148,10 +181,7 @@ class GameReadinessCoordinator {
      */
     void completeReadyCountdown(Game game) {
         closeReadyGate(game);
-        String gameId = game.getGameId();
-        if (handProgression.startNewHand(gameId)) {
-            openReadyGate(gameId);
-        }
+        startNewHandAndOpenReadyGateIfNeeded(game.getGameId());
     }
 
     /**
@@ -160,12 +190,9 @@ class GameReadinessCoordinator {
      * @param game the active game instance
      */
     void closeReadyGate(Game game) {
-        String gameId = game.getGameId();
-        cancelTimeout(gameId);
-        runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
         game.closeReadyCountdown();
-        game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
-        game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
+        taskScheduler.cancelTask(game, ScheduledGameTask.READY_TIMEOUT);
+        taskScheduler.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
     }
 
     /**
@@ -182,8 +209,7 @@ class GameReadinessCoordinator {
         if (game == null) {
             throw new ResourceNotFoundException("Game not found");
         }
-        Room room = roomService.getRoom(gameId);
-        completionHandler.rejectExpiredActivity(gameId, room);
+        completionHandler.rejectExpiredActivity(gameId);
 
         Player player = game.findPlayerByName(playerName);
         boolean previouslyReady = player != null && player.getIsReadyForNextHand();

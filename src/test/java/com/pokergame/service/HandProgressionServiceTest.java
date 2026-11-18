@@ -78,7 +78,7 @@ class HandProgressionServiceTest {
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);
         timerRegistry = new GameTimerRegistry(springScheduler, fixedClock);
-        taskScheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, fixedClock, TestTimings.DEFAULT_GAME, lifecycleProvider);
+        taskScheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, roomCoordinator, fixedClock, TestTimings.DEFAULT_GAME, lifecycleProvider);
         completionHandler = new GameCompletionHandler(
                 activeGames, roomService, gameStateService, timerRegistry, taskScheduler,
                 fixedClock, TestTimings.game(30_000L, 4_000L, 10_000L));
@@ -221,7 +221,7 @@ class HandProgressionServiceTest {
             boolean openGate;
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 openGate = progression.applyTurnOutcome(
-                        GAME_ID, game, new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null));
+                        game, new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null));
             }
 
             assertFalse(openGate);
@@ -229,6 +229,26 @@ class HandProgressionServiceTest {
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
             assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
             verify(gameStateService).broadcastGameState(game);
+        }
+
+        @Test
+        @DisplayName("SHOWDOWN cancels a scheduled auto-advance timer, not just its recorded deadline")
+        void applyTurnOutcome_Showdown_CancelsScheduledAutoAdvanceTimer() {
+            HandProgressionService progression = createProgression(4_000L);
+            Game game = createStartedGame();
+            @SuppressWarnings("unchecked")
+            ScheduledFuture<Object> autoFuture = mock(ScheduledFuture.class);
+            doReturn(autoFuture).when(springScheduler).schedule(any(Runnable.class), any(Instant.class));
+            timerRegistry.schedule(GAME_ID, ScheduledGameTask.AUTO_ADVANCE, FIXED_NOW.toEpochMilli() + 2000L, () -> {});
+            game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, FIXED_NOW.toEpochMilli() + 2000L);
+
+            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                progression.applyTurnOutcome(
+                        game, new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null));
+            }
+
+            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+            verify(autoFuture).cancel(false);
         }
 
         @Test
@@ -240,7 +260,7 @@ class HandProgressionServiceTest {
 
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 assertFalse(progression.applyTurnOutcome(
-                        GAME_ID, game, new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, null), true));
+                        game, new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, null), true));
             }
 
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
@@ -250,7 +270,7 @@ class HandProgressionServiceTest {
             clearInvocations(gameStateService);
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 assertFalse(progression.applyTurnOutcome(
-                        GAME_ID, game, new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, null), false));
+                        game, new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, null), false));
             }
             verify(gameStateService).broadcastGameStateWithAutoAdvance(game, "Auto-advancing...");
         }
@@ -265,7 +285,7 @@ class HandProgressionServiceTest {
             boolean openGateNow;
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 openGateNow = progression.applyTurnOutcome(
-                        GAME_ID, game, new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null));
+                        game, new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null));
             }
 
             assertTrue(openGateNow);
@@ -334,7 +354,7 @@ class HandProgressionServiceTest {
             HandProgressionService delayedProgression = createProgression(5_000L);
             Game preFlopGame = createStartedGame();
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                assertFalse(delayedProgression.applyAutoAdvanceTimeout(GAME_ID, preFlopGame));
+                assertFalse(delayedProgression.applyAutoAdvanceTimeout(preFlopGame));
             }
             assertEquals(GamePhase.FLOP, preFlopGame.getCurrentPhase());
             assertNotNull(preFlopGame.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
@@ -343,7 +363,7 @@ class HandProgressionServiceTest {
             preFlopGame.dealTurn();
             preFlopGame.dealRiver();
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                assertFalse(delayedProgression.applyAutoAdvanceTimeout(GAME_ID, preFlopGame));
+                assertFalse(delayedProgression.applyAutoAdvanceTimeout(preFlopGame));
             }
             assertEquals(GamePhase.SHOWDOWN, preFlopGame.getCurrentPhase());
             assertEquals(FIXED_NOW.toEpochMilli() + 5_000L,
@@ -359,7 +379,7 @@ class HandProgressionServiceTest {
                 riverZeroDelay.dealFlop();
                 riverZeroDelay.dealTurn();
                 riverZeroDelay.dealRiver();
-                assertTrue(immediateProgression.applyAutoAdvanceTimeout(GAME_ID, riverZeroDelay));
+                assertTrue(immediateProgression.applyAutoAdvanceTimeout(riverZeroDelay));
             }
             assertNull(riverZeroDelay.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
 
@@ -383,7 +403,7 @@ class HandProgressionServiceTest {
                 winner.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
                 loser.getHoleCards().clear();
                 loser.getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
-                assertFalse(delayedProgression.applyAutoAdvanceTimeout(GAME_ID, riverTournamentOver));
+                assertFalse(delayedProgression.applyAutoAdvanceTimeout(riverTournamentOver));
             }
             assertTrue(riverTournamentOver.isGameDecided());
             assertEquals(FIXED_NOW.toEpochMilli() + TestTimings.FINAL_SHOWDOWN_DISPLAY_DELAY_MS,
@@ -403,7 +423,7 @@ class HandProgressionServiceTest {
             clearInvocations(gameStateService, springScheduler);
 
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                assertFalse(progression.applyAutoAdvanceTimeout(GAME_ID, game));
+                assertFalse(progression.applyAutoAdvanceTimeout(game));
             }
 
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));

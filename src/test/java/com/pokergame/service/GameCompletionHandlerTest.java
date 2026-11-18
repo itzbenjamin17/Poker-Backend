@@ -87,7 +87,7 @@ class GameCompletionHandlerTest {
         activeGames = new ActiveGameRegistry(roomCoordinator);
         runtimeTimers = new GameTimerRegistry(taskScheduler, mutableClock);
         taskSchedulerFacade = new GameTaskScheduler(
-                activeGames, runtimeTimers, roomService, mutableClock, DEFAULT_TIMINGS, lifecycleProvider);
+                activeGames, runtimeTimers, roomService, roomCoordinator, mutableClock, DEFAULT_TIMINGS, lifecycleProvider);
         realGameStateService = new GameStateService(roomService, messagingTemplate, mutableClock);
         completion = new GameCompletionHandler(
                 activeGames, roomService, realGameStateService, runtimeTimers,
@@ -422,14 +422,16 @@ class GameCompletionHandlerTest {
             testRoom.setInactivityDeadlineEpochMs(BASE_EPOCH_MS + 1000L);
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                assertDoesNotThrow(() -> completion.rejectExpiredActivity(ROOM_ID, null));
-                assertDoesNotThrow(() -> completion.rejectExpiredActivity(ROOM_ID, testRoom));
+                when(roomService.getRoom(ROOM_ID)).thenReturn(null);
+                assertDoesNotThrow(() -> completion.rejectExpiredActivity(ROOM_ID));
+                when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
+                assertDoesNotThrow(() -> completion.rejectExpiredActivity(ROOM_ID));
             }
 
             mutableClock.setMillis(BASE_EPOCH_MS + 1000L);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 BadRequestException ex = assertThrows(BadRequestException.class,
-                        () -> completion.rejectExpiredActivity(ROOM_ID, testRoom));
+                        () -> completion.rejectExpiredActivity(ROOM_ID));
                 assertEquals("GAME_EXPIRED", ex.actionErrorCode());
             }
             assertFalse(game.isGameOver());
