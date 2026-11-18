@@ -132,7 +132,7 @@ class PlayerDepartureHandler {
             return;
         }
 
-        if (game.isFinishedOrEliminated()) {
+        if (game.isMatchConcluded()) {
             room.setFinished(true);
             completionHandler.handleGameEnd(roomId);
             detachRoomMembers(roomId, room, game, departingRoomMembers);
@@ -462,7 +462,7 @@ class PlayerDepartureHandler {
             return false;
         }
         Long deadline = player == null ? room.getAbsenceDeadline(playerName) : player.getDisconnectDeadlineEpochMs();
-        if (deadline == null && player != null && game.isFinishedOrEliminated()) {
+        if (deadline == null && player != null && game.isMatchConcluded()) {
             deadline = room.getAbsenceDeadline(playerName);
         }
         return deadline != null && deadline == expectedDeadlineEpochMs && clock.millis() >= expectedDeadlineEpochMs;

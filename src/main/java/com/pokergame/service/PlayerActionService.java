@@ -125,11 +125,11 @@ public class PlayerActionService {
         taskScheduler.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
         taskScheduler.resetGameInactivity(game);
 
-        if (outcome.conversionMessage() != null) {
+        if (outcome.actionNotice() != null) {
             logger.info("Sending conversion message to player {}: {}",
-                    currentPlayer.getName(), outcome.conversionMessage());
+                    currentPlayer.getName(), outcome.actionNotice());
             gameStateService.sendPrivatePlayerNotification(
-                    gameId, currentPlayer.getName(), outcome.conversionMessage(), ResponseMessage.PLAYER_NOTIFICATION);
+                    gameId, currentPlayer.getName(), outcome.actionNotice(), ResponseMessage.PLAYER_NOTIFICATION);
         }
 
         readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, outcome, true);

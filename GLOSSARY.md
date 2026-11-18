@@ -58,7 +58,7 @@ True once the match has permanently ended (via `settleGameEnd`, `resetForNewHand
 **`isGameDecided()`**:
 True when one or zero non-out players still hold chips (`chips > 0`), meaning no further hand can begin even before `settleGameEnd` marks `gameOver`.
 
-**`isFinishedOrEliminated()`**:
+**`isMatchConcluded()`**:
 True when `!pausedForDisconnectedSurvivor` and either `gameOver` is true or a settled hand has decided the winner (`isHandSettled() && isGameDecided()`), so player departures no longer affect live play.
 
 **`isFinalPotSettled()` (`finalPotSettled`)**:
@@ -67,7 +67,7 @@ True once `settleGameEnd` has awarded any remaining carry-over or unsettled pot 
 **`isHandSettled()`**:
 True when `lastSettlementResult != null`, meaning the current or most recent hand has completed pot distribution (by fold, void hand, or showdown) and is awaiting the next hand or game end.
 
-**`endedBeforeShowdown()`**:
+**`isHandInProgress()`**:
 True when `currentPhase != GamePhase.SHOWDOWN || !isHandSettled()`, distinguishing an in-progress or pre-showdown hand from a completed showdown so mid-hand zero-chip contenders remain eligible and new-hand requests are rejected while a hand is still running.
 
 **`isPausedForDisconnectedSurvivor()` (`pausedForDisconnectedSurvivor`)**:

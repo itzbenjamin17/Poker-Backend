@@ -467,7 +467,7 @@ final class BettingRound {
     }
 
     /** Outcome of normalizing a requested player decision against stack and bet limits. */
-    record DecisionResult(PlayerDecision decision, int amount, String conversionMessage) {
+    record DecisionResult(PlayerDecision decision, int amount, String actionNotice) {
     }
 
     /** Next hand-state transition required after forced preflop blinds leave some or all players all-in. */

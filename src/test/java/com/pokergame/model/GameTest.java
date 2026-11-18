@@ -927,7 +927,7 @@ class GameTest {
             int prevBet = deep1.getCurrentBet();
             TurnOutcome raiseOutcome = sidePotGame.processPlayerDecision(
                     deep1, new PlayerDecision(PlayerAction.RAISE, 100, deep1.getPlayerId()));
-            assertNull(raiseOutcome.conversionMessage());
+            assertNull(raiseOutcome.actionNotice());
             assertTrue(deep1.getCurrentBet() > prevBet);
             assertEquals(deep1.getCurrentBet(), sidePotGame.getCurrentHighestBet());
 
@@ -941,8 +941,8 @@ class GameTest {
             Player shortCaller = shortCallGame.getCurrentPlayer();
             TurnOutcome callOutcome = shortCallGame.processPlayerDecision(
                     shortCaller, new PlayerDecision(PlayerAction.CALL, 0, shortCaller.getPlayerId()));
-            assertNotNull(callOutcome.conversionMessage());
-            assertTrue(callOutcome.conversionMessage().contains("converted to all-in"));
+            assertNotNull(callOutcome.actionNotice());
+            assertTrue(callOutcome.actionNotice().contains("converted to all-in"));
             assertEquals(0, shortCaller.getChips());
             assertTrue(shortCaller.isAllIn());
         }

@@ -93,13 +93,13 @@ class GameReadinessCoordinator {
      * Applies a turn, forced-blind, or departure outcome and, if it ends the hand and the round-end
      * display delay is zero, opens the ready gate in this same call.
      *
-     * @param game                       the active game instance
-     * @param outcome                    the resulting turn state
-     * @param notifyImmediateAutoAdvance {@code true} to send an immediate all-in notice banner
+     * @param game          the active game instance
+     * @param outcome       the resulting turn state
+     * @param sendAllInNotice {@code true} to send an immediate all-in notice banner
      */
     void applyTurnOutcomeAndOpenReadyGateIfNeeded(
-            Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
-        if (handProgression.applyTurnOutcome(game, outcome, notifyImmediateAutoAdvance)) {
+            Game game, TurnOutcome outcome, boolean sendAllInNotice) {
+        if (handProgression.applyTurnOutcome(game, outcome, sendAllInNotice)) {
             openReadyGate(game);
         }
     }

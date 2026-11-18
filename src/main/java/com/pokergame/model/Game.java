@@ -32,7 +32,7 @@ import java.util.Set;
  * <ul>
  *   <li>{@link #isHandSettled()}: {@code true} once the current or most recent hand has finished
  *       pot distribution ({@code lastSettlementResult != null}), before the next hand resets it.</li>
- *   <li>{@link #endedBeforeShowdown()}: {@code true} while the current hand has not reached a
+ *   <li>{@link #isHandInProgress()}: {@code true} while the current hand has not reached a
  *       settled {@link GamePhase#SHOWDOWN}, distinguishing mid-hand play from post-hand state.</li>
  *   <li>{@link #isGameDecided()}: {@code true} when at most one non-out player holds chips, meaning
  *       another hand cannot start even before match-end cleanup marks the game over.</li>
@@ -42,7 +42,7 @@ import java.util.Set;
  *   <li>{@link #isGameOver()}: {@code true} once the match has permanently ended (via
  *       {@link #settleGameEnd}, {@link #resetForNewHand}, or {@link #markGameOver()}), stopping
  *       gameplay while retaining post-game review until cleanup.</li>
- *   <li>{@link #isFinishedOrEliminated()}: {@code true} when {@code !pausedForDisconnectedSurvivor} and either
+ *   <li>{@link #isMatchConcluded()}: {@code true} when {@code !pausedForDisconnectedSurvivor} and either
  *       the match is over or a settled hand has decided the winner, so departures no longer affect
  *       live play.</li>
  *   <li>{@link #isFinalPotSettled()}: {@code true} once {@link #settleGameEnd} has awarded any
@@ -364,7 +364,7 @@ public class Game {
         PotCalculator.trackContribution(handContributions, player, this.pot - potBeforeDecision, gameId);
         bettingRound.recordAppliedDecision(player, bigBlind, wagerBeforeDecision);
 
-        return advanceTurnOrPhase(result.conversionMessage(), true);
+        return advanceTurnOrPhase(result.actionNotice(), true);
     }
 
     /**
@@ -956,7 +956,7 @@ public class Game {
         if (player.isOut()) {
             return false;
         }
-        return endedBeforeShowdown() || player.getChips() > 0;
+        return isHandInProgress() || player.getChips() > 0;
     }
 
     /**
@@ -1081,7 +1081,7 @@ public class Game {
      *
      * @return {@code true} if the game has finished or can finalize without waiting on a disconnected survivor
      */
-    public boolean isFinishedOrEliminated() {
+    public boolean isMatchConcluded() {
         return !pausedForDisconnectedSurvivor && (gameOver || (isHandSettled() && isGameDecided()));
     }
 
@@ -1090,7 +1090,7 @@ public class Game {
      *
      * @return {@code true} if the hand is still running or settled outside showdown
      */
-    public boolean endedBeforeShowdown() {
+    public boolean isHandInProgress() {
         return currentPhase != GamePhase.SHOWDOWN || !isHandSettled();
     }
 
@@ -1138,19 +1138,19 @@ public class Game {
         PotCalculator.trackContribution(handContributions, player, player.getCurrentBet() - betBefore, gameId);
     }
 
-    private TurnOutcome advanceTurnOrPhase(String conversionMessage, boolean moveToNextPlayer) {
+    private TurnOutcome advanceTurnOrPhase(String actionNotice, boolean moveToNextPlayer) {
         bettingRound.markInitialTurnsIfAllActed(activePlayers);
         TurnOutcome.TurnOutcomeType outcome = bettingRound.nextProgression(activePlayers, isHandOver(), currentPhase);
         if (outcome == TurnOutcome.TurnOutcomeType.SHOWDOWN) {
             conductShowdown();
-            return new TurnOutcome(outcome, conversionMessage);
+            return new TurnOutcome(outcome, actionNotice);
         }
         if (outcome == TurnOutcome.TurnOutcomeType.PHASE_ADVANCED) {
             advancePhase();
         } else if (outcome == TurnOutcome.TurnOutcomeType.NEXT_PLAYER && moveToNextPlayer) {
             seating.nextPlayer(activePlayers);
         }
-        return new TurnOutcome(outcome, conversionMessage);
+        return new TurnOutcome(outcome, actionNotice);
     }
 
     private void advancePhase() {

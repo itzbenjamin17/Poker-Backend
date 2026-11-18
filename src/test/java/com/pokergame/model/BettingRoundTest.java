@@ -86,7 +86,7 @@ class BettingRoundTest {
                 List.of(alice, bob), 20);
         assertEquals(PlayerAction.ALL_IN, result.decision().action());
         assertEquals(0, result.amount());
-        assertNotNull(result.conversionMessage());
+        assertNotNull(result.actionNotice());
         assertEquals(10, alice.getChips());
     }
 

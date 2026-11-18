@@ -58,7 +58,7 @@ class HandProgressionService {
             completionHandler.handleGameEnd(gameId);
             return false;
         }
-        if (game.getHandNumber() > 0 && game.endedBeforeShowdown()) {
+        if (game.getHandNumber() > 0 && game.isHandInProgress()) {
             logger.warn("Ignoring new-hand request for unsettled game {} hand {}", gameId, game.getHandNumber());
             return false;
         }
@@ -105,12 +105,12 @@ class HandProgressionService {
      * Applies a turn, forced-blind, or departure outcome by scheduling the next timer and
      * broadcasting the resulting table state.
      *
-     * @param game                       the active game instance
-     * @param outcome                    the resulting turn state
-     * @param notifyImmediateAutoAdvance {@code true} to send an immediate all-in notice banner
+     * @param game            the active game instance
+     * @param outcome         the resulting turn state
+     * @param sendAllInNotice {@code true} to send an immediate all-in notice banner
      * @return {@code true} if the ready gate should open immediately, {@code false} otherwise
      */
-    boolean applyTurnOutcome(Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
+    boolean applyTurnOutcome(Game game, TurnOutcome outcome, boolean sendAllInNotice) {
         String gameId = game.getGameId();
         switch (outcome.type()) {
             case NEXT_PLAYER, PHASE_ADVANCED -> {
@@ -123,7 +123,7 @@ class HandProgressionService {
                 if (!game.isAutoAdvancing()) {
                     taskScheduler.scheduleAutoAdvance(gameId);
                 }
-                if (notifyImmediateAutoAdvance) {
+                if (sendAllInNotice) {
                     gameStateService.broadcastAutoAdvanceNotification(game);
                 } else {
                     gameStateService.broadcastGameStateWithAutoAdvance(game, GameStateService.AUTO_ADVANCE_MESSAGE);
