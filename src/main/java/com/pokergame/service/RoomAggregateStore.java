@@ -20,7 +20,7 @@ class RoomAggregateStore implements RoomAggregates {
     private static final Logger logger = LoggerFactory.getLogger(RoomAggregateStore.class);
     private final RoomRegistry rooms;
     private final ActiveGameRegistry activeGames;
-    private final GameTimerRegistry runtimeTimers;
+    private final GameTimerRegistry timerRegistry;
     private final GameTaskScheduler taskScheduler;
     private final RoomService roomService;
     private final RoomCoordinator roomCoordinator;
@@ -28,13 +28,13 @@ class RoomAggregateStore implements RoomAggregates {
     RoomAggregateStore(
             RoomRegistry rooms,
             ActiveGameRegistry activeGames,
-            GameTimerRegistry runtimeTimers,
+            GameTimerRegistry timerRegistry,
             GameTaskScheduler taskScheduler,
             RoomService roomService,
             RoomCoordinator roomCoordinator) {
         this.rooms = rooms;
         this.activeGames = activeGames;
-        this.runtimeTimers = runtimeTimers;
+        this.timerRegistry = timerRegistry;
         this.taskScheduler = taskScheduler;
         this.roomService = roomService;
         this.roomCoordinator = roomCoordinator;
@@ -68,7 +68,7 @@ class RoomAggregateStore implements RoomAggregates {
     public void remove(String roomId) {
         requireNonNull(roomId, "roomId must not be null");
         roomCoordinator.assertHeldByCurrentThread(roomId);
-        runtimeTimers.cancelAllForGame(roomId, false);
+        timerRegistry.cancelAllForGame(roomId, false);
         activeGames.remove(roomId);
         roomService.cancelLobbyInactivity(roomId);
         Room room = rooms.remove(roomId);
@@ -90,7 +90,7 @@ class RoomAggregateStore implements RoomAggregates {
         roomCoordinator.assertHeldByCurrentThread(roomId);
         Game existing = activeGames.get(roomId);
         if (existing != game) {
-            runtimeTimers.cancelAllForGame(roomId, false);
+            timerRegistry.cancelAllForGame(roomId, false);
         }
         rooms.put(room);
         if (game == null) {

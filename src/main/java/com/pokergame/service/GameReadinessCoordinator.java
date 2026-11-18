@@ -21,7 +21,7 @@ class GameReadinessCoordinator {
     private static final Logger logger = LoggerFactory.getLogger(GameReadinessCoordinator.class);
     private final ActiveGameRegistry activeGames;
     private final GameStateService gameStateService;
-    private final GameTimerRegistry runtimeTimers;
+    private final GameTimerRegistry timerRegistry;
     private final GameTaskScheduler taskScheduler;
     private final GameCompletionHandler completionHandler;
     private final HandProgressionService handProgression;
@@ -31,7 +31,7 @@ class GameReadinessCoordinator {
     GameReadinessCoordinator(
             ActiveGameRegistry activeGames,
             GameStateService gameStateService,
-            GameTimerRegistry runtimeTimers,
+            GameTimerRegistry timerRegistry,
             GameTaskScheduler taskScheduler,
             GameCompletionHandler completionHandler,
             HandProgressionService handProgression,
@@ -39,7 +39,7 @@ class GameReadinessCoordinator {
             GameTimingProperties timings) {
         this.activeGames = activeGames;
         this.gameStateService = gameStateService;
-        this.runtimeTimers = runtimeTimers;
+        this.timerRegistry = timerRegistry;
         this.taskScheduler = taskScheduler;
         this.completionHandler = completionHandler;
         this.handProgression = handProgression;
@@ -61,7 +61,7 @@ class GameReadinessCoordinator {
             }
             case GAME_DECIDED -> completionHandler.handleGameEnd(gameId);
             case WAITING_FOR_PLAYERS -> {
-                cancelTimeout(gameId);
+                cancelReadyTimeout(gameId);
                 gameStateService.broadcastGameState(game);
             }
             case ALL_READY -> {
@@ -149,7 +149,7 @@ class GameReadinessCoordinator {
             case IGNORE_STALE -> {
             }
             case WAITING_FOR_PLAYERS -> {
-                cancelTimeout(game.getGameId());
+                cancelReadyTimeout(game.getGameId());
                 gameStateService.broadcastGameState(game);
             }
             case FORCED_READY -> completeReadyCountdown(game);
@@ -199,8 +199,8 @@ class GameReadinessCoordinator {
      *
      * @param gameId the unique ID of the game
      */
-    void cancelTimeout(String gameId) {
-        runtimeTimers.cancelTask(gameId, ScheduledGameTask.READY_TIMEOUT);
+    void cancelReadyTimeout(String gameId) {
+        timerRegistry.cancelTask(gameId, ScheduledGameTask.READY_TIMEOUT);
     }
 
     private void setPlayerReadyForNextHand(String gameId, String playerName, boolean ready) {

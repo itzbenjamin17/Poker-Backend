@@ -35,7 +35,7 @@ public class GameLifecycleService {
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
     private final RoomService roomService;
     private final ActiveGameRegistry activeGames;
-    private final GameTimerRegistry runtimeTimers;
+    private final GameTimerRegistry timerRegistry;
     private final GameTaskScheduler taskScheduler;
     private final GameCompletionHandler completionHandler;
     private final GameReadinessCoordinator readinessCoordinator;
@@ -47,7 +47,7 @@ public class GameLifecycleService {
     GameLifecycleService(
             RoomService roomService,
             ActiveGameRegistry activeGames,
-            GameTimerRegistry runtimeTimers,
+            GameTimerRegistry timerRegistry,
             GameTaskScheduler taskScheduler,
             GameCompletionHandler completionHandler,
             GameReadinessCoordinator readinessCoordinator,
@@ -57,7 +57,7 @@ public class GameLifecycleService {
             GameTimingProperties timings) {
         this.roomService = roomService;
         this.activeGames = activeGames;
-        this.runtimeTimers = runtimeTimers;
+        this.timerRegistry = timerRegistry;
         this.taskScheduler = taskScheduler;
         this.completionHandler = completionHandler;
         this.readinessCoordinator = readinessCoordinator;
@@ -221,7 +221,7 @@ public class GameLifecycleService {
      * @param keepCleanup {@code true} to keep {@link ScheduledGameTask#CLEANUP} scheduled
      */
     public void cancelTimers(String gameId, boolean keepCleanup) {
-        runtimeTimers.cancelAllForGame(gameId, keepCleanup);
+        timerRegistry.cancelAllForGame(gameId, keepCleanup);
     }
 
     /**

@@ -25,7 +25,7 @@ class GameCompletionHandler {
     private final ActiveGameRegistry activeGames;
     private final RoomService roomService;
     private final GameStateService gameStateService;
-    private final GameTimerRegistry runtimeTimers;
+    private final GameTimerRegistry timerRegistry;
     private final GameTaskScheduler taskScheduler;
     private final Clock clock;
     private final GameTimingProperties timings;
@@ -34,14 +34,14 @@ class GameCompletionHandler {
             ActiveGameRegistry activeGames,
             RoomService roomService,
             GameStateService gameStateService,
-            GameTimerRegistry runtimeTimers,
+            GameTimerRegistry timerRegistry,
             GameTaskScheduler taskScheduler,
             Clock clock,
             GameTimingProperties timings) {
         this.activeGames = activeGames;
         this.roomService = roomService;
         this.gameStateService = gameStateService;
-        this.runtimeTimers = runtimeTimers;
+        this.timerRegistry = timerRegistry;
         this.taskScheduler = taskScheduler;
         this.clock = clock;
         this.timings = timings;
@@ -111,7 +111,7 @@ class GameCompletionHandler {
         game.markGameOver();
         game.closeReadyCountdown();
         game.clearAllScheduledTasks();
-        runtimeTimers.cancelAllForGame(gameId, true);
+        timerRegistry.cancelAllForGame(gameId, true);
         GameEndResponse event = gameStateService.advanceRevisionAndBuildAbandonment(game);
         game.setGameEndResult(event);
 
@@ -130,7 +130,7 @@ class GameCompletionHandler {
      * @param gameId the unique ID of the game and room to delete
      */
     void deleteGameAndRoom(String gameId) {
-        runtimeTimers.cancelAllForGame(gameId, false);
+        timerRegistry.cancelAllForGame(gameId, false);
         activeGames.remove(gameId);
         roomService.destroyRoom(gameId);
         logger.info("Game {} and associated room deleted", gameId);
@@ -208,7 +208,7 @@ class GameCompletionHandler {
         }
         game.closeReadyCountdown();
         game.clearAllScheduledTasks();
-        runtimeTimers.cancelAllForGame(gameId, false);
+        timerRegistry.cancelAllForGame(gameId, false);
         activeGames.remove(gameId);
     }
 
@@ -229,7 +229,7 @@ class GameCompletionHandler {
         }
 
         Player winner = game.settleGameEnd(preferredWinner, forfeitedPlayers);
-        runtimeTimers.cancelAllForGame(gameId, true);
+        timerRegistry.cancelAllForGame(gameId, true);
 
         Room room = roomService.getRoom(gameId);
         if (room != null) {

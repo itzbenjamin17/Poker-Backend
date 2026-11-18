@@ -41,12 +41,12 @@ class GameTimerRegistryTest {
     private TaskScheduler taskScheduler;
 
     private Clock fixedClock;
-    private GameTimerRegistry runtimeTimers;
+    private GameTimerRegistry timerRegistry;
 
     @BeforeEach
     void setUp() {
         fixedClock = Clock.fixed(FIXED_NOW, ZoneOffset.UTC);
-        runtimeTimers = new GameTimerRegistry(taskScheduler, fixedClock);
+        timerRegistry = new GameTimerRegistry(taskScheduler, fixedClock);
     }
 
     @Test
@@ -60,13 +60,13 @@ class GameTimerRegistryTest {
 
         long deadline = FIXED_NOW.toEpochMilli() + 10_000L;
         AtomicBoolean executed = new AtomicBoolean(false);
-        runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline, () -> executed.set(true));
+        timerRegistry.schedule(ROOM_ID, ScheduledGameTask.NEW_HAND, deadline, () -> executed.set(true));
 
         assertEquals(Instant.ofEpochMilli(deadline), instantCaptor.getValue());
 
         runnableCaptor.getValue().run();
         assertTrue(executed.get());
-        runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.NEW_HAND);
+        timerRegistry.cancelTask(ROOM_ID, ScheduledGameTask.NEW_HAND);
         verify(future, never()).cancel(false);
     }
 
@@ -77,10 +77,10 @@ class GameTimerRegistryTest {
         ScheduledFuture<Object> future = mock(ScheduledFuture.class);
         doReturn(future).when(taskScheduler).schedule(any(Runnable.class), eq(FIXED_NOW));
 
-        runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, FIXED_NOW.toEpochMilli() - 5_000L, () -> {});
+        timerRegistry.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, FIXED_NOW.toEpochMilli() - 5_000L, () -> {});
 
         verify(taskScheduler).schedule(any(Runnable.class), eq(FIXED_NOW));
-        runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT);
+        timerRegistry.cancelTask(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT);
         verify(future).cancel(false);
     }
 
@@ -96,9 +96,9 @@ class GameTimerRegistryTest {
 
         AtomicBoolean firstRan = new AtomicBoolean(false);
         AtomicBoolean secondRan = new AtomicBoolean(false);
-        runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.NEW_HAND, FIXED_NOW.toEpochMilli() + 5_000L,
+        timerRegistry.schedule(ROOM_ID, ScheduledGameTask.NEW_HAND, FIXED_NOW.toEpochMilli() + 5_000L,
                 () -> firstRan.set(true));
-        runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.NEW_HAND, FIXED_NOW.toEpochMilli() + 8_000L,
+        timerRegistry.schedule(ROOM_ID, ScheduledGameTask.NEW_HAND, FIXED_NOW.toEpochMilli() + 8_000L,
                 () -> secondRan.set(true));
 
         verify(future1).cancel(false);
@@ -111,7 +111,7 @@ class GameTimerRegistryTest {
 
         callbacks.getAllValues().getLast().run();
         assertTrue(secondRan.get());
-        runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.NEW_HAND);
+        timerRegistry.cancelTask(ROOM_ID, ScheduledGameTask.NEW_HAND);
         verify(future2, never()).cancel(false);
     }
 
@@ -123,12 +123,12 @@ class GameTimerRegistryTest {
         ArgumentCaptor<Runnable> callbackCaptor = ArgumentCaptor.forClass(Runnable.class);
         doReturn(future).when(taskScheduler).schedule(callbackCaptor.capture(), any(Instant.class));
 
-        runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, FIXED_NOW.toEpochMilli() + 1000L, () -> {
+        timerRegistry.schedule(ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, FIXED_NOW.toEpochMilli() + 1000L, () -> {
             throw new IllegalStateException("boom");
         });
 
         assertDoesNotThrow(() -> callbackCaptor.getValue().run());
-        runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.AUTO_ADVANCE);
+        timerRegistry.cancelTask(ROOM_ID, ScheduledGameTask.AUTO_ADVANCE);
         verify(future, never()).cancel(false);
     }
 
@@ -145,16 +145,16 @@ class GameTimerRegistryTest {
                 })
                 .thenAnswer(_ -> replacement);
 
-        runtimeTimers.scheduleInactivity(ROOM_ID, FIXED_NOW.toEpochMilli() + 100L, FIXED_NOW.toEpochMilli(),
-                () -> runtimeTimers.scheduleInactivity(
+        timerRegistry.scheduleInactivity(ROOM_ID, FIXED_NOW.toEpochMilli() + 100L, FIXED_NOW.toEpochMilli(),
+                () -> timerRegistry.scheduleInactivity(
                         ROOM_ID, FIXED_NOW.toEpochMilli() + 200L, FIXED_NOW.toEpochMilli(), replacementCallback));
 
         verify(first).cancel(false);
         verifyNoInteractions(replacement, replacementCallback);
 
-        runtimeTimers.cancelAllForGame(ROOM_ID, true);
+        timerRegistry.cancelAllForGame(ROOM_ID, true);
         verify(replacement).cancel(false);
-        runtimeTimers.cancelAllForGame(ROOM_ID, true);
+        timerRegistry.cancelAllForGame(ROOM_ID, true);
         verifyNoMoreInteractions(replacement);
     }
 
@@ -163,16 +163,16 @@ class GameTimerRegistryTest {
     void cancellingInactivityBeforeFutureAttachmentCancelsReturnedFuture() {
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         when(taskScheduler.schedule(any(Runnable.class), any(Instant.class))).thenAnswer(invocation -> {
-            runtimeTimers.cancelInactivity(ROOM_ID);
+            timerRegistry.cancelInactivity(ROOM_ID);
             invocation.<Runnable>getArgument(0).run();
             return future;
         });
 
-        runtimeTimers.scheduleInactivity(ROOM_ID, FIXED_NOW.toEpochMilli() + 200L, FIXED_NOW.toEpochMilli(),
+        timerRegistry.scheduleInactivity(ROOM_ID, FIXED_NOW.toEpochMilli() + 200L, FIXED_NOW.toEpochMilli(),
                 () -> fail("Unexpected timeout"));
 
         verify(future).cancel(false);
-        runtimeTimers.cancelInactivity(ROOM_ID);
+        timerRegistry.cancelInactivity(ROOM_ID);
         verifyNoMoreInteractions(future);
     }
 
@@ -186,12 +186,12 @@ class GameTimerRegistryTest {
                 .thenThrow(schedulerFailure);
         Runnable expire = mock(Runnable.class);
 
-        runtimeTimers.scheduleInactivity(ROOM_ID, FIXED_NOW.toEpochMilli() + 100L, FIXED_NOW.toEpochMilli(), expire);
+        timerRegistry.scheduleInactivity(ROOM_ID, FIXED_NOW.toEpochMilli() + 100L, FIXED_NOW.toEpochMilli(), expire);
         callbacks.getValue().run();
         verifyNoInteractions(expire);
 
         assertSame(schedulerFailure, assertThrows(RuntimeException.class, () ->
-                runtimeTimers.scheduleInactivity(
+                timerRegistry.scheduleInactivity(
                         ROOM_ID, FIXED_NOW.toEpochMilli() + 100L, FIXED_NOW.toEpochMilli(), expire)));
         callbacks.getValue().run();
         verifyNoInteractions(expire);
@@ -200,9 +200,9 @@ class GameTimerRegistryTest {
     @Test
     @DisplayName("null gameId or null deadline does not schedule inactivity")
     void missingGameIdOrDeadlineDoesNotScheduleInactivity() {
-        runtimeTimers.scheduleInactivity(null, 100L, 100L, () -> fail("Unexpected timeout"));
-        runtimeTimers.scheduleInactivity(ROOM_ID, null, 100L, () -> fail("Unexpected timeout"));
-        runtimeTimers.cancelInactivity(null);
+        timerRegistry.scheduleInactivity(null, 100L, 100L, () -> fail("Unexpected timeout"));
+        timerRegistry.scheduleInactivity(ROOM_ID, null, 100L, () -> fail("Unexpected timeout"));
+        timerRegistry.cancelInactivity(null);
 
         verifyNoInteractions(taskScheduler);
     }
@@ -214,11 +214,11 @@ class GameTimerRegistryTest {
         ScheduledFuture<Object> future = mock(ScheduledFuture.class);
         doReturn(future).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
 
-        runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, FIXED_NOW.toEpochMilli() + 10_000L, () -> {});
+        timerRegistry.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, FIXED_NOW.toEpochMilli() + 10_000L, () -> {});
 
-        runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.CLEANUP);
+        timerRegistry.cancelTask(ROOM_ID, ScheduledGameTask.CLEANUP);
         verify(future).cancel(false);
-        runtimeTimers.cancelTask(ROOM_ID, ScheduledGameTask.CLEANUP);
+        timerRegistry.cancelTask(ROOM_ID, ScheduledGameTask.CLEANUP);
         verifyNoMoreInteractions(future);
     }
 
@@ -232,12 +232,12 @@ class GameTimerRegistryTest {
             ScheduledFuture<?> future = mock(ScheduledFuture.class);
             futures.put(task, future);
             doReturn(future).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
-            runtimeTimers.schedule(ROOM_ID, task, deadline, () -> {});
+            timerRegistry.schedule(ROOM_ID, task, deadline, () -> {});
         }
         doReturn(inactivity).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
-        runtimeTimers.scheduleInactivity(ROOM_ID, deadline, FIXED_NOW.toEpochMilli(), () -> {});
+        timerRegistry.scheduleInactivity(ROOM_ID, deadline, FIXED_NOW.toEpochMilli(), () -> {});
 
-        runtimeTimers.cancelProgressionForGame(ROOM_ID);
+        timerRegistry.cancelProgressionForGame(ROOM_ID);
 
         for (ScheduledGameTask task : List.of(
                 ScheduledGameTask.TURN_TIMEOUT,
@@ -249,14 +249,14 @@ class GameTimerRegistryTest {
         }
         verifyNoInteractions(inactivity, futures.get(ScheduledGameTask.CLEANUP), futures.get(ScheduledGameTask.GAME_END));
 
-        runtimeTimers.cancelAllForGame(ROOM_ID, true);
+        timerRegistry.cancelAllForGame(ROOM_ID, true);
         verify(inactivity).cancel(false);
         verify(futures.get(ScheduledGameTask.GAME_END)).cancel(false);
         verifyNoInteractions(futures.get(ScheduledGameTask.CLEANUP));
 
-        runtimeTimers.cancelAllForGame(ROOM_ID, false);
+        timerRegistry.cancelAllForGame(ROOM_ID, false);
         verify(futures.get(ScheduledGameTask.CLEANUP)).cancel(false);
-        runtimeTimers.cancelAllForGame(ROOM_ID, false);
+        timerRegistry.cancelAllForGame(ROOM_ID, false);
         verifyNoMoreInteractions(inactivity, futures.get(ScheduledGameTask.GAME_END), futures.get(ScheduledGameTask.CLEANUP));
     }
 
@@ -270,16 +270,16 @@ class GameTimerRegistryTest {
         doReturn(newHandFuture).doReturn(cleanupFuture)
                 .when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
 
-        runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.NEW_HAND, FIXED_NOW.toEpochMilli() + 5_000L, () -> {});
-        runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, FIXED_NOW.toEpochMilli() + 60_000L, () -> {});
+        timerRegistry.schedule(ROOM_ID, ScheduledGameTask.NEW_HAND, FIXED_NOW.toEpochMilli() + 5_000L, () -> {});
+        timerRegistry.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, FIXED_NOW.toEpochMilli() + 60_000L, () -> {});
 
-        runtimeTimers.cancelAllForGame(ROOM_ID, true);
+        timerRegistry.cancelAllForGame(ROOM_ID, true);
         verify(newHandFuture).cancel(false);
         verify(cleanupFuture, never()).cancel(false);
 
-        runtimeTimers.cancelAllForGame(ROOM_ID, false);
+        timerRegistry.cancelAllForGame(ROOM_ID, false);
         verify(cleanupFuture).cancel(false);
-        runtimeTimers.cancelAllForGame(ROOM_ID, false);
+        timerRegistry.cancelAllForGame(ROOM_ID, false);
         verifyNoMoreInteractions(newHandFuture, cleanupFuture);
     }
 }

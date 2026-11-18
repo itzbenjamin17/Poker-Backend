@@ -17,23 +17,23 @@ import org.springframework.stereotype.Component;
 class HandProgressionService {
     private static final Logger logger = LoggerFactory.getLogger(HandProgressionService.class);
     private final ActiveGameRegistry activeGames;
-    private final GameTimerRegistry runtimeTimers;
-    private final GameTaskScheduler scheduling;
-    private final GameCompletionHandler completion;
+    private final GameTimerRegistry timerRegistry;
+    private final GameTaskScheduler taskScheduler;
+    private final GameCompletionHandler completionHandler;
     private final GameStateService gameStateService;
     private final GameTimingProperties timings;
 
     HandProgressionService(
             ActiveGameRegistry activeGames,
-            GameTimerRegistry runtimeTimers,
-            GameTaskScheduler scheduling,
-            GameCompletionHandler completion,
+            GameTimerRegistry timerRegistry,
+            GameTaskScheduler taskScheduler,
+            GameCompletionHandler completionHandler,
             GameStateService gameStateService,
             GameTimingProperties timings) {
         this.activeGames = activeGames;
-        this.runtimeTimers = runtimeTimers;
-        this.scheduling = scheduling;
-        this.completion = completion;
+        this.timerRegistry = timerRegistry;
+        this.taskScheduler = taskScheduler;
+        this.completionHandler = completionHandler;
         this.gameStateService = gameStateService;
         this.timings = timings;
     }
@@ -55,7 +55,7 @@ class HandProgressionService {
             return false;
         }
         if (game.isGameOver()) {
-            completion.handleGameEnd(gameId);
+            completionHandler.handleGameEnd(gameId);
             return false;
         }
         if (game.getHandNumber() > 0 && game.endedBeforeShowdown()) {
@@ -64,7 +64,7 @@ class HandProgressionService {
         }
 
         logger.info("Starting new hand for game: {}", gameId);
-        runtimeTimers.cancelProgressionForGame(gameId);
+        timerRegistry.cancelProgressionForGame(gameId);
         game.invalidateProgressionTasks();
         game.closeReadyCountdown();
         game.clearScheduledTask(ScheduledGameTask.CLEANUP);
@@ -73,7 +73,7 @@ class HandProgressionService {
         boolean gameEnded = game.resetForNewHand();
         if (gameEnded) {
             logger.info("Game {} became over after reset", gameId);
-            completion.handleGameEnd(gameId);
+            completionHandler.handleGameEnd(gameId);
             return false;
         }
 
@@ -114,14 +114,14 @@ class HandProgressionService {
         String gameId = game.getGameId();
         switch (outcome.type()) {
             case NEXT_PLAYER, PHASE_ADVANCED -> {
-                scheduling.cancelTask(game, ScheduledGameTask.AUTO_ADVANCE);
-                scheduling.scheduleTurnTimeout(gameId);
+                taskScheduler.cancelTask(game, ScheduledGameTask.AUTO_ADVANCE);
+                taskScheduler.scheduleTurnTimeout(gameId);
                 gameStateService.broadcastGameState(game);
             }
             case AUTO_ADVANCING -> {
-                scheduling.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
+                taskScheduler.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
                 if (!game.isAutoAdvancing()) {
-                    scheduling.scheduleAutoAdvance(gameId);
+                    taskScheduler.scheduleAutoAdvance(gameId);
                 }
                 if (notifyImmediateAutoAdvance) {
                     gameStateService.broadcastAutoAdvanceNotification(game);
@@ -130,8 +130,8 @@ class HandProgressionService {
                 }
             }
             case SHOWDOWN -> {
-                scheduling.cancelTask(game, ScheduledGameTask.AUTO_ADVANCE);
-                scheduling.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
+                taskScheduler.cancelTask(game, ScheduledGameTask.AUTO_ADVANCE);
+                taskScheduler.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
                 gameStateService.broadcastShowdownResults(game);
                 return schedulePostShowdownProgression(game);
             }
@@ -154,7 +154,7 @@ class HandProgressionService {
         if (complete) {
             return schedulePostShowdownProgression(game);
         }
-        scheduling.scheduleAutoAdvance(game.getGameId());
+        taskScheduler.scheduleAutoAdvance(game.getGameId());
         return false;
     }
 
@@ -189,9 +189,9 @@ class HandProgressionService {
     private boolean schedulePostShowdownProgression(Game game) {
         String gameId = game.getGameId();
         if (game.isGameDecided()) {
-            scheduling.scheduleGameEnd(gameId, timings.finalShowdownDisplayDelayMs());
+            taskScheduler.scheduleGameEnd(gameId, timings.finalShowdownDisplayDelayMs());
             return false;
         }
-        return scheduling.scheduleReadyCountdownOpen(gameId, timings.roundEndDisplayDelayMs());
+        return taskScheduler.scheduleReadyCountdownOpen(gameId, timings.roundEndDisplayDelayMs());
     }
 }

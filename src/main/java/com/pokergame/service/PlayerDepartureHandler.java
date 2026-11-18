@@ -32,9 +32,9 @@ class PlayerDepartureHandler {
     private static final Logger logger = LoggerFactory.getLogger(PlayerDepartureHandler.class);
     private final RoomService roomService;
     private final GameStateService gameStateService;
-    private final GameCompletionHandler completion;
-    private final GameReadinessCoordinator readiness;
-    private final GameTimerRegistry runtimeTimers;
+    private final GameCompletionHandler completionHandler;
+    private final GameReadinessCoordinator readinessCoordinator;
+    private final GameTimerRegistry timerRegistry;
     private final ActiveGameRegistry activeGames;
     private final Clock clock;
     private final GameTimingProperties timings;
@@ -42,17 +42,17 @@ class PlayerDepartureHandler {
     PlayerDepartureHandler(
             RoomService roomService,
             GameStateService gameStateService,
-            GameCompletionHandler completion,
-            GameReadinessCoordinator readiness,
-            GameTimerRegistry runtimeTimers,
+            GameCompletionHandler completionHandler,
+            GameReadinessCoordinator readinessCoordinator,
+            GameTimerRegistry timerRegistry,
             ActiveGameRegistry activeGames,
             Clock clock,
             GameTimingProperties timings) {
         this.roomService = roomService;
         this.gameStateService = gameStateService;
-        this.completion = completion;
-        this.readiness = readiness;
-        this.runtimeTimers = runtimeTimers;
+        this.completionHandler = completionHandler;
+        this.readinessCoordinator = readinessCoordinator;
+        this.timerRegistry = timerRegistry;
         this.activeGames = activeGames;
         this.clock = clock;
         this.timings = timings;
@@ -78,7 +78,7 @@ class PlayerDepartureHandler {
             return;
         }
         if (game != null && room.isInactivityExpired(clock.millis())) {
-            completion.abandonGameDueToInactivity(roomId);
+            completionHandler.abandonGameDueToInactivity(roomId);
             return;
         }
         removePlayersFromRoomAndGame(roomId, playerNames, room, game);
@@ -133,7 +133,7 @@ class PlayerDepartureHandler {
 
         if (game.isFinishedOrEliminated()) {
             room.setTerminal(true);
-            completion.handleGameEnd(roomId);
+            completionHandler.handleGameEnd(roomId);
             detachRoomMembers(roomId, room, game, departingRoomMembers);
             return;
         }
@@ -164,7 +164,7 @@ class PlayerDepartureHandler {
         detachRoomMembers(roomId, room, game, departingRoomMembers);
 
         if (contendersRemaining <= 0) {
-            completion.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
+            completionHandler.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
             return;
         }
 
@@ -177,10 +177,10 @@ class PlayerDepartureHandler {
         if (game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive()) {
             gameStateService.broadcastGameState(game);
         } else {
-            readiness.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, game.advanceAfterPlayerRemoval(), false);
+            readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, game.advanceAfterPlayerRemoval(), false);
         }
 
-        readiness.completeReadyCountdownIfEveryoneReady(game);
+        readinessCoordinator.completeReadyCountdownIfEveryoneReady(game);
     }
 
     /**
@@ -220,7 +220,7 @@ class PlayerDepartureHandler {
             gameStateService.broadcastGameState(game);
         }
 
-        readiness.completeReadyCountdownIfEveryoneReady(game);
+        readinessCoordinator.completeReadyCountdownIfEveryoneReady(game);
     }
 
     /**
@@ -247,7 +247,7 @@ class PlayerDepartureHandler {
                 if (game.isForfeitPending() && game.countContenders() == 1
                         && game.isContender(player)) {
                     game.clearForfeitPending();
-                    completion.handleGameEndWithForfeits(gameId, player, Set.of());
+                    completionHandler.handleGameEndWithForfeits(gameId, player, Set.of());
                     markRoomMemberConnected(room, playerName);
                     return;
                 }
@@ -257,7 +257,7 @@ class PlayerDepartureHandler {
                 }
                 if (game.getReadyGateState() == ReadyGateState.WAITING_FOR_PLAYERS
                         && game.getReadyEligibleCount() >= Room.MIN_PLAYERS) {
-                    readiness.openReadyGate(game);
+                    readinessCoordinator.openReadyGate(game);
                 }
             }
         }
@@ -277,7 +277,7 @@ class PlayerDepartureHandler {
      */
     GameEndResponse claimWin(String gameId, String playerName) {
         Game game = activeGames.get(gameId);
-        if (game == null || completion.isGameExpired(game)) {
+        if (game == null || completionHandler.isGameExpired(game)) {
             throw new ResourceNotFoundException("Game not found");
         }
         Room room = roomService.getRoom(gameId);
@@ -285,7 +285,7 @@ class PlayerDepartureHandler {
             throw new ResourceNotFoundException("Room not found");
         }
 
-        completion.rejectExpiredActivity(gameId);
+        completionHandler.rejectExpiredActivity(gameId);
         if (game.isGameOver()) {
             GameEndResponse retained = game.getGameEndResult();
             if (retained != null && retained.abandoned()) {
@@ -294,7 +294,7 @@ class PlayerDepartureHandler {
                         "GAME_ABANDONED",
                         "Game was abandoned due to inactivity");
             }
-            return completion.getGameReview(gameId, playerName);
+            return completionHandler.getGameReview(gameId, playerName);
         }
         if (!game.canPlayerClaimWin(playerName)) {
             throw new UnauthorisedActionException("Cannot claim win right now.");
@@ -408,7 +408,7 @@ class PlayerDepartureHandler {
         if (roomService.getRoom(roomId) != null) {
             gameStateService.broadcastGameState(game);
         }
-        completion.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
+        completionHandler.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
     }
 
     private void handleSingleSurvivorForfeit(
@@ -420,19 +420,19 @@ class PlayerDepartureHandler {
             Player survivor) {
         if (survivor.getIsDisconnected()) {
             game.pauseForDisconnectedSurvivor(departingGamePlayers);
-            runtimeTimers.cancelAllForGame(roomId, false);
+            timerRegistry.cancelAllForGame(roomId, false);
             detachRoomMembers(roomId, room, game, departingRoomMembers);
             if (roomService.getRoom(roomId) != null) {
                 gameStateService.broadcastGameState(game);
             }
-            completion.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
+            completionHandler.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
             return;
         }
 
         Set<String> forfeitedNames = departingGamePlayers.stream()
                 .map(Player::getName)
                 .collect(Collectors.toSet());
-        completion.handleGameEndWithForfeits(roomId, survivor, forfeitedNames);
+        completionHandler.handleGameEndWithForfeits(roomId, survivor, forfeitedNames);
         room.setTerminal(true);
         detachRoomMembers(roomId, room, game, departingRoomMembers);
     }

@@ -72,10 +72,10 @@ class GameCompletionHandlerTest {
     private MutableClock mutableClock;
     private RoomCoordinator roomCoordinator;
     private ActiveGameRegistry activeGames;
-    private GameTimerRegistry runtimeTimers;
+    private GameTimerRegistry timerRegistry;
     private GameTaskScheduler taskSchedulerFacade;
     private GameStateService realGameStateService;
-    private GameCompletionHandler completion;
+    private GameCompletionHandler completionHandler;
     private Room testRoom;
 
     @BeforeEach
@@ -84,12 +84,12 @@ class GameCompletionHandlerTest {
 
         roomCoordinator = new RoomCoordinator();
         activeGames = new ActiveGameRegistry(roomCoordinator);
-        runtimeTimers = new GameTimerRegistry(taskScheduler, mutableClock);
+        timerRegistry = new GameTimerRegistry(taskScheduler, mutableClock);
         taskSchedulerFacade = new GameTaskScheduler(
-                activeGames, runtimeTimers, roomService, roomCoordinator, mutableClock, DEFAULT_TIMINGS, lifecycleProvider);
+                activeGames, timerRegistry, roomService, roomCoordinator, mutableClock, DEFAULT_TIMINGS, lifecycleProvider);
         realGameStateService = new GameStateService(roomService, messagingTemplate, mutableClock);
-        completion = new GameCompletionHandler(
-                activeGames, roomService, realGameStateService, runtimeTimers,
+        completionHandler = new GameCompletionHandler(
+                activeGames, roomService, realGameStateService, timerRegistry,
                 taskSchedulerFacade, mutableClock, DEFAULT_TIMINGS);
 
         lenient().when(taskScheduler.schedule(any(Runnable.class), any(Instant.class)))
@@ -126,7 +126,7 @@ class GameCompletionHandlerTest {
         void handleGameEnd_MissingNoOpsAndEmptyRosterThrows() {
             clearInvocations(messagingTemplate, taskScheduler);
             try (LockLease _ = roomCoordinator.acquire("nonexistent-id")) {
-                assertDoesNotThrow(() -> completion.handleGameEnd("nonexistent-id"));
+                assertDoesNotThrow(() -> completionHandler.handleGameEnd("nonexistent-id"));
             }
             verifyNoInteractions(messagingTemplate, taskScheduler);
 
@@ -138,7 +138,7 @@ class GameCompletionHandlerTest {
 
             clearInvocations(messagingTemplate, taskScheduler);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                assertThrows(IllegalStateException.class, () -> completion.handleGameEnd(ROOM_ID));
+                assertThrows(IllegalStateException.class, () -> completionHandler.handleGameEnd(ROOM_ID));
             }
             verifyNoInteractions(messagingTemplate, taskScheduler);
             assertNull(emptyGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
@@ -157,21 +157,21 @@ class GameCompletionHandlerTest {
             clearInvocations(messagingTemplate, taskScheduler);
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.handleGameEnd(ROOM_ID);
+                completionHandler.handleGameEnd(ROOM_ID);
             }
             verifyNoInteractions(messagingTemplate);
             assertFalse(game.isGameOver());
 
             game.clearForfeitPending();
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.handleGameEnd(ROOM_ID);
+                completionHandler.handleGameEnd(ROOM_ID);
             }
             assertTrue(game.isGameOver());
             assertTrue(game.isFinalPotSettled());
 
             clearInvocations(messagingTemplate, taskScheduler);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.handleGameEnd(ROOM_ID);
+                completionHandler.handleGameEnd(ROOM_ID);
             }
             verifyNoInteractions(messagingTemplate);
         }
@@ -190,7 +190,7 @@ class GameCompletionHandlerTest {
 
             clearInvocations(messagingTemplate, taskScheduler);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.handleGameEnd(ROOM_ID);
+                completionHandler.handleGameEnd(ROOM_ID);
             }
 
             ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
@@ -214,7 +214,7 @@ class GameCompletionHandlerTest {
 
             clearInvocations(messagingTemplate, taskScheduler);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.handleGameEndWithForfeits(ROOM_ID, host, Set.of("Player2"));
+                completionHandler.handleGameEndWithForfeits(ROOM_ID, host, Set.of("Player2"));
             }
 
             assertTrue(p2.getIsOut());
@@ -253,7 +253,7 @@ class GameCompletionHandlerTest {
 
             clearInvocations(messagingTemplate);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.handleGameEnd(ROOM_ID);
+                completionHandler.handleGameEnd(ROOM_ID);
             }
 
             ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
@@ -266,7 +266,7 @@ class GameCompletionHandlerTest {
             assertTrue(terminal.isFinalPotSettled());
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.handleGameEnd(ROOM_ID);
+                completionHandler.handleGameEnd(ROOM_ID);
             }
             verify(messagingTemplate, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(Object.class));
             assertEquals(1010, winner.getChips());
@@ -290,11 +290,11 @@ class GameCompletionHandlerTest {
             doReturn(cleanupFuture).doReturn(turnFuture).doReturn(endCleanupFuture)
                     .when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
 
-            runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 90_000L, () -> {});
-            runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 10_000L, () -> {});
+            timerRegistry.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 90_000L, () -> {});
+            timerRegistry.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 10_000L, () -> {});
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.handleGameEnd(ROOM_ID);
+                completionHandler.handleGameEnd(ROOM_ID);
             }
 
             verify(turnFuture).cancel(false);
@@ -319,16 +319,16 @@ class GameCompletionHandlerTest {
 
             when(roomService.getRoom("missing")).thenReturn(null);
             try (LockLease _ = roomCoordinator.acquire("missing")) {
-                completion.abandonGameIfInactive("missing", BASE_EPOCH_MS);
+                completionHandler.abandonGameIfInactive("missing", BASE_EPOCH_MS);
             }
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 // Deadline mismatch
-                completion.abandonGameIfInactive(ROOM_ID, BASE_EPOCH_MS + 10_000L);
+                completionHandler.abandonGameIfInactive(ROOM_ID, BASE_EPOCH_MS + 10_000L);
                 assertFalse(game.isGameOver());
 
                 // Matches, but clock has not reached deadline yet
-                completion.abandonGameIfInactive(ROOM_ID, BASE_EPOCH_MS + 50_000L);
+                completionHandler.abandonGameIfInactive(ROOM_ID, BASE_EPOCH_MS + 50_000L);
                 assertFalse(game.isGameOver());
             }
 
@@ -336,7 +336,7 @@ class GameCompletionHandlerTest {
             mutableClock.setMillis(BASE_EPOCH_MS + 50_000L);
             clearInvocations(messagingTemplate);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.abandonGameIfInactive(ROOM_ID, BASE_EPOCH_MS + 50_000L);
+                completionHandler.abandonGameIfInactive(ROOM_ID, BASE_EPOCH_MS + 50_000L);
             }
 
             assertTrue(game.isGameOver());
@@ -357,12 +357,12 @@ class GameCompletionHandlerTest {
                     new Player("Player2", "p2", 100)));
             game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 5000L);
             game.scheduleTask(ScheduledGameTask.READY_OPEN, BASE_EPOCH_MS + 6000L);
-            runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 5000L, () -> {});
+            timerRegistry.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 5000L, () -> {});
             long genBefore = game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT);
 
             clearInvocations(messagingTemplate);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.abandonGameDueToInactivity(ROOM_ID);
+                completionHandler.abandonGameDueToInactivity(ROOM_ID);
             }
 
             assertTrue(game.isGameOver());
@@ -373,7 +373,7 @@ class GameCompletionHandlerTest {
 
             // Repeat call is idempotent
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.abandonGameDueToInactivity(ROOM_ID);
+                completionHandler.abandonGameDueToInactivity(ROOM_ID);
             }
             verify(messagingTemplate, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(GameEndResponse.class));
         }
@@ -394,7 +394,7 @@ class GameCompletionHandlerTest {
             registerGame(game);
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.abandonGameDueToInactivity(ROOM_ID);
+                completionHandler.abandonGameDueToInactivity(ROOM_ID);
             }
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertTrue(game.getCommunityCards().isEmpty());
@@ -404,7 +404,7 @@ class GameCompletionHandlerTest {
 
             clearInvocations(messagingTemplate, taskScheduler);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.handleGameEnd(ROOM_ID);
+                completionHandler.handleGameEnd(ROOM_ID);
             }
 
             assertFalse(game.isFinalPotSettled());
@@ -422,15 +422,15 @@ class GameCompletionHandlerTest {
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 when(roomService.getRoom(ROOM_ID)).thenReturn(null);
-                assertDoesNotThrow(() -> completion.rejectExpiredActivity(ROOM_ID));
+                assertDoesNotThrow(() -> completionHandler.rejectExpiredActivity(ROOM_ID));
                 when(roomService.getRoom(ROOM_ID)).thenReturn(testRoom);
-                assertDoesNotThrow(() -> completion.rejectExpiredActivity(ROOM_ID));
+                assertDoesNotThrow(() -> completionHandler.rejectExpiredActivity(ROOM_ID));
             }
 
             mutableClock.setMillis(BASE_EPOCH_MS + 1000L);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 BadRequestException ex = assertThrows(BadRequestException.class,
-                        () -> completion.rejectExpiredActivity(ROOM_ID));
+                        () -> completionHandler.rejectExpiredActivity(ROOM_ID));
                 assertEquals("GAME_EXPIRED", ex.actionErrorCode());
             }
             assertFalse(game.isGameOver());
@@ -452,32 +452,32 @@ class GameCompletionHandlerTest {
                     new Player("Player3", "p3", 1000)));
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                assertThrows(ConflictException.class, () -> completion.getGameReview(ROOM_ID, "Host"));
+                assertThrows(ConflictException.class, () -> completionHandler.getGameReview(ROOM_ID, "Host"));
 
-                completion.handleGameEndWithForfeits(
+                completionHandler.handleGameEndWithForfeits(
                         ROOM_ID, game.getPlayers().getFirst(), Set.of("Player2", "Player3"));
                 GameEndResponse terminal = game.getGameEndResult();
                 assertNotNull(terminal);
 
-                assertSame(terminal, completion.getGameReview(ROOM_ID, "Host"));
-                assertSame(terminal, completion.getGameReview(ROOM_ID, "Player2"));
+                assertSame(terminal, completionHandler.getGameReview(ROOM_ID, "Host"));
+                assertSame(terminal, completionHandler.getGameReview(ROOM_ID, "Player2"));
 
                 testRoom.removePlayer("Player3");
-                assertSame(terminal, completion.getGameReview(ROOM_ID, "Player3"));
+                assertSame(terminal, completionHandler.getGameReview(ROOM_ID, "Player3"));
 
                 assertThrows(UnauthorisedActionException.class,
-                        () -> completion.getGameReview(ROOM_ID, "Stranger"));
+                        () -> completionHandler.getGameReview(ROOM_ID, "Stranger"));
 
                 // Expired game -> 404
                 game.scheduleTask(ScheduledGameTask.CLEANUP, BASE_EPOCH_MS - 1000L);
-                assertTrue(completion.isGameExpired(game));
+                assertTrue(completionHandler.isGameExpired(game));
                 assertThrows(ResourceNotFoundException.class,
-                        () -> completion.getGameReview(ROOM_ID, "Host"));
+                        () -> completionHandler.getGameReview(ROOM_ID, "Host"));
             }
 
             try (LockLease _ = roomCoordinator.acquire("non-existent-game")) {
                 assertThrows(ResourceNotFoundException.class,
-                        () -> completion.getGameReview("non-existent-game", "Host"));
+                        () -> completionHandler.getGameReview("non-existent-game", "Host"));
             }
         }
 
@@ -491,13 +491,13 @@ class GameCompletionHandlerTest {
             game.setGameEndResult(null);
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                assertThrows(IllegalStateException.class, () -> completion.getGameReview(ROOM_ID, "Host"));
+                assertThrows(IllegalStateException.class, () -> completionHandler.getGameReview(ROOM_ID, "Host"));
 
                 game.dealFlop();
                 game.dealTurn();
                 game.dealRiver();
                 game.conductShowdown();
-                assertThrows(IllegalStateException.class, () -> completion.getGameReview(ROOM_ID, "Host"));
+                assertThrows(IllegalStateException.class, () -> completionHandler.getGameReview(ROOM_ID, "Host"));
             }
         }
 
@@ -510,10 +510,10 @@ class GameCompletionHandlerTest {
             @SuppressWarnings("unchecked")
             ScheduledFuture<Object> cleanupFuture = mock(ScheduledFuture.class);
             doReturn(cleanupFuture).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
-            runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 10_000L, () -> {});
+            timerRegistry.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 10_000L, () -> {});
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completion.deleteGameAndRoom(ROOM_ID);
+                completionHandler.deleteGameAndRoom(ROOM_ID);
                 assertNull(activeGames.get(ROOM_ID));
             }
             verify(cleanupFuture).cancel(false);
@@ -529,23 +529,23 @@ class GameCompletionHandlerTest {
             @SuppressWarnings("unchecked")
             ScheduledFuture<Object> cleanupFuture = mock(ScheduledFuture.class);
             doReturn(cleanupFuture).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
-            runtimeTimers.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 10_000L, () -> {});
+            timerRegistry.schedule(ROOM_ID, ScheduledGameTask.CLEANUP, BASE_EPOCH_MS + 10_000L, () -> {});
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 // Still has contenders and room members -> no-op
-                completion.cleanupAbandonedGameIfRoomEmpty(ROOM_ID, testRoom, game);
+                completionHandler.cleanupAbandonedGameIfRoomEmpty(ROOM_ID, testRoom, game);
                 assertNotNull(activeGames.get(ROOM_ID));
 
                 // Zero contenders, but room still has a member -> no-op
                 game.getPlayers().forEach(Player::setIsOut);
                 assertEquals(0, game.countContenders());
-                completion.cleanupAbandonedGameIfRoomEmpty(ROOM_ID, testRoom, game);
+                completionHandler.cleanupAbandonedGameIfRoomEmpty(ROOM_ID, testRoom, game);
                 assertNotNull(activeGames.get(ROOM_ID));
 
                 // Room becomes empty -> clears tasks, cancels timers, removes game
                 testRoom.removePlayer("Host");
                 testRoom.removePlayer("Player2");
-                completion.cleanupAbandonedGameIfRoomEmpty(ROOM_ID, testRoom, game);
+                completionHandler.cleanupAbandonedGameIfRoomEmpty(ROOM_ID, testRoom, game);
                 assertNull(activeGames.get(ROOM_ID));
             }
             verify(cleanupFuture).cancel(false);
