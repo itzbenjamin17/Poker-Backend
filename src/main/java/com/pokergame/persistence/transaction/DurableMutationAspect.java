@@ -1,18 +1,24 @@
 package com.pokergame.persistence.transaction;
 
 import com.pokergame.model.Room;
+import com.pokergame.persistence.PersistenceException;
 import com.pokergame.persistence.RoomAggregate;
 import com.pokergame.persistence.RoomAggregates;
-import com.pokergame.persistence.PersistenceException;
 import com.pokergame.persistence.config.PersistenceProperties;
-import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
-import com.pokergame.persistence.snapshot.RoomSnapshot;
 import com.pokergame.persistence.snapshot.RecoveredRoom;
+import com.pokergame.persistence.snapshot.RoomSnapshot;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.WalTransaction;
 import com.pokergame.util.LockLease;
 import com.pokergame.util.MdcUtils;
 import com.pokergame.util.RoomCoordinator;
+import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -20,13 +26,6 @@ import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
-
-import java.lang.reflect.Method;
-import java.lang.reflect.Parameter;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Automatically saves the poker game to disk after certain methods finish running.
@@ -48,6 +47,7 @@ public final class DurableMutationAspect {
     private final RoomAggregates aggregates;
     private final PersistenceProperties properties;
     private final RoomCoordinator roomCoordinator;
+
     private final ConcurrentHashMap<String, AtomicInteger> recordsSinceCompaction = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, PendingSave> pendingSaves = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Method, Integer> roomIdParameterIndexes = new ConcurrentHashMap<>();
@@ -85,6 +85,37 @@ public final class DurableMutationAspect {
         String roomId = resolveRoomId(joinPoint);
         try (MdcUtils.MdcScope _ = MdcUtils.withRoomId(roomId)) {
             return store == null ? runWithoutStorage(joinPoint, roomId) : runWithStorage(joinPoint, roomId);
+        }
+    }
+
+    /**
+     * Periodically retries pending room saves that previously failed due to transient storage errors.
+     */
+    @Scheduled(fixedDelayString = "#{@'poker.persistence-com.pokergame.persistence.config.PersistenceProperties'.retryIntervalMs()}",
+            initialDelayString = "#{@'poker.persistence-com.pokergame.persistence.config.PersistenceProperties'.retryIntervalMs()}")
+    public void retryPendingSaves() {
+        for (String roomId : pendingSaves.keySet()) {
+            LockLease lease = roomCoordinator.tryAcquire(roomId);
+            if (lease == null) continue;
+            try (lease) {
+                PendingSave pending = pendingSaves.get(roomId);
+                if (pending == null) continue;
+                if (pending.image() == null) {
+                    try {
+                        pending = captureState(roomId);
+                    } catch (RuntimeException captureFailure) {
+                        recordStorageFailure(roomId, captureFailure);
+                        continue;
+                    }
+                    pendingSaves.put(roomId, pending);
+                }
+                try {
+                    saveState(roomId, pending, null);
+                } catch (RuntimeException saveFailure) {
+                    // The store has already recorded this failure.
+                    logStorageUnavailable(roomId, saveFailure);
+                }
+            }
         }
     }
 
@@ -163,37 +194,6 @@ public final class DurableMutationAspect {
         }
     }
 
-    /**
-     * Periodically retries pending room saves that previously failed due to transient storage errors.
-     */
-    @Scheduled(fixedDelayString = "#{@'poker.persistence-com.pokergame.persistence.config.PersistenceProperties'.retryIntervalMs()}",
-            initialDelayString = "#{@'poker.persistence-com.pokergame.persistence.config.PersistenceProperties'.retryIntervalMs()}")
-    public void retryPendingSaves() {
-        for (String roomId : pendingSaves.keySet()) {
-            LockLease lease = roomCoordinator.tryAcquire(roomId);
-            if (lease == null) continue;
-            try (lease) {
-                PendingSave pending = pendingSaves.get(roomId);
-                if (pending == null) continue;
-                if (pending.image() == null) {
-                    try {
-                        pending = captureState(roomId);
-                    } catch (RuntimeException captureFailure) {
-                        recordStorageFailure(roomId, captureFailure);
-                        continue;
-                    }
-                    pendingSaves.put(roomId, pending);
-                }
-                try {
-                    saveState(roomId, pending, null);
-                } catch (RuntimeException saveFailure) {
-                    // The store has already recorded this failure.
-                    logStorageUnavailable(roomId, saveFailure);
-                }
-            }
-        }
-    }
-
     private PendingSave captureState(String roomId) {
         roomCoordinator.assertHeldByCurrentThread(roomId);
         RoomAggregate aggregate = aggregates.find(roomId);
@@ -236,15 +236,6 @@ public final class DurableMutationAspect {
                 roomId, failure.getClass().getSimpleName());
     }
 
-    private record PendingSave(byte[] image, boolean deleted) {
-        private PendingSave { image = image == null ? null : image.clone(); }
-
-        /** A placeholder meaning "no image yet; take a fresh snapshot before saving". */
-        static PendingSave needsCapture() {
-            return new PendingSave(null, false);
-        }
-    }
-
     private RollbackState captureRollbackState(String roomId) {
         roomCoordinator.assertHeldByCurrentThread(roomId);
         RoomAggregate aggregate = aggregates.find(roomId);
@@ -257,12 +248,6 @@ public final class DurableMutationAspect {
         }
         return new RollbackState(image, Map.copyOf(connections));
     }
-
-    // Process-local connectivity is intentionally separate from the persisted image.
-    private record ConnectionState(boolean connected, Long absenceDeadline) { }
-
-    // A null image denotes a room that did not exist before the rejected command.
-    private record RollbackState(RoomSnapshot image, Map<String, ConnectionState> connections) { }
 
     /*
      * Restores the independent pre-mutation RAM image after a rejection. Disk may lag
@@ -367,4 +352,19 @@ public final class DurableMutationAspect {
         }
         return found;
     }
+
+    private record PendingSave(byte[] image, boolean deleted) {
+        private PendingSave { image = image == null ? null : image.clone(); }
+
+        /** A placeholder meaning "no image yet; take a fresh snapshot before saving". */
+        static PendingSave needsCapture() {
+            return new PendingSave(null, false);
+        }
+    }
+
+    // Process-local connectivity is intentionally separate from the persisted image.
+    private record ConnectionState(boolean connected, Long absenceDeadline) { }
+
+    // A null image denotes a room that did not exist before the rejected command.
+    private record RollbackState(RoomSnapshot image, Map<String, ConnectionState> connections) { }
 }

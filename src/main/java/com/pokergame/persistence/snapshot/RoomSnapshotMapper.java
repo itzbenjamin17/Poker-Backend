@@ -9,14 +9,13 @@ import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.PersistenceException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
-
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
 
 /**
  * Converts live game data (Rooms and Games) into a clean snapshot format for saving to disk,
@@ -58,14 +57,6 @@ public final class RoomSnapshotMapper {
             throw new PersistenceException("Room cannot be null for aggregate state capture");
         }
         return new RoomSnapshot(false, toRoomState(room), toGameState(game));
-    }
-
-    private RoomSnapshot.RoomState toRoomState(Room room) {
-        return new RoomSnapshot.RoomState(
-                room.getRoomId(), room.getRoomName(), room.getHostName(), room.getMaxPlayers(), room.getSmallBlind(),
-                room.getBigBlind(), room.getBuyIn(), room.getPasswordHash(), room.getCreatedAt(),
-                room.getPlayersWithJoinTimeSnapshot(), room.getPlayerMembershipIdsSnapshot(), room.isGameStarted(),
-                room.getInactivityDeadlineEpochMs());
     }
 
     /**
@@ -158,14 +149,6 @@ public final class RoomSnapshotMapper {
         return new RecoveredRoom(restoreRoom(state), game, false);
     }
 
-    private byte[] write(RoomSnapshot image) {
-        try {
-            return objectMapper.writeValueAsBytes(image);
-        } catch (JacksonException e) {
-            throw new PersistenceException("Cannot encode aggregate snapshot", e);
-        }
-    }
-
     /**
      * Copies only the important game data we need to pause and resume the exact same hand.
      * Background tasks and runtime services are ignored here and reattached later.
@@ -238,6 +221,22 @@ public final class RoomSnapshotMapper {
                 .gameStarted(state.gameStarted())
                 .inactivityDeadlineEpochMs(state.inactivityDeadlineEpochMs())
                 .build();
+    }
+
+    private RoomSnapshot.RoomState toRoomState(Room room) {
+        return new RoomSnapshot.RoomState(
+                room.getRoomId(), room.getRoomName(), room.getHostName(), room.getMaxPlayers(), room.getSmallBlind(),
+                room.getBigBlind(), room.getBuyIn(), room.getPasswordHash(), room.getCreatedAt(),
+                room.getPlayersWithJoinTimeSnapshot(), room.getPlayerMembershipIdsSnapshot(), room.isGameStarted(),
+                room.getInactivityDeadlineEpochMs());
+    }
+
+    private byte[] write(RoomSnapshot image) {
+        try {
+            return objectMapper.writeValueAsBytes(image);
+        } catch (JacksonException e) {
+            throw new PersistenceException("Cannot encode aggregate snapshot", e);
+        }
     }
 
     private Game restoreGame(RoomSnapshot.GameState state, int maxPlayers) {

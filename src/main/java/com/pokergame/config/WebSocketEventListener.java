@@ -1,16 +1,29 @@
 package com.pokergame.config;
 
-import com.pokergame.security.PlayerPrincipal;
+import static java.util.Objects.requireNonNull;
+
 import com.pokergame.model.Room;
-import com.pokergame.model.Game;
+import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.security.RateLimitService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
-import com.pokergame.util.MdcUtils;
-import com.pokergame.util.MdcUtils.MdcScope;
-import com.pokergame.util.SecurityUtils;
 import com.pokergame.service.event.RoomDestroyed;
 import com.pokergame.service.event.RoomMemberRegistered;
 import com.pokergame.service.event.RoomMembershipEnded;
+import com.pokergame.util.LockLease;
+import com.pokergame.util.MdcUtils;
+import com.pokergame.util.MdcUtils.MdcScope;
+import com.pokergame.util.RoomCoordinator;
+import com.pokergame.util.SecurityUtils;
+import java.security.Principal;
+import java.time.Instant;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,22 +38,6 @@ import org.springframework.web.socket.messaging.SessionDisconnectEvent;
 import org.springframework.web.socket.messaging.SessionSubscribeEvent;
 import org.springframework.web.socket.messaging.SessionUnsubscribeEvent;
 
-import java.security.Principal;
-import java.time.Instant;
-import com.pokergame.util.RoomCoordinator;
-import com.pokergame.util.LockLease;
-
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ScheduledFuture;
-import com.pokergame.security.RateLimitService;
-import java.util.HashSet;
-
-import static java.util.Objects.requireNonNull;
-
 /**
  * Reconciles process-local WebSocket sessions with durable player membership.
  * <p>
@@ -53,16 +50,16 @@ import static java.util.Objects.requireNonNull;
 public class WebSocketEventListener {
 
     private static final Logger logger = LoggerFactory.getLogger(WebSocketEventListener.class);
-
     private final RoomService roomService;
     private final GameLifecycleService gameLifecycleService;
     private final RateLimitService rateLimitService;
+    private final TaskScheduler taskScheduler;
+    private final RoomCoordinator roomCoordinator;
     private final RoomTimingProperties roomTimings;
+
     private final ConcurrentMap<String, Set<String>> activeSessionsByUser = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PlayerPrincipal> sessionToPrincipal = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PendingDisconnect> pendingDisconnects = new ConcurrentHashMap<>();
-    private final TaskScheduler taskScheduler;
-    private final RoomCoordinator roomCoordinator;
 
     /**
      * Creates the listener with the authoritative room, game, rate limit, and coordinator services.
@@ -248,46 +245,6 @@ public class WebSocketEventListener {
         }
     }
 
-    private void cleanupDisconnectedUser(PlayerPrincipal principal, PendingDisconnect expected) {
-        String compositeName = playerKey(principal);
-        String playerName = principal.playerName();
-        String roomId = principal.roomId();
-        
-        try (LockLease _ = acquireRoomLease(roomId)) {
-            if (pendingDisconnects.get(compositeName) != expected || expected.isCancelled()) return;
-
-            if (hasActiveSession(compositeName)) {
-                logger.debug("Skipping disconnect cleanup for user {} because an active session exists", compositeName);
-                pendingDisconnects.remove(compositeName, expected);
-                return;
-            }
-            pendingDisconnects.remove(compositeName, expected);
-
-            logger.info("WebSocket grace period expired. Removing disconnected user: {}", compositeName);
-            rateLimitService.cleanUpWs(compositeName);
-
-            Room room = roomService.getRoom(roomId);
-            boolean playerInRoom = false;
-            if (room != null) {
-                playerInRoom = room.hasPlayer(playerName);
-            }
-            boolean playerInGame = gameLifecycleService.gameExists(roomId)
-                    && gameLifecycleService.playerExistsInGame(roomId, playerName);
-            if (!playerInRoom && !playerInGame) {
-                return;
-            }
-
-            try {
-                String roomName = room != null ? room.getRoomName() : roomId;
-                logger.info("Automatically removing disconnected user '{}' from room '{}'", playerName, roomName);
-                gameLifecycleService.removeDisconnectedPlayer(roomId, playerName, expected.membershipId(), expected.deadlineEpochMs());
-            } catch (Exception e) {
-                String roomName = room != null ? room.getRoomName() : roomId;
-                logger.error("Failed to remove disconnected user '{}' from room '{}'", playerName, roomName, e);
-            }
-        }
-    }
-
     /**
      * Registers a first-connection grace period for a newly created or joined room membership.
      * Invoked after the membership mutation is accepted.
@@ -416,89 +373,6 @@ public class WebSocketEventListener {
         }
     }
 
-
-    private void registerActiveSession(PlayerPrincipal principal, String sessionId) {
-        String compositeName = playerKey(principal);
-        // Get the set of active sessions for the user or create a new one if it
-        // doesn't exist
-        Set<String> sessions = activeSessionsByUser.computeIfAbsent(compositeName, k -> ConcurrentHashMap.newKeySet());
-        // A delayed retirement intent must not let sockets from an older membership
-        // keep the replacement connected after its own last socket closes.
-        sessions.removeIf(existingSession -> {
-            PlayerPrincipal existing = sessionToPrincipal.get(existingSession);
-            boolean obsolete = existing == null || !Objects.equals(existing.membershipId(), principal.membershipId());
-            if (obsolete && existing != null) sessionToPrincipal.remove(existingSession, existing);
-            return obsolete;
-        });
-        sessions.add(sessionId);
-
-        // Map the session ID back to the principal for recovery on disconnect
-        sessionToPrincipal.put(sessionId, principal);
-    }
-
-    private boolean unregisterActiveSession(PlayerPrincipal principal, String sessionId) {
-        if (principal == null || sessionId == null) { return false; }
-        PlayerPrincipal registeredPrincipal = sessionToPrincipal.get(sessionId);
-        if (registeredPrincipal == null || !principal.equals(registeredPrincipal)) { return false; }
-        String compositeName = playerKey(principal);
-        Set<String> sessions = activeSessionsByUser.get(compositeName);
-        boolean removed = sessions != null && sessions.remove(sessionId);
-        if (removed) { sessionToPrincipal.remove(sessionId); }
-        if (sessions != null && sessions.isEmpty()) { activeSessionsByUser.remove(compositeName); }
-        return removed;
-    }
-
-
-    private boolean hasActiveSession(String username) {
-        Set<String> sessions = activeSessionsByUser.get(username);
-        return sessions != null && !sessions.isEmpty();
-    }
-
-    /*
-     * A scheduled grace-period cleanup for one player membership in one room.
-     * Reconnect handling cancels it, and the cleanup callback checks that this exact
-     * instance is still the registered one (by identity) before removing anyone, so
-     * a superseded or cancelled timer cannot act.
-     */
-    private static final class PendingDisconnect {
-        private final String membershipId;
-        private final long deadlineEpochMs;
-        private volatile ScheduledFuture<?> future;
-        private volatile boolean cancelled;
-
-        private PendingDisconnect(String membershipId, long deadlineEpochMs) {
-            this.membershipId = membershipId;
-            this.deadlineEpochMs = deadlineEpochMs;
-        }
-
-        String membershipId() { return membershipId; }
-        long deadlineEpochMs() { return deadlineEpochMs; }
-        boolean isCancelled() { return cancelled; }
-
-        void attach(ScheduledFuture<?> scheduled) {
-            future = scheduled;
-            if (cancelled && scheduled != null) scheduled.cancel(false);
-        }
-
-        void cancel() {
-            cancelled = true;
-            ScheduledFuture<?> scheduled = future;
-            if (scheduled != null) scheduled.cancel(false);
-        }
-    }
-
-    private LockLease acquireRoomLease(String roomId) {
-        if (roomId == null) {
-            return LockLease.none();
-        }
-        return roomCoordinator.acquire(roomId);
-    }
-
-    // Runtime connection tracking key; Spring private routing uses the separate membership-bound principal name.
-    private static String playerKey(PlayerPrincipal principal) {
-        return principal.playerName() + ":" + principal.roomId();
-    }
-
     /** Schedules cleanup scoped to the ended membership, preserving any replacement. */
     public void publishMembershipEnded(String roomId, String playerName, String membershipId) {
         if (roomId == null || playerName == null) return;
@@ -541,6 +415,108 @@ public class WebSocketEventListener {
         publishRoomDestroyed(event.roomId());
     }
 
+    /**
+     * Cancels and removes all pending disconnect timers belonging to {@code roomId}.
+     * Caller must hold the room lock for {@code roomId}.
+     *
+     * @param roomId the unique ID of the room
+     */
+    public void cancelRoomPendingDisconnects(String roomId) {
+        if (roomId == null) {
+            return;
+        }
+        roomCoordinator.assertHeldByCurrentThread(roomId);
+        cancelPendingDisconnectsForRoom(roomId);
+    }
+
+    private void cleanupDisconnectedUser(PlayerPrincipal principal, PendingDisconnect expected) {
+        String compositeName = playerKey(principal);
+        String playerName = principal.playerName();
+        String roomId = principal.roomId();
+        
+        try (LockLease _ = acquireRoomLease(roomId)) {
+            if (pendingDisconnects.get(compositeName) != expected || expected.isCancelled()) return;
+
+            if (hasActiveSession(compositeName)) {
+                logger.debug("Skipping disconnect cleanup for user {} because an active session exists", compositeName);
+                pendingDisconnects.remove(compositeName, expected);
+                return;
+            }
+            pendingDisconnects.remove(compositeName, expected);
+
+            logger.info("WebSocket grace period expired. Removing disconnected user: {}", compositeName);
+            rateLimitService.cleanUpWs(compositeName);
+
+            Room room = roomService.getRoom(roomId);
+            boolean playerInRoom = false;
+            if (room != null) {
+                playerInRoom = room.hasPlayer(playerName);
+            }
+            boolean playerInGame = gameLifecycleService.gameExists(roomId)
+                    && gameLifecycleService.playerExistsInGame(roomId, playerName);
+            if (!playerInRoom && !playerInGame) {
+                return;
+            }
+
+            try {
+                String roomName = room != null ? room.getRoomName() : roomId;
+                logger.info("Automatically removing disconnected user '{}' from room '{}'", playerName, roomName);
+                gameLifecycleService.removeDisconnectedPlayer(roomId, playerName, expected.membershipId(), expected.deadlineEpochMs());
+            } catch (Exception e) {
+                String roomName = room != null ? room.getRoomName() : roomId;
+                logger.error("Failed to remove disconnected user '{}' from room '{}'", playerName, roomName, e);
+            }
+        }
+    }
+
+    private void registerActiveSession(PlayerPrincipal principal, String sessionId) {
+        String compositeName = playerKey(principal);
+        // Get the set of active sessions for the user or create a new one if it
+        // doesn't exist
+        Set<String> sessions = activeSessionsByUser.computeIfAbsent(compositeName, k -> ConcurrentHashMap.newKeySet());
+        // A delayed retirement intent must not let sockets from an older membership
+        // keep the replacement connected after its own last socket closes.
+        sessions.removeIf(existingSession -> {
+            PlayerPrincipal existing = sessionToPrincipal.get(existingSession);
+            boolean obsolete = existing == null || !Objects.equals(existing.membershipId(), principal.membershipId());
+            if (obsolete && existing != null) sessionToPrincipal.remove(existingSession, existing);
+            return obsolete;
+        });
+        sessions.add(sessionId);
+
+        // Map the session ID back to the principal for recovery on disconnect
+        sessionToPrincipal.put(sessionId, principal);
+    }
+
+    private boolean unregisterActiveSession(PlayerPrincipal principal, String sessionId) {
+        if (principal == null || sessionId == null) { return false; }
+        PlayerPrincipal registeredPrincipal = sessionToPrincipal.get(sessionId);
+        if (registeredPrincipal == null || !principal.equals(registeredPrincipal)) { return false; }
+        String compositeName = playerKey(principal);
+        Set<String> sessions = activeSessionsByUser.get(compositeName);
+        boolean removed = sessions != null && sessions.remove(sessionId);
+        if (removed) { sessionToPrincipal.remove(sessionId); }
+        if (sessions != null && sessions.isEmpty()) { activeSessionsByUser.remove(compositeName); }
+        return removed;
+    }
+
+    private boolean hasActiveSession(String username) {
+        Set<String> sessions = activeSessionsByUser.get(username);
+        return sessions != null && !sessions.isEmpty();
+    }
+
+    private LockLease acquireRoomLease(String roomId) {
+        if (roomId == null) {
+            return LockLease.none();
+        }
+        return roomCoordinator.acquire(roomId);
+    }
+
+    // Runtime connection tracking key; Spring private routing uses the separate membership-bound principal name.
+    private static String playerKey(PlayerPrincipal principal) {
+        return principal.playerName() + ":" + principal.roomId();
+    }
+
     /*
      * Runs transient-state cleanup on the scheduler so the publisher, which still holds
      * the room lease while after-commit callbacks run, is not delayed by it. The cleanup
@@ -576,20 +552,6 @@ public class WebSocketEventListener {
             }
             endMembershipUnderLock(roomId, playerName, membershipId, compositeName);
         }
-    }
-
-    /**
-     * Cancels and removes all pending disconnect timers belonging to {@code roomId}.
-     * Caller must hold the room lock for {@code roomId}.
-     *
-     * @param roomId the unique ID of the room
-     */
-    public void cancelRoomPendingDisconnects(String roomId) {
-        if (roomId == null) {
-            return;
-        }
-        roomCoordinator.assertHeldByCurrentThread(roomId);
-        cancelPendingDisconnectsForRoom(roomId);
     }
 
     private Set<String> cancelPendingDisconnectsForRoom(String roomId) {
@@ -666,6 +628,39 @@ public class WebSocketEventListener {
         }
         if (!hasActiveSession(compositeName)) {
             rateLimitService.cleanUpWs(compositeName);
+        }
+    }
+
+    /*
+     * A scheduled grace-period cleanup for one player membership in one room.
+     * Reconnect handling cancels it, and the cleanup callback checks that this exact
+     * instance is still the registered one (by identity) before removing anyone, so
+     * a superseded or cancelled timer cannot act.
+     */
+    private static final class PendingDisconnect {
+        private final String membershipId;
+        private final long deadlineEpochMs;
+        private volatile ScheduledFuture<?> future;
+        private volatile boolean cancelled;
+
+        private PendingDisconnect(String membershipId, long deadlineEpochMs) {
+            this.membershipId = membershipId;
+            this.deadlineEpochMs = deadlineEpochMs;
+        }
+
+        String membershipId() { return membershipId; }
+        long deadlineEpochMs() { return deadlineEpochMs; }
+        boolean isCancelled() { return cancelled; }
+
+        void attach(ScheduledFuture<?> scheduled) {
+            future = scheduled;
+            if (cancelled && scheduled != null) scheduled.cancel(false);
+        }
+
+        void cancel() {
+            cancelled = true;
+            ScheduledFuture<?> scheduled = future;
+            if (scheduled != null) scheduled.cancel(false);
         }
     }
 }

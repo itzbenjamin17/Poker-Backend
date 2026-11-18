@@ -1,14 +1,16 @@
 package com.pokergame.persistence.wal;
 
-import javax.crypto.Cipher;
-import javax.crypto.SecretKey;
-import javax.crypto.spec.GCMParameterSpec;
+import com.pokergame.persistence.PersistenceException;
+import com.pokergame.util.LockLease;
+import com.pokergame.util.RoomCoordinator;
+import com.pokergame.util.VisibleForTesting;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -28,12 +31,9 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
-import com.pokergame.persistence.PersistenceException;
-import com.pokergame.util.LockLease;
-import com.pokergame.util.RoomCoordinator;
-import com.pokergame.util.VisibleForTesting;
-import java.nio.file.AccessDeniedException;
-import java.util.Locale;
+import javax.crypto.Cipher;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -76,6 +76,7 @@ public final class EncryptedWalStore {
     private final EncryptionKeyring keyring;
     private final WalFaultInjector faultInjector;
     private final RoomCoordinator roomCoordinator;
+
     private final SecureRandom secureRandom = new SecureRandom();
     private final ConcurrentHashMap<String, Long> nextSequences = new ConcurrentHashMap<>();
     private final Set<String> failedRooms = ConcurrentHashMap.newKeySet();
@@ -304,31 +305,6 @@ public final class EncryptedWalStore {
         replaceWalWithCurrentState(roomId, latestPayload);
     }
 
-    private void replaceWalWithCurrentState(String roomId, byte[] latestPayload) {
-        long startMs = System.currentTimeMillis();
-        long bytesBefore = walSize(roomId);
-        recordingFailure(roomId, "Cannot compact WAL for room " + roomId, () -> {
-            try {
-                Path replacement = directory.resolve(roomId + ".wal.compacting");
-                Files.deleteIfExists(replacement);
-                writeFreshWal(replacement, roomId, latestPayload);
-                faultInjector.check(WalFaultPoint.BEFORE_COMPACTION_REPLACE, roomId);
-                replaceAtomically(replacement, walPath(roomId));
-                forceDirectory();
-                nextSequences.put(roomId, SEQUENCE_AFTER_CHECKPOINT);
-                checkpointRooms.remove(roomId);
-                failedRooms.remove(roomId);
-                long bytesAfter = walSize(roomId);
-                long durationMs = System.currentTimeMillis() - startMs;
-                logger.info("WAL compacted room={} bytesBefore={} bytesAfter={} ms={}", roomId, bytesBefore, bytesAfter, durationMs);
-                return null;
-            } catch (IOException | RuntimeException e) {
-                deleteCompactingFileQuietly(roomId);
-                throw e;
-            }
-        });
-    }
-
     /**
      * Deletes a room's save file. We only do this after the game is fully over.
      * Doing it in this order ensures a crash won't bring a dead room back to life.
@@ -483,6 +459,46 @@ public final class EncryptedWalStore {
             // whereas a bogus size of 0 or -1 would make callers believe the WAL is small and healthy.
             return Long.MAX_VALUE;
         }
+    }
+
+    /**
+     * Records a failed save without allowing a different room's successful retry to
+     * clear it. Full checkpoint replacement is required before ordinary appends resume.
+     * Caller must hold the room lock for {@code roomId}.
+     *
+     * @param roomId room whose current state has not been confirmed saved
+     * @param failure what went wrong
+     */
+    public void recordWriteFailure(String roomId, RuntimeException failure) {
+        roomCoordinator.assertHeldByCurrentThread(roomId);
+        checkpointRooms.add(roomId);
+        failedRooms.add(roomId);
+        lastError = failure.getClass().getSimpleName();
+    }
+
+    private void replaceWalWithCurrentState(String roomId, byte[] latestPayload) {
+        long startMs = System.currentTimeMillis();
+        long bytesBefore = walSize(roomId);
+        recordingFailure(roomId, "Cannot compact WAL for room " + roomId, () -> {
+            try {
+                Path replacement = directory.resolve(roomId + ".wal.compacting");
+                Files.deleteIfExists(replacement);
+                writeFreshWal(replacement, roomId, latestPayload);
+                faultInjector.check(WalFaultPoint.BEFORE_COMPACTION_REPLACE, roomId);
+                replaceAtomically(replacement, walPath(roomId));
+                forceDirectory();
+                nextSequences.put(roomId, SEQUENCE_AFTER_CHECKPOINT);
+                checkpointRooms.remove(roomId);
+                failedRooms.remove(roomId);
+                long bytesAfter = walSize(roomId);
+                long durationMs = System.currentTimeMillis() - startMs;
+                logger.info("WAL compacted room={} bytesBefore={} bytesAfter={} ms={}", roomId, bytesBefore, bytesAfter, durationMs);
+                return null;
+            } catch (IOException | RuntimeException e) {
+                deleteCompactingFileQuietly(roomId);
+                throw e;
+            }
+        });
     }
 
     private long nextSequence(String roomId) {
@@ -777,21 +793,6 @@ public final class EncryptedWalStore {
             recordWriteFailure(roomId, e);
             throw e;
         }
-    }
-
-    /**
-     * Records a failed save without allowing a different room's successful retry to
-     * clear it. Full checkpoint replacement is required before ordinary appends resume.
-     * Caller must hold the room lock for {@code roomId}.
-     *
-     * @param roomId room whose current state has not been confirmed saved
-     * @param failure what went wrong
-     */
-    public void recordWriteFailure(String roomId, RuntimeException failure) {
-        roomCoordinator.assertHeldByCurrentThread(roomId);
-        checkpointRooms.add(roomId);
-        failedRooms.add(roomId);
-        lastError = failure.getClass().getSimpleName();
     }
 
     @FunctionalInterface

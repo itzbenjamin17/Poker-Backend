@@ -87,97 +87,6 @@ class PlayerDepartureHandler {
         removePlayersFromRoomAndGame(roomId, playerNames, room, game);
     }
 
-    private void removePlayersFromRoomAndGame(String roomId, Collection<String> playerNames, Room room, Game game) {
-        List<String> departing = List.copyOf(new LinkedHashSet<>(playerNames));
-        List<String> departingRoomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
-        if (game == null) {
-            removeFromLobby(roomId, room, departingRoomMembers);
-        } else {
-            removeFromGame(roomId, room, game, departing, departingRoomMembers);
-        }
-    }
-
-    private void removeFromLobby(String roomId, Room room, List<String> departingRoomMembers) {
-        if (departingRoomMembers.isEmpty()) {
-            return;
-        }
-        String currentHost = room.getHostName();
-        if (currentHost != null && departingRoomMembers.contains(currentHost)) {
-            // leaveRoom destroys the whole lobby when the host leaves, so the other departing
-            // players need no separate removal.
-            roomService.leaveRoom(roomId, currentHost);
-        } else {
-            roomService.removeMembers(roomId, departingRoomMembers, currentHost);
-        }
-    }
-
-    private void removeFromGame(
-            String roomId, Room room, Game game, List<String> departing, List<String> departingRoomMembers) {
-        List<Player> departingGamePlayers = game.getPlayers().stream()
-                .filter(p -> departing.contains(p.getName()))
-                .toList();
-        if (departingRoomMembers.isEmpty() && departingGamePlayers.isEmpty()) {
-            return;
-        }
-
-        if (game.isPausedForDisconnectedSurvivor()) {
-            handleDepartureWhilePausedForDisconnectedSurvivor(
-                    roomId, room, game, departingRoomMembers, departingGamePlayers);
-            return;
-        }
-
-        if (game.isMatchConcluded()) {
-            room.setFinished(true);
-            completionHandler.handleGameEnd(roomId);
-            detachRoomMembers(roomId, room, game, departingRoomMembers);
-            return;
-        }
-
-        if (departingGamePlayers.isEmpty()) {
-            detachRoomMembers(roomId, room, game, departingRoomMembers);
-            return;
-        }
-
-        List<Player> departingContenders = departingGamePlayers.stream()
-                .filter(game::isContender)
-                .toList();
-        int contendersRemaining = game.countContenders() - departingContenders.size();
-
-        if (contendersRemaining == 1 && !departingContenders.isEmpty()) {
-            Player survivor = game.getPlayers().stream()
-                    .filter(candidate -> !departing.contains(candidate.getName()))
-                    .filter(game::isContender)
-                    .findFirst()
-                    .orElseThrow();
-            handleSingleSurvivorForfeit(roomId, room, game, departingRoomMembers, departingGamePlayers, survivor);
-            return;
-        }
-
-        for (Player departingPlayer : departingGamePlayers) {
-            game.removePlayer(departingPlayer);
-        }
-        detachRoomMembers(roomId, room, game, departingRoomMembers);
-
-        if (contendersRemaining <= 0) {
-            completionHandler.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
-            return;
-        }
-
-        if (roomService.getRoom(roomId) == null) {
-            logger.info("Room {} was destroyed during leave flow. Cleaning up active game state.", roomId);
-            activeGames.remove(roomId);
-            return;
-        }
-
-        if (game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive()) {
-            gameStateService.broadcastGameState(game);
-        } else {
-            readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, game.advanceAfterPlayerRemoval(), false);
-        }
-
-        readinessCoordinator.completeReadyCountdownIfEveryoneReady(game);
-    }
-
     /**
      * Marks {@code playerName} as disconnected with the specified reconnect deadline and
      * broadcasts the updated game state.
@@ -340,6 +249,97 @@ class PlayerDepartureHandler {
         removePlayers(gameId, List.of(actorToDepart));
         logger.info("Player {} timed out after {} ms in game {}; removing from seat",
                 actorToDepart, timings.turnAllowanceMs(), gameId);
+    }
+
+    private void removePlayersFromRoomAndGame(String roomId, Collection<String> playerNames, Room room, Game game) {
+        List<String> departing = List.copyOf(new LinkedHashSet<>(playerNames));
+        List<String> departingRoomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
+        if (game == null) {
+            removeFromLobby(roomId, room, departingRoomMembers);
+        } else {
+            removeFromGame(roomId, room, game, departing, departingRoomMembers);
+        }
+    }
+
+    private void removeFromLobby(String roomId, Room room, List<String> departingRoomMembers) {
+        if (departingRoomMembers.isEmpty()) {
+            return;
+        }
+        String currentHost = room.getHostName();
+        if (currentHost != null && departingRoomMembers.contains(currentHost)) {
+            // leaveRoom destroys the whole lobby when the host leaves, so the other departing
+            // players need no separate removal.
+            roomService.leaveRoom(roomId, currentHost);
+        } else {
+            roomService.removeMembers(roomId, departingRoomMembers, currentHost);
+        }
+    }
+
+    private void removeFromGame(
+            String roomId, Room room, Game game, List<String> departing, List<String> departingRoomMembers) {
+        List<Player> departingGamePlayers = game.getPlayers().stream()
+                .filter(p -> departing.contains(p.getName()))
+                .toList();
+        if (departingRoomMembers.isEmpty() && departingGamePlayers.isEmpty()) {
+            return;
+        }
+
+        if (game.isPausedForDisconnectedSurvivor()) {
+            handleDepartureWhilePausedForDisconnectedSurvivor(
+                    roomId, room, game, departingRoomMembers, departingGamePlayers);
+            return;
+        }
+
+        if (game.isMatchConcluded()) {
+            room.setFinished(true);
+            completionHandler.handleGameEnd(roomId);
+            detachRoomMembers(roomId, room, game, departingRoomMembers);
+            return;
+        }
+
+        if (departingGamePlayers.isEmpty()) {
+            detachRoomMembers(roomId, room, game, departingRoomMembers);
+            return;
+        }
+
+        List<Player> departingContenders = departingGamePlayers.stream()
+                .filter(game::isContender)
+                .toList();
+        int contendersRemaining = game.countContenders() - departingContenders.size();
+
+        if (contendersRemaining == 1 && !departingContenders.isEmpty()) {
+            Player survivor = game.getPlayers().stream()
+                    .filter(candidate -> !departing.contains(candidate.getName()))
+                    .filter(game::isContender)
+                    .findFirst()
+                    .orElseThrow();
+            handleSingleSurvivorForfeit(roomId, room, game, departingRoomMembers, departingGamePlayers, survivor);
+            return;
+        }
+
+        for (Player departingPlayer : departingGamePlayers) {
+            game.removePlayer(departingPlayer);
+        }
+        detachRoomMembers(roomId, room, game, departingRoomMembers);
+
+        if (contendersRemaining <= 0) {
+            completionHandler.cleanupAbandonedGameIfRoomEmpty(roomId, room, game);
+            return;
+        }
+
+        if (roomService.getRoom(roomId) == null) {
+            logger.info("Room {} was destroyed during leave flow. Cleaning up active game state.", roomId);
+            activeGames.remove(roomId);
+            return;
+        }
+
+        if (game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive()) {
+            gameStateService.broadcastGameState(game);
+        } else {
+            readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, game.advanceAfterPlayerRemoval(), false);
+        }
+
+        readinessCoordinator.completeReadyCountdownIfEveryoneReady(game);
     }
 
     // Keeps the current host if still present, or otherwise picks the first remaining connected

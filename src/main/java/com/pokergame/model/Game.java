@@ -259,19 +259,6 @@ public class Game {
         return false;
     }
 
-    private void eliminateBrokePlayers() {
-        activePlayers.clear();
-        for (Player player : players) {
-            if (player.getChips() == 0) {
-                logger.info("Setting {} as out (0 chips)", player.getName());
-                player.setIsOut();
-            }
-            if (!player.isOut()) {
-                activePlayers.add(player);
-            }
-        }
-    }
-
     /**
      * Increments the hand number and resets the state revision for the new hand.
      */
@@ -584,13 +571,6 @@ public class Game {
     }
 
     /**
-     * Resets the public state revision counter to {@link #INITIAL_HAND_REVISION} for a new hand.
-     */
-    void resetStateRevisionForNewHand() {
-        stateRevision = INITIAL_HAND_REVISION;
-    }
-
-    /**
      * Marks the game over without eliminating remaining showdown state so post-game review stays intact.
      */
     public void markGameOver() {
@@ -735,12 +715,6 @@ public class Game {
      */
     public int getUncalledAmount() {
         return PotCalculator.getUncalledAmount(potInputs());
-    }
-
-    private PotCalculator.PotInputs potInputs() {
-        return new PotCalculator.PotInputs(
-                pot, carryOverPot, handContributions, activePlayers, players,
-                lastSettlementResult, bettingRound.getCurrentHighestBet(), gameId);
     }
 
     public GamePhase getCurrentPhase() {
@@ -995,16 +969,6 @@ public class Game {
         return resolveChipWinner();
     }
 
-    private Player resolveChipWinner() {
-        // Tie-break by earliest seat in roster order so abandonments and forfeits resolve
-        // deterministically to a single table winner matching table seat priority without inventing a draw.
-        return players.stream()
-                .filter(player -> !player.isOut())
-                .max(Comparator.comparingInt(Player::getChips)
-                        .thenComparing(Comparator.comparingInt(players::indexOf).reversed()))
-                .orElseThrow(() -> new IllegalStateException("Cannot resolve winner when every player is out"));
-    }
-
     public boolean isGameOver() {
         return gameOver;
     }
@@ -1034,6 +998,13 @@ public class Game {
     }
 
     /**
+     * Resets the public state revision counter to {@link #INITIAL_HAND_REVISION} for a new hand.
+     */
+    void resetStateRevisionForNewHand() {
+        stateRevision = INITIAL_HAND_REVISION;
+    }
+
+    /**
      * Finds the first player in {@code tablePlayers} whose name matches {@code playerName}.
      *
      * @param tablePlayers player list to search
@@ -1045,6 +1016,35 @@ public class Game {
                 .filter(player -> player.getName().equals(playerName))
                 .findFirst()
                 .orElse(null);
+    }
+
+    private void eliminateBrokePlayers() {
+        activePlayers.clear();
+        for (Player player : players) {
+            if (player.getChips() == 0) {
+                logger.info("Setting {} as out (0 chips)", player.getName());
+                player.setIsOut();
+            }
+            if (!player.isOut()) {
+                activePlayers.add(player);
+            }
+        }
+    }
+
+    private PotCalculator.PotInputs potInputs() {
+        return new PotCalculator.PotInputs(
+                pot, carryOverPot, handContributions, activePlayers, players,
+                lastSettlementResult, bettingRound.getCurrentHighestBet(), gameId);
+    }
+
+    private Player resolveChipWinner() {
+        // Tie-break by earliest seat in roster order so abandonments and forfeits resolve
+        // deterministically to a single table winner matching table seat priority without inventing a draw.
+        return players.stream()
+                .filter(player -> !player.isOut())
+                .max(Comparator.comparingInt(Player::getChips)
+                        .thenComparing(Comparator.comparingInt(players::indexOf).reversed()))
+                .orElseThrow(() -> new IllegalStateException("Cannot resolve winner when every player is out"));
     }
 
     private Player findActivePlayerById(String playerId) {

@@ -1,7 +1,7 @@
 package com.pokergame.persistence;
 
-import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
 import com.pokergame.persistence.snapshot.RecoveredRoom;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.util.LockLease;
 import com.pokergame.util.RoomCoordinator;
@@ -35,6 +35,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
     private final RoomRecoveryHandler recoveryHandler;
     private final ApplicationContext applicationContext;
     private final RoomCoordinator roomCoordinator;
+
     private volatile boolean complete;
 
     /**

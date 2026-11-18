@@ -1,10 +1,8 @@
 package com.pokergame.service;
 
-import com.pokergame.config.GameTimingProperties;
-import com.pokergame.util.RoomCoordinator;
-
 import static java.util.Objects.requireNonNull;
 
+import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
@@ -16,6 +14,7 @@ import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.persistence.transaction.GameId;
 import com.pokergame.persistence.transaction.RoomId;
+import com.pokergame.util.RoomCoordinator;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collection;

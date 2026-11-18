@@ -38,6 +38,13 @@ public class Room {
 
     private final String roomId;
     private final String roomName;
+    private final int maxPlayers;
+    private final int smallBlind;
+    private final int bigBlind;
+    private final int buyIn;
+    private final String passwordHash;
+    private final LocalDateTime createdAt;
+
     private String hostName;
     /*
      * Join-order and arrival timestamps for players in this room.
@@ -49,24 +56,16 @@ public class Room {
      * Reads and writes require the room lock after publication.
      */
     private final Map<String, String> playerMembershipIds = new LinkedHashMap<>();
-
     /*
      * Process-local absence deadlines for players awaiting first connection or reconnect grace.
      * Guarded by the room lock after publication. Excluded from WAL serialization.
      */
     private final Map<String, Long> playerAbsenceDeadlines = new LinkedHashMap<>();
-
     /*
      * Process-local active socket presence bounded by room membership.
      * Guarded by the room lock after publication. Excluded from WAL serialization.
      */
     private final Set<String> connectedPlayers = new HashSet<>();
-    private final int maxPlayers;
-    private final int smallBlind;
-    private final int bigBlind;
-    private final int buyIn;
-    private final String passwordHash;
-    private final LocalDateTime createdAt;
     private boolean isGameStarted;
     private boolean isFinished;
     private Long inactivityDeadlineEpochMs;
@@ -172,112 +171,6 @@ public class Room {
      */
     public static RoomRestoreBuilder restoreBuilder() {
         return new RoomRestoreBuilder();
-    }
-
-    /**
-     * Builder for reconstructing a room instance from snapshot state.
-     */
-    public static class RoomRestoreBuilder {
-        private String roomId;
-        private String roomName;
-        private String hostName;
-        private int maxPlayers;
-        private int smallBlind;
-        private int bigBlind;
-        private int buyIn;
-        private String passwordHash;
-        private LocalDateTime createdAt;
-        private Map<String, LocalDateTime> playersWithJoinTime;
-        private Map<String, String> playerMembershipIds;
-        private boolean gameStarted;
-        private Long inactivityDeadlineEpochMs;
-
-        public RoomRestoreBuilder roomId(String roomId) {
-            this.roomId = roomId;
-            return this;
-        }
-
-        public RoomRestoreBuilder roomName(String roomName) {
-            this.roomName = roomName;
-            return this;
-        }
-
-        public RoomRestoreBuilder hostName(String hostName) {
-            this.hostName = hostName;
-            return this;
-        }
-
-        public RoomRestoreBuilder maxPlayers(int maxPlayers) {
-            this.maxPlayers = maxPlayers;
-            return this;
-        }
-
-        public RoomRestoreBuilder smallBlind(int smallBlind) {
-            this.smallBlind = smallBlind;
-            return this;
-        }
-
-        public RoomRestoreBuilder bigBlind(int bigBlind) {
-            this.bigBlind = bigBlind;
-            return this;
-        }
-
-        public RoomRestoreBuilder buyIn(int buyIn) {
-            this.buyIn = buyIn;
-            return this;
-        }
-
-        public RoomRestoreBuilder passwordHash(String passwordHash) {
-            this.passwordHash = passwordHash;
-            return this;
-        }
-
-        public RoomRestoreBuilder createdAt(LocalDateTime createdAt) {
-            this.createdAt = createdAt;
-            return this;
-        }
-
-        public RoomRestoreBuilder playersWithJoinTime(Map<String, LocalDateTime> playersWithJoinTime) {
-            this.playersWithJoinTime = playersWithJoinTime;
-            return this;
-        }
-
-        public RoomRestoreBuilder playerMembershipIds(Map<String, String> playerMembershipIds) {
-            this.playerMembershipIds = playerMembershipIds;
-            return this;
-        }
-
-        public RoomRestoreBuilder gameStarted(boolean gameStarted) {
-            this.gameStarted = gameStarted;
-            return this;
-        }
-
-        public RoomRestoreBuilder inactivityDeadlineEpochMs(Long inactivityDeadlineEpochMs) {
-            this.inactivityDeadlineEpochMs = inactivityDeadlineEpochMs;
-            return this;
-        }
-
-        public Room build() {
-            Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn,
-                    passwordHash, createdAt);
-            if (playersWithJoinTime != null) {
-                if (playersWithJoinTime.size() > maxPlayers) {
-                    throw new IllegalStateException(
-                            "Restored players count exceeds maxPlayers: " + playersWithJoinTime.size() + " > " + maxPlayers);
-                }
-                room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
-                for (String playerName : room.playersWithJoinTime.keySet()) {
-                    String persistedId = playerMembershipIds != null ? playerMembershipIds.get(playerName) : null;
-                    String membershipId = (persistedId != null && !persistedId.isBlank())
-                            ? persistedId
-                            : UUID.randomUUID().toString();
-                    room.playerMembershipIds.put(playerName, membershipId);
-                }
-            }
-            room.isGameStarted = gameStarted;
-            room.inactivityDeadlineEpochMs = inactivityDeadlineEpochMs;
-            return room;
-        }
     }
 
     public boolean isFull() {
@@ -562,6 +455,112 @@ public class Room {
             playerAbsenceDeadlines.remove(playerName);
         } else {
             connectedPlayers.remove(playerName);
+        }
+    }
+
+    /**
+     * Builder for reconstructing a room instance from snapshot state.
+     */
+    public static class RoomRestoreBuilder {
+        private String roomId;
+        private String roomName;
+        private String hostName;
+        private int maxPlayers;
+        private int smallBlind;
+        private int bigBlind;
+        private int buyIn;
+        private String passwordHash;
+        private LocalDateTime createdAt;
+        private Map<String, LocalDateTime> playersWithJoinTime;
+        private Map<String, String> playerMembershipIds;
+        private boolean gameStarted;
+        private Long inactivityDeadlineEpochMs;
+
+        public RoomRestoreBuilder roomId(String roomId) {
+            this.roomId = roomId;
+            return this;
+        }
+
+        public RoomRestoreBuilder roomName(String roomName) {
+            this.roomName = roomName;
+            return this;
+        }
+
+        public RoomRestoreBuilder hostName(String hostName) {
+            this.hostName = hostName;
+            return this;
+        }
+
+        public RoomRestoreBuilder maxPlayers(int maxPlayers) {
+            this.maxPlayers = maxPlayers;
+            return this;
+        }
+
+        public RoomRestoreBuilder smallBlind(int smallBlind) {
+            this.smallBlind = smallBlind;
+            return this;
+        }
+
+        public RoomRestoreBuilder bigBlind(int bigBlind) {
+            this.bigBlind = bigBlind;
+            return this;
+        }
+
+        public RoomRestoreBuilder buyIn(int buyIn) {
+            this.buyIn = buyIn;
+            return this;
+        }
+
+        public RoomRestoreBuilder passwordHash(String passwordHash) {
+            this.passwordHash = passwordHash;
+            return this;
+        }
+
+        public RoomRestoreBuilder createdAt(LocalDateTime createdAt) {
+            this.createdAt = createdAt;
+            return this;
+        }
+
+        public RoomRestoreBuilder playersWithJoinTime(Map<String, LocalDateTime> playersWithJoinTime) {
+            this.playersWithJoinTime = playersWithJoinTime;
+            return this;
+        }
+
+        public RoomRestoreBuilder playerMembershipIds(Map<String, String> playerMembershipIds) {
+            this.playerMembershipIds = playerMembershipIds;
+            return this;
+        }
+
+        public RoomRestoreBuilder gameStarted(boolean gameStarted) {
+            this.gameStarted = gameStarted;
+            return this;
+        }
+
+        public RoomRestoreBuilder inactivityDeadlineEpochMs(Long inactivityDeadlineEpochMs) {
+            this.inactivityDeadlineEpochMs = inactivityDeadlineEpochMs;
+            return this;
+        }
+
+        public Room build() {
+            Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn,
+                    passwordHash, createdAt);
+            if (playersWithJoinTime != null) {
+                if (playersWithJoinTime.size() > maxPlayers) {
+                    throw new IllegalStateException(
+                            "Restored players count exceeds maxPlayers: " + playersWithJoinTime.size() + " > " + maxPlayers);
+                }
+                room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
+                for (String playerName : room.playersWithJoinTime.keySet()) {
+                    String persistedId = playerMembershipIds != null ? playerMembershipIds.get(playerName) : null;
+                    String membershipId = (persistedId != null && !persistedId.isBlank())
+                            ? persistedId
+                            : UUID.randomUUID().toString();
+                    room.playerMembershipIds.put(playerName, membershipId);
+                }
+            }
+            room.isGameStarted = gameStarted;
+            room.inactivityDeadlineEpochMs = inactivityDeadlineEpochMs;
+            return room;
         }
     }
 }

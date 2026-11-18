@@ -1,13 +1,16 @@
 package com.pokergame.model;
 
-import java.util.*;
-import java.util.stream.*;
+import static java.util.Objects.requireNonNull;
 
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
-
-import static java.util.Objects.requireNonNull;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Works out the best poker hand a player can make and decides which of two equal-ranked hands
@@ -57,30 +60,6 @@ public class HandEvaluator {
         return new HandEvaluationResult(bestHand, bestRank);
     }
 
-    // Cards must be sorted lowest to highest, which getBestHand guarantees.
-    private HandRank evaluateHand(List<Card> cards) {
-        if (isRoyalFlush(cards))
-            return HandRank.ROYAL_FLUSH;
-        if (isStraightFlush(cards))
-            return HandRank.STRAIGHT_FLUSH;
-        if (isFourOfAKind(cards))
-            return HandRank.FOUR_OF_A_KIND;
-        if (isFullHouse(cards))
-            return HandRank.FULL_HOUSE;
-        if (isFlush(cards))
-            return HandRank.FLUSH;
-        if (isStraight(cards))
-            return HandRank.STRAIGHT;
-        if (isThreeOfAKind(cards))
-            return HandRank.THREE_OF_A_KIND;
-        if (isTwoPair(cards))
-            return HandRank.TWO_PAIR;
-        if (isOnePair(cards))
-            return HandRank.ONE_PAIR;
-
-        return HandRank.HIGH_CARD;
-    }
-
     /**
      * Compares two 5-card hands that both make the same hand rank.
      *
@@ -110,6 +89,30 @@ public class HandEvaluator {
             case FOUR_OF_A_KIND, FULL_HOUSE, FLUSH, THREE_OF_A_KIND, TWO_PAIR, ONE_PAIR, HIGH_CARD ->
                 compareValues(tiebreakValues(first), tiebreakValues(second));
         };
+    }
+
+    // Cards must be sorted lowest to highest, which getBestHand guarantees.
+    private HandRank evaluateHand(List<Card> cards) {
+        if (isRoyalFlush(cards))
+            return HandRank.ROYAL_FLUSH;
+        if (isStraightFlush(cards))
+            return HandRank.STRAIGHT_FLUSH;
+        if (isFourOfAKind(cards))
+            return HandRank.FOUR_OF_A_KIND;
+        if (isFullHouse(cards))
+            return HandRank.FULL_HOUSE;
+        if (isFlush(cards))
+            return HandRank.FLUSH;
+        if (isStraight(cards))
+            return HandRank.STRAIGHT;
+        if (isThreeOfAKind(cards))
+            return HandRank.THREE_OF_A_KIND;
+        if (isTwoPair(cards))
+            return HandRank.TWO_PAIR;
+        if (isOnePair(cards))
+            return HandRank.ONE_PAIR;
+
+        return HandRank.HIGH_CARD;
     }
 
     // Card values ordered most important first: larger groups first, higher values first within a group.

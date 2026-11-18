@@ -1,7 +1,5 @@
 package com.pokergame.service;
 
-import com.pokergame.util.RoomCoordinator;
-
 import static java.util.Objects.requireNonNull;
 
 import com.pokergame.config.RoomTimingProperties;
@@ -22,6 +20,7 @@ import com.pokergame.service.event.RoomDestroyed;
 import com.pokergame.service.event.RoomMemberRegistered;
 import com.pokergame.service.event.RoomMembershipEnded;
 import com.pokergame.util.InputSanitizer;
+import com.pokergame.util.RoomCoordinator;
 import com.pokergame.util.RoomPasswordPolicy;
 import java.time.Clock;
 import java.util.HashMap;

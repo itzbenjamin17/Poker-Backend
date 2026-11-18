@@ -1,14 +1,13 @@
 package com.pokergame.persistence.snapshot;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.Rank;
-import com.pokergame.enums.Suit;
-import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.ReadyGateState;
-
-import com.fasterxml.jackson.annotation.JsonCreator;
+import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.enums.Suit;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.LinkedHashMap;

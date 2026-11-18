@@ -19,27 +19,6 @@ public final class EncryptionKeyring {
     private final Map<String, SecretKey> keys;
 
     /**
-     * Builds a keyring from Base64-encoded key text, as it appears in the application settings.
-     * Decoding and the key-length check both happen here so a bad key stops the server at startup.
-     *
-     * @param currentKeyId the ID of the key to use for new saves
-     * @param base64Keys   all the old and new keys as Base64 text, by their IDs
-     * @return the keyring holding the decoded keys
-     * @throws PersistenceException if a key is not valid Base64, is not 256-bit, or the current key is missing
-     */
-    public static EncryptionKeyring fromBase64(String currentKeyId, Map<String, String> base64Keys) {
-        Map<String, SecretKey> keys = new LinkedHashMap<>();
-        for (Map.Entry<String, String> entry : base64Keys.entrySet()) {
-            try {
-                keys.put(entry.getKey(), new SecretKeySpec(Base64.getDecoder().decode(entry.getValue()), "AES"));
-            } catch (IllegalArgumentException e) {
-                throw new PersistenceException("Persistence key " + entry.getKey() + " is not valid Base64", e);
-            }
-        }
-        return new EncryptionKeyring(currentKeyId, keys);
-    }
-
-    /**
      * Creates a new keyring and checks that all keys are valid AES-256 keys.
      * We do this at startup so we don't accidentally start the server with broken keys.
      *
@@ -60,6 +39,27 @@ public final class EncryptionKeyring {
                 throw new PersistenceException("Persistence key " + entry.getKey() + " is not 256-bit");
             }
         }
+    }
+
+    /**
+     * Builds a keyring from Base64-encoded key text, as it appears in the application settings.
+     * Decoding and the key-length check both happen here so a bad key stops the server at startup.
+     *
+     * @param currentKeyId the ID of the key to use for new saves
+     * @param base64Keys   all the old and new keys as Base64 text, by their IDs
+     * @return the keyring holding the decoded keys
+     * @throws PersistenceException if a key is not valid Base64, is not 256-bit, or the current key is missing
+     */
+    public static EncryptionKeyring fromBase64(String currentKeyId, Map<String, String> base64Keys) {
+        Map<String, SecretKey> keys = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : base64Keys.entrySet()) {
+            try {
+                keys.put(entry.getKey(), new SecretKeySpec(Base64.getDecoder().decode(entry.getValue()), "AES"));
+            } catch (IllegalArgumentException e) {
+                throw new PersistenceException("Persistence key " + entry.getKey() + " is not valid Base64", e);
+            }
+        }
+        return new EncryptionKeyring(currentKeyId, keys);
     }
 
     /**

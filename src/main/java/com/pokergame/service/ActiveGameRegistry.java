@@ -1,10 +1,9 @@
 package com.pokergame.service;
 
-import com.pokergame.util.RoomCoordinator;
-
 import static java.util.Objects.requireNonNull;
 
 import com.pokergame.model.Game;
+import com.pokergame.util.RoomCoordinator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;

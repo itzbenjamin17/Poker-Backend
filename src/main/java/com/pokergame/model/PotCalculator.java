@@ -214,6 +214,32 @@ final class PotCalculator {
         return computeLiveAllocations(inputs).uncalledTotal();
     }
 
+    /**
+     * Returns player names for diagnostic logging.
+     *
+     * @param players players to summarize
+     * @return immutable list of player names
+     */
+    static List<String> playerNames(List<Player> players) {
+        return players.stream().map(Player::getName).toList();
+    }
+
+    /**
+     * Formats pot allocations into human-readable log entries.
+     *
+     * @param allocations computed pot allocations
+     * @return summary strings showing each pot amount and eligible player names
+     */
+    static List<String> allocationSummary(List<PotAllocation> allocations) {
+        List<String> summary = new ArrayList<>();
+        for (int i = 0; i < allocations.size(); i++) {
+            PotAllocation allocation = allocations.get(i);
+            summary.add("pot[" + i + "] amount=" + allocation.amount() + " eligible="
+                    + playerNames(allocation.eligiblePlayers()));
+        }
+        return summary;
+    }
+
     /*
      * Projects display layers while an active player still owes a call. Nothing is uncalled yet because the
      * owing player may still match the top bet, so chips above the highest all-in stay in an open top layer
@@ -264,32 +290,6 @@ final class PotCalculator {
                 .distinct()
                 .sorted()
                 .toList();
-    }
-
-    /**
-     * Returns player names for diagnostic logging.
-     *
-     * @param players players to summarize
-     * @return immutable list of player names
-     */
-    static List<String> playerNames(List<Player> players) {
-        return players.stream().map(Player::getName).toList();
-    }
-
-    /**
-     * Formats pot allocations into human-readable log entries.
-     *
-     * @param allocations computed pot allocations
-     * @return summary strings showing each pot amount and eligible player names
-     */
-    static List<String> allocationSummary(List<PotAllocation> allocations) {
-        List<String> summary = new ArrayList<>();
-        for (int i = 0; i < allocations.size(); i++) {
-            PotAllocation allocation = allocations.get(i);
-            summary.add("pot[" + i + "] amount=" + allocation.amount() + " eligible="
-                    + playerNames(allocation.eligiblePlayers()));
-        }
-        return summary;
     }
 
     private static PotComputationResult computeLiveAllocations(PotInputs inputs) {

@@ -19,6 +19,7 @@ import java.util.Objects;
 public class Player {
     private final String name;
     private final String playerId;
+
     private List<Card> holeCards;
     private List<Card> bestHand;
     private HandRank handRank;
@@ -66,18 +67,6 @@ public class Player {
         this.isReadyForNextHand = builder.readyForNextHand;
     }
 
-    private static void validateIdentityAndChips(String name, String playerId, int chips) {
-        if (name == null || name.trim().isEmpty()) {
-            throw new IllegalStateException("Player name required");
-        }
-        if (chips < 0) {
-            throw new IllegalStateException("Chips cannot be negative");
-        }
-        if (playerId == null || playerId.trim().isEmpty()) {
-            throw new IllegalStateException("Player ID cannot be empty");
-        }
-    }
-
     /**
      * Creates a builder for restoring a player instance from snapshot state.
      *
@@ -85,94 +74,6 @@ public class Player {
      */
     public static PlayerRestoreBuilder restoreBuilder() {
         return new PlayerRestoreBuilder();
-    }
-
-    /**
-     * Builder for reconstructing a player instance from snapshot state.
-     */
-    public static class PlayerRestoreBuilder {
-        private String name;
-        private String playerId;
-        private List<Card> holeCards;
-        private List<Card> bestHand;
-        private HandRank handRank;
-        private int chips;
-        private int currentBet;
-        private boolean hasFolded;
-        private boolean allIn;
-        private boolean out;
-        private boolean disconnected;
-        private Long disconnectDeadlineEpochMs;
-        private boolean readyForNextHand;
-
-        public PlayerRestoreBuilder name(String name) {
-            this.name = name;
-            return this;
-        }
-
-        public PlayerRestoreBuilder playerId(String playerId) {
-            this.playerId = playerId;
-            return this;
-        }
-
-        public PlayerRestoreBuilder holeCards(List<Card> holeCards) {
-            this.holeCards = holeCards;
-            return this;
-        }
-
-        public PlayerRestoreBuilder bestHand(List<Card> bestHand) {
-            this.bestHand = bestHand;
-            return this;
-        }
-
-        public PlayerRestoreBuilder handRank(HandRank handRank) {
-            this.handRank = handRank;
-            return this;
-        }
-
-        public PlayerRestoreBuilder chips(int chips) {
-            this.chips = chips;
-            return this;
-        }
-
-        public PlayerRestoreBuilder currentBet(int currentBet) {
-            this.currentBet = currentBet;
-            return this;
-        }
-
-        public PlayerRestoreBuilder hasFolded(boolean hasFolded) {
-            this.hasFolded = hasFolded;
-            return this;
-        }
-
-        public PlayerRestoreBuilder allIn(boolean allIn) {
-            this.allIn = allIn;
-            return this;
-        }
-
-        public PlayerRestoreBuilder out(boolean out) {
-            this.out = out;
-            return this;
-        }
-
-        public PlayerRestoreBuilder disconnected(boolean disconnected) {
-            this.disconnected = disconnected;
-            return this;
-        }
-
-        public PlayerRestoreBuilder disconnectDeadlineEpochMs(Long disconnectDeadlineEpochMs) {
-            this.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
-            return this;
-        }
-
-        public PlayerRestoreBuilder readyForNextHand(boolean readyForNextHand) {
-            this.readyForNextHand = readyForNextHand;
-            return this;
-        }
-
-        public Player build() {
-            return new Player(this);
-        }
     }
 
     /**
@@ -194,14 +95,6 @@ public class Player {
      */
     public void resetCurrentBet() {
         this.currentBet = 0;
-    }
-
-    private int goAllIn() {
-        int committed = chips;
-        isAllIn = true;
-        currentBet += committed;
-        chips = 0;
-        return committed;
     }
 
     /**
@@ -229,23 +122,6 @@ public class Player {
             }
             case CHECK -> 0;
         };
-    }
-
-    private int payChips(int amount) {
-        if (amount < 0) {
-            throw new IllegalStateException("Chip amount cannot be negative");
-        }
-
-        if (amount > this.chips) {
-            throw new IllegalStateException("Insufficient chips for this action");
-        }
-
-        this.chips -= amount;
-        if (this.chips == 0) {
-            this.isAllIn = true;
-        }
-        this.currentBet += amount;
-        return amount;
     }
 
     /**
@@ -386,5 +262,130 @@ public class Player {
     @Override
     public int hashCode() {
         return Objects.hash(playerId);
+    }
+
+    private static void validateIdentityAndChips(String name, String playerId, int chips) {
+        if (name == null || name.trim().isEmpty()) {
+            throw new IllegalStateException("Player name required");
+        }
+        if (chips < 0) {
+            throw new IllegalStateException("Chips cannot be negative");
+        }
+        if (playerId == null || playerId.trim().isEmpty()) {
+            throw new IllegalStateException("Player ID cannot be empty");
+        }
+    }
+
+    private int goAllIn() {
+        int committed = chips;
+        isAllIn = true;
+        currentBet += committed;
+        chips = 0;
+        return committed;
+    }
+
+    private int payChips(int amount) {
+        if (amount < 0) {
+            throw new IllegalStateException("Chip amount cannot be negative");
+        }
+
+        if (amount > this.chips) {
+            throw new IllegalStateException("Insufficient chips for this action");
+        }
+
+        this.chips -= amount;
+        if (this.chips == 0) {
+            this.isAllIn = true;
+        }
+        this.currentBet += amount;
+        return amount;
+    }
+
+    /**
+     * Builder for reconstructing a player instance from snapshot state.
+     */
+    public static class PlayerRestoreBuilder {
+        private String name;
+        private String playerId;
+        private List<Card> holeCards;
+        private List<Card> bestHand;
+        private HandRank handRank;
+        private int chips;
+        private int currentBet;
+        private boolean hasFolded;
+        private boolean allIn;
+        private boolean out;
+        private boolean disconnected;
+        private Long disconnectDeadlineEpochMs;
+        private boolean readyForNextHand;
+
+        public PlayerRestoreBuilder name(String name) {
+            this.name = name;
+            return this;
+        }
+
+        public PlayerRestoreBuilder playerId(String playerId) {
+            this.playerId = playerId;
+            return this;
+        }
+
+        public PlayerRestoreBuilder holeCards(List<Card> holeCards) {
+            this.holeCards = holeCards;
+            return this;
+        }
+
+        public PlayerRestoreBuilder bestHand(List<Card> bestHand) {
+            this.bestHand = bestHand;
+            return this;
+        }
+
+        public PlayerRestoreBuilder handRank(HandRank handRank) {
+            this.handRank = handRank;
+            return this;
+        }
+
+        public PlayerRestoreBuilder chips(int chips) {
+            this.chips = chips;
+            return this;
+        }
+
+        public PlayerRestoreBuilder currentBet(int currentBet) {
+            this.currentBet = currentBet;
+            return this;
+        }
+
+        public PlayerRestoreBuilder hasFolded(boolean hasFolded) {
+            this.hasFolded = hasFolded;
+            return this;
+        }
+
+        public PlayerRestoreBuilder allIn(boolean allIn) {
+            this.allIn = allIn;
+            return this;
+        }
+
+        public PlayerRestoreBuilder out(boolean out) {
+            this.out = out;
+            return this;
+        }
+
+        public PlayerRestoreBuilder disconnected(boolean disconnected) {
+            this.disconnected = disconnected;
+            return this;
+        }
+
+        public PlayerRestoreBuilder disconnectDeadlineEpochMs(Long disconnectDeadlineEpochMs) {
+            this.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
+            return this;
+        }
+
+        public PlayerRestoreBuilder readyForNextHand(boolean readyForNextHand) {
+            this.readyForNextHand = readyForNextHand;
+            return this;
+        }
+
+        public Player build() {
+            return new Player(this);
+        }
     }
 }

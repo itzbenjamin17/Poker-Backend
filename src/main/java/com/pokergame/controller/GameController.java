@@ -1,5 +1,7 @@
 package com.pokergame.controller;
 
+import static java.util.Objects.requireNonNull;
+
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.GameEndResponse;
@@ -7,13 +9,14 @@ import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.util.LockLease;
+import com.pokergame.model.Game;
+import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
+import com.pokergame.util.LockLease;
 import com.pokergame.util.RoomCoordinator;
-import com.pokergame.model.Game;
-import com.pokergame.security.PlayerPrincipal;
+import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -21,10 +24,11 @@ import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.web.bind.annotation.*;
-import jakarta.validation.Valid;
-
-import static java.util.Objects.requireNonNull;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 /**
  * REST and STOMP controller for active poker game operations: gameplay actions,
@@ -103,23 +107,6 @@ public class GameController {
             Game game = getAuthorisedGame(gameId, playerName);
             return ResponseEntity.ok(gameStateService.getPrivatePlayerStateSnapshot(game, playerName));
         }
-    }
-
-    private Game getAuthorisedGame(String gameId, String playerName) {
-        if (!gameLifecycleService.gameExists(gameId)) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-
-        if (!gameLifecycleService.playerExistsInGame(gameId, playerName)) {
-            throw new UnauthorisedActionException("You are no longer part of this game.");
-        }
-
-        Game game = gameLifecycleService.getGame(gameId);
-        if (game == null || game.isGameOver()) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-
-        return game;
     }
 
     /**
@@ -249,5 +236,22 @@ public class GameController {
             logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
             return ResponseEntity.ok(ApiResponse.success("Win claimed successfully", result));
         }
+    }
+
+    private Game getAuthorisedGame(String gameId, String playerName) {
+        if (!gameLifecycleService.gameExists(gameId)) {
+            throw new ResourceNotFoundException("Game not found");
+        }
+
+        if (!gameLifecycleService.playerExistsInGame(gameId, playerName)) {
+            throw new UnauthorisedActionException("You are no longer part of this game.");
+        }
+
+        Game game = gameLifecycleService.getGame(gameId);
+        if (game == null || game.isGameOver()) {
+            throw new ResourceNotFoundException("Game not found");
+        }
+
+        return game;
     }
 }

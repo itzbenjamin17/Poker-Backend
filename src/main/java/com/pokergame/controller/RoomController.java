@@ -1,33 +1,37 @@
 package com.pokergame.controller;
 
-import com.pokergame.dto.response.RoomDataResponse;
+import static java.util.Objects.requireNonNull;
+
+import com.pokergame.dto.internal.RoomEntryResult;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.ApiResponse;
+import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.dto.response.TokenResponse;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
+import com.pokergame.model.Room;
 import com.pokergame.security.JwtService;
-import com.pokergame.service.GameLifecycleService;
-import com.pokergame.util.RoomCoordinator;
-import com.pokergame.service.RoomService;
 import com.pokergame.security.PlayerPrincipal;
-import com.pokergame.dto.internal.RoomEntryResult;
+import com.pokergame.service.GameLifecycleService;
+import com.pokergame.service.RoomService;
+import com.pokergame.util.LockLease;
+import com.pokergame.util.RoomCoordinator;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import java.util.List;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.web.bind.annotation.*;
-
-import com.pokergame.model.Room;
-import com.pokergame.util.LockLease;
-import java.util.List;
-import java.util.UUID;
-import jakarta.servlet.http.HttpServletRequest;
-
-import static java.util.Objects.requireNonNull;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 /**
  * REST controller for poker room management.

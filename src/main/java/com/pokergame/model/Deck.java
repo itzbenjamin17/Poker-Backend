@@ -2,11 +2,10 @@ package com.pokergame.model;
 
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
-
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.security.SecureRandom;
 
 /**
  * Represents a standard 52-card deck for poker games.
@@ -14,6 +13,7 @@ import java.security.SecureRandom;
  */
 public class Deck {
     private static final SecureRandom SHUFFLE_RANDOM = new SecureRandom();
+
     private final List<Card> cards;
 
     /**
@@ -48,19 +48,6 @@ public class Deck {
      */
     public List<Card> getRemainingCardsSnapshot() {
         return List.copyOf(cards);
-    }
-
-    private void initializeDeck() {
-        for (Suit suit : Suit.values()) {
-            for (Rank rank : Rank.values()) {
-                cards.add(new Card(rank, suit));
-            }
-        }
-    }
-
-    // Uses a cryptographically strong random source so future private cards are not predictable.
-    private void shuffle() {
-        Collections.shuffle(cards, SHUFFLE_RANDOM);
     }
 
     /**
@@ -99,5 +86,18 @@ public class Deck {
             dealtCards.add(cards.removeLast());
         }
         return dealtCards;
+    }
+
+    private void initializeDeck() {
+        for (Suit suit : Suit.values()) {
+            for (Rank rank : Rank.values()) {
+                cards.add(new Card(rank, suit));
+            }
+        }
+    }
+
+    // Uses a cryptographically strong random source so future private cards are not predictable.
+    private void shuffle() {
+        Collections.shuffle(cards, SHUFFLE_RANDOM);
     }
 }

@@ -26,6 +26,7 @@ class GameTimerRegistry {
             ScheduledGameTask.READY_OPEN,
             ScheduledGameTask.READY_TIMEOUT,
             ScheduledGameTask.NEW_HAND);
+
     private final TaskScheduler taskScheduler;
     private final Clock clock;
 
