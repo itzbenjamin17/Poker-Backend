@@ -2,7 +2,6 @@ package com.pokergame.model;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 /**
  * Owns table seating order, blind assignments, and turn rotation by player ID within a {@link Game}.
@@ -23,7 +22,7 @@ final class TableSeating {
      */
     TableSeating(List<Player> activePlayers, List<Player> tablePlayers) {
         this.handSeatOrder = toPlayerIds(tablePlayers);
-        if (activePlayers == null || activePlayers.isEmpty()) {
+        if (activePlayers.isEmpty()) {
             this.dealerPlayerId = null;
             this.smallBlindPlayerId = null;
             this.bigBlindPlayerId = null;
@@ -68,14 +67,7 @@ final class TableSeating {
      * @param activePlayers active players seated for the next hand
      */
     void advancePositions(List<Player> activePlayers) {
-        if (activePlayers == null || activePlayers.isEmpty()) {
-            return;
-        }
-        if (handSeatOrder.isEmpty()) {
-            dealerPlayerId = activePlayers.getFirst().getPlayerId();
-            currentPlayerId = firstPreFlopActorId(activePlayers, 0);
-            smallBlindPlayerId = null;
-            bigBlindPlayerId = null;
+        if (activePlayers.isEmpty()) {
             return;
         }
 
@@ -87,7 +79,7 @@ final class TableSeating {
         for (int offset = 1; offset <= seatCount; offset++) {
             String candidateId = handSeatOrder.get(Math.floorMod(anchorIndex + offset, seatCount));
             int activeIndex = indexOfActivePlayer(activePlayers, candidateId);
-            if (activeIndex >= 0 && !activePlayers.get(activeIndex).getIsOut()) {
+            if (activeIndex >= 0) {
                 nextDealerIndex = activeIndex;
                 nextDealerId = candidateId;
                 break;
@@ -106,7 +98,7 @@ final class TableSeating {
      * @param activePlayers active players seated for the hand
      */
     void assignBlindsForHand(List<Player> activePlayers) {
-        if (activePlayers == null || activePlayers.isEmpty()) {
+        if (activePlayers.isEmpty()) {
             smallBlindPlayerId = null;
             bigBlindPlayerId = null;
             return;
@@ -121,12 +113,8 @@ final class TableSeating {
      * @param activePlayers active players in the current hand
      */
     void moveToFirstPostFlopActor(List<Player> activePlayers) {
-        if (activePlayers == null || activePlayers.isEmpty()) {
+        if (activePlayers.isEmpty()) {
             currentPlayerId = null;
-            return;
-        }
-        if (handSeatOrder.isEmpty()) {
-            currentPlayerId = firstActionableOrFirstId(activePlayers);
             return;
         }
         int anchorIndex = dealerPlayerId != null ? handSeatOrder.indexOf(dealerPlayerId) : -1;
@@ -156,7 +144,7 @@ final class TableSeating {
         if (removedPlayerId == null) {
             return;
         }
-        if (activePlayers == null || activePlayers.isEmpty()) {
+        if (activePlayers.isEmpty()) {
             currentPlayerId = null;
             return;
         }
@@ -173,7 +161,7 @@ final class TableSeating {
      * @param activePlayers active players in the current hand
      */
     void nextPlayer(List<Player> activePlayers) {
-        if (activePlayers == null || activePlayers.isEmpty()) {
+        if (activePlayers.isEmpty()) {
             currentPlayerId = null;
             return;
         }
@@ -196,7 +184,7 @@ final class TableSeating {
      * @throws IllegalStateException if no active players exist
      */
     Player getCurrentPlayer(List<Player> activePlayers) {
-        if (activePlayers == null || activePlayers.isEmpty()) {
+        if (activePlayers.isEmpty()) {
             throw new IllegalStateException("No active players available");
         }
         int index = indexOfActivePlayer(activePlayers, currentPlayerId);
@@ -242,7 +230,7 @@ final class TableSeating {
     }
 
     private String deriveBlindPlayerId(List<Player> activePlayers, boolean bigBlind) {
-        if (activePlayers == null || activePlayers.isEmpty()) {
+        if (activePlayers.isEmpty()) {
             return null;
         }
         int tableSize = activePlayers.size();
@@ -285,27 +273,25 @@ final class TableSeating {
     }
 
     private String findNextActorAfterDeparture(List<Player> activePlayers, String departedPlayerId) {
-        if (!handSeatOrder.isEmpty()) {
-            int anchorIndex = handSeatOrder.indexOf(departedPlayerId);
-            int seatCount = handSeatOrder.size();
-            String firstActiveFallback = null;
-            for (int offset = 1; offset <= seatCount; offset++) {
-                String candidateId = handSeatOrder.get(Math.floorMod(anchorIndex + offset, seatCount));
-                int activeIndex = indexOfActivePlayer(activePlayers, candidateId);
-                if (activeIndex < 0) {
-                    continue;
-                }
-                Player candidate = activePlayers.get(activeIndex);
-                if (candidate.canAct()) {
-                    return candidate.getPlayerId();
-                }
-                if (firstActiveFallback == null) {
-                    firstActiveFallback = candidate.getPlayerId();
-                }
+        int anchorIndex = handSeatOrder.indexOf(departedPlayerId);
+        int seatCount = handSeatOrder.size();
+        String firstActiveFallback = null;
+        for (int offset = 1; offset <= seatCount; offset++) {
+            String candidateId = handSeatOrder.get(Math.floorMod(anchorIndex + offset, seatCount));
+            int activeIndex = indexOfActivePlayer(activePlayers, candidateId);
+            if (activeIndex < 0) {
+                continue;
             }
-            if (firstActiveFallback != null) {
-                return firstActiveFallback;
+            Player candidate = activePlayers.get(activeIndex);
+            if (candidate.canAct()) {
+                return candidate.getPlayerId();
             }
+            if (firstActiveFallback == null) {
+                firstActiveFallback = candidate.getPlayerId();
+            }
+        }
+        if (firstActiveFallback != null) {
+            return firstActiveFallback;
         }
         return firstActionableOrFirstId(activePlayers);
     }
@@ -331,19 +317,15 @@ final class TableSeating {
     }
 
     private static List<String> toPlayerIds(List<Player> tablePlayers) {
-        if (tablePlayers == null) {
-            return new ArrayList<>();
-        }
-        return new ArrayList<>(tablePlayers.stream().filter(Objects::nonNull).map(Player::getPlayerId).toList());
+        return new ArrayList<>(tablePlayers.stream().map(Player::getPlayerId).toList());
     }
 
     private static int indexOfActivePlayer(List<Player> activePlayers, String playerId) {
-        if (activePlayers == null || playerId == null) {
+        if (playerId == null) {
             return -1;
         }
         for (int i = 0; i < activePlayers.size(); i++) {
-            Player p = activePlayers.get(i);
-            if (p != null && playerId.equals(p.getPlayerId())) {
+            if (playerId.equals(activePlayers.get(i).getPlayerId())) {
                 return i;
             }
         }

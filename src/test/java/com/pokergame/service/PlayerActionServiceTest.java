@@ -1317,7 +1317,6 @@ class PlayerActionServiceTest {
                 .bigBlind(10)
                 .handContributions(Map.of())
                 .preHandCarryOver(0)
-                .readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.TURN_TIMEOUT, FIXED_INSTANT.toEpochMilli()))

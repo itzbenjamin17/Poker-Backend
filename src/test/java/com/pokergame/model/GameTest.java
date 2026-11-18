@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
@@ -147,7 +148,6 @@ class GameTest {
                 .preHandCarryOver(0)
                 .lastFullRaise(lastFullRaise)
                 .lastActedWagerByPlayer(lastActedWagerByPlayer)
-                .readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
@@ -195,7 +195,6 @@ class GameTest {
                 .bigBlind(20)
                 .handContributions(Map.of(shortId, 50, bettorId, 250, owingId, 50, foldedId, 20))
                 .preHandCarryOver(carryOver)
-                .readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
@@ -466,12 +465,12 @@ class GameTest {
             players.get(0).doAction(PlayerAction.BET, 1000);
             players.get(0).setIsOut();
 
-            Player winner = GameEligibility.resolveWinner(game, null);
+            Player winner = game.resolveWinner(null);
             assertNotNull(winner);
             assertEquals("Player2", winner.getName());
 
             players.get(2).addChips(1000);
-            winner = GameEligibility.resolveWinner(game, null);
+            winner = game.resolveWinner(null);
             assertEquals("Player3", winner.getName());
         }
 
@@ -514,7 +513,7 @@ class GameTest {
                     .smallBlind(10)
                     .bigBlind(20)
                     .handContributions(contribs)
-                    .readyCountdownActive(true)
+                    .readyGateState(ReadyGateState.COUNTING_DOWN)
                     .readyCountdownDeadlineEpochMs(9999L)
                     .everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(acted)
@@ -765,7 +764,6 @@ class GameTest {
                     .bigBlind(10)
                     .handContributions(Map.of("ai", 10, "matched", 10))
                     .preHandCarryOver(0)
-                    .readyCountdownActive(false)
                     .everyoneHasHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
@@ -792,7 +790,6 @@ class GameTest {
                     .bigBlind(10)
                     .handContributions(Map.of("ai", 10))
                     .preHandCarryOver(0)
-                    .readyCountdownActive(false)
                     .everyoneHasHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
@@ -825,7 +822,6 @@ class GameTest {
                     .preHandCarryOver(0)
                     .handSeatOrder(List.of("a", "f", "leaving"))
                     .dealerAnchorPlayerId("a")
-                    .readyCountdownActive(false)
                     .everyoneHasHadInitialTurn(false)
                     .actedPlayersInRound(Set.of("a", "f"))
                     .scheduledTaskDeadlines(Map.of())
@@ -868,7 +864,6 @@ class GameTest {
                     .bigBlind(10)
                     .handContributions(Map.of("allIn", 100))
                     .preHandCarryOver(0)
-                    .readyCountdownActive(false)
                     .everyoneHasHadInitialTurn(false)
                     .actedPlayersInRound(Set.of("allIn"))
                     .scheduledTaskDeadlines(Map.of())
@@ -969,7 +964,7 @@ class GameTest {
                     .currentHighestBet(34).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
                     .smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p1", 33, "p2", 33, "p3", 34))
-                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -983,7 +978,7 @@ class GameTest {
                     .currentHighestBet(34).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
                     .smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p1", 33, "p2", 34, "p3", 34))
-                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -1011,7 +1006,7 @@ class GameTest {
                     .smallBlindPlayerId("a").bigBlindPlayerId("b").currentPlayerId("a").currentHighestBet(100)
                     .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 100, "b", 100, "f1", 5, "f2", 10, "f3", 15))
-                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -1041,7 +1036,7 @@ class GameTest {
                     .bigBlindPlayerId("c").currentPlayerId("a").currentHighestBet(200)
                     .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 50, "b", 100, "c", 200, "d", 200))
-                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -1068,7 +1063,7 @@ class GameTest {
                     .currentPlayerId("s").currentHighestBet(150).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("s", 50, "m", 150, "departed", 150))
-                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -1098,7 +1093,7 @@ class GameTest {
                     .currentPlayerId("a").currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("b", 10, "c", 20)).preHandCarryOver(0)
-                    .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -1130,7 +1125,7 @@ class GameTest {
                     .bigBlindPlayerId("bettor").currentPlayerId("owing").currentHighestBet(250).currentPhase(GamePhase.FLOP)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("short", 50, "bettor", 250, "owing", 50))
-                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             assertEquals(List.of(150, 200), live.getPotBreakdown());
@@ -1168,7 +1163,7 @@ class GameTest {
                     .currentPlayerId(active.getFirst().getPlayerId())
                     .currentHighestBet(highestBet).currentPhase(GamePhase.RIVER).gameOver(false)
                     .smallBlind(10).bigBlind(20).handContributions(new java.util.HashMap<>(contributions))
-                    .preHandCarryOver(carryOver).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .preHandCarryOver(carryOver).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
         }
@@ -1605,7 +1600,7 @@ class GameTest {
                     .currentPlayerId("ace").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("ace", 50, "king", 50)).preHandCarryOver(0)
-                    .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             assertEquals(List.of(ace), realGame.conductShowdown());
@@ -1620,7 +1615,7 @@ class GameTest {
                     .pot(101).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                     .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50, "b", 50))
-                    .preHandCarryOver(1).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .preHandCarryOver(1).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             carryGame.conductShowdown();
@@ -1672,7 +1667,7 @@ class GameTest {
                     .pot(50).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("a")
                     .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(true).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50))
-                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             assertTrue(unsettled.resetForNewHand());
@@ -1703,7 +1698,7 @@ class GameTest {
                     .currentPlayerId("a").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                     .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of())
                     .preHandCarryOver(1).lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, false))
-                    .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             Player oddWinner = oddCarry.settleGameEnd(null, Set.of());
@@ -1742,7 +1737,7 @@ class GameTest {
                     .currentPlayerId("p0").currentHighestBet(30).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p0", 30, "p1", 30, "p2", 30, "p3", 11))
-                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             int totalBeforeThreeWay = threeWay.getPlayers().stream().mapToInt(Player::getChips).sum() + threeWay.getPot();
@@ -1770,7 +1765,7 @@ class GameTest {
                     .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 50, "b", 50)).preHandCarryOver(1)
-                    .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             int totalBeforeHeadsUp = headsUp.getPlayers().stream().mapToInt(Player::getChips).sum() + headsUp.getPot();
@@ -1805,7 +1800,7 @@ class GameTest {
                     .currentPlayerId("s1").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("s0", 31, "s1", 50, "s2", 50, "s3", 10))
-                    .preHandCarryOver(0).readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             int totalBeforeSidePot = sidePotOdd.getPlayers().stream().mapToInt(Player::getChips).sum() + sidePotOdd.getPot();
@@ -1836,7 +1831,7 @@ class GameTest {
                     .currentPlayerId("d2").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("d0", 50, "d2", 50)).preHandCarryOver(1)
-                    .readyCountdownActive(false).everyoneHasHadInitialTurn(true)
+                    .everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             departedDealer.removePlayer(d1);
@@ -2408,6 +2403,263 @@ class GameTest {
                     .readyCountdownDeadlineEpochMs(70_000L).build();
             assertFalse(repairReschedule.repairRecoveredReadyGate(60_000L));
             assertEquals(70_000L, repairReschedule.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        }
+
+        @Test
+        void openOrWaitReadyGate_IgnoresForfeitPendingGameOverNonShowdownAndStopsWhenDecided() {
+            Player p1 = restoredPlayer("Alice", "p1", 1000, 0, false);
+            Player p2 = restoredPlayer("Bob", "p2", 1000, 0, false);
+
+            Game forfeitPendingGame = Game.restoreBuilder().gameId("rg-forfeit")
+                    .players(List.of(p1, p2)).activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(List.of()).smallBlind(10).bigBlind(20)
+                    .currentPhase(GamePhase.SHOWDOWN).forfeitPending(true).build();
+            assertEquals(ReadyCountdownStartOutcome.IGNORE, forfeitPendingGame.openOrWaitReadyGate(50_000L));
+            assertEquals(ReadyGateState.CLOSED, forfeitPendingGame.getReadyGateState());
+            assertNull(forfeitPendingGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+
+            Game gameOverGame = Game.restoreBuilder().gameId("rg-over")
+                    .players(List.of(p1, p2)).activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(List.of()).smallBlind(10).bigBlind(20)
+                    .currentPhase(GamePhase.SHOWDOWN).gameOver(true).build();
+            assertEquals(ReadyCountdownStartOutcome.IGNORE, gameOverGame.openOrWaitReadyGate(50_000L));
+            assertEquals(ReadyGateState.CLOSED, gameOverGame.getReadyGateState());
+            assertNull(gameOverGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+
+            Player broke = restoredPlayer("Bob", "p2", 0, 0, false);
+            Game decidedGame = Game.restoreBuilder().gameId("rg-decided")
+                    .players(List.of(p1, broke)).activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(List.of()).smallBlind(10).bigBlind(20)
+                    .currentPhase(GamePhase.SHOWDOWN).build();
+            assertEquals(ReadyCountdownStartOutcome.GAME_DECIDED, decidedGame.openOrWaitReadyGate(50_000L));
+            assertEquals(ReadyGateState.CLOSED, decidedGame.getReadyGateState());
+            assertNull(decidedGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+
+            Game turnGame = Game.restoreBuilder().gameId("rg-turn")
+                    .players(List.of(p1, p2)).activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(List.of()).smallBlind(10).bigBlind(20)
+                    .currentPhase(GamePhase.TURN).build();
+            assertEquals(ReadyCountdownStartOutcome.IGNORE, turnGame.openOrWaitReadyGate(50_000L));
+            assertEquals(ReadyGateState.CLOSED, turnGame.getReadyGateState());
+            assertNull(turnGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+        }
+    }
+
+    @Nested
+    class StateRevisionTests {
+
+        @Test
+        void incrementStateRevision_MonotonicAcrossSequence() {
+            Game revGame = createStandardGame(2, 1000);
+            for (int i = 1; i <= 10000; i++) {
+                revGame.incrementStateRevision();
+                assertEquals((long) i, revGame.getStateRevision());
+            }
+
+            Game nearMax = Game.restoreBuilder()
+                    .gameId("near-max")
+                    .players(List.of(new Player("Alice", "p1", 1000), new Player("Bob", "p2", 1000)))
+                    .activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(List.of())
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .stateRevision(Long.MAX_VALUE - 1)
+                    .build();
+            nearMax.incrementStateRevision();
+            assertEquals(Long.MAX_VALUE, nearMax.getStateRevision());
+        }
+
+        @Test
+        void resetStateRevisionForNewHand_ResetsToInitialHandRevision() {
+            Game revGame = createStandardGame(2, 1000);
+            revGame.incrementStateRevision();
+            revGame.incrementStateRevision();
+
+            revGame.resetStateRevisionForNewHand();
+
+            assertEquals(1L, Game.INITIAL_HAND_REVISION);
+            assertEquals(1L, revGame.getStateRevision());
+        }
+    }
+
+    @Nested
+    @DisplayName("Eligibility and winner resolution rules")
+    class EligibilityAndWinnerResolutionTests {
+
+        private static Player eligibilityPlayer(
+                String id, String name, int chips, boolean out, boolean disconnected) {
+            return Player.restoreBuilder()
+                    .playerId(id)
+                    .name(name)
+                    .chips(chips)
+                    .currentBet(0)
+                    .holeCards(List.of())
+                    .bestHand(List.of())
+                    .handRank(HandRank.NO_HAND)
+                    .hasFolded(false)
+                    .allIn(false)
+                    .out(out)
+                    .disconnected(disconnected)
+                    .readyForNextHand(false)
+                    .build();
+        }
+
+        private static Game eligibilityGameWith(
+                List<Player> players, GamePhase phase, boolean settled, boolean gameOver) {
+            return Game.restoreBuilder()
+                    .gameId("elig-game")
+                    .players(players)
+                    .activePlayerIds(players.stream().map(Player::getPlayerId).toList())
+                    .remainingDeck(List.of())
+                    .communityCards(List.of())
+                    .pot(0)
+                    .dealerAnchorPlayerId(players.isEmpty() ? null : players.getFirst().getPlayerId())
+                    .smallBlindPlayerId(players.isEmpty() ? null : players.getFirst().getPlayerId())
+                    .bigBlindPlayerId(players.size() > 1 ? players.get(1).getPlayerId() : players.isEmpty() ? null : players.getFirst().getPlayerId())
+                    .currentPlayerId(players.isEmpty() ? null : players.getFirst().getPlayerId())
+                    .currentHighestBet(0)
+                    .preHandCarryOver(0)
+                    .currentPhase(phase)
+                    .gameOver(gameOver)
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .handContributions(Map.of())
+                    .lastSettlementResult(settled ? new HandSettlementResult(Map.of("p1", 100), Map.of(), Set.of("p1"), 0, false) : null)
+                    .actedPlayersInRound(Set.of())
+                    .scheduledTaskDeadlines(Map.of())
+                    .build();
+        }
+
+        @Test
+        @DisplayName("isContender excludes eliminated players and zero-chip players after showdown settles")
+        void isContenderRespectsOutStatusAndSettledZeroChipExclusion() {
+            Player outPlayer = eligibilityPlayer("p1", "Out", 500, true, false);
+            Player bustedConnected = eligibilityPlayer("p2", "Busted", 0, false, false);
+            Player alive = eligibilityPlayer("p3", "Alive", 1000, false, false);
+
+            Game midHand = eligibilityGameWith(List.of(outPlayer, bustedConnected, alive), GamePhase.TURN, false, false);
+            assertFalse(midHand.isContender(outPlayer));
+            assertTrue(midHand.isContender(bustedConnected));
+            assertTrue(midHand.isContender(alive));
+            assertEquals(2, midHand.countContenders());
+
+            Game settledShowdown = eligibilityGameWith(List.of(outPlayer, bustedConnected, alive), GamePhase.SHOWDOWN, true, false);
+            assertFalse(settledShowdown.isContender(bustedConnected));
+            assertTrue(settledShowdown.isContender(alive));
+            assertEquals(1, settledShowdown.countContenders());
+        }
+
+        @Test
+        @DisplayName("disconnectWinClaimant and canPlayerClaimWin permit only the sole connected contender")
+        void disconnectClaimRequiresSoleConnectedContenderWithDisconnectedOpponent() {
+            Player alice = eligibilityPlayer("p1", "Alice", 1000, false, false);
+            Player bob = eligibilityPlayer("p2", "Bob", 1000, false, true);
+            Player carol = eligibilityPlayer("p3", "Carol", 1000, false, true);
+
+            Game claimable = eligibilityGameWith(List.of(alice, bob, carol), GamePhase.FLOP, false, false);
+            assertEquals(Optional.of(alice), claimable.disconnectWinClaimant());
+            assertTrue(claimable.canPlayerClaimWin("Alice"));
+            assertFalse(claimable.canPlayerClaimWin("Bob"));
+            assertFalse(claimable.canPlayerClaimWin("Unknown"));
+            assertEquals(List.of("Bob", "Carol"), claimable.disconnectedContenderNamesExcept("Alice"));
+
+            Player dan = eligibilityPlayer("p4", "Dan", 1000, false, false);
+            Game twoConnected = eligibilityGameWith(List.of(alice, bob, dan), GamePhase.FLOP, false, false);
+            assertEquals(Optional.empty(), twoConnected.disconnectWinClaimant());
+            assertFalse(twoConnected.canPlayerClaimWin("Alice"));
+
+            Game allConnected = eligibilityGameWith(List.of(alice, dan), GamePhase.PRE_FLOP, false, false);
+            assertEquals(Optional.empty(), allConnected.disconnectWinClaimant());
+
+            Game allDisconnected = eligibilityGameWith(List.of(bob, carol), GamePhase.FLOP, false, false);
+            assertEquals(Optional.empty(), allDisconnected.disconnectWinClaimant());
+        }
+
+        @Test
+        @DisplayName("disconnectWinClaimant returns empty once the game is over or settled and decided")
+        void disconnectWinClaimantStopsWhenGameOverOrSettledAndDecided() {
+            Player alice = eligibilityPlayer("p1", "Alice", 1000, false, false);
+            Player bob = eligibilityPlayer("p2", "Bob", 0, false, true);
+
+            Game gameOver = eligibilityGameWith(List.of(alice, bob), GamePhase.TURN, false, true);
+            assertEquals(Optional.empty(), gameOver.disconnectWinClaimant());
+
+            // Unsettled showdown with a disconnected 0-chip all-in player still counts 2 contenders
+            Game unsettledShowdown = eligibilityGameWith(List.of(alice, bob), GamePhase.SHOWDOWN, false, false);
+            assertEquals(Optional.of(alice), unsettledShowdown.disconnectWinClaimant());
+
+            // Once settled, 0-chip Bob is no longer a contender and game is decided
+            Game settledDecided = eligibilityGameWith(List.of(alice, bob), GamePhase.SHOWDOWN, true, false);
+            settledDecided.setGameEndResult(new GameEndResponse(
+                    "GAME_END", "elig-game", "Alice", 1000, false, "Complete", null));
+            assertEquals(Optional.empty(), settledDecided.disconnectWinClaimant());
+        }
+
+        @Test
+        @DisplayName("isGameDecided handles empty roster, single chip holder, and multiple chip holders")
+        void isGameDecidedEvaluatesRemainingChipHolders() {
+            Game emptyGame = Game.restoreBuilder().gameId("empty").players(List.of()).activePlayerIds(List.of())
+                    .remainingDeck(List.of())
+                    .build();
+            assertTrue(emptyGame.isGameDecided());
+
+            Player p1 = eligibilityPlayer("p1", "Alice", 1000, false, false);
+            Player p2OutWithChips = eligibilityPlayer("p2", "Bob", 500, true, false);
+            Player p3Broke = eligibilityPlayer("p3", "Carol", 0, false, false);
+            Game singleChipHolder = eligibilityGameWith(List.of(p1, p2OutWithChips, p3Broke), GamePhase.SHOWDOWN, true, false);
+            assertTrue(singleChipHolder.isGameDecided());
+
+            Player p4 = eligibilityPlayer("p4", "Dan", 10, false, false);
+            Game multipleChipHolders = eligibilityGameWith(List.of(p1, p4), GamePhase.SHOWDOWN, true, false);
+            assertFalse(multipleChipHolders.isGameDecided());
+        }
+
+        @Test
+        @DisplayName("resolveWinner returns eligible preferred winner or chip leader with earliest-seat tiebreak")
+        void resolveWinnerSelectsEligiblePreferredWinnerOrChipLeader() {
+            Player alice = eligibilityPlayer("p1", "Alice", 1000, true, false);
+            Player bob = eligibilityPlayer("p2", "Bob", 1000, false, false);
+            Player carol = eligibilityPlayer("p3", "Carol", 1000, false, false);
+            Game tiedGame = eligibilityGameWith(List.of(alice, bob, carol), GamePhase.SHOWDOWN, true, true);
+
+            assertSame(bob, tiedGame.resolveWinner(null));
+            assertSame(carol, tiedGame.resolveWinner(carol));
+
+            Player richCarol = eligibilityPlayer("p3", "Carol", 2000, false, false);
+            Game chipLeadGame = eligibilityGameWith(List.of(alice, bob, richCarol), GamePhase.SHOWDOWN, true, true);
+            assertSame(richCarol, chipLeadGame.resolveWinner(null));
+        }
+
+        @Test
+        @DisplayName("resolveWinner throws IllegalStateException when every player is out or roster is empty")
+        void resolveWinnerThrowsWhenAllOutOrEmptyRoster() {
+            Player allOutDc = eligibilityPlayer("p1", "Alice", 0, true, true);
+            Player allOutConnected = eligibilityPlayer("p2", "Bob", 0, true, false);
+            Game allOutGame = eligibilityGameWith(List.of(allOutDc, allOutConnected), GamePhase.SHOWDOWN, true, true);
+            assertThrows(IllegalStateException.class, () -> allOutGame.resolveWinner(null));
+
+            Game emptyGame = Game.restoreBuilder().gameId("empty").players(List.of()).activePlayerIds(List.of())
+                    .remainingDeck(List.of())
+                    .build();
+            assertThrows(IllegalStateException.class, () -> emptyGame.resolveWinner(null));
+        }
+
+        @Test
+        @DisplayName("resolveWinner throws IllegalStateException when preferred winner is out, off-roster, or roster is empty")
+        void resolveWinnerThrowsWhenPreferredWinnerIsOutOrOffRoster() {
+            Player aliceOut = eligibilityPlayer("p1", "Alice", 1000, true, false);
+            Player bob = eligibilityPlayer("p2", "Bob", 1000, false, false);
+            Game game = eligibilityGameWith(List.of(aliceOut, bob), GamePhase.SHOWDOWN, true, true);
+
+            assertThrows(IllegalStateException.class, () -> game.resolveWinner(aliceOut));
+
+            Player outsider = eligibilityPlayer("p9", "Outsider", 5000, false, false);
+            assertThrows(IllegalStateException.class, () -> game.resolveWinner(outsider));
+
+            Game emptyGame = Game.restoreBuilder().gameId("empty").players(List.of()).activePlayerIds(List.of())
+                    .remainingDeck(List.of())
+                    .build();
+            assertThrows(IllegalStateException.class, () -> emptyGame.resolveWinner(bob));
         }
     }
 }

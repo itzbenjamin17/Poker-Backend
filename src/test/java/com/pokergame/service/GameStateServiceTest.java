@@ -602,7 +602,7 @@ class GameStateServiceTest {
                 .smallBlindPlayerId(testPlayers.get(0).getPlayerId())
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId()).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
-                .smallBlind(5).bigBlind(10).handContributions(Map.of()).readyCountdownActive(false)
+                .smallBlind(5).bigBlind(10).handContributions(Map.of())
                 .lastSettlementResult(new HandSettlementResult(Map.of(winner.getPlayerId(), 100), Map.of(),
                         Set.of(winner.getPlayerId()), 0, true)).scheduledTaskDeadlines(Map.of())
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
@@ -707,7 +707,7 @@ class GameStateServiceTest {
                 .currentPlayerId("bb").currentHighestBet(0)
                 .currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10)
                 .handContributions(Map.of()).preHandCarryOver(10).lastSettlementResult(settled)
-                .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of()).build();
         terminal.settleGameEnd(bb, Set.of());
 
@@ -743,7 +743,7 @@ class GameStateServiceTest {
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId()).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of())
-                .lastSettlementResult(settlement).preHandCarryOver(0).readyCountdownActive(false)
+                .lastSettlementResult(settlement).preHandCarryOver(0)
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                 .build();
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
@@ -780,7 +780,7 @@ class GameStateServiceTest {
                 .currentPlayerId("main").currentHighestBet(150).currentPhase(GamePhase.RIVER)
                 .gameOver(false).smallBlind(5).bigBlind(10)
                 .handContributions(Map.of("main", 50, "side1", 100, "side2", 150, "side3", 150))
-                .preHandCarryOver(0).readyCountdownActive(true).everyoneHasHadInitialTurn(true)
+                .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of()).build();
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
@@ -826,7 +826,7 @@ class GameStateServiceTest {
                 .lastSettlementResult(new HandSettlementResult(Map.of(connected.getPlayerId(), 50,
                         disconnected.getPlayerId(), 50), Map.of(), Set.of(connected.getPlayerId(), disconnected.getPlayerId()),
                         0, true))
-                .readyCountdownActive(true).readyCountdownDeadlineEpochMs(12345L)
+                .readyCountdownDeadlineEpochMs(12345L)
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                 .build();
 
@@ -853,7 +853,7 @@ class GameStateServiceTest {
                 .currentPlayerId(testPlayers.get(0).getPlayerId()).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 100, false))
-                .readyCountdownActive(true).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of()).build();
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(voidGame);
@@ -887,7 +887,7 @@ class GameStateServiceTest {
                 .smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of(winner.getPlayerId(), 150), Map.of(),
                         Set.of(winner.getPlayerId()), 0, false))
-                .readyCountdownActive(true).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of()).build();
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
@@ -921,7 +921,6 @@ class GameStateServiceTest {
                 .handContributions(Map.of())
                 .preHandCarryOver(0)
                 .lastSettlementResult(null)
-                .readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
@@ -958,7 +957,6 @@ class GameStateServiceTest {
                 .preHandCarryOver(0)
                 .lastSettlementResult(null)
                 .readyGateState(ReadyGateState.COUNTING_DOWN)
-                .readyCountdownActive(true)
                 .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
@@ -996,7 +994,6 @@ class GameStateServiceTest {
                 .preHandCarryOver(0)
                 .lastSettlementResult(null)
                 .readyGateState(ReadyGateState.COUNTING_DOWN)
-                .readyCountdownActive(true)
                 .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
@@ -1063,7 +1060,6 @@ class GameStateServiceTest {
                 .handContributions(Map.of())
                 .preHandCarryOver(0)
                 .lastSettlementResult(settlement)
-                .readyCountdownActive(true)
                 .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
@@ -1168,7 +1164,6 @@ class GameStateServiceTest {
                 .handContributions(Map.of())
                 .preHandCarryOver(0)
                 .lastSettlementResult(settlement)
-                .readyCountdownActive(true)
                 .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 6000)
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
@@ -1227,7 +1222,6 @@ class GameStateServiceTest {
                 .handContributions(Map.of())
                 .preHandCarryOver(0)
                 .lastSettlementResult(new HandSettlementResult(contestedAwards, Map.of(), winnerIds, 0, true))
-                .readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
@@ -1647,7 +1641,6 @@ class GameStateServiceTest {
                     .bigBlind(10)
                     .handContributions(Map.of())
                     .preHandCarryOver(0)
-                    .readyCountdownActive(false)
                     .everyoneHasHadInitialTurn(true)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
@@ -1750,7 +1743,6 @@ class GameStateServiceTest {
                 .handContributions(Map.of())
                 .preHandCarryOver(0)
                 .lastSettlementResult(settlement)
-                .readyCountdownActive(true)
                 .readyCountdownDeadlineEpochMs(FIXED_INSTANT.toEpochMilli() + 10000)
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
@@ -1826,7 +1818,6 @@ class GameStateServiceTest {
                 .handContributions(Map.of())
                 .preHandCarryOver(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of("p-a1", 100), Map.of(), Set.of("p-a1"), 0, true))
-                .readyCountdownActive(true)
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
@@ -1859,7 +1850,6 @@ class GameStateServiceTest {
                 .handContributions(Map.of())
                 .preHandCarryOver(0)
                 .lastSettlementResult(null)
-                .readyCountdownActive(false)
                 .everyoneHasHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
@@ -2270,7 +2260,6 @@ class GameStateServiceTest {
                 .handContributions(Map.of("a", 10, "b", 20))
                 .preHandCarryOver(0)
                 .lastSettlementResult(settlement)
-                .readyCountdownActive(countdown)
                 .readyCountdownDeadlineEpochMs(countdown ? 12_345L : null)
                 .readyGateState(gate)
                 .everyoneHasHadInitialTurn(false)

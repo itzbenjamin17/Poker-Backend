@@ -72,7 +72,6 @@ public record AggregateStateImage(boolean deleted, RoomState room, GameState gam
      * @param smallBlind                    the small blind amount
      * @param bigBlind                      the big blind amount
      * @param handContributions             how much each player put in (used to split side pots)
-     * @param readyCountdownActive          true if we're waiting for the next hand to start
      * @param readyCountdownDeadlineEpochMs when the wait for the next hand ends
      * @param everyoneHasHadInitialTurn     true if everyone got a chance to bet this round
      * @param actedPlayerIds                who has already made a move this round
@@ -97,7 +96,7 @@ public record AggregateStateImage(boolean deleted, RoomState room, GameState gam
     public record GameState(String gameId, List<PlayerState> players, List<String> activePlayerIds,
             List<CardState> remainingDeck, List<CardState> communityCards, int pot, int currentHighestBet,
             GamePhase currentPhase, boolean gameOver, int smallBlind, int bigBlind,
-            Map<String, Integer> handContributions, boolean readyCountdownActive,
+            Map<String, Integer> handContributions,
             Long readyCountdownDeadlineEpochMs, boolean everyoneHasHadInitialTurn, Set<String> actedPlayerIds,
             Map<ScheduledGameTask, Long> scheduledTaskDeadlines, int preHandCarryOver,
             int lastFullRaise, Map<String, Integer> lastActedWagerByPlayer,

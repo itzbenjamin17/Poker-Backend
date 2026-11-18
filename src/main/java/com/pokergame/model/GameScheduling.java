@@ -7,34 +7,28 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Owns scheduled task deadlines, monotonic task schedule counts, and state revision numbers for {@link Game}.
+ * Owns scheduled task deadlines and monotonic task schedule counts for {@link Game}.
  */
 final class GameScheduling {
 
-    static final long INITIAL_HAND_REVISION = 1L;
-
     private final Map<ScheduledGameTask, Long> deadlines;
     private final Map<ScheduledGameTask, Long> generations;
-    private long stateRevision;
 
-    /** Creates empty task scheduling and revision state for a new game. */
+    /** Creates empty task scheduling state for a new game. */
     GameScheduling() {
         this.deadlines = new EnumMap<>(ScheduledGameTask.class);
         this.generations = new EnumMap<>(ScheduledGameTask.class);
-        this.stateRevision = 0L;
     }
 
     /**
-     * Reconstructs task scheduling and state revision from saved snapshot fields.
+     * Reconstructs task scheduling state from saved snapshot fields.
      *
-     * @param deadlines     saved task deadlines keyed by task type
-     * @param generations   saved task schedule counters keyed by task type
-     * @param stateRevision saved public state revision counter
+     * @param deadlines   saved task deadlines keyed by task type
+     * @param generations saved task schedule counters keyed by task type
      */
     GameScheduling(
             Map<ScheduledGameTask, Long> deadlines,
-            Map<ScheduledGameTask, Long> generations,
-            long stateRevision) {
+            Map<ScheduledGameTask, Long> generations) {
         this.deadlines = new EnumMap<>(ScheduledGameTask.class);
         if (deadlines != null) {
             this.deadlines.putAll(deadlines);
@@ -43,7 +37,6 @@ final class GameScheduling {
         if (generations != null) {
             this.generations.putAll(generations);
         }
-        this.stateRevision = stateRevision;
     }
 
     /**
@@ -54,9 +47,6 @@ final class GameScheduling {
      * @param deadlineEpochMs target execution epoch time in milliseconds
      */
     void scheduleTask(ScheduledGameTask task, long deadlineEpochMs) {
-        if (task == null) {
-            return;
-        }
         deadlines.put(task, deadlineEpochMs);
         generations.merge(task, 1L, Long::sum);
     }
@@ -68,9 +58,6 @@ final class GameScheduling {
      * @param task delayed task type
      */
     void clearTask(ScheduledGameTask task) {
-        if (task == null) {
-            return;
-        }
         deadlines.remove(task);
         generations.merge(task, 1L, Long::sum);
     }
@@ -98,11 +85,11 @@ final class GameScheduling {
     }
 
     Long getDeadline(ScheduledGameTask task) {
-        return task == null ? null : deadlines.get(task);
+        return deadlines.get(task);
     }
 
     long getGeneration(ScheduledGameTask task) {
-        return task == null ? 0L : generations.getOrDefault(task, 0L);
+        return generations.getOrDefault(task, 0L);
     }
 
     Map<ScheduledGameTask, Long> deadlinesSnapshot() {
@@ -165,17 +152,5 @@ final class GameScheduling {
     boolean isCleanupExpired(long nowEpochMs) {
         Long cleanupDeadline = getDeadline(ScheduledGameTask.CLEANUP);
         return cleanupDeadline != null && nowEpochMs >= cleanupDeadline;
-    }
-
-    long getStateRevision() {
-        return stateRevision;
-    }
-
-    void incrementStateRevision() {
-        stateRevision++;
-    }
-
-    void resetStateRevisionForNewHand() {
-        stateRevision = INITIAL_HAND_REVISION;
     }
 }

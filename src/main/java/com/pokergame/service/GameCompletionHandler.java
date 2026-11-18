@@ -9,7 +9,6 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.model.GameEligibility;
 import java.time.Clock;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -204,7 +203,7 @@ class GameCompletionHandler {
      * @param game   the game instance
      */
     void cleanupAbandonedGameIfRoomEmpty(String gameId, Room room, Game game) {
-        if (GameEligibility.countContenders(game) != 0 || !room.getPlayers().isEmpty()) {
+        if (game.countContenders() != 0 || !room.getPlayers().isEmpty()) {
             return;
         }
         game.closeReadyCountdown();

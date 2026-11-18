@@ -154,7 +154,7 @@ class AggregateSnapshotMapperTest {
                 .handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a").smallBlindPlayerId("a")
                 .bigBlindPlayerId("b").lastSettlementResult(new HandSettlementResult(Map.of("a", 50), Map.of("b", 2),
                         Set.of("a"), 3, true))
-                .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 123L))
                 .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 9L))
                 .handNumber(7).readyGateState(ReadyGateState.WAITING_FOR_PLAYERS).forfeitPending(true).stateRevision(19)
@@ -240,7 +240,7 @@ class AggregateSnapshotMapperTest {
                 .currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10).handContributions(Map.of())
                 .preHandCarryOver(0).lastFullRaise(0).lastActedWagerByPlayer(Map.of())
                 .handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
-                .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
                 .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 1L))
                 .handNumber(1).readyGateState(ReadyGateState.CLOSED).forfeitPending(false).stateRevision(42)
@@ -292,7 +292,7 @@ class AggregateSnapshotMapperTest {
                 .preHandCarryOver(0).lastFullRaise(100)
                 .lastActedWagerByPlayer(Map.of("a", 100)).handSeatOrder(List.of("a", "b", "s1", "s2"))
                 .dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
-                .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of("a"))
+                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of("a"))
                 .scheduledTaskDeadlines(Map.of()).build();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
@@ -629,7 +629,7 @@ class AggregateSnapshotMapperTest {
                 .currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10)
                 .handContributions(Map.of()).preHandCarryOver(0).lastFullRaise(0)
                 .lastActedWagerByPlayer(Map.of()).handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a")
-                .smallBlindPlayerId("a").bigBlindPlayerId("b").readyCountdownActive(false)
+                .smallBlindPlayerId("a").bigBlindPlayerId("b")
                 .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
                 .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 1L))
@@ -748,7 +748,15 @@ class AggregateSnapshotMapperTest {
                 Arguments.of("null game id", (Consumer<ObjectNode>) g -> g.putNull("gameId"),
                         "Game identity does not match room identity in snapshot"),
                 Arguments.of("negative pot", (Consumer<ObjectNode>) g -> g.put("pot", -1),
-                        "Invalid negative pot in snapshot"));
+                        "Invalid negative pot in snapshot"),
+                Arguments.of("null readyGateState", (Consumer<ObjectNode>) g -> g.putNull("readyGateState"),
+                        "Missing readyGateState in snapshot"),
+                Arguments.of("stale readyCountdownActive property",
+                        (Consumer<ObjectNode>) g -> g.put("readyCountdownActive", false),
+                        "Cannot decode aggregate snapshot"),
+                Arguments.of("missing readyGateState property",
+                        (Consumer<ObjectNode>) g -> g.remove("readyGateState"),
+                        "Cannot decode aggregate snapshot"));
     }
 
     @ParameterizedTest(name = "[{index}] {0}")
@@ -1245,7 +1253,6 @@ class AggregateSnapshotMapperTest {
                     .smallBlind(10)
                     .bigBlind(20)
                     .currentPhase(GamePhase.PRE_FLOP)
-                    .readyCountdownActive(true)
                     .readyCountdownDeadlineEpochMs(deadline)
                     .readyGateState(ReadyGateState.COUNTING_DOWN)
                     
@@ -1279,7 +1286,6 @@ class AggregateSnapshotMapperTest {
                     .smallBlind(10)
                     .bigBlind(20)
                     .currentPhase(GamePhase.PRE_FLOP)
-                    .readyCountdownActive(false)
                     .readyCountdownDeadlineEpochMs(null)
                     .readyGateState(ReadyGateState.WAITING_FOR_PLAYERS)
                     
@@ -1313,7 +1319,6 @@ class AggregateSnapshotMapperTest {
                     .smallBlind(10)
                     .bigBlind(20)
                     .currentPhase(GamePhase.PRE_FLOP)
-                    .readyCountdownActive(false)
                     .readyCountdownDeadlineEpochMs(null)
                     .readyGateState(ReadyGateState.CLOSED)
                     
@@ -1327,42 +1332,6 @@ class AggregateSnapshotMapperTest {
 
             assertEquals(ReadyGateState.CLOSED, restored.getReadyGateState());
             assertFalse(restored.isReadyCountdownActive());
-        }
-
-        @Test
-        @DisplayName("ReadyGateState Legacy Fallbacks: Null gate state correctly falls back to COUNTING_DOWN or CLOSED")
-        void testReadyGateState_LegacyFallbacks() {
-            Player p1 = createPlayer("p1", "Alice", 1000);
-            Player p2 = createPlayer("p2", "Bob", 1000);
-            List<Player> players = List.of(p1, p2);
-
-            // Fallback with readyCountdownActive = true -> COUNTING_DOWN
-            Game activeCountdownGame = Game.restoreBuilder()
-                    .gameId(ROOM_ID)
-                    .players(players)
-                    .activePlayerIds(List.of("p1", "p2"))
-                    .remainingDeck(List.of())
-                    .smallBlind(10)
-                    .bigBlind(20)
-                    .readyCountdownActive(true)
-                    .readyGateState(null)
-                    
-                    .build();
-            assertEquals(ReadyGateState.COUNTING_DOWN, activeCountdownGame.getReadyGateState());
-
-            // Fallback with readyCountdownActive = false -> CLOSED
-            Game inactiveCountdownGame = Game.restoreBuilder()
-                    .gameId(ROOM_ID)
-                    .players(players)
-                    .activePlayerIds(List.of("p1", "p2"))
-                    .remainingDeck(List.of())
-                    .smallBlind(10)
-                    .bigBlind(20)
-                    .readyCountdownActive(false)
-                    .readyGateState(null)
-                    
-                    .build();
-            assertEquals(ReadyGateState.CLOSED, inactiveCountdownGame.getReadyGateState());
         }
 
         // =========================================================================

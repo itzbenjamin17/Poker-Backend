@@ -21,7 +21,6 @@ import com.pokergame.model.Game;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.model.GameEligibility;
 import com.pokergame.persistence.transaction.PostSaveActions;
 import com.pokergame.security.PlayerPrincipal;
 import java.time.Clock;
@@ -569,14 +568,8 @@ public class GameStateService {
     }
 
     private String computeClaimWinPlayerName(Game game) {
-        if (!GameEligibility.canClaim(game)) {
-            return null;
-        }
-        return game.getPlayers().stream()
-                .filter(player -> GameEligibility.isContender(game, player))
-                .filter(player -> !player.getIsDisconnected())
+        return game.disconnectWinClaimant()
                 .map(Player::getName)
-                .findFirst()
                 .orElse(null);
     }
 

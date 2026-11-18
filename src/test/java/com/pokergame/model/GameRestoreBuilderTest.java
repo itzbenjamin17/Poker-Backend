@@ -104,19 +104,18 @@ class GameRestoreBuilderTest {
                 .bigBlindPlayerId("p1")                             // 24
                 .terminalCarryOverSettled(true)                     // 25
                 .forfeitPending(true)                               // 26
-                .readyCountdownActive(true)                         // 27
-                .readyCountdownDeadlineEpochMs(1700000000000L)      // 28
-                .readyGateState(ReadyGateState.COUNTING_DOWN)       // 29
-                .handNumber(7L)                                     // 30
-                .stateRevision(88L)                                 // 31
-                .retainedTerminalResult(terminalResult)             // 32
-                .everyoneHasHadInitialTurn(true)                    // 33
-                .actedPlayersInRound(actedPlayers)                  // 34
-                .scheduledTaskDeadlines(taskDeadlines)              // 35
-                .scheduledTaskGenerations(taskGenerations)          // 36
+                .readyCountdownDeadlineEpochMs(1700000000000L)      // 27
+                .readyGateState(ReadyGateState.COUNTING_DOWN)       // 28
+                .handNumber(7L)                                     // 29
+                .stateRevision(88L)                                 // 30
+                .retainedTerminalResult(terminalResult)             // 31
+                .everyoneHasHadInitialTurn(true)                    // 32
+                .actedPlayersInRound(actedPlayers)                  // 33
+                .scheduledTaskDeadlines(taskDeadlines)              // 34
+                .scheduledTaskGenerations(taskGenerations)          // 35
                 .build();
 
-        // Direct assertions on all 36 fields
+        // Direct assertions on all 35 fields
         assertEquals(GAME_ID, game.getGameId());                                     // 1
         assertEquals(allPlayers, game.getPlayers());                                 // 2
         assertEquals(2, game.getActivePlayers().size());                             // 3
@@ -392,7 +391,6 @@ class GameRestoreBuilderTest {
     @DisplayName("readyGateState_ExplicitStatePreserved")
     void readyGateState_ExplicitStatePreserved() {
         Game game = defaultBuilder()
-                .readyCountdownActive(false)
                 .readyGateState(ReadyGateState.WAITING_FOR_PLAYERS)
                 .build();
 
@@ -401,27 +399,10 @@ class GameRestoreBuilderTest {
     }
 
     @Test
-    @DisplayName("readyGateState_NullStateFallsBackToCountingDownWhenActive")
-    void readyGateState_NullStateFallsBackToCountingDownWhenActive() {
-        Game game = defaultBuilder()
-                .readyCountdownActive(true)
-                .readyGateState(null)
-                .build();
-
-        assertEquals(ReadyGateState.COUNTING_DOWN, game.getReadyGateState());
-        assertTrue(game.isReadyCountdownActive());
-    }
-
-    @Test
-    @DisplayName("readyGateState_NullStateFallsBackToClosedWhenInactive")
-    void readyGateState_NullStateFallsBackToClosedWhenInactive() {
-        Game game = defaultBuilder()
-                .readyCountdownActive(false)
-                .readyGateState(null)
-                .build();
-
-        assertEquals(ReadyGateState.CLOSED, game.getReadyGateState());
-        assertFalse(game.isReadyCountdownActive());
+    @DisplayName("readyGateState_NullStateThrows")
+    void readyGateState_NullStateThrows() {
+        GameRestoreBuilder builder = defaultBuilder().readyGateState(null);
+        assertThrows(NullPointerException.class, builder::build);
     }
 
     // =========================================================================
@@ -560,7 +541,6 @@ class GameRestoreBuilderTest {
                 .bigBlindPlayerId("p2")
                 .terminalCarryOverSettled(false)
                 .forfeitPending(false)
-                .readyCountdownActive(false)
                 .readyCountdownDeadlineEpochMs(null)
                 .readyGateState(ReadyGateState.CLOSED)
                 .handNumber(1L)
@@ -954,19 +934,10 @@ class GameRestoreBuilderTest {
         }
 
         @Test
-        @DisplayName("fallbacks_ReadyGateState_NullInferredFromCountdownActive")
-        void testFallbacks_ReadyGateState() {
-            Game gameActive = defaultBuilder()
-                    .readyCountdownActive(true)
-                    .readyGateState(null)
-                    .build();
-            assertEquals(ReadyGateState.COUNTING_DOWN, gameActive.getReadyGateState());
-
-            Game gameInactive = defaultBuilder()
-                    .readyCountdownActive(false)
-                    .readyGateState(null)
-                    .build();
-            assertEquals(ReadyGateState.CLOSED, gameInactive.getReadyGateState());
+        @DisplayName("readyGateState_NullState_ThrowsNullPointerException")
+        void testReadyGateState_NullThrows() {
+            GameRestoreBuilder builder = defaultBuilder().readyGateState(null);
+            assertThrows(NullPointerException.class, builder::build);
         }
 
         @Test
@@ -1101,7 +1072,6 @@ class GameRestoreBuilderTest {
                     .bigBlindPlayerId("p2")
                     .terminalCarryOverSettled(false)
                     .forfeitPending(false)
-                    .readyCountdownActive(false)
                     .readyCountdownDeadlineEpochMs(null)
                     .readyGateState(ReadyGateState.CLOSED)
                     .handNumber(1L)

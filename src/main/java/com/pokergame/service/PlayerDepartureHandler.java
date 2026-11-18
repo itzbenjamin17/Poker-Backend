@@ -10,7 +10,6 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.model.GameEligibility;
 import java.time.Clock;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -145,14 +144,14 @@ class PlayerDepartureHandler {
         }
 
         List<Player> departingContenders = departingGamePlayers.stream()
-                .filter(p -> GameEligibility.isContender(game, p))
+                .filter(game::isContender)
                 .toList();
-        int contendersRemaining = GameEligibility.countContenders(game) - departingContenders.size();
+        int contendersRemaining = game.countContenders() - departingContenders.size();
 
         if (contendersRemaining == 1 && !departingContenders.isEmpty()) {
             Player survivor = game.getPlayers().stream()
                     .filter(candidate -> !departing.contains(candidate.getName()))
-                    .filter(candidate -> GameEligibility.isContender(game, candidate))
+                    .filter(game::isContender)
                     .findFirst()
                     .orElseThrow();
             handleSingleSurvivorForfeit(roomId, room, game, departingRoomMembers, departingGamePlayers, survivor);
@@ -245,8 +244,8 @@ class PlayerDepartureHandler {
                 player.setDisconnectDeadlineEpochMs(null);
                 logger.info("Player {} marked reconnected in game {}", playerName, gameId);
 
-                if (game.isForfeitPending() && GameEligibility.countContenders(game) == 1
-                        && GameEligibility.isContender(game, player)) {
+                if (game.isForfeitPending() && game.countContenders() == 1
+                        && game.isContender(player)) {
                     game.setForfeitPending(false);
                     completion.handleGameEndWithForfeits(gameId, player, Set.of());
                     markRoomMemberConnected(room, playerName);
@@ -297,10 +296,10 @@ class PlayerDepartureHandler {
             }
             return completion.getGameReview(gameId, playerName);
         }
-        if (!GameEligibility.canPlayerClaimWin(game, playerName)) {
+        if (!game.canPlayerClaimWin(playerName)) {
             throw new UnauthorisedActionException("Cannot claim win right now.");
         }
-        List<String> opponents = GameEligibility.disconnectedContenderNamesExcept(game, playerName);
+        List<String> opponents = game.disconnectedContenderNamesExcept(playerName);
         removePlayersFromRoomAndGame(gameId, opponents, room, game);
         return game.getGameEndResult();
     }
@@ -375,13 +374,13 @@ class PlayerDepartureHandler {
         if (game != null) {
             for (String name : remaining) {
                 Player player = game.findPlayerByName(name);
-                if (player != null && GameEligibility.isContender(game, player) && !player.getIsDisconnected()) {
+                if (player != null && game.isContender(player) && !player.getIsDisconnected()) {
                     return name;
                 }
             }
             for (String name : remaining) {
                 Player player = game.findPlayerByName(name);
-                if (player != null && GameEligibility.isContender(game, player)) {
+                if (player != null && game.isContender(player)) {
                     return name;
                 }
             }
@@ -400,11 +399,11 @@ class PlayerDepartureHandler {
         }
         for (Player departingPlayer : departingGamePlayers) {
             if (roomMembersToLeave.contains(departingPlayer.getName())
-                    && GameEligibility.isContender(game, departingPlayer)) {
+                    && game.isContender(departingPlayer)) {
                 departingPlayer.setIsOut();
             }
         }
-        List<String> membersToDetach = GameEligibility.countContenders(game) == 0
+        List<String> membersToDetach = game.countContenders() == 0
                 ? room.getPlayers()
                 : roomMembersToLeave;
         String survivingHost = selectNextHost(room, game, membersToDetach);

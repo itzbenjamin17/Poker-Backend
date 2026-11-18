@@ -1,6 +1,5 @@
 package com.pokergame.model;
 
-import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.ReadyCountdownStartOutcome;
 import com.pokergame.enums.ReadyCountdownTimeoutOutcome;
 import com.pokergame.enums.ReadyGateState;
@@ -27,22 +26,18 @@ final class ReadyGate {
     ReadyGate(List<Player> players) {
         this.players = players;
         this.state = ReadyGateState.CLOSED;
-        this.countdownDeadlineEpochMs = null;
     }
 
     /**
      * Reconstructs ready-gate state from saved snapshot fields.
      *
      * @param players         live table player list owned by {@link Game}
-     * @param restoredState   saved gate state, or {@code null} to derive from {@code restoredActive}
-     * @param restoredActive  legacy countdown-active flag when {@code restoredState} is {@code null}
+     * @param restoredState   saved gate state (must not be {@code null})
      * @param deadlineEpochMs saved countdown deadline in epoch milliseconds, or {@code null}
      */
-    ReadyGate(List<Player> players, ReadyGateState restoredState, boolean restoredActive, Long deadlineEpochMs) {
+    ReadyGate(List<Player> players, ReadyGateState restoredState, Long deadlineEpochMs) {
         this.players = players;
-        this.state = restoredState != null
-                ? restoredState
-                : (restoredActive ? ReadyGateState.COUNTING_DOWN : ReadyGateState.CLOSED);
+        this.state = Objects.requireNonNull(restoredState, "readyGateState must not be null");
         this.countdownDeadlineEpochMs = deadlineEpochMs;
     }
 
@@ -61,19 +56,7 @@ final class ReadyGate {
         if (player == null) {
             throw new UnauthorisedActionException("You are no longer part of this game.");
         }
-        if (player.getIsOut()) {
-            throw new UnauthorisedActionException("You are out of this game.");
-        }
-        if (ready) {
-            if (player.getIsDisconnected()) {
-                throw new UnauthorisedActionException("Reconnect before marking ready.");
-            }
-            if (player.getChips() <= 0) {
-                throw new UnauthorisedActionException("Players without chips cannot mark ready.");
-            }
-        } else if (player.getIsDisconnected() || player.getChips() <= 0) {
-            throw new UnauthorisedActionException("You are not eligible to change readiness.");
-        }
+        validateReadinessEligibility(player, ready);
         player.setReadyForNextHand(ready);
     }
 
@@ -95,35 +78,15 @@ final class ReadyGate {
     }
 
     /**
-     * Evaluates readiness conditions after a hand settles and opens the countdown or waits for players.
+     * Evaluates readiness eligibility after a hand settles and opens the countdown or waits for players.
      *
-     * @param forfeitPending  whether a forfeit is pending
-     * @param gameOver        whether the game is already over
-     * @param gameDecided     whether one or zero players with chips remain
-     * @param currentPhase    current game phase
      * @param deadlineEpochMs countdown expiration timestamp in epoch milliseconds
      * @param scheduling      game scheduler used to record or clear the ready-timeout task
      * @return outcome describing the resulting gate state
      */
-    ReadyCountdownStartOutcome openOrWait(
-            boolean forfeitPending,
-            boolean gameOver,
-            boolean gameDecided,
-            GamePhase currentPhase,
-            long deadlineEpochMs,
-            GameScheduling scheduling) {
-        if (forfeitPending || gameOver) {
-            return ReadyCountdownStartOutcome.IGNORE;
-        }
-        if (gameDecided) {
-            return ReadyCountdownStartOutcome.GAME_DECIDED;
-        }
-        if (currentPhase != GamePhase.SHOWDOWN) {
-            return ReadyCountdownStartOutcome.IGNORE;
-        }
+    ReadyCountdownStartOutcome openOrWait(long deadlineEpochMs, GameScheduling scheduling) {
         if (getReadyEligibleCount() < 2) {
-            waitForPlayers();
-            scheduling.clearTask(ScheduledGameTask.READY_TIMEOUT);
+            moveToWaitingForPlayers(scheduling);
             return ReadyCountdownStartOutcome.WAITING_FOR_PLAYERS;
         }
         openCountdown(deadlineEpochMs);
@@ -146,8 +109,7 @@ final class ReadyGate {
             return ReadyCountdownTimeoutOutcome.IGNORE_STALE;
         }
         if (getReadyEligibleCount() < 2) {
-            waitForPlayers();
-            scheduling.clearTask(ScheduledGameTask.READY_TIMEOUT);
+            moveToWaitingForPlayers(scheduling);
             return ReadyCountdownTimeoutOutcome.WAITING_FOR_PLAYERS;
         }
         forceReadyForEligiblePlayers();
@@ -166,8 +128,7 @@ final class ReadyGate {
         if (isCountdownActive() && countdownDeadlineEpochMs == null) {
             repaired = true;
             if (getReadyEligibleCount() < 2) {
-                waitForPlayers();
-                scheduling.clearTask(ScheduledGameTask.READY_TIMEOUT);
+                moveToWaitingForPlayers(scheduling);
             } else {
                 openCountdown(fallbackDeadlineEpochMs);
                 scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, fallbackDeadlineEpochMs);
@@ -211,6 +172,11 @@ final class ReadyGate {
         return countdownDeadlineEpochMs;
     }
 
+    private void moveToWaitingForPlayers(GameScheduling scheduling) {
+        waitForPlayers();
+        scheduling.clearTask(ScheduledGameTask.READY_TIMEOUT);
+    }
+
     private void openCountdown(long deadlineEpochMs) {
         clearPlayerReadyFlags();
         this.state = ReadyGateState.COUNTING_DOWN;
@@ -218,25 +184,14 @@ final class ReadyGate {
     }
 
     private void clearPlayerReadyFlags() {
-        if (players == null) {
-            return;
-        }
         for (Player player : players) {
-            if (player != null) {
-                player.setReadyForNextHand(false);
-            }
+            player.setReadyForNextHand(false);
         }
     }
 
     private List<Player> getEligiblePlayers() {
-        if (players == null) {
-            return List.of();
-        }
         return players.stream()
-                .filter(Objects::nonNull)
-                .filter(player -> !player.getIsOut())
-                .filter(player -> !player.getIsDisconnected())
-                .filter(player -> player.getChips() > 0)
+                .filter(ReadyGate::isPlayerEligible)
                 .toList();
     }
 
@@ -244,5 +199,25 @@ final class ReadyGate {
         for (Player player : getEligiblePlayers()) {
             player.setReadyForNextHand(true);
         }
+    }
+
+    private static boolean isPlayerEligible(Player player) {
+        return !player.getIsOut() && !player.getIsDisconnected() && player.getChips() > 0;
+    }
+
+    private static void validateReadinessEligibility(Player player, boolean ready) {
+        if (isPlayerEligible(player)) {
+            return;
+        }
+        if (player.getIsOut()) {
+            throw new UnauthorisedActionException("You are out of this game.");
+        }
+        if (!ready) {
+            throw new UnauthorisedActionException("You are not eligible to change readiness.");
+        }
+        if (player.getIsDisconnected()) {
+            throw new UnauthorisedActionException("Reconnect before marking ready.");
+        }
+        throw new UnauthorisedActionException("Players without chips cannot mark ready.");
     }
 }

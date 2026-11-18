@@ -16,10 +16,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -28,6 +30,7 @@ import java.util.Set;
  */
 public class Game {
     private static final Logger logger = LoggerFactory.getLogger(Game.class);
+    static final long INITIAL_HAND_REVISION = 1L;
 
     private final String gameId;
     private final int maxPlayers;
@@ -48,6 +51,7 @@ public class Game {
     private GamePhase currentPhase;
     private HandSettlementResult lastSettlementResult;
     private long handNumber;
+    private long stateRevision;
     private boolean gameOver;
     private boolean finalPotSettled;
     private boolean forfeitPending;
@@ -98,6 +102,7 @@ public class Game {
         this.handContributions = new HashMap<>();
         this.lastSettlementResult = null;
         this.handNumber = 0;
+        this.stateRevision = 0L;
         this.gameOver = false;
         this.finalPotSettled = false;
         this.forfeitPending = false;
@@ -166,6 +171,7 @@ public class Game {
         this.finalPotSettled = builder.isTerminalCarryOverSettled();
         this.forfeitPending = builder.isForfeitPending();
         this.handNumber = builder.getHandNumber();
+        this.stateRevision = builder.getStateRevision();
         this.gameEndResult = builder.getRetainedTerminalResult();
 
         this.seating = new TableSeating(
@@ -184,12 +190,10 @@ public class Game {
         this.readyGate = new ReadyGate(
                 this.players,
                 builder.getReadyGateState(),
-                builder.isReadyCountdownActive(),
                 builder.getReadyCountdownDeadlineEpochMs());
         this.scheduling = new GameScheduling(
                 builder.getScheduledTaskDeadlines(),
-                builder.getScheduledTaskGenerations(),
-                builder.getStateRevision());
+                builder.getScheduledTaskGenerations());
     }
 
     /**
@@ -265,7 +269,7 @@ public class Game {
      */
     public long beginHand() {
         this.handNumber = handNumber <= 0 ? 1L : handNumber + 1L;
-        scheduling.resetStateRevisionForNewHand();
+        resetStateRevisionForNewHand();
         return this.handNumber;
     }
 
@@ -505,8 +509,16 @@ public class Game {
      * @return outcome describing the resulting gate action
      */
     public ReadyCountdownStartOutcome openOrWaitReadyGate(long deadlineEpochMs) {
-        return readyGate.openOrWait(
-                forfeitPending, gameOver, isGameDecided(), currentPhase, deadlineEpochMs, scheduling);
+        if (forfeitPending || gameOver) {
+            return ReadyCountdownStartOutcome.IGNORE;
+        }
+        if (isGameDecided()) {
+            return ReadyCountdownStartOutcome.GAME_DECIDED;
+        }
+        if (currentPhase != GamePhase.SHOWDOWN) {
+            return ReadyCountdownStartOutcome.IGNORE;
+        }
+        return readyGate.openOrWait(deadlineEpochMs, scheduling);
     }
 
     /**
@@ -602,7 +614,14 @@ public class Game {
      * Increments the public state revision counter.
      */
     public void incrementStateRevision() {
-        scheduling.incrementStateRevision();
+        stateRevision++;
+    }
+
+    /**
+     * Resets the public state revision counter to {@link #INITIAL_HAND_REVISION} for a new hand.
+     */
+    void resetStateRevisionForNewHand() {
+        stateRevision = INITIAL_HAND_REVISION;
     }
 
     /**
@@ -653,7 +672,7 @@ public class Game {
         if (!isHandSettled()) {
             conductShowdown();
         }
-        Player winner = GameEligibility.resolveWinner(this, forfeitWinner);
+        Player winner = resolveWinner(forfeitWinner);
         if (!finalPotSettled) {
             if (pot > 0) {
                 winner.addChips(pot);
@@ -950,7 +969,79 @@ public class Game {
     }
 
     public long getStateRevision() {
-        return scheduling.getStateRevision();
+        return stateRevision;
+    }
+
+    /**
+     * Returns whether {@code player} still qualifies as a contender in this game.
+     *
+     * @param player player to evaluate
+     * @return {@code true} if the player is not out and either the hand is unsettled or they hold chips
+     */
+    public boolean isContender(Player player) {
+        if (player.getIsOut()) {
+            return false;
+        }
+        return endedBeforeShowdown() || player.getChips() > 0;
+    }
+
+    /**
+     * Counts the players in this game who still qualify as contenders.
+     *
+     * @return number of contending players
+     */
+    public int countContenders() {
+        return (int) players.stream().filter(this::isContender).count();
+    }
+
+    /**
+     * Returns the sole connected contender eligible to claim an immediate disconnect win, if one exists.
+     *
+     * @return {@code Optional} containing the sole connected contender when at least two contenders
+     *         remain, exactly one is connected, at least one is disconnected, and the game has not
+     *         finished or settled as decided; otherwise {@code Optional.empty()}
+     */
+    public Optional<Player> disconnectWinClaimant() {
+        if (gameOver || (isHandSettled() && isGameDecided())) {
+            return Optional.empty();
+        }
+        List<Player> contenders = players.stream().filter(this::isContender).toList();
+        if (contenders.size() < 2) {
+            return Optional.empty();
+        }
+        List<Player> connected = contenders.stream()
+                .filter(player -> !player.getIsDisconnected())
+                .toList();
+        if (connected.size() != 1) {
+            return Optional.empty();
+        }
+        return Optional.of(connected.getFirst());
+    }
+
+    /**
+     * Checks whether {@code playerName} may claim an immediate disconnect win.
+     *
+     * @param playerName prospective claimant name
+     * @return {@code true} if an immediate disconnect win is legal for {@code playerName}
+     */
+    public boolean canPlayerClaimWin(String playerName) {
+        return disconnectWinClaimant()
+                .filter(claimant -> claimant.getName().equals(playerName))
+                .isPresent();
+    }
+
+    /**
+     * Returns the names of all disconnected contenders other than {@code playerName}.
+     *
+     * @param playerName claimant to exclude
+     * @return list of disconnected opponent contender names
+     */
+    public List<String> disconnectedContenderNamesExcept(String playerName) {
+        return players.stream()
+                .filter(player -> !player.getName().equals(playerName))
+                .filter(player -> isContender(player) && player.getIsDisconnected())
+                .map(Player::getName)
+                .toList();
     }
 
     /**
@@ -959,7 +1050,44 @@ public class Game {
      * @return {@code true} if the game is decided
      */
     public boolean isGameDecided() {
-        return GameEligibility.isGameDecided(players);
+        long playersWithChips = players.stream()
+                .filter(player -> !player.getIsOut() && player.getChips() > 0)
+                .count();
+        return playersWithChips <= 1;
+    }
+
+    /**
+     * Resolves the game winner, returning {@code preferredWinner} when provided and eligible, or
+     * otherwise picking the chip leader among players who are not out (breaking ties by earliest
+     * seat).
+     *
+     * @param preferredWinner explicit forfeit survivor, or {@code null} for chip-based resolution
+     * @return resolved non-out winner on the game roster
+     * @throws IllegalStateException if {@code preferredWinner} is not an eligible seated player or
+     *                               no non-out player exists on the roster
+     */
+    public Player resolveWinner(Player preferredWinner) {
+        if (preferredWinner != null) {
+            if (!players.contains(preferredWinner) || preferredWinner.getIsOut()) {
+                throw new IllegalStateException(
+                        "Preferred winner must be seated on the roster and not out: " + preferredWinner.getName());
+            }
+            return preferredWinner;
+        }
+        if (players.isEmpty()) {
+            throw new IllegalStateException("Cannot resolve winner from an empty roster");
+        }
+        return resolveChipWinner();
+    }
+
+    private Player resolveChipWinner() {
+        // Tie-break by earliest seat in roster order so abandonments and forfeits resolve
+        // deterministically to a single table winner matching table seat priority without inventing a draw.
+        return players.stream()
+                .filter(player -> !player.getIsOut())
+                .max(Comparator.comparingInt(Player::getChips)
+                        .thenComparing(Comparator.comparingInt(players::indexOf).reversed()))
+                .orElseThrow(() -> new IllegalStateException("Cannot resolve winner when every player is out"));
     }
 
     public boolean isGameOver() {

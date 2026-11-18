@@ -261,7 +261,6 @@ class TableSeatingTest {
             assertEquals("p0", missingAnchor.getDealerPlayerId());
 
             assertDoesNotThrow(() -> missingAnchor.advancePositions(List.of()));
-            assertDoesNotThrow(() -> missingAnchor.advancePositions(null));
         }
 
         @Test

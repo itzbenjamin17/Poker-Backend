@@ -13,7 +13,6 @@ import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
-import com.pokergame.model.GameEligibility;
 import com.pokergame.model.HandSettlementResult;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
@@ -248,7 +247,7 @@ class GameCompletionHandlerTest {
                     .currentPlayerId("host").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false).smallBlind(5).bigBlind(10)
                     .handContributions(Map.of()).preHandCarryOver(10)
                     .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, false))
-                    .readyCountdownActive(false).everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                    .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of()).build();
             registerGame(terminal);
 
@@ -539,7 +538,7 @@ class GameCompletionHandlerTest {
 
                 // Zero contenders, but room still has a member -> no-op
                 game.getPlayers().forEach(Player::setIsOut);
-                assertEquals(0, GameEligibility.countContenders(game));
+                assertEquals(0, game.countContenders());
                 completion.cleanupAbandonedGameIfRoomEmpty(ROOM_ID, testRoom, game);
                 assertNotNull(activeGames.get(ROOM_ID));
 

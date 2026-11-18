@@ -149,6 +149,9 @@ public final class AggregateSnapshotMapper {
             if (image.game().pot() < 0) {
                 throw new PersistenceException("Invalid negative pot in snapshot");
             }
+            if (image.game().readyGateState() == null) {
+                throw new PersistenceException("Missing readyGateState in snapshot");
+            }
             game = restoreGame(image.game(), state.maxPlayers());
         }
 
@@ -181,7 +184,7 @@ public final class AggregateSnapshotMapper {
             cards(game.getRemainingDeckSnapshot()), cards(game.getCommunityCards()), game.getPot(),
             game.getCurrentHighestBet(), game.getCurrentPhase(),
             game.isGameOver(), game.getSmallBlind(), game.getBigBlind(), game.getHandContributionsSnapshot(),
-            game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs(),
+            game.getReadyCountdownDeadlineEpochMs(),
             game.hasAllPlayersHadInitialTurn(), game.getActedPlayerIdsSnapshot(),
             game.getScheduledTaskDeadlinesSnapshot(), game.getCarryOverPot(),
             game.getLastFullRaise(), game.getLastActedWagerByPlayerSnapshot(),
@@ -270,7 +273,6 @@ public final class AggregateSnapshotMapper {
                 .smallBlind(state.smallBlind())
                 .bigBlind(state.bigBlind())
                 .handContributions(state.handContributions())
-                .readyCountdownActive(state.readyCountdownActive())
                 .readyCountdownDeadlineEpochMs(state.readyCountdownDeadlineEpochMs())
                 .everyoneHasHadInitialTurn(state.everyoneHasHadInitialTurn())
                 .actedPlayersInRound(state.actedPlayerIds())

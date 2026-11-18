@@ -1,6 +1,5 @@
 package com.pokergame.model;
 
-import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ReadyCountdownStartOutcome;
@@ -13,11 +12,10 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import java.util.stream.Stream;
@@ -67,10 +65,9 @@ class ReadyGateTest {
         }
 
         @Test
-        void getReadyEligibleCount_FiltersOutDisqualifiedAndNullElements() {
-            List<Player> players = Arrays.asList(
+        void getReadyEligibleCount_FiltersOutDisqualifiedPlayers() {
+            List<Player> players = List.of(
                     player("p1", "Alice", 1000, false, false, true),
-                    null,
                     player("p2", "Bob", 1000, true, false, true),
                     player("p3", "Charlie", 0, false, false, true),
                     player("p4", "Eve", 1000, false, true, true),
@@ -83,7 +80,6 @@ class ReadyGateTest {
 
         @Test
         void areAllEligiblePlayersReady_FewerThanTwoEligible_ReturnsFalse() {
-            assertFalse(new ReadyGate(null).areAllEligiblePlayersReady());
             assertFalse(new ReadyGate(List.of()).areAllEligiblePlayersReady());
             assertFalse(new ReadyGate(List.of(player("p1", "Solo", 1000, false, false, true)))
                     .areAllEligiblePlayersReady());
@@ -146,38 +142,24 @@ class ReadyGateTest {
     class RestoreAndManualTransitionsTests {
 
         @ParameterizedTest
-        @CsvSource({
-                "CLOSED, false, CLOSED",
-                "CLOSED, true, CLOSED",
-                "WAITING_FOR_PLAYERS, false, WAITING_FOR_PLAYERS",
-                "WAITING_FOR_PLAYERS, true, WAITING_FOR_PLAYERS",
-                "COUNTING_DOWN, false, COUNTING_DOWN"
-        })
-        void restoreConstructor_ExplicitStatePreserved(
-                ReadyGateState explicitState, boolean legacyActive, ReadyGateState expectedState) {
-            ReadyGate gate = new ReadyGate(List.of(), explicitState, legacyActive, 50_000L);
-            assertEquals(expectedState, gate.getState());
-            assertEquals(expectedState == ReadyGateState.COUNTING_DOWN, gate.isCountdownActive());
+        @EnumSource(ReadyGateState.class)
+        void restoreConstructor_ExplicitStatePreserved(ReadyGateState explicitState) {
+            ReadyGate gate = new ReadyGate(List.of(), explicitState, 50_000L);
+            assertEquals(explicitState, gate.getState());
+            assertEquals(explicitState == ReadyGateState.COUNTING_DOWN, gate.isCountdownActive());
+            assertEquals(50_000L, gate.getCountdownDeadlineEpochMs());
         }
 
         @Test
-        void restoreConstructor_NullStateFallsBackToLegacyActiveFlag() {
-            ReadyGate active = new ReadyGate(List.of(), null, true, 50_000L);
-            assertEquals(ReadyGateState.COUNTING_DOWN, active.getState());
-            assertTrue(active.isCountdownActive());
-            assertEquals(50_000L, active.getCountdownDeadlineEpochMs());
-
-            ReadyGate closed = new ReadyGate(List.of(), null, false, null);
-            assertEquals(ReadyGateState.CLOSED, closed.getState());
-            assertFalse(closed.isCountdownActive());
-            assertNull(closed.getCountdownDeadlineEpochMs());
+        void restoreConstructor_NullStateThrows() {
+            assertThrows(NullPointerException.class, () -> new ReadyGate(List.of(), null, 50_000L));
         }
 
         @Test
         void closeCountdownAndWaitForPlayersResetStateProperly() {
             Player alice = player("p1", "Alice", 1000, false, false, true);
             Player bob = player("p2", "Bob", 1000, false, false, false);
-            ReadyGate gate = new ReadyGate(List.of(alice, bob), ReadyGateState.COUNTING_DOWN, true, 99_999L);
+            ReadyGate gate = new ReadyGate(List.of(alice, bob), ReadyGateState.COUNTING_DOWN, 99_999L);
 
             gate.waitForPlayers();
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, gate.getState());
@@ -215,7 +197,7 @@ class ReadyGateTest {
             ReadyGate closedGate = new ReadyGate(roster);
             assertThrows(UnauthorisedActionException.class, () -> closedGate.setPlayerReady("Alice", true));
 
-            ReadyGate activeGate = new ReadyGate(roster, ReadyGateState.COUNTING_DOWN, true, 50_000L);
+            ReadyGate activeGate = new ReadyGate(roster, ReadyGateState.COUNTING_DOWN, 50_000L);
             activeGate.setPlayerReady("Alice", true);
             assertTrue(alice.getIsReadyForNextHand());
             activeGate.setPlayerReady("Alice", false);
@@ -245,7 +227,6 @@ class ReadyGateTest {
             ReadyGate gate = new ReadyGate(
                     roster,
                     gateState,
-                    gateState == ReadyGateState.COUNTING_DOWN,
                     gateState == ReadyGateState.COUNTING_DOWN ? 50_000L : null);
 
             UnauthorisedActionException error = assertThrows(
@@ -286,25 +267,6 @@ class ReadyGateTest {
     class CountdownStateMachineTransitionTests {
 
         @Test
-        void openOrWait_IgnoresForfeitPendingGameOverOrNonShowdown() {
-            Player p1 = player("p1", "Alice", 1000);
-            Player p2 = player("p2", "Bob", 1000);
-            GameScheduling scheduling = new GameScheduling();
-            ReadyGate gate = new ReadyGate(List.of(p1, p2));
-
-            assertEquals(ReadyCountdownStartOutcome.IGNORE,
-                    gate.openOrWait(true, false, false, GamePhase.SHOWDOWN, 50_000L, scheduling));
-            assertEquals(ReadyCountdownStartOutcome.IGNORE,
-                    gate.openOrWait(false, true, false, GamePhase.SHOWDOWN, 50_000L, scheduling));
-            assertEquals(ReadyCountdownStartOutcome.GAME_DECIDED,
-                    gate.openOrWait(false, false, true, GamePhase.SHOWDOWN, 50_000L, scheduling));
-            assertEquals(ReadyCountdownStartOutcome.IGNORE,
-                    gate.openOrWait(false, false, false, GamePhase.TURN, 50_000L, scheduling));
-            assertEquals(ReadyGateState.CLOSED, gate.getState());
-            assertNull(scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
-        }
-
-        @Test
         void openOrWait_FewerThanTwoEligible_TransitionsToWaitingAndClearsTimer() {
             Player p1 = player("p1", "Alice", 1000, false, false, true);
             Player p2 = player("p2", "Bob", 0);
@@ -312,8 +274,7 @@ class ReadyGateTest {
             scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 40_000L);
             ReadyGate gate = new ReadyGate(List.of(p1, p2));
 
-            ReadyCountdownStartOutcome outcome =
-                    gate.openOrWait(false, false, false, GamePhase.SHOWDOWN, 50_000L, scheduling);
+            ReadyCountdownStartOutcome outcome = gate.openOrWait(50_000L, scheduling);
 
             assertEquals(ReadyCountdownStartOutcome.WAITING_FOR_PLAYERS, outcome);
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, gate.getState());
@@ -330,8 +291,7 @@ class ReadyGateTest {
             GameScheduling scheduling = new GameScheduling();
             ReadyGate gate = new ReadyGate(List.of(p1, p2));
 
-            ReadyCountdownStartOutcome outcome =
-                    gate.openOrWait(false, false, false, GamePhase.SHOWDOWN, 50_000L, scheduling);
+            ReadyCountdownStartOutcome outcome = gate.openOrWait(50_000L, scheduling);
 
             assertEquals(ReadyCountdownStartOutcome.OPENED, outcome);
             assertEquals(ReadyGateState.COUNTING_DOWN, gate.getState());
@@ -352,7 +312,7 @@ class ReadyGateTest {
             assertEquals(ReadyCountdownTimeoutOutcome.IGNORE_STALE,
                     closed.expireCountdown(false, 1000L, scheduling));
 
-            ReadyGate active = new ReadyGate(List.of(p1, p2), ReadyGateState.COUNTING_DOWN, true, 1000L);
+            ReadyGate active = new ReadyGate(List.of(p1, p2), ReadyGateState.COUNTING_DOWN, 1000L);
             assertEquals(ReadyCountdownTimeoutOutcome.IGNORE_STALE,
                     active.expireCountdown(true, 1000L, scheduling));
             assertEquals(ReadyCountdownTimeoutOutcome.IGNORE_STALE,
@@ -365,7 +325,7 @@ class ReadyGateTest {
             Player p2 = player("p2", "Bob", 0);
             GameScheduling scheduling = new GameScheduling();
             scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 1000L);
-            ReadyGate gate = new ReadyGate(List.of(p1, p2), ReadyGateState.COUNTING_DOWN, true, 1000L);
+            ReadyGate gate = new ReadyGate(List.of(p1, p2), ReadyGateState.COUNTING_DOWN, 1000L);
 
             ReadyCountdownTimeoutOutcome outcome = gate.expireCountdown(false, 1000L, scheduling);
 
@@ -382,7 +342,7 @@ class ReadyGateTest {
             Player p2 = player("p2", "Bob", 800);
             Player pOut = player("p3", "Charlie", 0, true, false, false);
             GameScheduling scheduling = new GameScheduling();
-            ReadyGate gate = new ReadyGate(List.of(p1, p2, pOut), ReadyGateState.COUNTING_DOWN, true, 1000L);
+            ReadyGate gate = new ReadyGate(List.of(p1, p2, pOut), ReadyGateState.COUNTING_DOWN, 1000L);
 
             ReadyCountdownTimeoutOutcome outcome = gate.expireCountdown(false, 1000L, scheduling);
 
@@ -403,19 +363,19 @@ class ReadyGateTest {
             assertFalse(closed.repairRecoveredGate(5000L, scheduling));
 
             ReadyGate missingTimerOnly = new ReadyGate(
-                    List.of(p1, p2), ReadyGateState.COUNTING_DOWN, true, 4000L);
+                    List.of(p1, p2), ReadyGateState.COUNTING_DOWN, 4000L);
             assertFalse(missingTimerOnly.repairRecoveredGate(5000L, scheduling));
             assertEquals(4000L, scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
 
             GameScheduling emptySched = new GameScheduling();
             ReadyGate needsWaiting = new ReadyGate(
-                    List.of(p1, player("p3", "Zero", 0)), ReadyGateState.COUNTING_DOWN, true, null);
+                    List.of(p1, player("p3", "Zero", 0)), ReadyGateState.COUNTING_DOWN, null);
             assertTrue(needsWaiting.repairRecoveredGate(5000L, emptySched));
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, needsWaiting.getState());
             assertNull(emptySched.getDeadline(ScheduledGameTask.READY_TIMEOUT));
 
             ReadyGate needsDeadline = new ReadyGate(
-                    List.of(p1, p2), ReadyGateState.COUNTING_DOWN, true, null);
+                    List.of(p1, p2), ReadyGateState.COUNTING_DOWN, null);
             assertTrue(needsDeadline.repairRecoveredGate(5000L, emptySched));
             assertEquals(ReadyGateState.COUNTING_DOWN, needsDeadline.getState());
             assertEquals(5000L, needsDeadline.getCountdownDeadlineEpochMs());
@@ -432,7 +392,7 @@ class ReadyGateTest {
             for (int i = 0; i < 20; i++) {
                 twentyPlayers.add(player("p" + i, "Player" + i, i < 10 ? 1000 : 0, i % 4 == 0, i % 5 == 0, false));
             }
-            ReadyGate gate = new ReadyGate(twentyPlayers, ReadyGateState.COUNTING_DOWN, true, 5000L);
+            ReadyGate gate = new ReadyGate(twentyPlayers, ReadyGateState.COUNTING_DOWN, 5000L);
             assertEquals(ReadyCountdownTimeoutOutcome.FORCED_READY,
                     gate.expireCountdown(false, 5000L, new GameScheduling()));
             for (Player p : twentyPlayers) {
@@ -475,7 +435,7 @@ class ReadyGateTest {
                     }
                 }
 
-                ReadyGate gate = new ReadyGate(roster, ReadyGateState.COUNTING_DOWN, true, 10_000L);
+                ReadyGate gate = new ReadyGate(roster, ReadyGateState.COUNTING_DOWN, 10_000L);
                 assertEquals(expectedEligibleCount, gate.getReadyEligibleCount());
                 assertEquals(expectedEligibleCount >= 2 && allExpectedReady, gate.areAllEligiblePlayersReady());
 

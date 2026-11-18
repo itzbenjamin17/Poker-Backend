@@ -70,13 +70,6 @@ class GameSchedulingTest {
             assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.NEW_HAND));
             assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.CLEANUP));
         }
-
-        @Test
-        void scheduleTask_NullTask_HandledGracefully() {
-            assertDoesNotThrow(() -> scheduling.scheduleTask(null, 500L));
-            assertTrue(scheduling.deadlinesSnapshot().isEmpty());
-            assertTrue(scheduling.generationsSnapshot().isEmpty());
-        }
     }
 
     @Nested
@@ -111,13 +104,6 @@ class GameSchedulingTest {
             assertNull(scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(2000L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
             assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.CLEANUP));
-        }
-
-        @Test
-        void clearTask_NullTask_HandledGracefully() {
-            scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 1000L);
-            assertDoesNotThrow(() -> scheduling.clearTask(null));
-            assertEquals(1000L, scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE));
         }
     }
 
@@ -327,7 +313,7 @@ class GameSchedulingTest {
 
         @Test
         void restoreConstructor_NullMaps_ReturnEmptyImmutableSnapshots() {
-            GameScheduling restored = new GameScheduling(null, null, 0L);
+            GameScheduling restored = new GameScheduling(null, null);
 
             Map<ScheduledGameTask, Long> deadlines = restored.deadlinesSnapshot();
             Map<ScheduledGameTask, Long> generations = restored.generationsSnapshot();
@@ -336,45 +322,6 @@ class GameSchedulingTest {
             assertTrue(generations.isEmpty());
             assertThrows(UnsupportedOperationException.class, () -> deadlines.put(ScheduledGameTask.AUTO_ADVANCE, 1L));
             assertThrows(UnsupportedOperationException.class, () -> generations.put(ScheduledGameTask.AUTO_ADVANCE, 1L));
-        }
-    }
-
-    @Nested
-    class StateRevisionTests {
-
-        @Test
-        void incrementStateRevision_MonotonicAcrossSequence() {
-            for (int i = 1; i <= 10000; i++) {
-                scheduling.incrementStateRevision();
-                assertEquals((long) i, scheduling.getStateRevision());
-            }
-
-            GameScheduling nearMax = new GameScheduling(null, null, Long.MAX_VALUE - 1);
-            nearMax.incrementStateRevision();
-            assertEquals(Long.MAX_VALUE, nearMax.getStateRevision());
-        }
-
-        @Test
-        void resetStateRevisionForNewHand_ResetsToInitialHandRevision() {
-            scheduling.incrementStateRevision();
-            scheduling.incrementStateRevision();
-
-            scheduling.resetStateRevisionForNewHand();
-
-            assertEquals(1L, GameScheduling.INITIAL_HAND_REVISION);
-            assertEquals(1L, scheduling.getStateRevision());
-        }
-    }
-
-    @Nested
-    class NullSafetyTests {
-
-        @Test
-        void nullTaskArgumentsReturnSafeDefaults() {
-            assertDoesNotThrow(() -> scheduling.scheduleTask(null, 0L));
-            assertDoesNotThrow(() -> scheduling.clearTask(null));
-            assertNull(scheduling.getDeadline(null));
-            assertEquals(0L, scheduling.getGeneration(null));
         }
     }
 

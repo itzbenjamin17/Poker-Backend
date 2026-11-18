@@ -83,7 +83,6 @@
     "smallBlind" : 5,
     "bigBlind" : 10,
     "handContributions" : { },
-    "readyCountdownActive" : false,
     "readyCountdownDeadlineEpochMs" : null,
     "everyoneHasHadInitialTurn" : true,
     "actedPlayerIds" : [ ],

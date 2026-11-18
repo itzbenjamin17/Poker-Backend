@@ -41,7 +41,6 @@ public class GameRestoreBuilder {
     private String bigBlindPlayerId;
     private boolean terminalCarryOverSettled;
     private boolean forfeitPending;
-    private boolean readyCountdownActive;
     private Long readyCountdownDeadlineEpochMs;
     private ReadyGateState readyGateState = ReadyGateState.CLOSED;
     private long handNumber;
@@ -176,11 +175,6 @@ public class GameRestoreBuilder {
 
     public GameRestoreBuilder forfeitPending(boolean value) {
         this.forfeitPending = value;
-        return this;
-    }
-
-    public GameRestoreBuilder readyCountdownActive(boolean readyCountdownActive) {
-        this.readyCountdownActive = readyCountdownActive;
         return this;
     }
 
@@ -327,10 +321,6 @@ public class GameRestoreBuilder {
 
     boolean isForfeitPending() {
         return forfeitPending;
-    }
-
-    boolean isReadyCountdownActive() {
-        return readyCountdownActive;
     }
 
     Long getReadyCountdownDeadlineEpochMs() {
