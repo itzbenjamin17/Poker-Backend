@@ -3,7 +3,7 @@ package com.pokergame.persistence.config;
 import com.pokergame.persistence.PersistenceRecovery;
 import com.pokergame.persistence.RoomAggregates;
 import com.pokergame.persistence.RoomRecoveryHandler;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
 import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;
@@ -109,7 +109,7 @@ public class PersistenceConfiguration {
      */
     @Bean
     DurableMutationAspect durableMutationAspect(ObjectProvider<EncryptedWalStore> store,
-            AggregateSnapshotMapper snapshotMapper, RoomAggregates aggregates, RoomCoordinator roomCoordinator) {
+            RoomSnapshotMapper snapshotMapper, RoomAggregates aggregates, RoomCoordinator roomCoordinator) {
         return new DurableMutationAspect(store.getIfAvailable(), snapshotMapper, aggregates, properties,
                 roomCoordinator);
     }
@@ -126,7 +126,7 @@ public class PersistenceConfiguration {
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
-    PersistenceRecovery persistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper,
+    PersistenceRecovery persistenceRecovery(EncryptedWalStore store, RoomSnapshotMapper mapper,
             RoomRecoveryHandler recoveryHandler,
             ApplicationContext applicationContext,
             RoomCoordinator roomCoordinator) {

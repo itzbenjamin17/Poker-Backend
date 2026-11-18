@@ -14,7 +14,7 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
 import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.persistence.transaction.RoomId;
 import com.pokergame.persistence.wal.EncryptedWalStore;
@@ -223,7 +223,7 @@ class PersistenceRestartIT {
         try (ConfigurableApplicationContext context = startApplication()) {
             RoomService rooms = context.getBean(RoomService.class);
             GameLifecycleService games = context.getBean(GameLifecycleService.class);
-            AggregateSnapshotMapper mapper = context.getBean(AggregateSnapshotMapper.class);
+            RoomSnapshotMapper mapper = context.getBean(RoomSnapshotMapper.class);
             WebSocketEventListener listener = context.getBean(WebSocketEventListener.class);
 
             long baselineFutures = countActiveScheduledFutures(context);
@@ -342,7 +342,7 @@ class PersistenceRestartIT {
         try (ConfigurableApplicationContext first = startApplication(120_000L, 60_000L)) {
             RoomService rooms = first.getBean(RoomService.class);
             GameLifecycleService games = first.getBean(GameLifecycleService.class);
-            AggregateSnapshotMapper mapper = first.getBean(AggregateSnapshotMapper.class);
+            RoomSnapshotMapper mapper = first.getBean(RoomSnapshotMapper.class);
             EncryptedWalStore store = first.getBean(EncryptedWalStore.class);
 
             rooms.createRoom(roomId, new CreateRoomRequest("Overdue Cleanup", "Alice", 6, 5, 10, 1000, null));
@@ -376,7 +376,7 @@ class PersistenceRestartIT {
         String roomId = UUID.randomUUID().toString();
         try (ConfigurableApplicationContext first = startApplication()) {
             RoomService rooms = first.getBean(RoomService.class);
-            AggregateSnapshotMapper mapper = first.getBean(AggregateSnapshotMapper.class);
+            RoomSnapshotMapper mapper = first.getBean(RoomSnapshotMapper.class);
             EncryptedWalStore store = first.getBean(EncryptedWalStore.class);
 
             rooms.createRoom(roomId, new CreateRoomRequest("Expired Lobby", "Alice", 4, 5, 10, 1000, null));
@@ -406,7 +406,7 @@ class PersistenceRestartIT {
         try (ConfigurableApplicationContext first = startApplication(120_000L, 30_000L)) {
             RoomService rooms = first.getBean(RoomService.class);
             GameLifecycleService games = first.getBean(GameLifecycleService.class);
-            AggregateSnapshotMapper mapper = first.getBean(AggregateSnapshotMapper.class);
+            RoomSnapshotMapper mapper = first.getBean(RoomSnapshotMapper.class);
             EncryptedWalStore store = first.getBean(EncryptedWalStore.class);
 
             rooms.createRoom(roomId, new CreateRoomRequest("Inactive Game", "Alice", 6, 5, 10, 1000, null));
@@ -451,7 +451,7 @@ class PersistenceRestartIT {
         try (ConfigurableApplicationContext first = startApplication(5_000L)) {
             RoomService rooms = first.getBean(RoomService.class);
             GameLifecycleService games = first.getBean(GameLifecycleService.class);
-            AggregateSnapshotMapper mapper = first.getBean(AggregateSnapshotMapper.class);
+            RoomSnapshotMapper mapper = first.getBean(RoomSnapshotMapper.class);
             EncryptedWalStore store = first.getBean(EncryptedWalStore.class);
 
             rooms.createRoom(roomId, new CreateRoomRequest("Long Grace", "Alice", 6, 5, 10, 1000, null));
@@ -495,7 +495,7 @@ class PersistenceRestartIT {
         try (ConfigurableApplicationContext first = startApplication(60_000L, 60_000L)) {
             RoomService rooms = first.getBean(RoomService.class);
             GameLifecycleService games = first.getBean(GameLifecycleService.class);
-            AggregateSnapshotMapper mapper = first.getBean(AggregateSnapshotMapper.class);
+            RoomSnapshotMapper mapper = first.getBean(RoomSnapshotMapper.class);
             EncryptedWalStore store = first.getBean(EncryptedWalStore.class);
             WebSocketEventListener listener = first.getBean(WebSocketEventListener.class);
 

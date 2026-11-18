@@ -27,7 +27,7 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
 import com.pokergame.testutil.MutableClock;
 import com.pokergame.testutil.TestTimings;
 import com.pokergame.util.LockLease;
@@ -666,7 +666,7 @@ class PlayerDepartureHandlerTest {
             verify(gameStateService, never()).sendGameEnd(any(GameEndResponse.class));
             verify(gameStateService, never()).broadcastGameState(any(Game.class));
 
-            AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
+            RoomSnapshotMapper mapper = new RoomSnapshotMapper(
                     JsonMapper.builder().findAndAddModules().build());
             Game restored = mapper.deserialize(mapper.serialize(mapper.captureStateImage(testRoom, game))).game();
             assertTrue(restored.isForfeitPending());

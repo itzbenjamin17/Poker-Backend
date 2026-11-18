@@ -1,7 +1,7 @@
 package com.pokergame.persistence;
 
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
-import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
+import com.pokergame.persistence.snapshot.RecoveredRoom;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.util.LockLease;
 import com.pokergame.util.RoomCoordinator;
@@ -31,7 +31,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
     private static final Logger logger = LoggerFactory.getLogger(PersistenceRecovery.class);
 
     private final EncryptedWalStore store;
-    private final AggregateSnapshotMapper mapper;
+    private final RoomSnapshotMapper mapper;
     private final RoomRecoveryHandler recoveryHandler;
     private final ApplicationContext applicationContext;
     private final RoomCoordinator roomCoordinator;
@@ -49,7 +49,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
      */
     public PersistenceRecovery(
             EncryptedWalStore store,
-            AggregateSnapshotMapper mapper,
+            RoomSnapshotMapper mapper,
             RoomRecoveryHandler recoveryHandler,
             ApplicationContext applicationContext,
             RoomCoordinator roomCoordinator) {
@@ -92,14 +92,14 @@ public final class PersistenceRecovery implements ApplicationRunner {
         AvailabilityChangeEvent.publish(applicationContext, ReadinessState.REFUSING_TRAFFIC);
 
         Map<String, byte[]> images = store.recoverAll();
-        List<RecoveredAggregate> recoveredAggregates = new ArrayList<>();
+        List<RecoveredRoom> recoveredRooms = new ArrayList<>();
         int roomsRestored = 0;
         int gamesRestored = 0;
         int roomsDeleted = 0;
 
         for (Map.Entry<String, byte[]> entry : images.entrySet()) {
             String roomId = entry.getKey();
-            RecoveredAggregate aggregate;
+            RecoveredRoom aggregate;
             try {
                 aggregate = mapper.deserialize(entry.getValue());
             } catch (Exception e) {
@@ -128,10 +128,10 @@ public final class PersistenceRecovery implements ApplicationRunner {
                 continue;
             }
 
-            recoveredAggregates.add(aggregate);
+            recoveredRooms.add(aggregate);
         }
 
-        for (RecoveredAggregate aggregate : recoveredAggregates) {
+        for (RecoveredRoom aggregate : recoveredRooms) {
             String roomId = aggregate.room().getRoomId();
             try (LockLease _ = roomCoordinator.acquire(roomId)) {
                 try {

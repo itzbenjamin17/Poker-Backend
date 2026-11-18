@@ -1,6 +1,6 @@
 # 0003: In-Memory Aggregate Rollback on Mutation Failure
 
-We decided to automatically restore the in-memory `Room` and `Game` objects from a pre-change snapshot (`AggregateStateImage`) whenever a `@DurableMutation` service method throws an exception.
+We decided to automatically restore the in-memory `Room` and `Game` objects from a pre-change snapshot (`RoomSnapshot`) whenever a `@DurableMutation` service method throws an exception.
 
 ## Context
 
@@ -8,7 +8,7 @@ Service methods annotated with `@DurableMutation` modify the live `Room` and `Ga
 
 ## Decision
 
-1. **Pre-Change Snapshot**: `DurableMutationAspect` captures a frozen in-memory copy (`AggregateStateImage`) of the room and game before running each top-level `@DurableMutation` method. Because this copy is kept in memory before JSON serialization or disk writes, rollbacks still work even when disk persistence is disabled or experiencing an outage.
+1. **Pre-Change Snapshot**: `DurableMutationAspect` captures a frozen in-memory copy (`RoomSnapshot`) of the room and game before running each top-level `@DurableMutation` method. Because this copy is kept in memory before JSON serialization or disk writes, rollbacks still work even when disk persistence is disabled or experiencing an outage.
 2. **Rollback or Eviction on Error**: If the service method throws any exception (`Throwable`), `DurableMutationAspect` discards any queued WebSocket broadcasts and restores the `Room`, `Game`, and connection state from the pre-change copy. Active timers are rebuilt from the restored deadlines without re-sending broadcasts. If no pre-change copy exists (for example, when creating a brand-new room fails), the room is removed from memory completely.
 3. **Normal Error Responses**: After rolling back memory to a clean state, the original exception is rethrown so Spring's `@RestControllerAdvice` and `@MessageExceptionHandler` return the expected error response to the client.
 

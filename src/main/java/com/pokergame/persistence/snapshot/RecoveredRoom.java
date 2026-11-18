@@ -11,5 +11,5 @@ import com.pokergame.model.Room;
  * @param game    the restored game, or null if the room hasn't started playing yet
  * @param deleted true if this is a record of a room that was deleted
  */
-public record RecoveredAggregate(Room room, Game game, boolean deleted) {
+public record RecoveredRoom(Room room, Game game, boolean deleted) {
 }

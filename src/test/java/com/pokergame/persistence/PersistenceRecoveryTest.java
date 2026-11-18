@@ -11,8 +11,8 @@ import static org.mockito.Mockito.*;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
-import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
+import com.pokergame.persistence.snapshot.RecoveredRoom;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.persistence.wal.WalFaultPoint;
@@ -50,7 +50,7 @@ class PersistenceRecoveryTest {
     private EncryptedWalStore store;
 
     @Mock
-    private AggregateSnapshotMapper mapper;
+    private RoomSnapshotMapper mapper;
 
     @Mock
     private RoomRecoveryHandler recoveryHandler;
@@ -74,10 +74,10 @@ class PersistenceRecoveryTest {
     void mismatchedRoomIdentityQuarantinesWalAndRecoversRemainingRooms() {
         Room roomY = mock(Room.class);
         when(roomY.getRoomId()).thenReturn("room-Y");
-        RecoveredAggregate aggregate = new RecoveredAggregate(roomY, null, false);
+        RecoveredRoom aggregate = new RecoveredRoom(roomY, null, false);
 
         Room roomValid = roomForRecovery("room-valid", "Alice");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(roomValid, null, false);
+        RecoveredRoom validAggregate = new RecoveredRoom(roomValid, null, false);
 
         when(store.recoverAll()).thenReturn(Map.of(
                 "room-X", new byte[]{1, 2, 3},
@@ -99,7 +99,7 @@ class PersistenceRecoveryTest {
 
     @Test
     void deletionTombstoneDeletesWalAndDoesNotInvokeHandler() {
-        RecoveredAggregate tombstone = new RecoveredAggregate(null, null, true);
+        RecoveredRoom tombstone = new RecoveredRoom(null, null, true);
 
         when(store.recoverAll()).thenReturn(Map.of("room-deleted", new byte[]{1, 2, 3}));
         when(mapper.deserialize(any())).thenReturn(tombstone);
@@ -117,7 +117,7 @@ class PersistenceRecoveryTest {
     @Test
     void restoreAcquiresRoomLockAroundHandlerAndPublishesReadinessTransitions() {
         Room room = roomForRecovery("room-1", "Alice");
-        RecoveredAggregate aggregate = new RecoveredAggregate(room, null, false);
+        RecoveredRoom aggregate = new RecoveredRoom(room, null, false);
         when(store.recoverAll()).thenReturn(Map.of("room-1", new byte[]{1, 2, 3}));
         when(mapper.deserialize(any())).thenReturn(aggregate);
 
@@ -149,9 +149,9 @@ class PersistenceRecoveryTest {
     @Test
     void handlerDiscardDecisionDeletesWalWithoutQuarantine() {
         Room expiredRoom = roomForRecovery("expired-room", "Alice");
-        RecoveredAggregate expiredAggregate = new RecoveredAggregate(expiredRoom, null, false);
+        RecoveredRoom expiredAggregate = new RecoveredRoom(expiredRoom, null, false);
         Room validRoom = roomForRecovery("valid-room", "Bob");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, null, false);
+        RecoveredRoom validAggregate = new RecoveredRoom(validRoom, null, false);
 
         byte[] expiredBytes = new byte[]{1};
         byte[] validBytes = new byte[]{2};
@@ -180,7 +180,7 @@ class PersistenceRecoveryTest {
                 Map.of("current", new SecretKeySpec(new byte[32], "AES")));
         RoomCoordinator coordinator = new RoomCoordinator();
         EncryptedWalStore realStore = new EncryptedWalStore(directory, keys, coordinator);
-        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
         Room active = roomForRecovery("valid-game", "Alice");
@@ -203,7 +203,7 @@ class PersistenceRecoveryTest {
             return null;
         });
         when(recoveryHandler.restore(any())).thenAnswer(invocation -> {
-            RecoveredAggregate recovered = invocation.getArgument(0);
+            RecoveredRoom recovered = invocation.getArgument(0);
             if (unrestorable.getRoomId().equals(recovered.room().getRoomId())) {
                 throw new IllegalStateException("Injected room registration failure");
             }
@@ -235,7 +235,7 @@ class PersistenceRecoveryTest {
         RoomCoordinator coordinator = new RoomCoordinator();
         EncryptedWalStore realStore = new EncryptedWalStore(directory, keys, coordinator);
         JsonMapper jsonMapper = JsonMapper.builder().findAndAddModules().build();
-        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(jsonMapper);
+        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(jsonMapper);
 
         Room validRoom = roomForRecovery("valid-room", "Alice");
         Room unknownKeyRoom = roomForRecovery("unknown-key-room", "Bob");
@@ -274,7 +274,7 @@ class PersistenceRecoveryTest {
         RoomCoordinator coordinator = new RoomCoordinator();
         EncryptedWalStore realStore = new EncryptedWalStore(directory, keys, coordinator);
         JsonMapper jsonMapper = JsonMapper.builder().findAndAddModules().build();
-        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(jsonMapper);
+        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(jsonMapper);
 
         Room validRoom = roomForRecovery("valid-room", "Alice");
         Room missingKeyRoom = roomForRecovery("missing-key-room", "Bob");
@@ -309,7 +309,7 @@ class PersistenceRecoveryTest {
     @Test
     void corruptedSnapshotDeserializationFailureQuarantinesWalAndRecoversRemainingRooms() {
         Room validRoom = roomForRecovery("room-valid", "Alice");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, null, false);
+        RecoveredRoom validAggregate = new RecoveredRoom(validRoom, null, false);
 
         byte[] corruptBytes = new byte[]{9, 9, 9};
         byte[] validBytes = new byte[]{1, 2, 3};
@@ -334,9 +334,9 @@ class PersistenceRecoveryTest {
     @Test
     void handlerRestorationExceptionQuarantinesWalAndRecoversRemainingRooms() {
         Room brokenRoom = roomForRecovery("room-broken", "Bob");
-        RecoveredAggregate brokenAggregate = new RecoveredAggregate(brokenRoom, null, false);
+        RecoveredRoom brokenAggregate = new RecoveredRoom(brokenRoom, null, false);
         Room validRoom = roomForRecovery("room-valid", "Alice");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, null, false);
+        RecoveredRoom validAggregate = new RecoveredRoom(validRoom, null, false);
 
         byte[] brokenBytes = new byte[]{4, 5, 6};
         byte[] validBytes = new byte[]{1, 2, 3};
@@ -384,9 +384,9 @@ class PersistenceRecoveryTest {
 
     @Test
     void tombstoneDeleteFailureDoesNotQuarantineOrAbortRecovery() {
-        RecoveredAggregate tombstone = new RecoveredAggregate(null, null, true);
+        RecoveredRoom tombstone = new RecoveredRoom(null, null, true);
         Room validRoom = roomForRecovery("room-valid", "Alice");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, null, false);
+        RecoveredRoom validAggregate = new RecoveredRoom(validRoom, null, false);
 
         byte[] tombstoneBytes = new byte[]{1};
         byte[] validBytes = new byte[]{2};
@@ -414,9 +414,9 @@ class PersistenceRecoveryTest {
     @Test
     void discardedRoomDeleteFailureDoesNotQuarantineOrAbortRecovery() {
         Room discardedRoom = roomForRecovery("expired-room", "Alice");
-        RecoveredAggregate discardedAggregate = new RecoveredAggregate(discardedRoom, null, false);
+        RecoveredRoom discardedAggregate = new RecoveredRoom(discardedRoom, null, false);
         Room validRoom = roomForRecovery("room-valid", "Bob");
-        RecoveredAggregate validAggregate = new RecoveredAggregate(validRoom, null, false);
+        RecoveredRoom validAggregate = new RecoveredRoom(validRoom, null, false);
 
         byte[] discardedBytes = new byte[]{1};
         byte[] validBytes = new byte[]{2};
@@ -451,7 +451,7 @@ class PersistenceRecoveryTest {
                 throw new PersistenceException("injected delete failure for " + roomId);
             }
         }, coordinator);
-        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
         Room validRoom = roomForRecovery("valid-room", "Alice");

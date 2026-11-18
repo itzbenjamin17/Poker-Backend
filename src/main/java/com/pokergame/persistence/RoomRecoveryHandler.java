@@ -1,6 +1,6 @@
 package com.pokergame.persistence;
 
-import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.persistence.snapshot.RecoveredRoom;
 
 /**
  * Applies domain restart rules to one recovered room while the caller holds the room lock.
@@ -14,5 +14,5 @@ public interface RoomRecoveryHandler {
      * @return {@link RecoveryDecision#KEEP} if the room remains active, or
      *         {@link RecoveryDecision#DISCARD} if its persisted WAL should be deleted
      */
-    RecoveryDecision restore(RecoveredAggregate recovered);
+    RecoveryDecision restore(RecoveredRoom recovered);
 }

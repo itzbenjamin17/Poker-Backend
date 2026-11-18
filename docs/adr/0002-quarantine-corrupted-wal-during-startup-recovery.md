@@ -4,7 +4,7 @@ We decided to isolate broken or unreadable room save files by renaming them to `
 
 ## Context
 
-On startup, `PersistenceRecovery` loops through every `.wal` file in the persistence folder and restores the latest `Room` and `Game` snapshot (`AggregateStateImage`) for each room. Previously, if even one room's save file had an unsupported schema version, a mismatched room ID, or corrupted bytes, deserialization threw an unhandled `PersistenceException`. Because `PersistenceRecovery` runs during Spring Boot startup (`ApplicationRunner`), one bad room file crashed the entire server on boot (`CrashLoopBackOff`) and took down every other healthy room.
+On startup, `PersistenceRecovery` loops through every `.wal` file in the persistence folder and restores the latest `Room` and `Game` snapshot (`RoomSnapshot`) for each room. Previously, if even one room's save file had an unsupported schema version, a mismatched room ID, or corrupted bytes, deserialization threw an unhandled `PersistenceException`. Because `PersistenceRecovery` runs during Spring Boot startup (`ApplicationRunner`), one bad room file crashed the entire server on boot (`CrashLoopBackOff`) and took down every other healthy room.
 
 ## Decision
 

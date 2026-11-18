@@ -17,8 +17,8 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.config.PersistenceProperties;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
-import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
+import com.pokergame.persistence.snapshot.RecoveredRoom;
 import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.persistence.transaction.PostSaveActions;
@@ -137,7 +137,7 @@ class PersistenceCoordinationIT {
     private EncryptedWalStore walStore;
 
     @Autowired
-    private AggregateSnapshotMapper snapshotMapper;
+    private RoomSnapshotMapper snapshotMapper;
 
     @Autowired
     private DurableMutationAspect durableMutationAspect;
@@ -355,7 +355,7 @@ class PersistenceCoordinationIT {
 
         FAULT_INJECTOR.set(WalFaultInjector.NONE);
         awaitPendingSavesFlushed();
-        RecoveredAggregate recovered = withRoomLock(roomCoordinator, roomId,
+        RecoveredRoom recovered = withRoomLock(roomCoordinator, roomId,
                 () -> snapshotMapper.deserialize(walStore.recoverLatest(roomId).orElseThrow()));
         assertThat(recovered.room().getPlayers()).containsExactlyInAnyOrder("Host", "Alice", "Bob");
     }
@@ -480,7 +480,7 @@ class PersistenceCoordinationIT {
         assertThatCode(() -> webSocketAuthInterceptor.preSend(stompSubscription(roomFixtures.principalFor(roomId, "Alice")), null))
                 .doesNotThrowAnyException();
 
-        RecoveredAggregate recovered = withRoomLock(roomCoordinator, roomId,
+        RecoveredRoom recovered = withRoomLock(roomCoordinator, roomId,
                 () -> snapshotMapper.deserialize(walStore.recoverLatest(roomId).orElseThrow()));
         assertThat(recovered.room().getMembershipId("Alice")).isNotEqualTo(retiredAlice.membershipId());
     }
@@ -538,7 +538,7 @@ class PersistenceCoordinationIT {
 
         FAULT_INJECTOR.set(WalFaultInjector.NONE);
         awaitPendingSavesFlushed();
-        RecoveredAggregate recovered = withRoomLock(roomCoordinator, roomId,
+        RecoveredRoom recovered = withRoomLock(roomCoordinator, roomId,
                 () -> snapshotMapper.deserialize(walStore.recoverLatest(roomId).orElseThrow()));
         assertThat(recovered.room().getPlayers()).containsExactlyInAnyOrder("Host", "Alice", "Bob");
     }
@@ -636,7 +636,7 @@ class PersistenceCoordinationIT {
         // Healthy room can still persist mutations and delete its WAL while failedRoomId remains degraded.
         roomService.joinRoom(healthyRoomId, new JoinRoomRequest("Healthy Isolation Room", "Dana", null));
         withRoomLock(roomCoordinator, healthyRoomId, () -> {
-            RecoveredAggregate healthySnapshot = snapshotMapper.deserialize(walStore.recoverLatest(healthyRoomId).orElseThrow());
+            RecoveredRoom healthySnapshot = snapshotMapper.deserialize(walStore.recoverLatest(healthyRoomId).orElseThrow());
             assertThat(healthySnapshot.room().getPlayers()).containsExactlyInAnyOrder("HostB", "Bob", "Dana");
             assertThat(walStore.requiresCheckpoint(healthyRoomId)).isFalse();
             return null;
@@ -652,7 +652,7 @@ class PersistenceCoordinationIT {
 
         FAULT_INJECTOR.set(WalFaultInjector.NONE);
         awaitPendingSavesFlushed();
-        RecoveredAggregate recoveredFailed = withRoomLock(roomCoordinator, failedRoomId,
+        RecoveredRoom recoveredFailed = withRoomLock(roomCoordinator, failedRoomId,
                 () -> snapshotMapper.deserialize(walStore.recoverLatest(failedRoomId).orElseThrow()));
         assertThat(recoveredFailed.room().getPlayers()).containsExactlyInAnyOrder("HostA", "Alice", "Charlie");
     }

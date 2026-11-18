@@ -10,7 +10,7 @@ import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.RecoveryDecision;
 import com.pokergame.persistence.RoomRecoveryHandler;
-import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.persistence.snapshot.RecoveredRoom;
 import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.persistence.transaction.GameId;
 import com.pokergame.persistence.transaction.PostSaveActions;
@@ -77,7 +77,7 @@ public class RoomRestoreService implements RoomRecoveryHandler {
      *         {@link RecoveryDecision#DISCARD} when its WAL should be deleted
      */
     @Override
-    public RecoveryDecision restore(RecoveredAggregate recovered) {
+    public RecoveryDecision restore(RecoveredRoom recovered) {
         requireNonNull(recovered, "recovered must not be null");
         Room room = requireNonNull(recovered.room(), "recovered.room() must not be null");
         String roomId = room.getRoomId();

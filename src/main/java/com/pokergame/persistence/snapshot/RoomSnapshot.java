@@ -27,7 +27,7 @@ import java.util.Set;
  * @param room          the saved room details, or {@code null} for a deletion record
  * @param game          the saved game progress, or {@code null} if the game hasn't started
  */
-public record AggregateStateImage(boolean deleted, RoomState room, GameState game) {
+public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
 
     /**
      * Details about the room itself (the lobby) that we need to restore, like passwords and who joined when.
@@ -91,7 +91,7 @@ public record AggregateStateImage(boolean deleted, RoomState room, GameState gam
      * @param scheduledTaskGenerations      generation tokens protecting asynchronous task executions
      * @param forfeitPending                whether a pending forfeit preserves out standings
      * @param stateRevision                 monotonically increasing public state revision
-     * @param gameEndResult                 frozen immutable terminal result retained across post-game review
+     * @param gameEndResult                 frozen immutable game result retained across post-game review
      */
     public record GameState(String gameId, List<PlayerState> players, List<String> activePlayerIds,
             List<CardState> remainingDeck, List<CardState> communityCards, int pot, int currentHighestBet,
@@ -104,15 +104,15 @@ public record AggregateStateImage(boolean deleted, RoomState room, GameState gam
             String bigBlindPlayerId, String currentPlayerId, SettlementState lastSettlementResult,
             boolean finalPotSettled, ReadyGateState readyGateState, long handNumber,
             Map<ScheduledGameTask, Long> scheduledTaskGenerations, boolean forfeitPending, long stateRevision,
-            TerminalResultState gameEndResult) {
+            GameResultState gameEndResult) {
     }
 
     /** Plain persisted form of the immutable hand settlement result. */
     public record SettlementState(Map<String, Integer> contestedAwards, Map<String, Integer> refunds,
             Set<String> winnerIds, int remainder, boolean wentToShowdown) { }
 
-    /** Plain persisted form of the immutable terminal game end result. */
-    public record TerminalResultState(
+    /** Plain persisted form of the immutable game result. */
+    public record GameResultState(
             String type,
             String gameId,
             String winner,
@@ -155,7 +155,7 @@ public record AggregateStateImage(boolean deleted, RoomState room, GameState gam
             long stateRevision) {
     }
 
-    /** Plain persisted form of a player's public state in the terminal projection. */
+    /** Plain persisted form of a player's public state in the game result projection. */
     public record FinalPlayerState(
             String id,
             String name,

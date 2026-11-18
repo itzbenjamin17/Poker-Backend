@@ -40,9 +40,9 @@ import com.pokergame.util.LockLease;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.persistence.wal.WalFaultPoint;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
-import com.pokergame.persistence.snapshot.AggregateStateImage;
-import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
+import com.pokergame.persistence.snapshot.RoomSnapshot;
+import com.pokergame.persistence.snapshot.RecoveredRoom;
 import com.pokergame.util.MdcKeys;
 import com.pokergame.util.RoomCoordinator;
 import org.junit.jupiter.api.DisplayName;
@@ -64,7 +64,7 @@ class DurableMutationAspectTest {
     Path tempDir;
 
     @Mock
-    private AggregateSnapshotMapper snapshotMapper;
+    private RoomSnapshotMapper snapshotMapper;
 
     @Mock
     private RoomAggregates aggregates;
@@ -94,9 +94,9 @@ class DurableMutationAspectTest {
     void setUp() {
         properties = new PersistenceProperties(false, Path.of("data", "poker-wal"), null, Map.of(), 1000, 16L * 1024 * 1024, 5000);
         roomCoordinator = new RoomCoordinator();
-        AggregateStateImage mockImage = Mockito.mock(AggregateStateImage.class);
+        RoomSnapshot mockImage = Mockito.mock(RoomSnapshot.class);
         Mockito.lenient().when(snapshotMapper.captureStateImage(any(), any())).thenReturn(mockImage);
-        Mockito.lenient().when(snapshotMapper.serialize(any(AggregateStateImage.class))).thenReturn(new byte[]{1, 2, 3});
+        Mockito.lenient().when(snapshotMapper.serialize(any(RoomSnapshot.class))).thenReturn(new byte[]{1, 2, 3});
     }
 
     @AfterEach
@@ -362,7 +362,7 @@ class DurableMutationAspectTest {
             PostSaveActions.runAfterSave(() -> effects.add("effect-" + move));
             return move;
         });
-        when(snapshotMapper.serialize(any(AggregateStateImage.class))).thenThrow(new PersistenceException("injected serialization failure"));
+        when(snapshotMapper.serialize(any(RoomSnapshot.class))).thenThrow(new PersistenceException("injected serialization failure"));
 
         assertEquals(1, aspect.persist(joinPoint));
         assertEquals(List.of("effect-1"), effects);
@@ -385,8 +385,8 @@ class DurableMutationAspectTest {
         assertThrows(IllegalArgumentException.class, () -> aspect.persist(joinPoint));
         assertTrue(published.isEmpty());
         assertNull(PostSaveActions.currentRoomId());
-        verify(snapshotMapper, never()).serialize(any(AggregateStateImage.class));
-        verify(snapshotMapper, never()).serialize(any(AggregateStateImage.class));
+        verify(snapshotMapper, never()).serialize(any(RoomSnapshot.class));
+        verify(snapshotMapper, never()).serialize(any(RoomSnapshot.class));
     }
 
     @Test
@@ -396,7 +396,7 @@ class DurableMutationAspectTest {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
-        AggregateSnapshotMapper realMapper = spy(new AggregateSnapshotMapper(
+        RoomSnapshotMapper realMapper = spy(new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build()));
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, realMapper, aggregates, properties, roomCoordinator);
@@ -426,13 +426,13 @@ class DurableMutationAspectTest {
             assertTrue(roomCoordinator.isHeldByCurrentThread("room-capture"),
                     "Encoding must retain the established room coordination boundary");
             return inv.callRealMethod();
-        }).when(realMapper).serialize(any(AggregateStateImage.class));
+        }).when(realMapper).serialize(any(RoomSnapshot.class));
 
         ProceedingJoinPoint joinPoint = mutationPoint("room-capture", () -> "done");
         aspect.persist(joinPoint);
 
         verify(realMapper, times(2)).captureStateImage(room, game);
-        verify(realMapper).serialize(any(AggregateStateImage.class));
+        verify(realMapper).serialize(any(RoomSnapshot.class));
     }
 
     /** An accepted action's timer must still run if its preceding broadcast callback fails. */
@@ -441,7 +441,7 @@ class DurableMutationAspectTest {
         AtomicBoolean unavailable = new AtomicBoolean(false);
         EncryptedWalStore store = failingStore(unavailable);
         DurableMutationAspect aspect = aspectForRoom(store, "room-callback");
-        when(snapshotMapper.serialize(any(AggregateStateImage.class))).thenReturn(new byte[]{1});
+        when(snapshotMapper.serialize(any(RoomSnapshot.class))).thenReturn(new byte[]{1});
         List<String> effects = new ArrayList<>();
         ProceedingJoinPoint joinPoint = mutationPoint("room-callback", () -> {
             PostSaveActions.runAfterSave(() -> { throw new IllegalStateException("broker unavailable"); });
@@ -481,8 +481,8 @@ class DurableMutationAspectTest {
             return null;
         });
 
-        when(snapshotMapper.restoreStateImage(any(AggregateStateImage.class)))
-                .thenReturn(new RecoveredAggregate(originalRoom, originalGame, false));
+        when(snapshotMapper.restoreStateImage(any(RoomSnapshot.class)))
+                .thenReturn(new RecoveredRoom(originalRoom, originalGame, false));
 
         lenient().when(aggregates.find(roomId)).thenReturn(new RoomAggregate(originalRoom, originalGame));
 
@@ -577,10 +577,10 @@ class DurableMutationAspectTest {
         when(aggregates.find("room-pending-rollback")).thenReturn(new RoomAggregate(room, game));
 
         byte[] acceptedBytes = new byte[]{50, 51, 52};
-        AggregateStateImage capturedImage = mock(AggregateStateImage.class);
+        RoomSnapshot capturedImage = mock(RoomSnapshot.class);
         when(snapshotMapper.captureStateImage(any(), any())).thenReturn(capturedImage);
         when(snapshotMapper.serialize(capturedImage)).thenReturn(acceptedBytes);
-        when(snapshotMapper.restoreStateImage(capturedImage)).thenReturn(new RecoveredAggregate(room, game, false));
+        when(snapshotMapper.restoreStateImage(capturedImage)).thenReturn(new RecoveredRoom(room, game, false));
 
         // First mutation: domain succeeds, but storage fails (saving pendingSave with acceptedBytes)
         storageOutage.set(true);
@@ -619,7 +619,7 @@ class DurableMutationAspectTest {
         });
 
         // Serialization fails on first mutation
-        when(snapshotMapper.serialize(any(AggregateStateImage.class)))
+        when(snapshotMapper.serialize(any(RoomSnapshot.class)))
                 .thenThrow(new PersistenceException("transient serialization failure"))
                 .thenReturn(new byte[]{7, 8, 9});
 
@@ -661,9 +661,9 @@ class DurableMutationAspectTest {
 
         Room lobbyRoom = new Room(roomId, "Lobby Room", "Alice", 6, 10, 20, 1000, null);
         lobbyRoom.addPlayer("Alice");
-        RecoveredAggregate lobbyAggregate = new RecoveredAggregate(lobbyRoom, null, false);
+        RecoveredRoom lobbyAggregate = new RecoveredRoom(lobbyRoom, null, false);
         when(aggregates.find(roomId)).thenReturn(new RoomAggregate(lobbyRoom, null));
-        when(snapshotMapper.restoreStateImage(any(AggregateStateImage.class))).thenReturn(lobbyAggregate);
+        when(snapshotMapper.restoreStateImage(any(RoomSnapshot.class))).thenReturn(lobbyAggregate);
 
         ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
             throw new RuntimeException("Lobby mutation failure");
@@ -678,7 +678,7 @@ class DurableMutationAspectTest {
     @Test
     void failedDeletionSaveRetainsAndRetriesDeletionTombstone() throws Throwable {
         String roomId = "room-deletion-retry";
-        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
         AtomicBoolean failCommit = new AtomicBoolean(true);
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
@@ -708,7 +708,7 @@ class DurableMutationAspectTest {
     @Test
     void prepareFailureBeforeRejectedMutationQueuesRetryForExistingRoom() throws Throwable {
         String roomId = "room-prepare-rejected-retry";
-        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
         AtomicBoolean failPrepare = new AtomicBoolean(true);
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
@@ -744,10 +744,10 @@ class DurableMutationAspectTest {
     @Test
     void retryPendingSavesHoldsRoomLockWhenRecordingSnapshotFailure() throws Throwable {
         String roomId = "room-retry-failure-lock";
-        AggregateSnapshotMapper failingMapper = spy(new AggregateSnapshotMapper(
+        RoomSnapshotMapper failingMapper = spy(new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build()));
         doThrow(new PersistenceException("injected serialization outage"))
-                .when(failingMapper).serialize(any(AggregateStateImage.class));
+                .when(failingMapper).serialize(any(RoomSnapshot.class));
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = spy(new EncryptedWalStore(tempDir, keyring, roomCoordinator));
@@ -780,7 +780,7 @@ class DurableMutationAspectTest {
     @Test
     void storeFailuresAreRecordedOnlyByTheStoreAndRetryStillHeals() throws Throwable {
         String roomId = "room-store-records-once";
-        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
         AtomicReference<WalFaultPoint> outage = new AtomicReference<>(WalFaultPoint.BEFORE_COMMIT_WRITE);
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
@@ -813,7 +813,7 @@ class DurableMutationAspectTest {
     @Test
     void missingRoomRejectedMutationDuringPrepareOutageDoesNotDegradeStore() throws Throwable {
         String roomId = "room-missing-prepare-outage";
-        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
@@ -841,7 +841,7 @@ class DurableMutationAspectTest {
     @Test
     @DisplayName("Room B uses ordinary append and deletes normally even when room A has a write failure")
     void otherRoomUsesOrdinaryAppendAndDeletesNormallyWhenAnotherRoomHasWriteFailure() throws Throwable {
-        AggregateSnapshotMapper realMapper = new AggregateSnapshotMapper(
+        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
         AtomicReference<String> failRoom = new AtomicReference<>();
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(

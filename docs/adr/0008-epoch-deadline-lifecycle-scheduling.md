@@ -8,7 +8,7 @@ A Texas Hold'em match relies on several background timers (`ScheduledGameTask`: 
 
 ## Decision
 
-1. **Save Deadlines in Game State**: Store the exact wall-clock expiration time (`deadlineEpochMs`, `disconnectDeadlineEpochMs`, `readyCountdownDeadlineEpochMs`) and a task generation counter (`scheduledTaskGenerations`) directly on `Game` and `Player` so they are saved to disk as part of `AggregateStateImage`.
+1. **Save Deadlines in Game State**: Store the exact wall-clock expiration time (`deadlineEpochMs`, `disconnectDeadlineEpochMs`, `readyCountdownDeadlineEpochMs`) and a task generation counter (`scheduledTaskGenerations`) directly on `Game` and `Player` so they are saved to disk as part of `RoomSnapshot`.
 2. **Ignore Outdated Timer Callbacks**: When a scheduled task fires on Spring's `ThreadPoolTaskScheduler`, it locks the room and checks whether the `Game`'s current task generation counter and state still match the timer that was scheduled. If the game has already moved on (for example, a player acted before their turn timer ran out), the outdated callback does nothing.
 3. **Resume Timers on Startup**: When `PersistenceRecovery.java` restores saved rooms on server startup, it inspects each saved deadline:
    - If the deadline is still in the future, it schedules a timer for the remaining time.

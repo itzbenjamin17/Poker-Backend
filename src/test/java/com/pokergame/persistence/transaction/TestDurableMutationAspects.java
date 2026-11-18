@@ -2,7 +2,7 @@ package com.pokergame.persistence.transaction;
 
 import com.pokergame.persistence.RoomAggregates;
 import com.pokergame.persistence.config.PersistenceProperties;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
 import com.pokergame.util.RoomCoordinator;
 
 import java.nio.file.Path;
@@ -24,7 +24,7 @@ public final class TestDurableMutationAspects {
     public static DurableMutationAspect lockOnly() {
         PersistenceProperties properties = new PersistenceProperties(
                 false, Path.of("data", "poker-wal"), null, Map.of(), 1000, 16L * 1024 * 1024, 5000);
-        return new DurableMutationAspect(null, mock(AggregateSnapshotMapper.class),
+        return new DurableMutationAspect(null, mock(RoomSnapshotMapper.class),
                 mock(RoomAggregates.class), properties, new RoomCoordinator());
     }
 }

@@ -5,9 +5,9 @@ import com.pokergame.persistence.RoomAggregate;
 import com.pokergame.persistence.RoomAggregates;
 import com.pokergame.persistence.PersistenceException;
 import com.pokergame.persistence.config.PersistenceProperties;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
-import com.pokergame.persistence.snapshot.AggregateStateImage;
-import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
+import com.pokergame.persistence.snapshot.RoomSnapshot;
+import com.pokergame.persistence.snapshot.RecoveredRoom;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.WalTransaction;
 import com.pokergame.util.LockLease;
@@ -44,7 +44,7 @@ public final class DurableMutationAspect {
     private static final int WAL_RECORDS_PER_SAVE = 2;
 
     private final EncryptedWalStore store;
-    private final AggregateSnapshotMapper snapshotMapper;
+    private final RoomSnapshotMapper snapshotMapper;
     private final RoomAggregates aggregates;
     private final PersistenceProperties properties;
     private final RoomCoordinator roomCoordinator;
@@ -61,7 +61,7 @@ public final class DurableMutationAspect {
      * @param properties           settings for when to clean up old save files
      * @param roomCoordinator      coordinator managing room-scoped concurrency boundaries
      */
-    public DurableMutationAspect(EncryptedWalStore store, AggregateSnapshotMapper snapshotMapper,
+    public DurableMutationAspect(EncryptedWalStore store, RoomSnapshotMapper snapshotMapper,
             RoomAggregates aggregates, PersistenceProperties properties, RoomCoordinator roomCoordinator) {
         this.store = store;
         this.snapshotMapper = snapshotMapper;
@@ -199,7 +199,7 @@ public final class DurableMutationAspect {
         RoomAggregate aggregate = aggregates.find(roomId);
         if (aggregate == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
         // Keep capture and serialization within the stable room coordination boundary.
-        AggregateStateImage stateImage = snapshotMapper.captureStateImage(aggregate.room(), aggregate.game());
+        RoomSnapshot stateImage = snapshotMapper.captureStateImage(aggregate.room(), aggregate.game());
         return new PendingSave(snapshotMapper.serialize(stateImage), false);
     }
 
@@ -250,7 +250,7 @@ public final class DurableMutationAspect {
         RoomAggregate aggregate = aggregates.find(roomId);
         if (aggregate == null) return new RollbackState(null, Map.of());
         Room room = aggregate.room();
-        AggregateStateImage image = snapshotMapper.captureStateImage(room, aggregate.game());
+        RoomSnapshot image = snapshotMapper.captureStateImage(room, aggregate.game());
         Map<String, ConnectionState> connections = new HashMap<>();
         for (String player : room.getPlayers()) {
             connections.put(player, new ConnectionState(room.isPlayerConnected(player), room.getAbsenceDeadline(player)));
@@ -262,7 +262,7 @@ public final class DurableMutationAspect {
     private record ConnectionState(boolean connected, Long absenceDeadline) { }
 
     /** A null image denotes a room that did not exist before the rejected command. */
-    private record RollbackState(AggregateStateImage image, Map<String, ConnectionState> connections) { }
+    private record RollbackState(RoomSnapshot image, Map<String, ConnectionState> connections) { }
 
     /**
      * Restores the independent pre-mutation RAM image after a rejection. Disk may lag
@@ -272,7 +272,7 @@ public final class DurableMutationAspect {
         roomCoordinator.assertHeldByCurrentThread(roomId);
         try {
             if (beforeMutation != null && beforeMutation.image() != null) {
-                RecoveredAggregate aggregate = snapshotMapper.restoreStateImage(beforeMutation.image());
+                RecoveredRoom aggregate = snapshotMapper.restoreStateImage(beforeMutation.image());
                 // The one place connection flags are carried over: they are process-local, not in the image.
                 beforeMutation.connections().forEach((player, state) -> {
                     aggregate.room().setPlayerConnected(player, state.connected());

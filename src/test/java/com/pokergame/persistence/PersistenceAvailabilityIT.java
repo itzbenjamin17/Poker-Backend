@@ -8,8 +8,8 @@ import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.config.PersistenceProperties;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
-import com.pokergame.persistence.snapshot.RecoveredAggregate;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
+import com.pokergame.persistence.snapshot.RecoveredRoom;
 import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;
@@ -100,7 +100,7 @@ class PersistenceAvailabilityIT {
     private EncryptedWalStore walStore;
 
     @Autowired
-    private AggregateSnapshotMapper snapshotMapper;
+    private RoomSnapshotMapper snapshotMapper;
 
     @Autowired
     private DurableMutationAspect durableMutationAspect;
@@ -190,7 +190,7 @@ class PersistenceAvailabilityIT {
         try (LockLease _ = roomCoordinator.acquire(roomId)) {
             recoveredBytes = walStore.recoverLatest(roomId).orElseThrow();
         }
-        RecoveredAggregate recovered = snapshotMapper.deserialize(recoveredBytes);
+        RecoveredRoom recovered = snapshotMapper.deserialize(recoveredBytes);
         assertThat(recovered.game().getStateRevision()).isEqualTo(liveRevision);
     }
 

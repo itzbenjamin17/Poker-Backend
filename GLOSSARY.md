@@ -89,17 +89,17 @@ The final match summary recording the overall winner, winning chip total, whethe
 
 ## Persistence & Crash Recovery Terms
 
-**Aggregate (`RecoveredAggregate`, `AggregateSnapshotMapper`)**:
+**Aggregate (`RecoveredRoom`, `RoomSnapshotMapper`)**:
 Domain-Driven Design term used in the persistence package for a room (`Room`) and its active game (`Game`) treated together as one self-contained unit when saving, restoring, or rolling back state.
 
 **DurableMutation (`@DurableMutation`)**:
 An annotation on room and game service methods that changes live state in memory, rolls back memory if an error is thrown, and saves an encrypted backup of the room to disk.
 
-**AggregateStateImage**:
+**RoomSnapshot**:
 A frozen, versioned copy of a `Room` and its `Game` at a specific moment that can be safely encrypted and written to disk or used to roll back a failed change in memory.
 
 **EncryptedWalStore (`WalTransaction`)**:
-The per-room encrypted save file (`<roomId>.wal`, short for Write-Ahead Log) on disk that records the latest `AggregateStateImage` so active games survive a server restart; broken save files are renamed to `<roomId>.wal.corrupted` on startup so one bad file doesn't stop the server from booting.
+The per-room encrypted save file (`<roomId>.wal`, short for Write-Ahead Log) on disk that records the latest `RoomSnapshot` so active games survive a server restart; broken save files are renamed to `<roomId>.wal.corrupted` on startup so one bad file doesn't stop the server from booting.
 
 **Transient**:
 Something that is in-memory so it is not persisted to disk and is lost on server restart.
