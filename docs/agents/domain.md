@@ -4,9 +4,11 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`GLOSSARY.md`** at the repo root for the canonical ubiquitous language and avoided synonyms.
-- **`docs/ai/PROJECT.md`** as the canonical project context.
-- **`GEMINI.md`** at the repo root for compatibility with older workflows.
+- **`GLOSSARY.md`** at the repo root for the canonical ubiquitous language (avoided jargon terms live in `CODING_STANDARDS.md` §Naming And Javadoc).
+- **`AGENTS.md`** and **`CODING_STANDARDS.md`** at the repo root for workflow rules and review standards.
+- **`docs/ai/PROJECT.md`** as the canonical system architecture and runtime invariants context.
+- **`docs/agents/roles.md`** for subagent role and model selection.
+- **`CLAUDE.md`** and **`GEMINI.md`** at the repo root as compatibility entry points.
 - **`docs/adr/`** — read ADRs that touch the area you're about to work in.
 
 ## File structure
@@ -15,9 +17,13 @@ Single-context repo:
 
 ```
 /
-├── GLOSSARY.md
+├── AGENTS.md
+├── CLAUDE.md
+├── CODING_STANDARDS.md
 ├── GEMINI.md
+├── GLOSSARY.md
 ├── docs/ai/PROJECT.md
+├── docs/agents/roles.md
 ├── docs/adr/
 │   ├── 0001-encrypted-state-image-wal-with-spring-aop.md
 │   ├── 0002-quarantine-corrupted-wal-during-startup-recovery.md
@@ -35,7 +41,7 @@ Single-context repo:
 
 ## Use the glossary's vocabulary
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md`. Don't drift to synonyms the glossary explicitly avoids.
+When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md`. Avoid the banned jargon listed in `CODING_STANDARDS.md` §Naming And Javadoc.
 
 If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap to capture via `/domain-modeling`.
 

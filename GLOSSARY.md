@@ -10,6 +10,9 @@ A poker table's lobby and configuration—holding the room name, blinds, buy-in,
 **Host (`hostName`)**:
 The player who created the room (or inherited host status) and is allowed to start the game.
 
+**Player**:
+A room/game participant whose authenticated identity is player name plus room ID.
+
 **membershipId**:
 A unique pass generated each time a player joins a room and embedded in their JWT token; if a player leaves and rejoins, their old token's `membershipId` no longer matches and is rejected.
 
@@ -24,10 +27,16 @@ A concurrency mechanism that allows one thread at a time to run a protected oper
 **LockLease**:
 An `AutoCloseable` handle representing one successful lock acquisition. The acquiring thread holds the lock until it closes the lease, usually automatically at the end of a try-with-resources block. Like a C file handle represents an open file, a lease represents an acquired lock; closing it releases that acquisition but does not necessarily remove the lock from the registry.
 
+**Room lock**:
+The per-room lock managed by `RoomCoordinator` and held via a `LockLease` so only one thread operates on a room at a time.
+
 ## Game & Hand Progression
 
 **Game**:
 The live poker match running inside a `Room` (sharing the same ID), tracking the deck, seated players, chip stacks, betting rounds, and pots across hands.
+
+**Hand / round**:
+One deal and betting sequence ending in showdown, distinct from game completion.
 
 **GamePhase**:
 The current stage of a poker hand: `PRE_FLOP`, `FLOP`, `TURN`, `RIVER`, or `SHOWDOWN`.
@@ -38,17 +47,20 @@ The helper that tracks how many chips each player has put in during a hand (`han
 **HandSettlementResult**:
 The final breakdown at the end of a hand showing who won which pot, any uncalled bets returned, and who received any odd chip from a split pot.
 
-**ReadyGate (`ReadyGateState`)**:
-The between-hand pause and countdown (`CLOSED`, `COUNTING_DOWN`, `WAITING_FOR_PLAYERS`) where players mark ready before the next hand is dealt.
+**ReadyGate (`ReadyGateState`, ready countdown)**:
+The shared between-hand pause and countdown gate (`CLOSED`, `COUNTING_DOWN`, `WAITING_FOR_PLAYERS`) where players mark ready before the next hand is dealt.
 
 **ScheduledGameTask**:
 A timed background action (`AUTO_ADVANCE`, `READY_OPEN`, `NEW_HAND`, `DISCONNECT_CLEANUP`, `CLEANUP`) stored on the game with an exact clock deadline (`deadlineEpochMs`) and timer version so timers can safely resume after a server restart.
 
+**timerVersion (`timerVersions`)**:
+The per-task counter on `Game` incremented whenever a `ScheduledGameTask` is scheduled or cancelled so stale timer callbacks are ignored.
+
 **stateRevision**:
 A counter (`1, 2, 3...`) that goes up every time the public game state changes, allowing clients to tell which update is newest and ignore out-of-order messages.
 
-**disconnectGracePeriodMs**:
-The time window (120 seconds by default) after a player's last browser tab disconnects during which their seat, chips, and cards are held before they are auto-folded and removed.
+**disconnectGracePeriodMs (disconnect deadline)**:
+The grace window (120 seconds by default) and resulting absolute deadline after a player's last WebSocket session disconnects during which their seat, chips, and cards are held before automatic fold and removal.
 
 ### End-State Flags
 
@@ -78,8 +90,8 @@ Room-level flag mirroring `gameOver` once the match finishes so `RoomService` ke
 
 ## Client Payloads & Views
 
-**PublicGameStateResponse**:
-The shared table state sent to everyone in the room (community cards, pots, chip stacks, turn timers, and current bets), with opponents' face-down hole cards hidden.
+**Public snapshot (`PublicGameStateResponse`)**:
+The shared table state projection sent to everyone in the room (community cards, pots, chip stacks, turn timers, and current bets), excluding live private hole cards and deck order.
 
 **PrivatePlayerState**:
 A player's confidential view containing only their own player ID, hand number, and face-down hole cards, delivered only to that player.
@@ -89,17 +101,26 @@ The final match summary recording the overall winner, winning chip total, whethe
 
 ## Persistence & Crash Recovery Terms
 
-**Aggregate (`RecoveredRoom`, `RoomSnapshotMapper`)**:
-Domain-Driven Design term used in the persistence package for a room (`Room`) and its active game (`Game`) treated together as one self-contained unit when saving, restoring, or rolling back state.
+**RoomAggregate**:
+The `persistence/` record pairing a live `Room` and its active `Game` (if any) as one unit when reading, replacing, or removing room state.
+
+**RecoveredRoom**:
+The record returned when loading a saved room during startup recovery, pairing the restored `Room`, its restored `Game` (if any), and a `deleted` tombstone flag.
+
+**RoomSnapshotMapper**:
+The mapper that converts live `Room` and `Game` state into a `RoomSnapshot` before saving and reconstructs a `RecoveredRoom` from a saved `RoomSnapshot`.
+
+**GameResultState**:
+The persisted form inside `RoomSnapshot.GameState` that stores a finished match's `GameEndResponse` for post-game review across restarts.
 
 **DurableMutation (`@DurableMutation`)**:
 An annotation on room and game service methods that changes live state in memory, rolls back memory if an error is thrown, and saves an encrypted backup of the room to disk.
 
 **RoomSnapshot**:
-A frozen, versioned copy of a `Room` and its `Game` at a specific moment that can be safely encrypted and written to disk or used to roll back a failed change in memory.
+A frozen copy of a `Room` and its `Game` at a specific moment that can be safely encrypted and written to disk or used to roll back a failed change in memory.
 
-**EncryptedWalStore (`WalTransaction`)**:
-The per-room encrypted save file (`<roomId>.wal`, short for Write-Ahead Log) on disk that records the latest `RoomSnapshot` so active games survive a server restart; broken save files are renamed to `<roomId>.wal.corrupted` on startup so one bad file doesn't stop the server from booting.
+**WAL (`EncryptedWalStore`, `WalTransaction`)**:
+The per-room encrypted save file (`<roomId>.wal`, short for Write-Ahead Log) on disk that retains current live recoverable state (`RoomSnapshot`) rather than a historical hand archive; broken save files are renamed to `<roomId>.wal.corrupted` on startup so one bad file doesn't stop the server from booting.
 
 **Transient**:
 Something that is in-memory so it is not persisted to disk and is lost on server restart.
