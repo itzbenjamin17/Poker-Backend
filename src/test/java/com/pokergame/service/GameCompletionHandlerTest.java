@@ -358,7 +358,7 @@ class GameCompletionHandlerTest {
             game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 5000L);
             game.scheduleTask(ScheduledGameTask.READY_OPEN, BASE_EPOCH_MS + 6000L);
             timerRegistry.schedule(ROOM_ID, ScheduledGameTask.TURN_TIMEOUT, BASE_EPOCH_MS + 5000L, () -> {});
-            long genBefore = game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT);
+            long timerVersionBefore = game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT);
 
             clearInvocations(messagingTemplate);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
@@ -368,7 +368,7 @@ class GameCompletionHandlerTest {
             assertTrue(game.isGameOver());
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
-            assertThat(game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT)).isGreaterThan(genBefore);
+            assertThat(game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT)).isGreaterThan(timerVersionBefore);
             verify(messagingTemplate, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(GameEndResponse.class));
 
             // Repeat call is idempotent

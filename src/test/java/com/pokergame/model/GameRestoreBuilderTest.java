@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Dedicated unit tests for {@link GameRestoreBuilder}.
  * Verifies snapshot reconstruction across all 36 internal fields, validation rules,
- * fallback defaults, deck draw integrity, task scheduling generations, state revisions,
+ * fallback defaults, deck draw integrity, task scheduling timer versions, state revisions,
  * and defensive collection isolation.
  */
 @Tag("unit")
@@ -63,7 +63,7 @@ class GameRestoreBuilderTest {
         Map<ScheduledGameTask, Long> taskDeadlines = Map.of(
                 ScheduledGameTask.AUTO_ADVANCE, 1700000005000L,
                 ScheduledGameTask.CLEANUP, 1700000060000L);
-        Map<ScheduledGameTask, Long> taskGenerations = Map.of(
+        Map<ScheduledGameTask, Long> timerVersions = Map.of(
                 ScheduledGameTask.AUTO_ADVANCE, 3L,
                 ScheduledGameTask.CLEANUP, 1L);
 
@@ -112,7 +112,7 @@ class GameRestoreBuilderTest {
                 .allPlayersHadInitialTurn(true)                     // 32
                 .actedPlayersInRound(actedPlayers)                  // 33
                 .scheduledTaskDeadlines(taskDeadlines)              // 34
-                .scheduledTaskGenerations(taskGenerations)          // 35
+                .timerVersions(timerVersions)                       // 35
                 .build();
 
         // Direct assertions on all 35 fields
@@ -156,10 +156,10 @@ class GameRestoreBuilderTest {
                 game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));           // 35
         assertEquals(taskDeadlines, game.getScheduledTaskDeadlinesSnapshot());        // 35
         assertEquals(3L,
-                game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE));    // 36
+                game.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));             // 36
         assertEquals(1L,
-                game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));         // 36
-        assertEquals(taskGenerations, game.getScheduledTaskGenerationsSnapshot());    // 36
+                game.getTimerVersion(ScheduledGameTask.CLEANUP));                  // 36
+        assertEquals(timerVersions, game.getTimerVersionsSnapshot());              // 36
 
         // A restored hand that already has a settlement returns without modifying the recorded winners
         game.conductShowdown();
@@ -336,47 +336,47 @@ class GameRestoreBuilderTest {
     }
 
     // =========================================================================
-    // 4. Scheduled Tasks and Generations Restoration Tests
+    // 4. Scheduled Tasks and Timer Versions Restoration Tests
     // =========================================================================
 
     @Test
-    @DisplayName("scheduledTasks_DeadlinesAndGenerationsPreserved: checks queries and snapshots")
-    void scheduledTasks_DeadlinesAndGenerationsPreserved() {
+    @DisplayName("scheduledTasks_DeadlinesAndTimerVersionsPreserved: checks queries and snapshots")
+    void scheduledTasks_DeadlinesAndTimerVersionsPreserved() {
         Map<ScheduledGameTask, Long> deadlines = Map.of(
                 ScheduledGameTask.AUTO_ADVANCE, 50000L,
                 ScheduledGameTask.READY_TIMEOUT, 60000L);
-        Map<ScheduledGameTask, Long> generations = Map.of(
+        Map<ScheduledGameTask, Long> timerVersions = Map.of(
                 ScheduledGameTask.AUTO_ADVANCE, 2L,
                 ScheduledGameTask.READY_TIMEOUT, 4L);
 
         Game game = defaultBuilder()
                 .scheduledTaskDeadlines(deadlines)
-                .scheduledTaskGenerations(generations)
+                .timerVersions(timerVersions)
                 .build();
 
         assertEquals(50000L, game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
         assertEquals(60000L, game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
         assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
 
-        assertEquals(2L, game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE));
-        assertEquals(4L, game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT));
-        assertEquals(0L, game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
+        assertEquals(2L, game.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
+        assertEquals(4L, game.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
+        assertEquals(0L, game.getTimerVersion(ScheduledGameTask.CLEANUP));
 
         assertEquals(deadlines, game.getScheduledTaskDeadlinesSnapshot());
-        assertEquals(generations, game.getScheduledTaskGenerationsSnapshot());
+        assertEquals(timerVersions, game.getTimerVersionsSnapshot());
     }
 
     @Test
-    @DisplayName("scheduledTasks_NullGenerationsMapDefaultsGracefully: leaves generations empty")
-    void scheduledTasks_NullGenerationsMapDefaultsGracefully() {
+    @DisplayName("scheduledTasks_NullTimerVersionsMapDefaultsGracefully: leaves timerVersions empty")
+    void scheduledTasks_NullTimerVersionsMapDefaultsGracefully() {
         Game game = defaultBuilder()
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 99999L))
-                .scheduledTaskGenerations(null)
+                .timerVersions(null)
                 .build();
 
         assertEquals(99999L, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
-        assertEquals(0L, game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
-        assertTrue(game.getScheduledTaskGenerationsSnapshot().isEmpty());
+        assertEquals(0L, game.getTimerVersion(ScheduledGameTask.CLEANUP));
+        assertTrue(game.getTimerVersionsSnapshot().isEmpty());
     }
 
     // =========================================================================
@@ -565,7 +565,7 @@ class GameRestoreBuilderTest {
                 .allPlayersHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
-                .scheduledTaskGenerations(Map.of());
+                .timerVersions(Map.of());
     }
 
     @Nested
@@ -595,8 +595,8 @@ class GameRestoreBuilderTest {
             Set<String> mutableActed = new HashSet<>(Set.of("p1"));
             Map<ScheduledGameTask, Long> mutableDeadlines = new EnumMap<>(ScheduledGameTask.class);
             mutableDeadlines.put(ScheduledGameTask.AUTO_ADVANCE, 5000L);
-            Map<ScheduledGameTask, Long> mutableGenerations = new EnumMap<>(ScheduledGameTask.class);
-            mutableGenerations.put(ScheduledGameTask.AUTO_ADVANCE, 1L);
+            Map<ScheduledGameTask, Long> mutableTimerVersions = new EnumMap<>(ScheduledGameTask.class);
+            mutableTimerVersions.put(ScheduledGameTask.AUTO_ADVANCE, 1L);
 
             GameRestoreBuilder builder = Game.restoreBuilder()
                     .gameId(GAME_ID)
@@ -610,7 +610,7 @@ class GameRestoreBuilderTest {
                     .handSeatOrder(mutableSeatOrder)
                     .actedPlayersInRound(mutableActed)
                     .scheduledTaskDeadlines(mutableDeadlines)
-                    .scheduledTaskGenerations(mutableGenerations);
+                    .timerVersions(mutableTimerVersions);
 
             // --- Mutate BEFORE build() ---
             mutablePlayers.add(p3);
@@ -622,7 +622,7 @@ class GameRestoreBuilderTest {
             mutableSeatOrder.add("p3");
             mutableActed.add("p2");
             mutableDeadlines.put(ScheduledGameTask.CLEANUP, 9000L);
-            mutableGenerations.put(ScheduledGameTask.CLEANUP, 2L);
+            mutableTimerVersions.put(ScheduledGameTask.CLEANUP, 2L);
 
             // Build game
             Game game = builder.build();
@@ -638,7 +638,7 @@ class GameRestoreBuilderTest {
             assertEquals(List.of("p1", "p2", "p3"), game.getHandSeatOrderSnapshot());
             assertTrue(game.getActedPlayerIdsSnapshot().contains("p2"));
             assertEquals(9000L, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
-            assertEquals(2L, game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
+            assertEquals(2L, game.getTimerVersion(ScheduledGameTask.CLEANUP));
 
             // --- Mutate AFTER build() ---
             mutablePlayers.clear();
@@ -650,7 +650,7 @@ class GameRestoreBuilderTest {
             mutableSeatOrder.clear();
             mutableActed.clear();
             mutableDeadlines.clear();
-            mutableGenerations.clear();
+            mutableTimerVersions.clear();
 
             // Game internal state MUST remain unchanged (defensive copies verified)
             assertEquals(3, game.getPlayers().size(), "players was affected by post-build mutation");
@@ -662,7 +662,7 @@ class GameRestoreBuilderTest {
             assertEquals(3, game.getHandSeatOrderSnapshot().size(), "handSeatOrder was affected by post-build mutation");
             assertEquals(2, game.getActedPlayerIdsSnapshot().size(), "actedPlayersInRound was affected by post-build mutation");
             assertEquals(2, game.getScheduledTaskDeadlinesSnapshot().size(), "scheduledTaskDeadlines was affected by post-build mutation");
-            assertEquals(2, game.getScheduledTaskGenerationsSnapshot().size(), "scheduledTaskGenerations was affected by post-build mutation");
+            assertEquals(2, game.getTimerVersionsSnapshot().size(), "timerVersions was affected by post-build mutation");
         }
 
         @Test
@@ -847,30 +847,30 @@ class GameRestoreBuilderTest {
         }
 
         @Test
-        @DisplayName("boundary_ScheduledTasks_DeadlinesAndGenerations_ExtremeValues")
+        @DisplayName("boundary_ScheduledTasks_DeadlinesAndTimerVersions_ExtremeValues")
         void testBoundary_ScheduledTasksExtremeValues() {
             Map<ScheduledGameTask, Long> extremeDeadlines = Map.of(
                     ScheduledGameTask.AUTO_ADVANCE, 0L,
                     ScheduledGameTask.READY_TIMEOUT, -1L,
                     ScheduledGameTask.CLEANUP, Long.MAX_VALUE);
 
-            Map<ScheduledGameTask, Long> extremeGenerations = Map.of(
+            Map<ScheduledGameTask, Long> extremeTimerVersions = Map.of(
                     ScheduledGameTask.AUTO_ADVANCE, 0L,
                     ScheduledGameTask.READY_TIMEOUT, Long.MAX_VALUE - 1,
                     ScheduledGameTask.CLEANUP, Long.MAX_VALUE);
 
             Game game = defaultBuilder()
                     .scheduledTaskDeadlines(extremeDeadlines)
-                    .scheduledTaskGenerations(extremeGenerations)
+                    .timerVersions(extremeTimerVersions)
                     .build();
 
             assertEquals(0L, game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(-1L, game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
             assertEquals(Long.MAX_VALUE, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
 
-            assertEquals(0L, game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(Long.MAX_VALUE - 1, game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT));
-            assertEquals(Long.MAX_VALUE, game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
+            assertEquals(0L, game.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(Long.MAX_VALUE - 1, game.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(Long.MAX_VALUE, game.getTimerVersion(ScheduledGameTask.CLEANUP));
         }
 
         @Test
@@ -1096,7 +1096,7 @@ class GameRestoreBuilderTest {
                     .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
-                    .scheduledTaskGenerations(Map.of());
+                    .timerVersions(Map.of());
         }
     }
 }

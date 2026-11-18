@@ -181,13 +181,13 @@ public class GameLifecycleService {
 
     /**
      * Executes a scheduled game timer if the game still expects that deadline, hand number, and
-     * timer generation.
+     * timer version.
      *
-     * @param gameId             the unique ID of the game
-     * @param task               the timer type that fired
-     * @param expectedDeadline   the captured execution epoch time in milliseconds
-     * @param expectedHandNumber the hand number active when the timer was scheduled
-     * @param expectedGeneration the timer generation active when the timer was scheduled
+     * @param gameId               the unique ID of the game
+     * @param task                 the timer type that fired
+     * @param expectedDeadline     the captured execution epoch time in milliseconds
+     * @param expectedHandNumber   the hand number active when the timer was scheduled
+     * @param expectedTimerVersion the timer version active when the timer was scheduled
      */
     @DurableMutation
     public void executeScheduledTask(
@@ -195,12 +195,12 @@ public class GameLifecycleService {
             ScheduledGameTask task,
             long expectedDeadline,
             long expectedHandNumber,
-            long expectedGeneration) {
+            long expectedTimerVersion) {
         if (task == null) {
             return;
         }
         Game game = activeGames.get(gameId);
-        if (!taskScheduler.claimTimer(game, task, expectedDeadline, expectedHandNumber, expectedGeneration)) {
+        if (!taskScheduler.claimTimer(game, task, expectedDeadline, expectedHandNumber, expectedTimerVersion)) {
             return;
         }
         switch (task) {

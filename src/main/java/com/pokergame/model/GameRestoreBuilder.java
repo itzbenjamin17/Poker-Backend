@@ -49,7 +49,7 @@ public class GameRestoreBuilder {
     private boolean allPlayersHadInitialTurn;
     private Set<String> actedPlayersInRound;
     private Map<ScheduledGameTask, Long> scheduledTaskDeadlines;
-    private Map<ScheduledGameTask, Long> scheduledTaskGenerations;
+    private Map<ScheduledGameTask, Long> timerVersions;
 
     /**
      * Package-private constructor so callers outside com.pokergame.model
@@ -218,8 +218,8 @@ public class GameRestoreBuilder {
         return this;
     }
 
-    public GameRestoreBuilder scheduledTaskGenerations(Map<ScheduledGameTask, Long> value) {
-        this.scheduledTaskGenerations = value;
+    public GameRestoreBuilder timerVersions(Map<ScheduledGameTask, Long> value) {
+        this.timerVersions = value;
         return this;
     }
 
@@ -355,7 +355,7 @@ public class GameRestoreBuilder {
         return scheduledTaskDeadlines;
     }
 
-    Map<ScheduledGameTask, Long> getScheduledTaskGenerations() {
-        return scheduledTaskGenerations;
+    Map<ScheduledGameTask, Long> getTimerVersions() {
+        return timerVersions;
     }
 }

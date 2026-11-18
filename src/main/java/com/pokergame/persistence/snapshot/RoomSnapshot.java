@@ -88,7 +88,7 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
      * @param finalPotSettled               guards the final carry-over award against recovery-time repayout
      * @param readyGateState                current ready-gate state machine phase
      * @param handNumber                    authoritative completed-hand count
-     * @param scheduledTaskGenerations      generation tokens protecting asynchronous task executions
+     * @param timerVersions                 timer version tokens protecting asynchronous task executions
      * @param forfeitPending                whether a pending forfeit preserves out standings
      * @param stateRevision                 monotonically increasing public state revision
      * @param gameEndResult                 frozen immutable game result retained across post-game review
@@ -103,7 +103,7 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
             List<String> handSeatOrder, String dealerPlayerId, String smallBlindPlayerId,
             String bigBlindPlayerId, String currentPlayerId, SettlementState lastSettlementResult,
             boolean finalPotSettled, ReadyGateState readyGateState, long handNumber,
-            Map<ScheduledGameTask, Long> scheduledTaskGenerations, boolean forfeitPending, long stateRevision,
+            Map<ScheduledGameTask, Long> timerVersions, boolean forfeitPending, long stateRevision,
             GameResultState gameEndResult) {
     }
 

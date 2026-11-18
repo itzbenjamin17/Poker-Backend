@@ -480,14 +480,14 @@ class LifecycleCoordinationIT {
             String roomId = roomFixtures.createAndConnectRoom("Turn Stale Room", "Host", 1000, "Alice", "Bob");
             gameLifecycleService.createGameFromRoom(roomId);
 
-            record TurnSnapshot(String actor, Long deadline, long hand, long generation) {}
+            record TurnSnapshot(String actor, Long deadline, long hand, long timerVersion) {}
             TurnSnapshot turn1 = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = gameLifecycleService.getGame(roomId);
                 return new TurnSnapshot(
                         game.getCurrentPlayer().getName(),
                         game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT),
                         game.getHandNumber(),
-                        game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT));
+                        game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT));
             });
 
             playerActionService.processPlayerAction(
@@ -499,13 +499,13 @@ class LifecycleCoordinationIT {
                         game.getCurrentPlayer().getName(),
                         game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT),
                         game.getHandNumber(),
-                        game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT));
+                        game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT));
             });
             assertThat(turn2.actor()).isNotEqualTo(turn1.actor());
 
             // Stale callback from Turn 1
             gameLifecycleService.executeScheduledTask(
-                    roomId, ScheduledGameTask.TURN_TIMEOUT, turn1.deadline(), turn1.hand(), turn1.generation());
+                    roomId, ScheduledGameTask.TURN_TIMEOUT, turn1.deadline(), turn1.hand(), turn1.timerVersion());
 
             withRoomLock(roomCoordinator, roomId, () -> {
                 Room room = roomService.getRoom(roomId);
@@ -513,7 +513,7 @@ class LifecycleCoordinationIT {
                 assertThat(room.hasPlayer(turn2.actor())).isTrue();
                 assertThat(game.getCurrentPlayer().getName()).isEqualTo(turn2.actor());
                 assertThat(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(turn2.deadline());
-                assertThat(game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(turn2.generation());
+                assertThat(game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(turn2.timerVersion());
                 assertThat(game.isGameOver()).isFalse();
                 return null;
             });
@@ -532,10 +532,10 @@ class LifecycleCoordinationIT {
                         null,
                         game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT),
                         game.getHandNumber(),
-                        game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT));
+                        game.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
             });
             gameLifecycleService.executeScheduledTask(
-                    roomId, ScheduledGameTask.READY_TIMEOUT, readyTimer.deadline(), readyTimer.hand(), readyTimer.generation());
+                    roomId, ScheduledGameTask.READY_TIMEOUT, readyTimer.deadline(), readyTimer.hand(), readyTimer.timerVersion());
 
             withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(gameLifecycleService.getGame(roomId).getHandNumber()).isGreaterThan(turn1.hand());
@@ -544,7 +544,7 @@ class LifecycleCoordinationIT {
 
             // Stale Turn 1 callback from Hand 1 during Hand 2 is a no-op
             gameLifecycleService.executeScheduledTask(
-                    roomId, ScheduledGameTask.TURN_TIMEOUT, turn1.deadline(), turn1.hand(), turn1.generation());
+                    roomId, ScheduledGameTask.TURN_TIMEOUT, turn1.deadline(), turn1.hand(), turn1.timerVersion());
 
             withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = gameLifecycleService.getGame(roomId);
@@ -609,8 +609,8 @@ class LifecycleCoordinationIT {
             Long turnDeadline = withRoomLock(roomCoordinator, roomId, () ->
                     gameLifecycleService.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
             long handNumber = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
-            long generation = withRoomLock(roomCoordinator, roomId, () ->
-                    gameLifecycleService.getGame(roomId).getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT));
+            long timerVersion = withRoomLock(roomCoordinator, roomId, () ->
+                    gameLifecycleService.getGame(roomId).getTimerVersion(ScheduledGameTask.TURN_TIMEOUT));
 
             try (ExecutorService executor = Executors.newFixedThreadPool(3)) {
                 CyclicBarrier barrier = new CyclicBarrier(3);
@@ -634,7 +634,7 @@ class LifecycleCoordinationIT {
                 futures.add(executor.submit(() -> {
                     barrier.await(5, TimeUnit.SECONDS);
                     gameLifecycleService.executeScheduledTask(
-                            roomId, ScheduledGameTask.TURN_TIMEOUT, turnDeadline, handNumber, generation);
+                            roomId, ScheduledGameTask.TURN_TIMEOUT, turnDeadline, handNumber, timerVersion);
                     return null;
                 }));
                 futures.add(executor.submit(() -> {
@@ -696,8 +696,8 @@ class LifecycleCoordinationIT {
             gameLifecycleService.markPlayerReadyForNextHand(roomId, "Host");
             long deadline = withRoomLock(roomCoordinator, roomId, () ->
                     gameLifecycleService.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
-            long generation = withRoomLock(roomCoordinator, roomId, () ->
-                    gameLifecycleService.getGame(roomId).getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT));
+            long timerVersion = withRoomLock(roomCoordinator, roomId, () ->
+                    gameLifecycleService.getGame(roomId).getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
 
             try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
                 CyclicBarrier start = new CyclicBarrier(2);
@@ -713,7 +713,7 @@ class LifecycleCoordinationIT {
                 Future<?> timeout = executor.submit(() -> {
                     start.await(5, TimeUnit.SECONDS);
                     gameLifecycleService.executeScheduledTask(
-                            roomId, ScheduledGameTask.READY_TIMEOUT, deadline, hand, generation);
+                            roomId, ScheduledGameTask.READY_TIMEOUT, deadline, hand, timerVersion);
                     return null;
                 });
                 ready.get(5, TimeUnit.SECONDS);
@@ -752,11 +752,11 @@ class LifecycleCoordinationIT {
                 return game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
             });
             long hand = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
-            long generation = withRoomLock(roomCoordinator, roomId, () ->
-                    gameLifecycleService.getGame(roomId).getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
+            long timerVersion = withRoomLock(roomCoordinator, roomId, () ->
+                    gameLifecycleService.getGame(roomId).getTimerVersion(ScheduledGameTask.CLEANUP));
 
             gameLifecycleService.executeScheduledTask(
-                    roomId, ScheduledGameTask.CLEANUP, cleanupDeadline, hand, generation);
+                    roomId, ScheduledGameTask.CLEANUP, cleanupDeadline, hand, timerVersion);
 
             withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(gameLifecycleService.gameExists(roomId)).isFalse();
@@ -815,11 +815,11 @@ class LifecycleCoordinationIT {
                     gameLifecycleService.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
             assertThat(cleanupDeadline).isPositive();
             long hand = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
-            long generation = withRoomLock(roomCoordinator, roomId, () ->
-                    gameLifecycleService.getGame(roomId).getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
+            long timerVersion = withRoomLock(roomCoordinator, roomId, () ->
+                    gameLifecycleService.getGame(roomId).getTimerVersion(ScheduledGameTask.CLEANUP));
 
             gameLifecycleService.executeScheduledTask(
-                    roomId, ScheduledGameTask.CLEANUP, cleanupDeadline, hand, generation);
+                    roomId, ScheduledGameTask.CLEANUP, cleanupDeadline, hand, timerVersion);
 
             await().atMost(ASYNC_TIMEOUT).untilAsserted(() -> {
                 assertThat(withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId))).isNull();

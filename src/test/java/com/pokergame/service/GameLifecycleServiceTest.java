@@ -391,12 +391,12 @@ class GameLifecycleServiceTest {
             runout.getPlayers().forEach(player -> setPlayerChips(player, 5));
             long nextHandDeadline = BASE_EPOCH_MS + 1_000L;
             runout.scheduleTask(ScheduledGameTask.NEW_HAND, nextHandDeadline);
-            long nextHandGen = runout.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND);
+            long nextHandVersion = runout.getTimerVersion(ScheduledGameTask.NEW_HAND);
             reset(gameStateService);
             stubGameEndCapture();
 
             withRoomLock(headsUp.getRoomId(), () -> gameLifecycleService.executeScheduledTask(
-                    headsUp.getRoomId(), ScheduledGameTask.NEW_HAND, nextHandDeadline, runout.getHandNumber(), nextHandGen));
+                    headsUp.getRoomId(), ScheduledGameTask.NEW_HAND, nextHandDeadline, runout.getHandNumber(), nextHandVersion));
 
             assertTrue(runout.getActivePlayers().stream().allMatch(Player::isAllIn));
             assertEquals(5, runout.getCurrentHighestBet());
@@ -428,12 +428,12 @@ class GameLifecycleServiceTest {
                         index == nextSmallBlindIndex ? 5 : index == nextBigBlindIndex ? 10 : 500);
             }
             callHand.scheduleTask(ScheduledGameTask.NEW_HAND, nextHandDeadline);
-            long callGen = callHand.getScheduledTaskGeneration(ScheduledGameTask.NEW_HAND);
+            long callVersion = callHand.getTimerVersion(ScheduledGameTask.NEW_HAND);
             reset(gameStateService);
             stubGameEndCapture();
 
             withRoomLock(threeHanded.getRoomId(), () -> gameLifecycleService.executeScheduledTask(
-                    threeHanded.getRoomId(), ScheduledGameTask.NEW_HAND, nextHandDeadline, callHand.getHandNumber(), callGen));
+                    threeHanded.getRoomId(), ScheduledGameTask.NEW_HAND, nextHandDeadline, callHand.getHandNumber(), callVersion));
 
             Player actor = callHand.getCurrentPlayer();
             assertNotNull(actor);
@@ -494,11 +494,11 @@ class GameLifecycleServiceTest {
                     game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
             long currentDeadline = game.getReadyCountdownDeadlineEpochMs();
             long hand = game.getHandNumber();
-            long gen = game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT);
+            long timerVersion = game.getTimerVersion(ScheduledGameTask.READY_TIMEOUT);
 
             // Stale deadline ignored
             withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, currentDeadline - 1_000L, hand, gen));
+                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, currentDeadline - 1_000L, hand, timerVersion));
             assertTrue(game.isReadyCountdownActive());
             assertEquals(currentDeadline, game.getReadyCountdownDeadlineEpochMs());
 
@@ -510,7 +510,7 @@ class GameLifecycleServiceTest {
                 gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Host", BASE_EPOCH_MS + 120_000L);
                 assertTrue(game.isReadyCountdownActive());
                 gameLifecycleService.executeScheduledTask(
-                        ROOM_ID, ScheduledGameTask.READY_TIMEOUT, currentDeadline, hand, gen);
+                        ROOM_ID, ScheduledGameTask.READY_TIMEOUT, currentDeadline, hand, timerVersion);
             });
 
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, game.getReadyGateState());
@@ -525,10 +525,10 @@ class GameLifecycleServiceTest {
             withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReconnected(ROOM_ID, "Host"));
             assertTrue(game.isReadyCountdownActive());
             long reopenedDeadline = game.getReadyCountdownDeadlineEpochMs();
-            long reopenedGen = game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT);
+            long reopenedVersion = game.getTimerVersion(ScheduledGameTask.READY_TIMEOUT);
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, reopenedDeadline, hand, reopenedGen));
+                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, reopenedDeadline, hand, reopenedVersion));
 
             assertEquals(hand + 1, game.getHandNumber());
             assertNull(game.getReadyCountdownDeadlineEpochMs());
@@ -678,14 +678,14 @@ class GameLifecycleServiceTest {
             dealBoardAndShowdown(game);
             long deadline = BASE_EPOCH_MS + 4_000L;
             game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, deadline);
-            long gen = game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
+            long timerVersion = game.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE);
             int chipsHostBefore = game.getPlayers().get(0).getChips();
             int chipsP2Before = game.getPlayers().get(1).getChips();
             reset(gameStateService);
             stubGameEndCapture();
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, deadline, game.getHandNumber(), gen));
+                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, deadline, game.getHandNumber(), timerVersion));
 
             assertEquals(chipsHostBefore, game.getPlayers().get(0).getChips());
             assertEquals(chipsP2Before, game.getPlayers().get(1).getChips());
@@ -698,12 +698,12 @@ class GameLifecycleServiceTest {
             Game immediate = autoAdvanceToRiver();
             long deadline = BASE_EPOCH_MS + 4_000L;
             immediate.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, deadline);
-            long gen = immediate.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
+            long timerVersion = immediate.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE);
             reset(gameStateService);
             stubGameEndCapture();
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, deadline, immediate.getHandNumber(), gen));
+                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, deadline, immediate.getHandNumber(), timerVersion));
 
             assertEquals(GamePhase.SHOWDOWN, immediate.getCurrentPhase());
             assertTrue(immediate.isReadyCountdownActive());
@@ -716,10 +716,10 @@ class GameLifecycleServiceTest {
             stubGameEndCapture();
             Game delayed = autoAdvanceToRiver();
             delayed.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, deadline);
-            long delayedGen = delayed.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
+            long delayedVersion = delayed.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE);
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, deadline, delayed.getHandNumber(), delayedGen));
+                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, deadline, delayed.getHandNumber(), delayedVersion));
 
             assertEquals(GamePhase.SHOWDOWN, delayed.getCurrentPhase());
             assertFalse(delayed.isReadyCountdownActive());
@@ -819,15 +819,15 @@ class GameLifecycleServiceTest {
             withRoomLock(ROOM_ID, () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(
                     game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
             long deadline = game.getReadyCountdownDeadlineEpochMs();
-            long oldGen = game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT);
+            long oldVersion = game.getTimerVersion(ScheduledGameTask.READY_TIMEOUT);
 
-            // Re-schedule READY_TIMEOUT at the same clock & deadline -> generation increments
+            // Re-schedule READY_TIMEOUT at the same clock & deadline -> timer version increments
             game.closeReadyCountdown();
             game.openOrWaitReadyGate(deadline);
-            assertEquals(oldGen + 1, game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(oldVersion + 1, game.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, deadline, game.getHandNumber(), oldGen));
+                    ROOM_ID, ScheduledGameTask.READY_TIMEOUT, deadline, game.getHandNumber(), oldVersion));
 
             assertTrue(game.isReadyCountdownActive());
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
@@ -844,19 +844,19 @@ class GameLifecycleServiceTest {
                     game, new TurnOutcome(TurnOutcomeType.AUTO_ADVANCING, null), true));
             long capturedDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE);
             long capturedHand = game.getHandNumber();
-            long capturedGen = game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
+            long capturedVersion = game.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE);
 
             Player nonCurrent = game.getPlayers().stream()
                     .filter(p -> !p.equals(game.getCurrentPlayer()))
                     .findFirst()
                     .orElseThrow();
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of(nonCurrent.getName())));
-            // Subsequent outcome or progression advances/invalidates generation
+            // Subsequent outcome or progression advances/invalidates timer version
             game.invalidateProgressionTasks();
             clearInvocations(gameStateService);
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, capturedDeadline, capturedHand, capturedGen));
+                    ROOM_ID, ScheduledGameTask.AUTO_ADVANCE, capturedDeadline, capturedHand, capturedVersion));
 
             verifyNoInteractions(gameStateService);
         }
@@ -877,11 +877,11 @@ class GameLifecycleServiceTest {
 
             Game game = getGameLocked(ROOM_ID);
             Long cleanupDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
-            long cleanupGen = game.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP);
+            long cleanupVersion = game.getTimerVersion(ScheduledGameTask.CLEANUP);
             assertNotNull(cleanupDeadline);
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(
-                    ROOM_ID, ScheduledGameTask.CLEANUP, cleanupDeadline, game.getHandNumber(), cleanupGen));
+                    ROOM_ID, ScheduledGameTask.CLEANUP, cleanupDeadline, game.getHandNumber(), cleanupVersion));
 
             assertNull(getGameLocked(ROOM_ID));
             verify(roomService).destroyRoom(ROOM_ID);
@@ -967,7 +967,7 @@ class GameLifecycleServiceTest {
             withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
             ScheduledGameTask task = ScheduledGameTask.AUTO_ADVANCE;
-            long generationBefore = game.getScheduledTaskGeneration(task);
+            long timerVersionBefore = game.getTimerVersion(task);
             clearInvocations(taskScheduler);
 
             try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
@@ -981,12 +981,12 @@ class GameLifecycleServiceTest {
                             () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, autoAdvance, false)));
                     Awaitility.await().atMost(Duration.ofSeconds(5))
                             .until(() -> roomCoordinator.lockReservationCount(ROOM_ID) == 3);
-                    assertEquals(generationBefore, game.getScheduledTaskGeneration(task));
+                    assertEquals(timerVersionBefore, game.getTimerVersion(task));
                     assertNull(game.getScheduledTaskDeadline(task));
                 }
                 firstSchedule.get(5, TimeUnit.SECONDS);
                 secondSchedule.get(5, TimeUnit.SECONDS);
-                assertEquals(generationBefore + 1, game.getScheduledTaskGeneration(task));
+                assertEquals(timerVersionBefore + 1, game.getTimerVersion(task));
                 assertNotNull(game.getScheduledTaskDeadline(task));
                 verify(taskScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
             }

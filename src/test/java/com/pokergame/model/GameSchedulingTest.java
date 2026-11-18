@@ -33,26 +33,26 @@ class GameSchedulingTest {
     class TaskSchedulingTests {
 
         @Test
-        void scheduleTask_NewTask_SetsDeadlineAndInitializesGeneration() {
+        void scheduleTask_NewTask_SetsDeadlineAndInitializesTimerVersion() {
             long deadline = 1700000000000L;
             scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, deadline);
 
             assertEquals(deadline, scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
         }
 
         @Test
-        void scheduleTask_ExistingTaskRescheduled_UpdatesDeadlineAndIncrementsGeneration() {
+        void scheduleTask_ExistingTaskRescheduled_UpdatesDeadlineAndIncrementsTimerVersion() {
             scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 1000L);
-            assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
 
             scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 2000L);
             assertEquals(2000L, scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
-            assertEquals(2L, scheduling.getGeneration(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
 
             scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 3000L);
             assertEquals(3000L, scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
-            assertEquals(3L, scheduling.getGeneration(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(3L, scheduling.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
         }
 
         @Test
@@ -66,9 +66,9 @@ class GameSchedulingTest {
             assertEquals(200L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
             assertEquals(300L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
 
-            assertEquals(2L, scheduling.getGeneration(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.NEW_HAND));
-            assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.CLEANUP));
+            assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
+            assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
         }
     }
 
@@ -76,22 +76,22 @@ class GameSchedulingTest {
     class TaskClearingTests {
 
         @Test
-        void clearTask_ScheduledTask_RemovesDeadlineAndIncrementsGeneration() {
+        void clearTask_ScheduledTask_RemovesDeadlineAndIncrementsTimerVersion() {
             scheduling.scheduleTask(ScheduledGameTask.READY_OPEN, 5000L);
-            assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.READY_OPEN));
+            assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.READY_OPEN));
 
             scheduling.clearTask(ScheduledGameTask.READY_OPEN);
 
             assertNull(scheduling.getDeadline(ScheduledGameTask.READY_OPEN));
-            assertEquals(2L, scheduling.getGeneration(ScheduledGameTask.READY_OPEN));
+            assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.READY_OPEN));
         }
 
         @Test
-        void clearTask_UnscheduledTask_IncrementsGeneration() {
+        void clearTask_UnscheduledTask_IncrementsTimerVersion() {
             scheduling.clearTask(ScheduledGameTask.NEW_HAND);
 
             assertNull(scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
-            assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.NEW_HAND));
+            assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
         }
 
         @Test
@@ -103,7 +103,7 @@ class GameSchedulingTest {
 
             assertNull(scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(2000L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
-            assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.CLEANUP));
+            assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
         }
     }
 
@@ -128,13 +128,13 @@ class GameSchedulingTest {
             assertNull(scheduling.getDeadline(ScheduledGameTask.GAME_END));
 
             assertEquals(600L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
-            assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.CLEANUP));
+            assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
 
-            assertEquals(2L, scheduling.getGeneration(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(2L, scheduling.getGeneration(ScheduledGameTask.READY_OPEN));
-            assertEquals(2L, scheduling.getGeneration(ScheduledGameTask.READY_TIMEOUT));
-            assertEquals(2L, scheduling.getGeneration(ScheduledGameTask.NEW_HAND));
-            assertEquals(2L, scheduling.getGeneration(ScheduledGameTask.GAME_END));
+            assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.READY_OPEN));
+            assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
+            assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.GAME_END));
         }
 
         @Test
@@ -144,7 +144,7 @@ class GameSchedulingTest {
             scheduling.invalidateProgressionTasks();
 
             assertEquals(9999L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
-            assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.CLEANUP));
+            assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
         }
 
         @Test
@@ -155,8 +155,8 @@ class GameSchedulingTest {
             scheduling.invalidateProgressionTasks();
 
             assertTrue(scheduling.deadlinesSnapshot().isEmpty());
-            assertEquals(2L, scheduling.getGeneration(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(2L, scheduling.getGeneration(ScheduledGameTask.NEW_HAND));
+            assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
         }
 
         @Test
@@ -166,7 +166,7 @@ class GameSchedulingTest {
         }
 
         @Test
-        void clearAllTasks_ClearsEveryTaskIncludingCleanupAndBumpsGenerations() {
+        void clearAllTasks_ClearsEveryTaskIncludingCleanupAndBumpsTimerVersions() {
             for (ScheduledGameTask task : ScheduledGameTask.values()) {
                 scheduling.scheduleTask(task, 100L + task.ordinal());
             }
@@ -176,42 +176,42 @@ class GameSchedulingTest {
             assertTrue(scheduling.deadlinesSnapshot().isEmpty());
             for (ScheduledGameTask task : ScheduledGameTask.values()) {
                 assertNull(scheduling.getDeadline(task));
-                assertEquals(2L, scheduling.getGeneration(task));
+                assertEquals(2L, scheduling.getTimerVersion(task));
             }
         }
     }
 
     @Nested
-    class MonotonicGenerationTokenTests {
+    class MonotonicTimerVersionTokenTests {
 
         @Test
-        void generationToken_StrictlyIncreasesAcrossLifecycle() {
+        void timerVersionToken_StrictlyIncreasesAcrossLifecycle() {
             ScheduledGameTask task = ScheduledGameTask.GAME_END;
-            assertEquals(0L, scheduling.getGeneration(task));
+            assertEquals(0L, scheduling.getTimerVersion(task));
 
             scheduling.scheduleTask(task, 1000L);
-            long g1 = scheduling.getGeneration(task);
+            long v1 = scheduling.getTimerVersion(task);
 
             scheduling.scheduleTask(task, 2000L);
-            long g2 = scheduling.getGeneration(task);
+            long v2 = scheduling.getTimerVersion(task);
 
             scheduling.clearTask(task);
-            long g3 = scheduling.getGeneration(task);
+            long v3 = scheduling.getTimerVersion(task);
 
             scheduling.scheduleTask(task, 3000L);
-            long g4 = scheduling.getGeneration(task);
+            long v4 = scheduling.getTimerVersion(task);
 
             scheduling.invalidateProgressionTasks();
-            long g5 = scheduling.getGeneration(task);
+            long v5 = scheduling.getTimerVersion(task);
 
-            assertTrue(g1 < g2 && g2 < g3 && g3 < g4 && g4 < g5);
-            assertEquals(5L, g5);
+            assertTrue(v1 < v2 && v2 < v3 && v3 < v4 && v4 < v5);
+            assertEquals(5L, v5);
         }
 
         @ParameterizedTest
         @EnumSource(ScheduledGameTask.class)
-        void getGeneration_UnscheduledTask_ReturnsZero(ScheduledGameTask task) {
-            assertEquals(0L, scheduling.getGeneration(task));
+        void getTimerVersion_UnscheduledTask_ReturnsZero(ScheduledGameTask task) {
+            assertEquals(0L, scheduling.getTimerVersion(task));
         }
     }
 
@@ -253,9 +253,9 @@ class GameSchedulingTest {
         }
 
         @Test
-        void generationsSnapshot_ReturnsImmutableMap() {
+        void timerVersionsSnapshot_ReturnsImmutableMap() {
             scheduling.scheduleTask(ScheduledGameTask.READY_OPEN, 5000L);
-            Map<ScheduledGameTask, Long> snapshot = scheduling.generationsSnapshot();
+            Map<ScheduledGameTask, Long> snapshot = scheduling.timerVersionsSnapshot();
 
             assertThrows(UnsupportedOperationException.class, () -> snapshot.put(ScheduledGameTask.CLEANUP, 10L));
             assertThrows(UnsupportedOperationException.class, () -> snapshot.remove(ScheduledGameTask.READY_OPEN));
@@ -268,9 +268,9 @@ class GameSchedulingTest {
         }
 
         @Test
-        void generationsSnapshot_IsolatedFromUnderlyingMutations() {
+        void timerVersionsSnapshot_IsolatedFromUnderlyingMutations() {
             scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 1000L);
-            Map<ScheduledGameTask, Long> snapshot = scheduling.generationsSnapshot();
+            Map<ScheduledGameTask, Long> snapshot = scheduling.timerVersionsSnapshot();
 
             scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 2000L);
             scheduling.scheduleTask(ScheduledGameTask.CLEANUP, 3000L);
@@ -280,35 +280,35 @@ class GameSchedulingTest {
         }
 
         @Test
-        void snapshots_MultiGenerationalIsolation() {
+        void snapshots_MultiVersionIsolation() {
             scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 1000L);
             Map<ScheduledGameTask, Long> d1 = scheduling.deadlinesSnapshot();
-            Map<ScheduledGameTask, Long> g1 = scheduling.generationsSnapshot();
+            Map<ScheduledGameTask, Long> v1 = scheduling.timerVersionsSnapshot();
 
             scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 2000L);
             scheduling.scheduleTask(ScheduledGameTask.CLEANUP, 60000L);
             Map<ScheduledGameTask, Long> d2 = scheduling.deadlinesSnapshot();
-            Map<ScheduledGameTask, Long> g2 = scheduling.generationsSnapshot();
+            Map<ScheduledGameTask, Long> v2 = scheduling.timerVersionsSnapshot();
 
             scheduling.invalidateProgressionTasks();
             Map<ScheduledGameTask, Long> d3 = scheduling.deadlinesSnapshot();
-            Map<ScheduledGameTask, Long> g3 = scheduling.generationsSnapshot();
+            Map<ScheduledGameTask, Long> v3 = scheduling.timerVersionsSnapshot();
 
             assertEquals(1, d1.size());
             assertEquals(1000L, d1.get(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(1L, g1.get(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(1L, v1.get(ScheduledGameTask.AUTO_ADVANCE));
 
             assertEquals(2, d2.size());
             assertEquals(2000L, d2.get(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(60000L, d2.get(ScheduledGameTask.CLEANUP));
-            assertEquals(2L, g2.get(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(1L, g2.get(ScheduledGameTask.CLEANUP));
+            assertEquals(2L, v2.get(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(1L, v2.get(ScheduledGameTask.CLEANUP));
 
             assertEquals(1, d3.size());
             assertFalse(d3.containsKey(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(60000L, d3.get(ScheduledGameTask.CLEANUP));
-            assertEquals(3L, g3.get(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(1L, g3.get(ScheduledGameTask.CLEANUP));
+            assertEquals(3L, v3.get(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(1L, v3.get(ScheduledGameTask.CLEANUP));
         }
 
         @Test
@@ -316,12 +316,12 @@ class GameSchedulingTest {
             GameScheduling restored = new GameScheduling(null, null);
 
             Map<ScheduledGameTask, Long> deadlines = restored.deadlinesSnapshot();
-            Map<ScheduledGameTask, Long> generations = restored.generationsSnapshot();
+            Map<ScheduledGameTask, Long> timerVersions = restored.timerVersionsSnapshot();
 
             assertTrue(deadlines.isEmpty());
-            assertTrue(generations.isEmpty());
+            assertTrue(timerVersions.isEmpty());
             assertThrows(UnsupportedOperationException.class, () -> deadlines.put(ScheduledGameTask.AUTO_ADVANCE, 1L));
-            assertThrows(UnsupportedOperationException.class, () -> generations.put(ScheduledGameTask.AUTO_ADVANCE, 1L));
+            assertThrows(UnsupportedOperationException.class, () -> timerVersions.put(ScheduledGameTask.AUTO_ADVANCE, 1L));
         }
     }
 
@@ -335,43 +335,43 @@ class GameSchedulingTest {
             for (int step = 1; step <= 50; step++) {
                 for (ScheduledGameTask task : allTasks) {
                     long expectedBefore = (long) (step - 1) * 2;
-                    assertEquals(expectedBefore, scheduling.getGeneration(task));
+                    assertEquals(expectedBefore, scheduling.getTimerVersion(task));
 
                     scheduling.scheduleTask(task, 10000L + step);
-                    assertEquals(expectedBefore + 1, scheduling.getGeneration(task));
+                    assertEquals(expectedBefore + 1, scheduling.getTimerVersion(task));
                     assertEquals(10000L + step, scheduling.getDeadline(task));
 
                     scheduling.clearTask(task);
-                    assertEquals(expectedBefore + 2, scheduling.getGeneration(task));
+                    assertEquals(expectedBefore + 2, scheduling.getTimerVersion(task));
                     assertNull(scheduling.getDeadline(task));
                 }
             }
 
             for (ScheduledGameTask task : allTasks) {
-                assertEquals(100L, scheduling.getGeneration(task));
+                assertEquals(100L, scheduling.getTimerVersion(task));
                 assertNull(scheduling.getDeadline(task));
             }
         }
 
         @Test
-        void scheduleTask_SameDeadline_IncrementsGeneration() {
+        void scheduleTask_SameDeadline_IncrementsTimerVersion() {
             long fixedDeadline = 1710000000000L;
-            for (long expectedGen = 1; expectedGen <= 10; expectedGen++) {
+            for (long expectedVersion = 1; expectedVersion <= 10; expectedVersion++) {
                 scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, fixedDeadline);
                 assertEquals(fixedDeadline, scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
-                assertEquals(expectedGen, scheduling.getGeneration(ScheduledGameTask.READY_TIMEOUT));
+                assertEquals(expectedVersion, scheduling.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
             }
         }
 
         @Test
-        void clearTask_RepeatedClears_ContinuouslyIncrementsGeneration() {
+        void clearTask_RepeatedClears_ContinuouslyIncrementsTimerVersion() {
             assertNull(scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
-            assertEquals(0L, scheduling.getGeneration(ScheduledGameTask.NEW_HAND));
+            assertEquals(0L, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
 
-            for (long expectedGen = 1; expectedGen <= 10; expectedGen++) {
+            for (long expectedVersion = 1; expectedVersion <= 10; expectedVersion++) {
                 scheduling.clearTask(ScheduledGameTask.NEW_HAND);
                 assertNull(scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
-                assertEquals(expectedGen, scheduling.getGeneration(ScheduledGameTask.NEW_HAND));
+                assertEquals(expectedVersion, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
             }
         }
 
@@ -386,7 +386,7 @@ class GameSchedulingTest {
                 scheduling.invalidateProgressionTasks();
 
                 assertEquals(77777L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
-                assertEquals(1L, scheduling.getGeneration(ScheduledGameTask.CLEANUP));
+                assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
                 assertEquals(1, scheduling.deadlinesSnapshot().size());
             }
         }
@@ -432,36 +432,36 @@ class GameSchedulingTest {
         @Test
         void claimTask_WhenForfeitPending_ReturnsFalseWithoutClearing() {
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
-            long gen = scheduling.getGeneration(ScheduledGameTask.NEW_HAND);
+            long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND);
 
             boolean claimed = scheduling.claimTask(
-                    true, false, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, gen);
+                    true, false, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
 
             assertFalse(claimed);
             assertEquals(5000L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
-            assertEquals(gen, scheduling.getGeneration(ScheduledGameTask.NEW_HAND));
+            assertEquals(timerVersion, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
         }
 
         @Test
         void claimTask_WhenHandNumberStale_ReturnsFalseForNonCleanupTask() {
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
-            long gen = scheduling.getGeneration(ScheduledGameTask.NEW_HAND);
+            long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND);
 
             boolean claimed = scheduling.claimTask(
-                    false, false, 2L, ScheduledGameTask.NEW_HAND, 5000L, 1L, gen);
+                    false, false, 2L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
 
             assertFalse(claimed);
             assertEquals(5000L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
         }
 
         @Test
-        void claimTask_WhenGenerationStale_ReturnsFalse() {
+        void claimTask_WhenTimerVersionStale_ReturnsFalse() {
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 6000L);
-            long currentGen = scheduling.getGeneration(ScheduledGameTask.NEW_HAND);
+            long currentVersion = scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND);
 
             boolean claimed = scheduling.claimTask(
-                    false, false, 1L, ScheduledGameTask.NEW_HAND, 6000L, 1L, currentGen - 1);
+                    false, false, 1L, ScheduledGameTask.NEW_HAND, 6000L, 1L, currentVersion - 1);
 
             assertFalse(claimed);
             assertEquals(6000L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
@@ -470,49 +470,49 @@ class GameSchedulingTest {
         @Test
         void claimTask_WhenGameOverAndNonCleanup_ClearsAndReturnsFalse() {
             scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 5000L);
-            long gen = scheduling.getGeneration(ScheduledGameTask.AUTO_ADVANCE);
+            long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE);
 
             boolean claimed = scheduling.claimTask(
-                    false, true, 1L, ScheduledGameTask.AUTO_ADVANCE, 5000L, 1L, gen);
+                    false, true, 1L, ScheduledGameTask.AUTO_ADVANCE, 5000L, 1L, timerVersion);
 
             assertFalse(claimed);
             assertNull(scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(gen + 1, scheduling.getGeneration(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(timerVersion + 1, scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
         }
 
         @Test
         void claimTask_WhenGameOverAndCleanup_ReturnsTrueAndRetainsDeadline() {
             scheduling.scheduleTask(ScheduledGameTask.CLEANUP, 5000L);
-            long gen = scheduling.getGeneration(ScheduledGameTask.CLEANUP);
+            long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.CLEANUP);
 
             boolean claimed = scheduling.claimTask(
-                    false, true, 99L, ScheduledGameTask.CLEANUP, 5000L, 1L, gen);
+                    false, true, 99L, ScheduledGameTask.CLEANUP, 5000L, 1L, timerVersion);
 
             assertTrue(claimed);
             assertEquals(5000L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
-            assertEquals(gen, scheduling.getGeneration(ScheduledGameTask.CLEANUP));
+            assertEquals(timerVersion, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
         }
 
         @Test
         void claimTask_WhenDeadlineMismatchedOrUnscheduled_ReturnsFalse() {
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
-            long gen = scheduling.getGeneration(ScheduledGameTask.NEW_HAND);
+            long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND);
 
-            assertFalse(scheduling.claimTask(false, false, 1L, ScheduledGameTask.NEW_HAND, 4000L, 1L, gen));
+            assertFalse(scheduling.claimTask(false, false, 1L, ScheduledGameTask.NEW_HAND, 4000L, 1L, timerVersion));
             assertFalse(scheduling.claimTask(false, false, 1L, ScheduledGameTask.READY_OPEN, 5000L, 1L, 0L));
         }
 
         @Test
-        void claimTask_Success_ClearsNonCleanupTaskAndIncrementsGeneration() {
+        void claimTask_Success_ClearsNonCleanupTaskAndIncrementsTimerVersion() {
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
-            long gen = scheduling.getGeneration(ScheduledGameTask.NEW_HAND);
+            long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND);
 
             boolean claimed = scheduling.claimTask(
-                    false, false, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, gen);
+                    false, false, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
 
             assertTrue(claimed);
             assertNull(scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
-            assertEquals(gen + 1, scheduling.getGeneration(ScheduledGameTask.NEW_HAND));
+            assertEquals(timerVersion + 1, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
         }
 
         @Test

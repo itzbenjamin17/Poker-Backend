@@ -42,7 +42,7 @@ The final breakdown at the end of a hand showing who won which pot, any uncalled
 The between-hand pause and countdown (`CLOSED`, `COUNTING_DOWN`, `WAITING_FOR_PLAYERS`) where players mark ready before the next hand is dealt.
 
 **ScheduledGameTask**:
-A timed background action (`AUTO_ADVANCE`, `READY_OPEN`, `NEW_HAND`, `DISCONNECT_CLEANUP`, `CLEANUP`) stored on the game with an exact clock deadline (`deadlineEpochMs`) and generation counter so timers can safely resume after a server restart.
+A timed background action (`AUTO_ADVANCE`, `READY_OPEN`, `NEW_HAND`, `DISCONNECT_CLEANUP`, `CLEANUP`) stored on the game with an exact clock deadline (`deadlineEpochMs`) and timer version so timers can safely resume after a server restart.
 
 **stateRevision**:
 A counter (`1, 2, 3...`) that goes up every time the public game state changes, allowing clients to tell which update is newest and ignore out-of-order messages.

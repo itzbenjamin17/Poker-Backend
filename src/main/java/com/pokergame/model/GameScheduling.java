@@ -12,30 +12,30 @@ import java.util.Map;
 final class GameScheduling {
 
     private final Map<ScheduledGameTask, Long> deadlines;
-    private final Map<ScheduledGameTask, Long> generations;
+    private final Map<ScheduledGameTask, Long> timerVersions;
 
     /** Creates empty task scheduling state for a new game. */
     GameScheduling() {
         this.deadlines = new EnumMap<>(ScheduledGameTask.class);
-        this.generations = new EnumMap<>(ScheduledGameTask.class);
+        this.timerVersions = new EnumMap<>(ScheduledGameTask.class);
     }
 
     /**
      * Reconstructs task scheduling state from saved snapshot fields.
      *
-     * @param deadlines   saved task deadlines keyed by task type
-     * @param generations saved task schedule counters keyed by task type
+     * @param deadlines     saved task deadlines keyed by task type
+     * @param timerVersions saved task schedule counters keyed by task type
      */
     GameScheduling(
             Map<ScheduledGameTask, Long> deadlines,
-            Map<ScheduledGameTask, Long> generations) {
+            Map<ScheduledGameTask, Long> timerVersions) {
         this.deadlines = new EnumMap<>(ScheduledGameTask.class);
         if (deadlines != null) {
             this.deadlines.putAll(deadlines);
         }
-        this.generations = new EnumMap<>(ScheduledGameTask.class);
-        if (generations != null) {
-            this.generations.putAll(generations);
+        this.timerVersions = new EnumMap<>(ScheduledGameTask.class);
+        if (timerVersions != null) {
+            this.timerVersions.putAll(timerVersions);
         }
     }
 
@@ -48,7 +48,7 @@ final class GameScheduling {
      */
     void scheduleTask(ScheduledGameTask task, long deadlineEpochMs) {
         deadlines.put(task, deadlineEpochMs);
-        generations.merge(task, 1L, Long::sum);
+        timerVersions.merge(task, 1L, Long::sum);
     }
 
     /**
@@ -59,7 +59,7 @@ final class GameScheduling {
      */
     void clearTask(ScheduledGameTask task) {
         deadlines.remove(task);
-        generations.merge(task, 1L, Long::sum);
+        timerVersions.merge(task, 1L, Long::sum);
     }
 
     /**
@@ -88,29 +88,29 @@ final class GameScheduling {
         return deadlines.get(task);
     }
 
-    long getGeneration(ScheduledGameTask task) {
-        return generations.getOrDefault(task, 0L);
+    long getTimerVersion(ScheduledGameTask task) {
+        return timerVersions.getOrDefault(task, 0L);
     }
 
     Map<ScheduledGameTask, Long> deadlinesSnapshot() {
         return Map.copyOf(deadlines);
     }
 
-    Map<ScheduledGameTask, Long> generationsSnapshot() {
-        return Map.copyOf(generations);
+    Map<ScheduledGameTask, Long> timerVersionsSnapshot() {
+        return Map.copyOf(timerVersions);
     }
 
     /**
      * Validates whether a firing timer callback still matches current game state and claims
      * non-cleanup tasks for one-shot execution.
      *
-     * @param forfeitPending     whether a forfeit is currently pending
-     * @param gameOver           whether the game has concluded
-     * @param currentHandNumber  current hand number on the game
-     * @param task               task type that fired
-     * @param expectedDeadline   deadline captured when the timer was scheduled
-     * @param expectedHandNumber hand number captured when the timer was scheduled
-     * @param expectedGeneration schedule count captured when the timer was scheduled
+     * @param forfeitPending       whether a forfeit is currently pending
+     * @param gameOver             whether the game has concluded
+     * @param currentHandNumber    current hand number on the game
+     * @param task                 task type that fired
+     * @param expectedDeadline     deadline captured when the timer was scheduled
+     * @param expectedHandNumber   hand number captured when the timer was scheduled
+     * @param expectedTimerVersion schedule count captured when the timer was scheduled
      * @return {@code true} if the task was claimed for execution, {@code false} if stale,
      *         cancelled on game over, or blocked by a pending forfeit
      */
@@ -121,12 +121,12 @@ final class GameScheduling {
             ScheduledGameTask task,
             long expectedDeadline,
             long expectedHandNumber,
-            long expectedGeneration) {
+            long expectedTimerVersion) {
         if (forfeitPending) {
             return false;
         }
         if ((task != ScheduledGameTask.CLEANUP && currentHandNumber != expectedHandNumber)
-                || getGeneration(task) != expectedGeneration) {
+                || getTimerVersion(task) != expectedTimerVersion) {
             return false;
         }
         if (gameOver && task != ScheduledGameTask.CLEANUP) {

@@ -101,7 +101,7 @@
     "finalPotSettled" : false,
     "readyGateState" : "CLOSED",
     "handNumber" : 1,
-    "scheduledTaskGenerations" : {
+    "timerVersions" : {
       "CLEANUP" : 1
     },
     "forfeitPending" : false,

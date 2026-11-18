@@ -14,7 +14,7 @@ Use one local Write-Ahead Log (WAL) save file per `roomId` (`<roomId>.wal`) for 
 
 Save records are encrypted with AES-256-GCM. Authenticated metadata binds the room ID, sequence number, transaction ID, record type, and encryption key ID. `EncryptionKeyring` provides one current write key and optional older read keys for key rotation. On startup, `Room` and `Game` objects are rebuilt from `RoomSnapshot` via `RoomSnapshotMapper`, while runtime-only collaborators (schedulers, timers, WebSocket sessions, locks, hand evaluators, event publishers, and rate-limit buckets) are recreated fresh.
 
-Exact clock deadlines for scheduled tasks and reconnect windows are saved inside `RoomSnapshot`. Startup recovery (`PersistenceRecovery`) restores every saved room and game before marking the server ready, treats all previous WebSocket connections as disconnected, grants every player a fresh reconnect grace period, and reschedules future or overdue timers with generation checks so tasks never run twice.
+Exact clock deadlines for scheduled tasks and reconnect windows are saved inside `RoomSnapshot`. Startup recovery (`PersistenceRecovery`) restores every saved room and game before marking the server ready, treats all previous WebSocket connections as disconnected, grants every player a fresh reconnect grace period, and reschedules future or overdue timers with timer version checks so tasks never run twice.
 
 ## Consequences
 

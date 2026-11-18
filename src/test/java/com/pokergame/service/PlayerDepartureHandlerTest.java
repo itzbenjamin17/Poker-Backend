@@ -244,7 +244,7 @@ class PlayerDepartureHandlerTest {
             Map<String, Long> gamePlayerDisconnectDeadlines,
             Boolean gameOver,
             Map<ScheduledGameTask, Long> scheduledDeadlines,
-            Map<ScheduledGameTask, Long> scheduledGenerations) {
+            Map<ScheduledGameTask, Long> timerVersions) {
     }
 
     private RoomGameSnapshot snapshotRoomAndGame(Room room, Game game) {
@@ -261,7 +261,7 @@ class PlayerDepartureHandlerTest {
         Map<String, Long> gameDeadlines = new LinkedHashMap<>();
         Boolean gameOver = null;
         Map<ScheduledGameTask, Long> scheduledDeadlines = Map.of();
-        Map<ScheduledGameTask, Long> scheduledGenerations = Map.of();
+        Map<ScheduledGameTask, Long> timerVersions = Map.of();
         if (game != null) {
             for (Player player : game.getPlayers()) {
                 gameDisconnected.put(player.getName(), player.isDisconnected());
@@ -269,10 +269,10 @@ class PlayerDepartureHandlerTest {
             }
             gameOver = game.isGameOver();
             scheduledDeadlines = game.getScheduledTaskDeadlinesSnapshot();
-            scheduledGenerations = game.getScheduledTaskGenerationsSnapshot();
+            timerVersions = game.getTimerVersionsSnapshot();
         }
         return new RoomGameSnapshot(roster, membershipIds, connected, absenceDeadlines,
-                gameDisconnected, gameDeadlines, gameOver, scheduledDeadlines, scheduledGenerations);
+                gameDisconnected, gameDeadlines, gameOver, scheduledDeadlines, timerVersions);
     }
 
     private void assertNoOpDisconnect(RoomGameSnapshot before, Room room, Game game) {
@@ -626,13 +626,13 @@ class PlayerDepartureHandlerTest {
                     gameLifecycleService.markPlayerDisconnected(ROOM_ID, survivor.getName(), BASE_EPOCH_MS + 60_000L));
 
             Map<ScheduledGameTask, Long> deadlines = new EnumMap<>(ScheduledGameTask.class);
-            Map<ScheduledGameTask, Long> generations = new EnumMap<>(ScheduledGameTask.class);
+            Map<ScheduledGameTask, Long> timerVersions = new EnumMap<>(ScheduledGameTask.class);
             long deadline = BASE_EPOCH_MS + 30_000L;
             for (ScheduledGameTask task : List.of(ScheduledGameTask.READY_OPEN, ScheduledGameTask.READY_TIMEOUT,
                     ScheduledGameTask.AUTO_ADVANCE, ScheduledGameTask.NEW_HAND, ScheduledGameTask.GAME_END)) {
                 game.scheduleTask(task, deadline++);
                 deadlines.put(task, game.getScheduledTaskDeadline(task));
-                generations.put(task, game.getScheduledTaskGeneration(task));
+                timerVersions.put(task, game.getTimerVersion(task));
             }
 
             doAnswer(invocation -> {
@@ -656,7 +656,7 @@ class PlayerDepartureHandlerTest {
             withRoomLock(ROOM_ID, () -> {
                 for (ScheduledGameTask task : deadlines.keySet()) {
                     gameLifecycleService.executeScheduledTask(
-                            ROOM_ID, task, deadlines.get(task), handBefore, generations.get(task));
+                            ROOM_ID, task, deadlines.get(task), handBefore, timerVersions.get(task));
                 }
             });
             assertEquals(handBefore, game.getHandNumber());

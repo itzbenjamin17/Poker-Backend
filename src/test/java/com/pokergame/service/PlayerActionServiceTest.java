@@ -1283,7 +1283,7 @@ class PlayerActionServiceTest {
     void processPlayerAction_ValidAction_ClearsAndCancelsTurnTimeoutAndResetsInactivity() {
         long deadline = FIXED_INSTANT.toEpochMilli() + 60_000L;
         testGame.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, deadline);
-        long genBefore = testGame.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT);
+        long timerVersionBefore = testGame.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT);
         when(activeGames.get(GAME_ID)).thenReturn(testGame);
         Player currentPlayer = testGame.getCurrentPlayer();
 
@@ -1291,7 +1291,7 @@ class PlayerActionServiceTest {
                 GAME_ID, new PlayerActionRequest(PlayerAction.FOLD, null), currentPlayer.getName());
 
         assertNull(testGame.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
-        assertTrue(testGame.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT) > genBefore);
+        assertTrue(testGame.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT) > timerVersionBefore);
         verify(taskScheduler).cancelTask(testGame, ScheduledGameTask.TURN_TIMEOUT);
         verify(taskScheduler).resetGameInactivity(testGame);
     }

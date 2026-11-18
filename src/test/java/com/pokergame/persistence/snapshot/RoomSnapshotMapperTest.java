@@ -156,7 +156,7 @@ class RoomSnapshotMapperTest {
                         Set.of("a"), 3, true))
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 123L))
-                .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 9L))
+                .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 9L))
                 .handNumber(7).readyGateState(ReadyGateState.WAITING_FOR_PLAYERS).forfeitPending(true).stateRevision(19)
                 .build();
         game.markGameOver();
@@ -176,7 +176,7 @@ class RoomSnapshotMapperTest {
         assertTrue(restored.isFinalPotSettled());
         assertEquals(7, restored.getHandNumber());
         assertEquals(ReadyGateState.CLOSED, restored.getReadyGateState());
-        assertEquals(9L, restored.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
+        assertEquals(9L, restored.getTimerVersion(ScheduledGameTask.CLEANUP));
         assertTrue(restored.isForfeitPending());
         assertEquals(19, restored.getStateRevision(), "Persisted same-hand public revision must survive restart");
         String json = new String(snapshot, StandardCharsets.UTF_8);
@@ -243,7 +243,7 @@ class RoomSnapshotMapperTest {
                 .handSeatOrder(List.of("a", "b")).dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
-                .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 1L))
+                .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 1L))
                 .handNumber(1).readyGateState(ReadyGateState.CLOSED).forfeitPending(false).stateRevision(42)
                 .gameEndResult(terminalResult)
                 .build();
@@ -633,7 +633,7 @@ class RoomSnapshotMapperTest {
                 .smallBlindPlayerId("a").bigBlindPlayerId("b")
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
-                .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 1L))
+                .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 1L))
                 .handNumber(1).readyGateState(ReadyGateState.CLOSED).forfeitPending(false).stateRevision(42)
                 .gameEndResult(terminalResult).build();
 
@@ -1340,8 +1340,8 @@ class RoomSnapshotMapperTest {
         // =========================================================================
 
         @Test
-        @DisplayName("Scheduled Tasks & Defensive Isolation: Validates snapshot round-trip of task deadlines & generations")
-        void testScheduledTasksAndGenerationsRoundTrip() {
+        @DisplayName("Scheduled Tasks & Defensive Isolation: Validates snapshot round-trip of task deadlines & timer versions")
+        void testScheduledTasksAndTimerVersionsRoundTrip() {
             Player p1 = createPlayer("p1", "Alice", 1000);
             Player p2 = createPlayer("p2", "Bob", 1000);
             List<Player> players = List.of(p1, p2);
@@ -1351,9 +1351,9 @@ class RoomSnapshotMapperTest {
             deadlines.put(ScheduledGameTask.AUTO_ADVANCE, 1700000010000L);
             deadlines.put(ScheduledGameTask.READY_TIMEOUT, 1700000020000L);
 
-            Map<ScheduledGameTask, Long> generations = new EnumMap<>(ScheduledGameTask.class);
-            generations.put(ScheduledGameTask.AUTO_ADVANCE, 3L);
-            generations.put(ScheduledGameTask.READY_TIMEOUT, 7L);
+            Map<ScheduledGameTask, Long> timerVersions = new EnumMap<>(ScheduledGameTask.class);
+            timerVersions.put(ScheduledGameTask.AUTO_ADVANCE, 3L);
+            timerVersions.put(ScheduledGameTask.READY_TIMEOUT, 7L);
 
             Game game = Game.restoreBuilder()
                     .gameId(ROOM_ID)
@@ -1364,7 +1364,7 @@ class RoomSnapshotMapperTest {
                     .bigBlind(20)
                     .currentPhase(GamePhase.PRE_FLOP)
                     .scheduledTaskDeadlines(deadlines)
-                    .scheduledTaskGenerations(generations)
+                    .timerVersions(timerVersions)
                     .stateRevision(42L)
                     .handNumber(5L)
                     
@@ -1373,7 +1373,7 @@ class RoomSnapshotMapperTest {
             assertEquals(42L, game.getStateRevision());
             assertEquals(5L, game.getHandNumber());
             assertEquals(deadlines, game.getScheduledTaskDeadlinesSnapshot());
-            assertEquals(generations, game.getScheduledTaskGenerationsSnapshot());
+            assertEquals(timerVersions, game.getTimerVersionsSnapshot());
 
             byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
             Game restored = snapshotMapper.deserialize(bytes).game();
@@ -1381,7 +1381,7 @@ class RoomSnapshotMapperTest {
             assertEquals(42L, restored.getStateRevision());
             assertEquals(5L, restored.getHandNumber());
             assertEquals(deadlines, restored.getScheduledTaskDeadlinesSnapshot());
-            assertEquals(generations, restored.getScheduledTaskGenerationsSnapshot());
+            assertEquals(timerVersions, restored.getTimerVersionsSnapshot());
         }
     }
 

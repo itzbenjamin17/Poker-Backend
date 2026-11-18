@@ -191,7 +191,7 @@ public final class RoomSnapshotMapper {
             game.getHandSeatOrderSnapshot(), game.getDealerPlayerId(), game.getSmallBlindPlayerId(),
             game.getBigBlindPlayerId(), game.getCurrentPlayerId(), settlementState(game.getLastSettlementResult()),
             game.isFinalPotSettled(), game.getReadyGateState(), game.getHandNumber(),
-            game.getScheduledTaskGenerationsSnapshot(), game.isForfeitPending(), game.getStateRevision(),
+            game.getTimerVersionsSnapshot(), game.isForfeitPending(), game.getStateRevision(),
             toGameResultState(game.getGameEndResult()));
     }
 
@@ -277,7 +277,7 @@ public final class RoomSnapshotMapper {
                 .allPlayersHadInitialTurn(state.allPlayersHadInitialTurn())
                 .actedPlayersInRound(state.actedPlayerIds())
                 .scheduledTaskDeadlines(state.scheduledTaskDeadlines())
-                .scheduledTaskGenerations(state.scheduledTaskGenerations())
+                .timerVersions(state.timerVersions())
                 .carryOverPot(state.carryOverPot())
                 .lastFullRaise(state.lastFullRaise())
                 .lastActedWagerByPlayer(state.lastActedWagerByPlayer())

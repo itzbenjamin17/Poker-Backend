@@ -584,7 +584,7 @@ class TimingAndInactivityIT {
                 return new long[]{
                         game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT),
                         game.getHandNumber(),
-                        game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT)
+                        game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT)
                 };
             });
 
@@ -682,19 +682,19 @@ class TimingAndInactivityIT {
         void expiryRemovesActorAndAwardsHeadsUpVictory() throws Exception {
             String roomId = createStartedAndConnectedGame("TurnRemoval", "Guest");
 
-            record TurnMeta(String actor, long deadline, long hand, long generation) {}
+            record TurnMeta(String actor, long deadline, long hand, long timerVersion) {}
             TurnMeta meta = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 return new TurnMeta(
                         game.getCurrentPlayer().getName(),
                         states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs(),
                         game.getHandNumber(),
-                        game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT));
+                        game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT));
             });
 
             clock.setMillis(meta.deadline());
             lifecycle.executeScheduledTask(
-                    roomId, ScheduledGameTask.TURN_TIMEOUT, meta.deadline(), meta.hand(), meta.generation());
+                    roomId, ScheduledGameTask.TURN_TIMEOUT, meta.deadline(), meta.hand(), meta.timerVersion());
 
             String survivor = "Host".equals(meta.actor()) ? "Guest" : "Host";
             withRoomLock(roomCoordinator, roomId, () -> {
@@ -754,7 +754,7 @@ class TimingAndInactivityIT {
         void multiContenderTimeoutRemovesActorAndContinuesPlay() throws Exception {
             String roomId = createStartedAndConnectedGame("TurnMulti", "Guest1", "Guest2");
 
-            record TurnMeta(String actor, int pot, long deadline, long hand, long generation) {}
+            record TurnMeta(String actor, int pot, long deadline, long hand, long timerVersion) {}
             TurnMeta meta = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 return new TurnMeta(
@@ -762,12 +762,12 @@ class TimingAndInactivityIT {
                         game.getPot(),
                         states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs(),
                         game.getHandNumber(),
-                        game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT));
+                        game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT));
             });
 
             clock.setMillis(meta.deadline());
             lifecycle.executeScheduledTask(
-                    roomId, ScheduledGameTask.TURN_TIMEOUT, meta.deadline(), meta.hand(), meta.generation());
+                    roomId, ScheduledGameTask.TURN_TIMEOUT, meta.deadline(), meta.hand(), meta.timerVersion());
 
             withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
@@ -789,14 +789,14 @@ class TimingAndInactivityIT {
         void staleOrDuplicateCallbacksAreIgnored() throws Exception {
             String roomId = createStartedAndConnectedGame("TurnStale", "Guest1", "Guest2");
 
-            record TurnMeta(String actor, long deadline, long hand, long generation) {}
+            record TurnMeta(String actor, long deadline, long hand, long timerVersion) {}
             TurnMeta stale = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 return new TurnMeta(
                         game.getCurrentPlayer().getName(),
                         states.getPublicGameStateSnapshot(game).turnDeadlineEpochMs(),
                         game.getHandNumber(),
-                        game.getScheduledTaskGeneration(ScheduledGameTask.TURN_TIMEOUT));
+                        game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT));
             });
 
             clock.advanceByMillis(5_000L);
@@ -807,7 +807,7 @@ class TimingAndInactivityIT {
 
             clock.setMillis(stale.deadline());
             lifecycle.executeScheduledTask(
-                    roomId, ScheduledGameTask.TURN_TIMEOUT, stale.deadline(), stale.hand(), stale.generation());
+                    roomId, ScheduledGameTask.TURN_TIMEOUT, stale.deadline(), stale.hand(), stale.timerVersion());
 
             withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(rooms.getRoom(roomId).hasPlayer(actor2)).isTrue();

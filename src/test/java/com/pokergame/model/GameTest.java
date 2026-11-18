@@ -2282,7 +2282,7 @@ class GameTest {
                     .players(List.of(new Player("Alice", "p1", 1000), new Player("Bob", "p2", 1000)))
                     .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of()).smallBlind(10).bigBlind(20)
                     .handNumber(42L).stateRevision(199L)
-                    .scheduledTaskDeadlines(Map.of()).scheduledTaskGenerations(Map.of()).build();
+                    .scheduledTaskDeadlines(Map.of()).timerVersions(Map.of()).build();
             assertEquals(42L, restored.getHandNumber());
             assertEquals(199L, restored.getStateRevision());
             restored.incrementStateRevision();
@@ -2335,22 +2335,22 @@ class GameTest {
             aggGame.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 1500L);
             aggGame.scheduleTask(ScheduledGameTask.CLEANUP, 60000L);
             assertEquals(1500L, aggGame.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(1L, aggGame.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(1L, aggGame.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
             aggGame.invalidateProgressionTasks();
             assertNull(aggGame.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(60000L, aggGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
-            assertEquals(1L, aggGame.getScheduledTaskGeneration(ScheduledGameTask.CLEANUP));
+            assertEquals(1L, aggGame.getTimerVersion(ScheduledGameTask.CLEANUP));
             aggGame.clearScheduledTask(ScheduledGameTask.CLEANUP);
             assertNull(aggGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
 
             for (ScheduledGameTask task : ScheduledGameTask.values()) {
                 aggGame.scheduleTask(task, 70_000L + task.ordinal());
             }
-            java.util.Map<ScheduledGameTask, Long> gensBeforeClearAll = aggGame.getScheduledTaskGenerationsSnapshot();
+            java.util.Map<ScheduledGameTask, Long> versionsBeforeClearAll = aggGame.getTimerVersionsSnapshot();
             aggGame.clearAllScheduledTasks();
             for (ScheduledGameTask task : ScheduledGameTask.values()) {
                 assertNull(aggGame.getScheduledTaskDeadline(task));
-                assertEquals(gensBeforeClearAll.get(task) + 1, aggGame.getScheduledTaskGeneration(task));
+                assertEquals(versionsBeforeClearAll.get(task) + 1, aggGame.getTimerVersion(task));
             }
 
             GameEndResponse endResponse = new GameEndResponse(

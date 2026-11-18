@@ -57,7 +57,7 @@ class GameTaskScheduler {
      */
     static ScheduledTimer createTimer(Game game, ScheduledGameTask task, long deadline) {
         return new ScheduledTimer(
-                game.getGameId(), task, deadline, game.getHandNumber(), game.getScheduledTaskGeneration(task));
+                game.getGameId(), task, deadline, game.getHandNumber(), game.getTimerVersion(task));
     }
 
     /**
@@ -191,30 +191,30 @@ class GameTaskScheduler {
      */
     void registerTimer(ScheduledTimer timer) {
         Game game = activeGames.get(timer.gameId());
-        if (!matches(game, timer.task(), timer.deadline(), timer.handNumber(), timer.generation())) {
+        if (!matches(game, timer.task(), timer.deadline(), timer.handNumber(), timer.timerVersion())) {
             return;
         }
         timerRegistry.schedule(timer.gameId(), timer.task(), timer.deadline(),
                 () -> gameLifecycleProvider.getObject().executeScheduledTask(
-                        timer.gameId(), timer.task(), timer.deadline(), timer.handNumber(), timer.generation()));
+                        timer.gameId(), timer.task(), timer.deadline(), timer.handNumber(), timer.timerVersion()));
     }
 
     /**
      * Claims a firing timer for execution if it still matches {@code game}'s active hand,
      * schedule count, and deadline, cancelling any non-cleanup future once the game is over.
      *
-     * @param game       the current game instance, or {@code null} if already removed
-     * @param task       the timer type that fired
-     * @param deadline   the deadline captured when the timer was scheduled
-     * @param handNumber the hand number captured when the timer was scheduled
-     * @param generation the schedule count captured when the timer was scheduled
+     * @param game         the current game instance, or {@code null} if already removed
+     * @param task         the timer type that fired
+     * @param deadline     the deadline captured when the timer was scheduled
+     * @param handNumber   the hand number captured when the timer was scheduled
+     * @param timerVersion the schedule count captured when the timer was scheduled
      * @return {@code true} if the timer callback should execute, {@code false} otherwise
      */
-    boolean claimTimer(Game game, ScheduledGameTask task, long deadline, long handNumber, long generation) {
+    boolean claimTimer(Game game, ScheduledGameTask task, long deadline, long handNumber, long timerVersion) {
         if (game == null) {
             return false;
         }
-        if (game.claimScheduledTask(task, deadline, handNumber, generation)) {
+        if (game.claimScheduledTask(task, deadline, handNumber, timerVersion)) {
             return true;
         }
         if (game.isGameOver() && task != ScheduledGameTask.CLEANUP) {
@@ -241,22 +241,22 @@ class GameTaskScheduler {
         return delayMs;
     }
 
-    private static boolean matches(Game game, ScheduledGameTask task, long deadline, long handNumber, long generation) {
+    private static boolean matches(Game game, ScheduledGameTask task, long deadline, long handNumber, long timerVersion) {
         return game != null
                 && game.getHandNumber() == handNumber
-                && game.getScheduledTaskGeneration(task) == generation
+                && game.getTimerVersion(task) == timerVersion
                 && Objects.equals(game.getScheduledTaskDeadline(task), deadline);
     }
 
     /**
-     * Immutable identifier of a scheduled timer for a specific hand, generation, and deadline.
+     * Immutable identifier of a scheduled timer for a specific hand, timer version, and deadline.
      *
-     * @param gameId     the room/game ID
-     * @param task       the timer type
-     * @param deadline   target execution epoch time in milliseconds
-     * @param handNumber hand number active when the timer was scheduled
-     * @param generation generation counter for the timer type
+     * @param gameId       the room/game ID
+     * @param task         the timer type
+     * @param deadline     target execution epoch time in milliseconds
+     * @param handNumber   hand number active when the timer was scheduled
+     * @param timerVersion timer version counter for the timer type
      */
-    record ScheduledTimer(String gameId, ScheduledGameTask task, long deadline, long handNumber, long generation) {
+    record ScheduledTimer(String gameId, ScheduledGameTask task, long deadline, long handNumber, long timerVersion) {
     }
 }

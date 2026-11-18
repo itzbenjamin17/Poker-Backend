@@ -210,7 +210,7 @@ public class Game {
                 builder.getReadyCountdownDeadlineEpochMs());
         this.scheduling = new GameScheduling(
                 builder.getScheduledTaskDeadlines(),
-                builder.getScheduledTaskGenerations());
+                builder.getTimerVersions());
     }
 
     /**
@@ -561,19 +561,19 @@ public class Game {
     /**
      * Claims execution of a firing timer callback against current game state.
      *
-     * @param task               task type that fired
-     * @param expectedDeadline   deadline captured when the timer was scheduled
-     * @param expectedHandNumber hand number captured when the timer was scheduled
-     * @param expectedGeneration schedule count captured when the timer was scheduled
+     * @param task                 task type that fired
+     * @param expectedDeadline     deadline captured when the timer was scheduled
+     * @param expectedHandNumber   hand number captured when the timer was scheduled
+     * @param expectedTimerVersion schedule count captured when the timer was scheduled
      * @return {@code true} if the task was claimed for execution, {@code false} otherwise
      */
     public boolean claimScheduledTask(
             ScheduledGameTask task,
             long expectedDeadline,
             long expectedHandNumber,
-            long expectedGeneration) {
+            long expectedTimerVersion) {
         return scheduling.claimTask(
-                forfeitPending, gameOver, handNumber, task, expectedDeadline, expectedHandNumber, expectedGeneration);
+                forfeitPending, gameOver, handNumber, task, expectedDeadline, expectedHandNumber, expectedTimerVersion);
     }
 
     /**
@@ -915,8 +915,8 @@ public class Game {
      * @param task delayed task type
      * @return schedule count, or {@code 0} if never scheduled
      */
-    public long getScheduledTaskGeneration(ScheduledGameTask task) {
-        return scheduling.getGeneration(task);
+    public long getTimerVersion(ScheduledGameTask task) {
+        return scheduling.getTimerVersion(task);
     }
 
     /**
@@ -928,8 +928,8 @@ public class Game {
         return scheduling.deadlinesSnapshot();
     }
 
-    public Map<ScheduledGameTask, Long> getScheduledTaskGenerationsSnapshot() {
-        return scheduling.generationsSnapshot();
+    public Map<ScheduledGameTask, Long> getTimerVersionsSnapshot() {
+        return scheduling.timerVersionsSnapshot();
     }
 
     /**
