@@ -26,7 +26,7 @@ public class GameRestoreBuilder {
     private int pot;
     private String currentPlayerId;
     private int currentHighestBet;
-    private int preHandCarryOver;
+    private int carryOverPot;
     private GamePhase currentPhase;
     private boolean gameOver;
     private int smallBlind;
@@ -36,17 +36,17 @@ public class GameRestoreBuilder {
     private int lastFullRaise;
     private Map<String, Integer> lastActedWagerByPlayer = new HashMap<>();
     private List<String> handSeatOrder = new ArrayList<>();
-    private String dealerAnchorPlayerId;
+    private String dealerPlayerId;
     private String smallBlindPlayerId;
     private String bigBlindPlayerId;
-    private boolean terminalCarryOverSettled;
+    private boolean finalPotSettled;
     private boolean forfeitPending;
     private Long readyCountdownDeadlineEpochMs;
     private ReadyGateState readyGateState = ReadyGateState.CLOSED;
     private long handNumber;
     private long stateRevision;
-    private GameEndResponse retainedTerminalResult;
-    private boolean everyoneHasHadInitialTurn;
+    private GameEndResponse gameEndResult;
+    private boolean allPlayersHadInitialTurn;
     private Set<String> actedPlayersInRound;
     private Map<ScheduledGameTask, Long> scheduledTaskDeadlines;
     private Map<ScheduledGameTask, Long> scheduledTaskGenerations;
@@ -103,8 +103,8 @@ public class GameRestoreBuilder {
         return this;
     }
 
-    public GameRestoreBuilder preHandCarryOver(int amount) {
-        this.preHandCarryOver = amount;
+    public GameRestoreBuilder carryOverPot(int amount) {
+        this.carryOverPot = amount;
         return this;
     }
 
@@ -153,8 +153,8 @@ public class GameRestoreBuilder {
         return this;
     }
 
-    public GameRestoreBuilder dealerAnchorPlayerId(String value) {
-        this.dealerAnchorPlayerId = value;
+    public GameRestoreBuilder dealerPlayerId(String value) {
+        this.dealerPlayerId = value;
         return this;
     }
 
@@ -168,8 +168,8 @@ public class GameRestoreBuilder {
         return this;
     }
 
-    public GameRestoreBuilder terminalCarryOverSettled(boolean value) {
-        this.terminalCarryOverSettled = value;
+    public GameRestoreBuilder finalPotSettled(boolean value) {
+        this.finalPotSettled = value;
         return this;
     }
 
@@ -198,13 +198,13 @@ public class GameRestoreBuilder {
         return this;
     }
 
-    public GameRestoreBuilder retainedTerminalResult(GameEndResponse value) {
-        this.retainedTerminalResult = value;
+    public GameRestoreBuilder gameEndResult(GameEndResponse value) {
+        this.gameEndResult = value;
         return this;
     }
 
-    public GameRestoreBuilder everyoneHasHadInitialTurn(boolean everyoneHasHadInitialTurn) {
-        this.everyoneHasHadInitialTurn = everyoneHasHadInitialTurn;
+    public GameRestoreBuilder allPlayersHadInitialTurn(boolean allPlayersHadInitialTurn) {
+        this.allPlayersHadInitialTurn = allPlayersHadInitialTurn;
         return this;
     }
 
@@ -263,8 +263,8 @@ public class GameRestoreBuilder {
         return currentHighestBet;
     }
 
-    int getPreHandCarryOver() {
-        return preHandCarryOver;
+    int getCarryOverPot() {
+        return carryOverPot;
     }
 
     GamePhase getCurrentPhase() {
@@ -303,8 +303,8 @@ public class GameRestoreBuilder {
         return handSeatOrder;
     }
 
-    String getDealerAnchorPlayerId() {
-        return dealerAnchorPlayerId;
+    String getDealerPlayerId() {
+        return dealerPlayerId;
     }
 
     String getSmallBlindPlayerId() {
@@ -315,8 +315,8 @@ public class GameRestoreBuilder {
         return bigBlindPlayerId;
     }
 
-    boolean isTerminalCarryOverSettled() {
-        return terminalCarryOverSettled;
+    boolean isFinalPotSettled() {
+        return finalPotSettled;
     }
 
     boolean isForfeitPending() {
@@ -339,12 +339,12 @@ public class GameRestoreBuilder {
         return stateRevision;
     }
 
-    GameEndResponse getRetainedTerminalResult() {
-        return retainedTerminalResult;
+    GameEndResponse getGameEndResult() {
+        return gameEndResult;
     }
 
-    boolean isEveryoneHasHadInitialTurn() {
-        return everyoneHasHadInitialTurn;
+    boolean isAllPlayersHadInitialTurn() {
+        return allPlayersHadInitialTurn;
     }
 
     Set<String> getActedPlayersInRound() {

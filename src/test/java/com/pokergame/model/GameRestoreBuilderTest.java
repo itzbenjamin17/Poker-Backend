@@ -89,7 +89,7 @@ class GameRestoreBuilderTest {
                 .pot(475)                                           // 6
                 .currentPlayerId("p1")                              // 7
                 .currentHighestBet(100)                             // 8
-                .preHandCarryOver(25)                               // 12
+                .carryOverPot(25)                                   // 12
                 .currentPhase(GamePhase.FLOP)                       // 13
                 .gameOver(false)                                    // 14
                 .smallBlind(15)                                     // 15
@@ -99,17 +99,17 @@ class GameRestoreBuilderTest {
                 .lastFullRaise(lastFullRaise)                       // 19
                 .lastActedWagerByPlayer(lastActedWager)             // 20
                 .handSeatOrder(seatOrder)                           // 21
-                .dealerAnchorPlayerId("p2")                         // 22
+                .dealerPlayerId("p2")                               // 22
                 .smallBlindPlayerId("p3")                           // 23
                 .bigBlindPlayerId("p1")                             // 24
-                .terminalCarryOverSettled(true)                     // 25
+                .finalPotSettled(true)                              // 25
                 .forfeitPending(true)                               // 26
                 .readyCountdownDeadlineEpochMs(1700000000000L)      // 27
                 .readyGateState(ReadyGateState.COUNTING_DOWN)       // 28
                 .handNumber(7L)                                     // 29
                 .stateRevision(88L)                                 // 30
-                .retainedTerminalResult(terminalResult)             // 31
-                .everyoneHasHadInitialTurn(true)                    // 32
+                .gameEndResult(terminalResult)                      // 31
+                .allPlayersHadInitialTurn(true)                     // 32
                 .actedPlayersInRound(actedPlayers)                  // 33
                 .scheduledTaskDeadlines(taskDeadlines)              // 34
                 .scheduledTaskGenerations(taskGenerations)          // 35
@@ -181,8 +181,8 @@ class GameRestoreBuilderTest {
                         new Card(Rank.QUEEN, Suit.SPADES)))
                 .pot(200).currentPlayerId("p1").currentHighestBet(100).currentPhase(GamePhase.FLOP)
                 .smallBlind(15).bigBlind(30).handContributions(Map.of("p1", 100, "p2", 100))
-                .dealerAnchorPlayerId("p2").smallBlindPlayerId("p2").bigBlindPlayerId("p1")
-                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                .dealerPlayerId("p2").smallBlindPlayerId("p2").bigBlindPlayerId("p1")
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                 .build();
 
         game.conductShowdown();
@@ -542,7 +542,7 @@ class GameRestoreBuilderTest {
                 .pot(0)
                 .currentPlayerId("p1")
                 .currentHighestBet(0)
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .currentPhase(GamePhase.PRE_FLOP)
                 .gameOver(false)
                 .smallBlind(5)
@@ -552,17 +552,17 @@ class GameRestoreBuilderTest {
                 .lastFullRaise(0)
                 .lastActedWagerByPlayer(Map.of())
                 .handSeatOrder(List.of())
-                .dealerAnchorPlayerId("p1")
+                .dealerPlayerId("p1")
                 .smallBlindPlayerId("p1")
                 .bigBlindPlayerId("p2")
-                .terminalCarryOverSettled(false)
+                .finalPotSettled(false)
                 .forfeitPending(false)
                 .readyCountdownDeadlineEpochMs(null)
                 .readyGateState(ReadyGateState.CLOSED)
                 .handNumber(1L)
                 .stateRevision(1L)
-                .retainedTerminalResult(null)
-                .everyoneHasHadInitialTurn(false)
+                .gameEndResult(null)
+                .allPlayersHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 .scheduledTaskGenerations(Map.of());
@@ -794,7 +794,7 @@ class GameRestoreBuilderTest {
         void testBoundary_BlindsAndPot() {
             Game gameZero = defaultBuilder()
                     .pot(0)
-                    .preHandCarryOver(0)
+                    .carryOverPot(0)
                     .smallBlind(0)
                     .bigBlind(0)
                     .build();
@@ -805,7 +805,7 @@ class GameRestoreBuilderTest {
 
             Game gameMax = defaultBuilder()
                     .pot(Integer.MAX_VALUE)
-                    .preHandCarryOver(Integer.MAX_VALUE)
+                    .carryOverPot(Integer.MAX_VALUE)
                     .smallBlind(1_000_000)
                     .bigBlind(2_000_000)
                     .build();
@@ -1015,12 +1015,12 @@ class GameRestoreBuilderTest {
                         .communityCards(community)
                         .remainingDeck(List.of())
                         .pot(pot)
-                        .dealerAnchorPlayerId(activeIds.get(rng.nextInt(activeCount)))
+                        .dealerPlayerId(activeIds.get(rng.nextInt(activeCount)))
                         .smallBlindPlayerId(activeIds.get(rng.nextInt(activeCount)))
                         .bigBlindPlayerId(activeIds.get(rng.nextInt(activeCount)))
                         .currentPlayerId(activeIds.get(rng.nextInt(activeCount)))
                         .currentHighestBet(rng.nextInt(1000))
-                        .preHandCarryOver(carryOver)
+                        .carryOverPot(carryOver)
                         .currentPhase(phase)
                         .gameOver(gameOver)
                         .smallBlind(sb)
@@ -1073,7 +1073,7 @@ class GameRestoreBuilderTest {
                     .pot(0)
                     .currentPlayerId("p1")
                     .currentHighestBet(0)
-                    .preHandCarryOver(0)
+                    .carryOverPot(0)
                     .currentPhase(GamePhase.PRE_FLOP)
                     .gameOver(false)
                     .smallBlind(5)
@@ -1083,17 +1083,17 @@ class GameRestoreBuilderTest {
                     .lastFullRaise(0)
                     .lastActedWagerByPlayer(Map.of())
                     .handSeatOrder(List.of())
-                    .dealerAnchorPlayerId("p1")
+                    .dealerPlayerId("p1")
                     .smallBlindPlayerId("p1")
                     .bigBlindPlayerId("p2")
-                    .terminalCarryOverSettled(false)
+                    .finalPotSettled(false)
                     .forfeitPending(false)
                     .readyCountdownDeadlineEpochMs(null)
                     .readyGateState(ReadyGateState.CLOSED)
                     .handNumber(1L)
                     .stateRevision(1L)
-                    .retainedTerminalResult(null)
-                    .everyoneHasHadInitialTurn(false)
+                    .gameEndResult(null)
+                    .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
                     .scheduledTaskGenerations(Map.of());

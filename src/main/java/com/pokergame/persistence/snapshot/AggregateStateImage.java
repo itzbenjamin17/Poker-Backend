@@ -73,38 +73,38 @@ public record AggregateStateImage(boolean deleted, RoomState room, GameState gam
      * @param bigBlind                      the big blind amount
      * @param handContributions             how much each player put in (used to split side pots)
      * @param readyCountdownDeadlineEpochMs when the wait for the next hand ends
-     * @param everyoneHasHadInitialTurn     true if everyone got a chance to bet this round
+     * @param allPlayersHadInitialTurn      true if everyone got a chance to bet this round
      * @param actedPlayerIds                who has already made a move this round
      * @param scheduledTaskDeadlines        when upcoming automatic actions are supposed to happen
-     * @param preHandCarryOver               explicit chips carried from a completed prior hand
-     * @param lastFullRaise                  last full-raise increment this street, or 0 if none yet
-     * @param lastActedWagerByPlayer         each player's wager baseline for raise-reopening decisions
-     * @param handSeatOrder                  stable seats retained across departures during this hand
-     * @param dealerAnchorPlayerId           original dealer identity for correct clockwise position recovery
-     * @param smallBlindPlayerId             actual small blind payer identity, even if that player departed
-     * @param bigBlindPlayerId               actual big blind payer identity, even if that player departed
-     * @param currentPlayerId                player ID whose turn it is to act
-     * @param lastSettlementResult           immutable settled awards, refunds, winners and explicit remainder
-     * @param terminalCarryOverSettled       guards the final carry-over award against recovery-time repayout
-     * @param readyGateState                 current ready-gate state machine phase
-     * @param handNumber                     authoritative completed-hand count
-     * @param scheduledTaskGenerations       generation tokens protecting asynchronous task executions
-     * @param forfeitPending                 whether a pending forfeit preserves out standings
-     * @param stateRevision                  monotonically increasing public state revision
-     * @param retainedTerminalResult         frozen immutable terminal result retained across post-game review
+     * @param carryOverPot                  explicit chips carried from a completed prior hand
+     * @param lastFullRaise                 last full-raise increment this street, or 0 if none yet
+     * @param lastActedWagerByPlayer        each player's wager baseline for raise-reopening decisions
+     * @param handSeatOrder                 stable seats retained across departures during this hand
+     * @param dealerPlayerId                original dealer identity for correct clockwise position recovery
+     * @param smallBlindPlayerId            actual small blind payer identity, even if that player departed
+     * @param bigBlindPlayerId              actual big blind payer identity, even if that player departed
+     * @param currentPlayerId               player ID whose turn it is to act
+     * @param lastSettlementResult          immutable settled awards, refunds, winners and explicit remainder
+     * @param finalPotSettled               guards the final carry-over award against recovery-time repayout
+     * @param readyGateState                current ready-gate state machine phase
+     * @param handNumber                    authoritative completed-hand count
+     * @param scheduledTaskGenerations      generation tokens protecting asynchronous task executions
+     * @param forfeitPending                whether a pending forfeit preserves out standings
+     * @param stateRevision                 monotonically increasing public state revision
+     * @param gameEndResult                 frozen immutable terminal result retained across post-game review
      */
     public record GameState(String gameId, List<PlayerState> players, List<String> activePlayerIds,
             List<CardState> remainingDeck, List<CardState> communityCards, int pot, int currentHighestBet,
             GamePhase currentPhase, boolean gameOver, int smallBlind, int bigBlind,
             Map<String, Integer> handContributions,
-            Long readyCountdownDeadlineEpochMs, boolean everyoneHasHadInitialTurn, Set<String> actedPlayerIds,
-            Map<ScheduledGameTask, Long> scheduledTaskDeadlines, int preHandCarryOver,
+            Long readyCountdownDeadlineEpochMs, boolean allPlayersHadInitialTurn, Set<String> actedPlayerIds,
+            Map<ScheduledGameTask, Long> scheduledTaskDeadlines, int carryOverPot,
             int lastFullRaise, Map<String, Integer> lastActedWagerByPlayer,
-            List<String> handSeatOrder, String dealerAnchorPlayerId, String smallBlindPlayerId,
+            List<String> handSeatOrder, String dealerPlayerId, String smallBlindPlayerId,
             String bigBlindPlayerId, String currentPlayerId, SettlementState lastSettlementResult,
-            boolean terminalCarryOverSettled, ReadyGateState readyGateState, long handNumber,
+            boolean finalPotSettled, ReadyGateState readyGateState, long handNumber,
             Map<ScheduledGameTask, Long> scheduledTaskGenerations, boolean forfeitPending, long stateRevision,
-            TerminalResultState retainedTerminalResult) {
+            TerminalResultState gameEndResult) {
     }
 
     /** Plain persisted form of the immutable hand settlement result. */

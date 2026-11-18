@@ -135,7 +135,7 @@ class GameTest {
                 .remainingDeck(List.of())
                 .communityCards(List.of())
                 .pot(pot)
-                .dealerAnchorPlayerId(handPlayers.get(0).getPlayerId())
+                .dealerPlayerId(handPlayers.get(0).getPlayerId())
                 .smallBlindPlayerId(handPlayers.get(0).getPlayerId())
                 .bigBlindPlayerId(handPlayers.get(Math.min(1, handPlayers.size() - 1)).getPlayerId())
                 .currentPlayerId(handPlayers.get(currentPlayerPosition).getPlayerId())
@@ -145,10 +145,10 @@ class GameTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handContributions(contributions)
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .lastFullRaise(lastFullRaise)
                 .lastActedWagerByPlayer(lastActedWagerByPlayer)
-                .everyoneHasHadInitialTurn(false)
+                .allPlayersHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 
@@ -184,7 +184,7 @@ class GameTest {
                 .remainingDeck(List.of())
                 .communityCards(List.of())
                 .pot(pot)
-                .dealerAnchorPlayerId(shortId)
+                .dealerPlayerId(shortId)
                 .smallBlindPlayerId(shortId)
                 .bigBlindPlayerId(bettorId)
                 .currentPlayerId(owingId)
@@ -194,8 +194,8 @@ class GameTest {
                 .smallBlind(10)
                 .bigBlind(20)
                 .handContributions(Map.of(shortId, 50, bettorId, 250, owingId, 50, foldedId, 20))
-                .preHandCarryOver(carryOver)
-                .everyoneHasHadInitialTurn(true)
+                .carryOverPot(carryOver)
+                .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 
@@ -503,7 +503,7 @@ class GameTest {
                     .remainingDeck(deckCards)
                     .communityCards(community)
                     .pot(100)
-                    .dealerAnchorPlayerId("p2-id")
+                    .dealerPlayerId("p2-id")
                     .smallBlindPlayerId("p1-id")
                     .bigBlindPlayerId("p2-id")
                     .currentPlayerId("p1-id")
@@ -515,7 +515,7 @@ class GameTest {
                     .handContributions(contribs)
                     .readyGateState(ReadyGateState.COUNTING_DOWN)
                     .readyCountdownDeadlineEpochMs(9999L)
-                    .everyoneHasHadInitialTurn(true)
+                    .allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(acted)
                     .scheduledTaskDeadlines(tasks)
                     
@@ -753,7 +753,7 @@ class GameTest {
                     .remainingDeck(List.of())
                     .communityCards(List.of())
                     .pot(20)
-                    .dealerAnchorPlayerId("ai")
+                    .dealerPlayerId("ai")
                     .smallBlindPlayerId("ai")
                     .bigBlindPlayerId("matched")
                     .currentPlayerId("matched")
@@ -763,8 +763,8 @@ class GameTest {
                     .smallBlind(5)
                     .bigBlind(10)
                     .handContributions(Map.of("ai", 10, "matched", 10))
-                    .preHandCarryOver(0)
-                    .everyoneHasHadInitialTurn(false)
+                    .carryOverPot(0)
+                    .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
                     
@@ -779,7 +779,7 @@ class GameTest {
                     .remainingDeck(List.of())
                     .communityCards(List.of())
                     .pot(10)
-                    .dealerAnchorPlayerId("ai")
+                    .dealerPlayerId("ai")
                     .smallBlindPlayerId("ai")
                     .bigBlindPlayerId("owing")
                     .currentPlayerId("owing")
@@ -789,8 +789,8 @@ class GameTest {
                     .smallBlind(5)
                     .bigBlind(10)
                     .handContributions(Map.of("ai", 10))
-                    .preHandCarryOver(0)
-                    .everyoneHasHadInitialTurn(false)
+                    .carryOverPot(0)
+                    .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
                     
@@ -819,10 +819,10 @@ class GameTest {
                     .smallBlind(5)
                     .bigBlind(10)
                     .handContributions(Map.of("a", 50, "f", 50))
-                    .preHandCarryOver(0)
+                    .carryOverPot(0)
                     .handSeatOrder(List.of("a", "f", "leaving"))
-                    .dealerAnchorPlayerId("a")
-                    .everyoneHasHadInitialTurn(false)
+                    .dealerPlayerId("a")
+                    .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of("a", "f"))
                     .scheduledTaskDeadlines(Map.of())
                     
@@ -853,7 +853,7 @@ class GameTest {
                             new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.FIVE, Suit.SPADES),
                             new Card(Rank.SIX, Suit.CLUBS)))
                     .pot(100)
-                    .dealerAnchorPlayerId("allIn")
+                    .dealerPlayerId("allIn")
                     .smallBlindPlayerId("allIn")
                     .bigBlindPlayerId("caller")
                     .currentPlayerId("caller")
@@ -863,8 +863,8 @@ class GameTest {
                     .smallBlind(5)
                     .bigBlind(10)
                     .handContributions(Map.of("allIn", 100))
-                    .preHandCarryOver(0)
-                    .everyoneHasHadInitialTurn(false)
+                    .carryOverPot(0)
+                    .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of("allIn"))
                     .scheduledTaskDeadlines(Map.of())
                     .build();
@@ -960,11 +960,11 @@ class GameTest {
             Game gameUncalled = Game.restoreBuilder().gameId("odd-chip-game")
                     .players(List.of(p1, p2, p3)).activePlayerIds(List.of("p1", "p2", "p3"))
                     .remainingDeck(List.of()).communityCards(List.of()).pot(100)
-                    .dealerAnchorPlayerId("p1").smallBlindPlayerId("p1").bigBlindPlayerId("p2").currentPlayerId("p3")
+                    .dealerPlayerId("p1").smallBlindPlayerId("p1").bigBlindPlayerId("p2").currentPlayerId("p3")
                     .currentHighestBet(34).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
                     .smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p1", 33, "p2", 33, "p3", 34))
-                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
+                    .carryOverPot(0).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -974,11 +974,11 @@ class GameTest {
             Game oddGame = Game.restoreBuilder().gameId("odd-game-split")
                     .players(List.of(p1, p2, p3)).activePlayerIds(List.of("p1", "p2", "p3"))
                     .remainingDeck(List.of()).communityCards(List.of()).pot(101)
-                    .dealerAnchorPlayerId("p1").smallBlindPlayerId("p1").bigBlindPlayerId("p2").currentPlayerId("p3")
+                    .dealerPlayerId("p1").smallBlindPlayerId("p1").bigBlindPlayerId("p2").currentPlayerId("p3")
                     .currentHighestBet(34).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
                     .smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p1", 33, "p2", 34, "p3", 34))
-                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
+                    .carryOverPot(0).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -1002,11 +1002,11 @@ class GameTest {
 
             Game ordinary = Game.restoreBuilder().gameId("coalesce-ordinary-pots")
                     .players(List.of(a, b, f1, f2, f3)).activePlayerIds(List.of("a", "b", "f1", "f2", "f3"))
-                    .remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD).pot(230).dealerAnchorPlayerId("a")
+                    .remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD).pot(230).dealerPlayerId("a")
                     .smallBlindPlayerId("a").bigBlindPlayerId("b").currentPlayerId("a").currentHighestBet(100)
                     .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 100, "b", 100, "f1", 5, "f2", 10, "f3", 15))
-                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
+                    .carryOverPot(0).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -1032,11 +1032,11 @@ class GameTest {
                             new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
                             new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.CLUBS),
                             new Card(Rank.THREE, Suit.DIAMONDS)))
-                    .pot(550).dealerAnchorPlayerId("a").smallBlindPlayerId("b")
+                    .pot(550).dealerPlayerId("a").smallBlindPlayerId("b")
                     .bigBlindPlayerId("c").currentPlayerId("a").currentHighestBet(200)
                     .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 50, "b", 100, "c", 200, "d", 200))
-                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
+                    .carryOverPot(0).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -1060,11 +1060,11 @@ class GameTest {
                             new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
                             new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.CLUBS),
                             new Card(Rank.THREE, Suit.DIAMONDS)))
-                    .pot(350).dealerAnchorPlayerId("s").smallBlindPlayerId("s").bigBlindPlayerId("m")
+                    .pot(350).dealerPlayerId("s").smallBlindPlayerId("s").bigBlindPlayerId("m")
                     .currentPlayerId("s").currentHighestBet(150).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("s", 50, "m", 150, "departed", 150))
-                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
+                    .carryOverPot(0).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -1090,11 +1090,11 @@ class GameTest {
             Game deadBlindGame = Game.restoreBuilder().gameId("zero-contribution-contender")
                     .players(List.of(contender, foldedSb, foldedBb))
                     .activePlayerIds(List.of("a", "b", "c")).remainingDeck(List.of()).communityCards(List.of())
-                    .pot(30).dealerAnchorPlayerId("a").smallBlindPlayerId("b").bigBlindPlayerId("c")
+                    .pot(30).dealerPlayerId("a").smallBlindPlayerId("b").bigBlindPlayerId("c")
                     .currentPlayerId("a").currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP)
                     .gameOver(false).smallBlind(10).bigBlind(20)
-                    .handContributions(Map.of("b", 10, "c", 20)).preHandCarryOver(0)
-                    .everyoneHasHadInitialTurn(true)
+                    .handContributions(Map.of("b", 10, "c", 20)).carryOverPot(0)
+                    .allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
 
@@ -1122,11 +1122,11 @@ class GameTest {
             Player owing = restoredPlayer("Owing", "owing", 950, 50, false);
             Game live = Game.restoreBuilder().gameId("live-cap-pending-bet").players(List.of(shortStack, bettor, owing))
                     .activePlayerIds(List.of("short", "bettor", "owing")).remainingDeck(List.of())
-                    .communityCards(List.of()).pot(350).dealerAnchorPlayerId("short").smallBlindPlayerId("short")
+                    .communityCards(List.of()).pot(350).dealerPlayerId("short").smallBlindPlayerId("short")
                     .bigBlindPlayerId("bettor").currentPlayerId("owing").currentHighestBet(250).currentPhase(GamePhase.FLOP)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("short", 50, "bettor", 250, "owing", 50))
-                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
+                    .carryOverPot(0).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             assertEquals(List.of(150, 200), live.getPotBreakdown());
@@ -1158,13 +1158,13 @@ class GameTest {
             return Game.restoreBuilder().gameId(id)
                     .players(table).activePlayerIds(active.stream().map(Player::getPlayerId).toList())
                     .remainingDeck(List.of()).communityCards(board).pot(pot)
-                    .dealerAnchorPlayerId(table.getFirst().getPlayerId())
+                    .dealerPlayerId(table.getFirst().getPlayerId())
                     .smallBlindPlayerId(table.getFirst().getPlayerId())
                     .bigBlindPlayerId(table.getLast().getPlayerId())
                     .currentPlayerId(active.getFirst().getPlayerId())
                     .currentHighestBet(highestBet).currentPhase(GamePhase.RIVER).gameOver(false)
                     .smallBlind(10).bigBlind(20).handContributions(new java.util.HashMap<>(contributions))
-                    .preHandCarryOver(carryOver).everyoneHasHadInitialTurn(true)
+                    .carryOverPot(carryOver).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
         }
@@ -1599,11 +1599,11 @@ class GameTest {
                     .allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
             Game realGame = Game.restoreBuilder().gameId("real-high-card-showdown").players(List.of(ace, king))
                     .activePlayerIds(List.of("ace", "king")).remainingDeck(List.of()).communityCards(board)
-                    .pot(100).dealerAnchorPlayerId("ace").smallBlindPlayerId("ace").bigBlindPlayerId("king")
+                    .pot(100).dealerPlayerId("ace").smallBlindPlayerId("ace").bigBlindPlayerId("king")
                     .currentPlayerId("ace").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
-                    .handContributions(Map.of("ace", 50, "king", 50)).preHandCarryOver(0)
-                    .everyoneHasHadInitialTurn(true)
+                    .handContributions(Map.of("ace", 50, "king", 50)).carryOverPot(0)
+                    .allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             realGame.conductShowdown();
@@ -1616,10 +1616,10 @@ class GameTest {
             Player coB = restoredPlayer("B", "b", 50, 0, true);
             Game carryGame = Game.restoreBuilder().gameId("carry-over-remainder").players(List.of(coA, coB))
                     .activePlayerIds(List.of("a", "b")).remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD)
-                    .pot(101).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                    .pot(101).dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                     .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50, "b", 50))
-                    .preHandCarryOver(1).everyoneHasHadInitialTurn(true)
+                    .carryOverPot(1).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             carryGame.conductShowdown();
@@ -1670,10 +1670,10 @@ class GameTest {
             Player termA = restoredPlayer("A", "a", 50, 50, true);
             Game unsettled = Game.restoreBuilder().gameId("terminal-reset-ledger").players(List.of(termA))
                     .activePlayerIds(List.of("a")).remainingDeck(List.of()).communityCards(List.of())
-                    .pot(50).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("a")
+                    .pot(50).dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("a")
                     .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(true).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50))
-                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
+                    .carryOverPot(0).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             assertTrue(unsettled.resetForNewHand());
@@ -1700,11 +1700,11 @@ class GameTest {
             Player ob = new Player("B", "b", 100);
             Game oddCarry = Game.restoreBuilder().gameId("terminal-odd-carry").players(List.of(oa, ob))
                     .activePlayerIds(List.of("a", "b")).remainingDeck(List.of()).communityCards(List.of())
-                    .pot(1).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                    .pot(1).dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                     .currentPlayerId("a").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                     .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of())
-                    .preHandCarryOver(1).lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, false))
-                    .everyoneHasHadInitialTurn(true)
+                    .carryOverPot(1).lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, false))
+                    .allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             Player oddWinner = oddCarry.settleGameEnd(null, Set.of());
@@ -1739,11 +1739,11 @@ class GameTest {
             Game threeWay = Game.restoreBuilder().gameId("three-way-odd-chips")
                     .players(List.of(p0, p1, p2, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
                     .remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD).pot(101)
-                    .dealerAnchorPlayerId("p1").smallBlindPlayerId("p2").bigBlindPlayerId("p3")
+                    .dealerPlayerId("p1").smallBlindPlayerId("p2").bigBlindPlayerId("p3")
                     .currentPlayerId("p0").currentHighestBet(30).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p0", 30, "p1", 30, "p2", 30, "p3", 11))
-                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
+                    .carryOverPot(0).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             int totalBeforeThreeWay = threeWay.getPlayers().stream().mapToInt(Player::getChips).sum() + threeWay.getPot();
@@ -1767,11 +1767,11 @@ class GameTest {
             Game headsUp = Game.restoreBuilder().gameId("heads-up-odd-chip")
                     .players(List.of(huA, huB)).activePlayerIds(List.of("a", "b"))
                     .remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD).pot(101)
-                    .dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                    .dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                     .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
-                    .handContributions(Map.of("a", 50, "b", 50)).preHandCarryOver(1)
-                    .everyoneHasHadInitialTurn(true)
+                    .handContributions(Map.of("a", 50, "b", 50)).carryOverPot(1)
+                    .allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             int totalBeforeHeadsUp = headsUp.getPlayers().stream().mapToInt(Player::getChips).sum() + headsUp.getPot();
@@ -1802,11 +1802,11 @@ class GameTest {
                             new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.KING, Suit.CLUBS),
                             new Card(Rank.TWO, Suit.CLUBS)))
                     .pot(141)
-                    .dealerAnchorPlayerId("s2").smallBlindPlayerId("s3").bigBlindPlayerId("s0")
+                    .dealerPlayerId("s2").smallBlindPlayerId("s3").bigBlindPlayerId("s0")
                     .currentPlayerId("s1").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("s0", 31, "s1", 50, "s2", 50, "s3", 10))
-                    .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
+                    .carryOverPot(0).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             int totalBeforeSidePot = sidePotOdd.getPlayers().stream().mapToInt(Player::getChips).sum() + sidePotOdd.getPot();
@@ -1833,11 +1833,11 @@ class GameTest {
                     .players(List.of(d0, d1, d2)).activePlayerIds(List.of("d0", "d1", "d2"))
                     .handSeatOrder(List.of("d0", "d1", "d2"))
                     .remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD).pot(101)
-                    .dealerAnchorPlayerId("d1").smallBlindPlayerId("d2").bigBlindPlayerId("d0")
+                    .dealerPlayerId("d1").smallBlindPlayerId("d2").bigBlindPlayerId("d0")
                     .currentPlayerId("d2").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20)
-                    .handContributions(Map.of("d0", 50, "d2", 50)).preHandCarryOver(1)
-                    .everyoneHasHadInitialTurn(true)
+                    .handContributions(Map.of("d0", 50, "d2", 50)).carryOverPot(1)
+                    .allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                     .build();
             departedDealer.removePlayer(d1);
@@ -2091,8 +2091,8 @@ class GameTest {
                     .remainingDeck(List.of())
                     .pot(0).currentPlayerId("c")
                     .currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
-                    .handSeatOrder(List.of("d", "a", "b", "c")).dealerAnchorPlayerId("d")
-                    .smallBlindPlayerId("a").bigBlindPlayerId("b").everyoneHasHadInitialTurn(true)
+                    .handSeatOrder(List.of("d", "a", "b", "c")).dealerPlayerId("d")
+                    .smallBlindPlayerId("a").bigBlindPlayerId("b").allPlayersHadInitialTurn(true)
                     .build();
             anchored.removePlayer(d);
             anchored.removePlayer(b);
@@ -2116,7 +2116,7 @@ class GameTest {
                     .pot(30).currentPlayerId("c")
                     .currentHighestBet(20).currentPhase(GamePhase.PRE_FLOP).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 10, "b", 20)).handSeatOrder(List.of("a", "b", "c", "d"))
-                    .dealerAnchorPlayerId("d").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                    .dealerPlayerId("d").smallBlindPlayerId("a").bigBlindPlayerId("b")
                     .build();
             sbLeft.removePlayer(a2);
             assertEquals("c", sbLeft.getCurrentPlayer().getPlayerId());
@@ -2137,7 +2137,7 @@ class GameTest {
                     .remainingDeck(List.of(new Card(Rank.SEVEN, Suit.CLUBS)))
                     .pot(0).currentPlayerId("c2")
                     .currentHighestBet(0).currentPhase(GamePhase.FLOP).smallBlind(10).bigBlind(20)
-                    .handSeatOrder(List.of("a2", "b2", "c2", "d2")).dealerAnchorPlayerId("d2")
+                    .handSeatOrder(List.of("a2", "b2", "c2", "d2")).dealerPlayerId("d2")
                     .build();
             dealerLeft.removePlayer(dd);
             dealerLeft.dealTurn();
@@ -2151,7 +2151,7 @@ class GameTest {
                             restoredPlayer("D", "d", 1000, 0, false)))
                     .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(List.of()).currentPlayerId("b")
                     .currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
-                    .handSeatOrder(List.of("a", "b", "c", "d")).dealerAnchorPlayerId("a")
+                    .handSeatOrder(List.of("a", "b", "c", "d")).dealerPlayerId("a")
                     .build();
             succ.removePlayer(succ.getPlayers().get(1));
             TurnOutcome succOutcome = succ.advanceAfterPlayerRemoval();
@@ -2169,7 +2169,7 @@ class GameTest {
                             new Card(Rank.TWO, Suit.CLUBS), new Card(Rank.THREE, Suit.DIAMONDS),
                             new Card(Rank.FOUR, Suit.HEARTS)))
                     .currentPlayerId("c").currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
-                    .handSeatOrder(List.of("a", "b", "c")).dealerAnchorPlayerId("a")
+                    .handSeatOrder(List.of("a", "b", "c")).dealerPlayerId("a")
                     .actedPlayersInRound(Set.of("a", "b")).build();
             flopComplete.removePlayer(flopComplete.getPlayers().get(2));
             TurnOutcome turnOutcome = flopComplete.advanceAfterPlayerRemoval();
@@ -2229,7 +2229,7 @@ class GameTest {
                             new Card(Rank.TWO, Suit.CLUBS), new Card(Rank.THREE, Suit.DIAMONDS),
                             new Card(Rank.FOUR, Suit.HEARTS)))
                     .currentPlayerId("a").currentPhase(GamePhase.FLOP).smallBlind(5).bigBlind(10)
-                    .handSeatOrder(List.of("a", "b", "c")).dealerAnchorPlayerId("a")
+                    .handSeatOrder(List.of("a", "b", "c")).dealerPlayerId("a")
                     .build();
 
             Player actorA = midHandOut.getPlayers().get(0);
@@ -2535,12 +2535,12 @@ class GameTest {
                     .remainingDeck(List.of())
                     .communityCards(List.of())
                     .pot(0)
-                    .dealerAnchorPlayerId(players.isEmpty() ? null : players.getFirst().getPlayerId())
+                    .dealerPlayerId(players.isEmpty() ? null : players.getFirst().getPlayerId())
                     .smallBlindPlayerId(players.isEmpty() ? null : players.getFirst().getPlayerId())
                     .bigBlindPlayerId(players.size() > 1 ? players.get(1).getPlayerId() : players.isEmpty() ? null : players.getFirst().getPlayerId())
                     .currentPlayerId(players.isEmpty() ? null : players.getFirst().getPlayerId())
                     .currentHighestBet(0)
-                    .preHandCarryOver(0)
+                    .carryOverPot(0)
                     .currentPhase(phase)
                     .gameOver(gameOver)
                     .smallBlind(10)

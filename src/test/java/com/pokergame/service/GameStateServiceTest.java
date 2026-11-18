@@ -598,14 +598,14 @@ class GameStateServiceTest {
         other.setHandRank(HandRank.ROYAL_FLUSH);
         Game contested = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
                 .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
-                .communityCards(board).pot(0).dealerAnchorPlayerId(testPlayers.get(0).getPlayerId())
+                .communityCards(board).pot(0).dealerPlayerId(testPlayers.get(0).getPlayerId())
                 .smallBlindPlayerId(testPlayers.get(0).getPlayerId())
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId()).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
                 .smallBlind(5).bigBlind(10).handContributions(Map.of())
                 .lastSettlementResult(new HandSettlementResult(Map.of(winner.getPlayerId(), 100), Map.of(),
                         Set.of(winner.getPlayerId()), 0, true)).scheduledTaskDeadlines(Map.of())
-                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .build();
 
         GameEndResponse event = gameStateService.advanceRevisionAndBuildGameEnd(contested, winner, false);
@@ -707,11 +707,11 @@ class GameStateServiceTest {
         HandSettlementResult settled = new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, false);
         Game terminal = Game.restoreBuilder().gameId(GAME_ID).players(List.of(sb, bb)).activePlayerIds(List.of("bb"))
                 .remainingDeck(List.of()).communityCards(List.of()).pot(10)
-                .dealerAnchorPlayerId("sb").smallBlindPlayerId("sb").bigBlindPlayerId("bb")
+                .dealerPlayerId("sb").smallBlindPlayerId("sb").bigBlindPlayerId("bb")
                 .currentPlayerId("bb").currentHighestBet(0)
                 .currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10)
-                .handContributions(Map.of()).preHandCarryOver(10).lastSettlementResult(settled)
-                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .handContributions(Map.of()).carryOverPot(10).lastSettlementResult(settled)
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of()).build();
         terminal.settleGameEnd(bb, Set.of());
 
@@ -742,13 +742,13 @@ class GameStateServiceTest {
         Game settled = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
                 .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
                 .communityCards(List.of()).pot(0)
-                .dealerAnchorPlayerId(testPlayers.get(0).getPlayerId())
+                .dealerPlayerId(testPlayers.get(0).getPlayerId())
                 .smallBlindPlayerId(testPlayers.get(0).getPlayerId())
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId()).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of())
-                .lastSettlementResult(settlement).preHandCarryOver(0)
-                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                .lastSettlementResult(settlement).carryOverPot(0)
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                 .build();
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
@@ -780,11 +780,11 @@ class GameStateServiceTest {
                         new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.EIGHT, Suit.DIAMONDS),
                         new Card(Rank.TWO, Suit.CLUBS)))
                 .pot(450)
-                .dealerAnchorPlayerId("main").smallBlindPlayerId("main").bigBlindPlayerId("side1")
+                .dealerPlayerId("main").smallBlindPlayerId("main").bigBlindPlayerId("side1")
                 .currentPlayerId("main").currentHighestBet(150).currentPhase(GamePhase.RIVER)
                 .gameOver(false).smallBlind(5).bigBlind(10)
                 .handContributions(Map.of("main", 50, "side1", 100, "side2", 150, "side3", 150))
-                .preHandCarryOver(0).everyoneHasHadInitialTurn(true)
+                .carryOverPot(0).allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of()).build();
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
@@ -822,16 +822,16 @@ class GameStateServiceTest {
         Game settled = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
                 .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
                 .communityCards(List.of()).pot(0)
-                .dealerAnchorPlayerId(testPlayers.get(0).getPlayerId())
+                .dealerPlayerId(testPlayers.get(0).getPlayerId())
                 .smallBlindPlayerId(testPlayers.get(0).getPlayerId())
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId()).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
-                .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
+                .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).carryOverPot(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of(connected.getPlayerId(), 50,
                         disconnected.getPlayerId(), 50), Map.of(), Set.of(connected.getPlayerId(), disconnected.getPlayerId()),
                         0, true))
                 .readyCountdownDeadlineEpochMs(12345L)
-                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
                 .build();
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(settled);
@@ -851,13 +851,13 @@ class GameStateServiceTest {
         Game voidGame = Game.restoreBuilder().gameId(GAME_ID).players(testPlayers)
                 .activePlayerIds(testPlayers.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
                 .communityCards(List.of()).pot(100)
-                .dealerAnchorPlayerId(testPlayers.get(0).getPlayerId())
+                .dealerPlayerId(testPlayers.get(0).getPlayerId())
                 .smallBlindPlayerId(testPlayers.get(0).getPlayerId())
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId()).currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
-                .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
+                .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).carryOverPot(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 100, false))
-                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of()).build();
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(voidGame);
@@ -885,13 +885,13 @@ class GameStateServiceTest {
         List<Player> players = List.of(winner, oldOut);
         Game settled = Game.restoreBuilder().gameId(GAME_ID).players(players)
                 .activePlayerIds(List.of(winner.getPlayerId())).remainingDeck(List.of()).communityCards(List.of())
-                .pot(0).dealerAnchorPlayerId("p1").smallBlindPlayerId("p1").bigBlindPlayerId("p2")
+                .pot(0).dealerPlayerId("p1").smallBlindPlayerId("p1").bigBlindPlayerId("p2")
                 .currentPlayerId("p1")
                 .currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
-                .smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(0)
+                .smallBlind(5).bigBlind(10).handContributions(Map.of()).carryOverPot(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of(winner.getPlayerId(), 150), Map.of(),
                         Set.of(winner.getPlayerId()), 0, false))
-                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of()).build();
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
 
@@ -913,7 +913,7 @@ class GameStateServiceTest {
                 .remainingDeck(List.of())
                 .communityCards(List.of())
                 .pot(100)
-                .dealerAnchorPlayerId(testPlayers.get(0).getPlayerId())
+                .dealerPlayerId(testPlayers.get(0).getPlayerId())
                 .smallBlindPlayerId(testPlayers.get(0).getPlayerId())
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId())
@@ -923,9 +923,9 @@ class GameStateServiceTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handContributions(Map.of())
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .lastSettlementResult(null)
-                .everyoneHasHadInitialTurn(true)
+                .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 
@@ -948,7 +948,7 @@ class GameStateServiceTest {
                 .remainingDeck(List.of())
                 .communityCards(List.of())
                 .pot(100)
-                .dealerAnchorPlayerId(testPlayers.get(0).getPlayerId())
+                .dealerPlayerId(testPlayers.get(0).getPlayerId())
                 .smallBlindPlayerId(testPlayers.get(0).getPlayerId())
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId())
@@ -958,11 +958,11 @@ class GameStateServiceTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handContributions(Map.of())
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .lastSettlementResult(null)
                 .readyGateState(ReadyGateState.COUNTING_DOWN)
                 .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
-                .everyoneHasHadInitialTurn(true)
+                .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 
@@ -985,7 +985,7 @@ class GameStateServiceTest {
                 .remainingDeck(List.of())
                 .communityCards(List.of())
                 .pot(100)
-                .dealerAnchorPlayerId(testPlayers.get(0).getPlayerId())
+                .dealerPlayerId(testPlayers.get(0).getPlayerId())
                 .smallBlindPlayerId(testPlayers.get(0).getPlayerId())
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId())
@@ -995,11 +995,11 @@ class GameStateServiceTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handContributions(Map.of())
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .lastSettlementResult(null)
                 .readyGateState(ReadyGateState.COUNTING_DOWN)
                 .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
-                .everyoneHasHadInitialTurn(true)
+                .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 
@@ -1052,7 +1052,7 @@ class GameStateServiceTest {
                         new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TEN, Suit.CLUBS),
                         new Card(Rank.NINE, Suit.DIAMONDS)))
                 .pot(0)
-                .dealerAnchorPlayerId(testPlayers.get(0).getPlayerId())
+                .dealerPlayerId(testPlayers.get(0).getPlayerId())
                 .smallBlindPlayerId(testPlayers.get(0).getPlayerId())
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId())
@@ -1062,10 +1062,10 @@ class GameStateServiceTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handContributions(Map.of())
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .lastSettlementResult(settlement)
                 .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
-                .everyoneHasHadInitialTurn(true)
+                .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 
@@ -1156,7 +1156,7 @@ class GameStateServiceTest {
                 .remainingDeck(List.of())
                 .communityCards(List.of())
                 .pot(0)
-                .dealerAnchorPlayerId(testPlayers.get(0).getPlayerId())
+                .dealerPlayerId(testPlayers.get(0).getPlayerId())
                 .smallBlindPlayerId(testPlayers.get(0).getPlayerId())
                 .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                 .currentPlayerId(testPlayers.get(0).getPlayerId())
@@ -1166,10 +1166,10 @@ class GameStateServiceTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handContributions(Map.of())
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .lastSettlementResult(settlement)
                 .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 6000)
-                .everyoneHasHadInitialTurn(true)
+                .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 
@@ -1214,7 +1214,7 @@ class GameStateServiceTest {
                 .remainingDeck(List.of())
                 .communityCards(List.of())
                 .pot(0)
-                .dealerAnchorPlayerId(players.get(0).getPlayerId())
+                .dealerPlayerId(players.get(0).getPlayerId())
                 .smallBlindPlayerId(players.get(0).getPlayerId())
                 .bigBlindPlayerId(players.get(Math.min(1, players.size() - 1)).getPlayerId())
                 .currentPlayerId(players.get(0).getPlayerId())
@@ -1224,9 +1224,9 @@ class GameStateServiceTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handContributions(Map.of())
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .lastSettlementResult(new HandSettlementResult(contestedAwards, Map.of(), winnerIds, 0, true))
-                .everyoneHasHadInitialTurn(true)
+                .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 
@@ -1631,7 +1631,7 @@ class GameStateServiceTest {
                     .remainingDeck(List.of())
                     .communityCards(List.of())
                     .pot(0)
-                    .dealerAnchorPlayerId(testPlayers.get(0).getPlayerId())
+                    .dealerPlayerId(testPlayers.get(0).getPlayerId())
                     .smallBlindPlayerId(testPlayers.get(0).getPlayerId())
                     .bigBlindPlayerId(testPlayers.get(1).getPlayerId())
                     .currentPlayerId(testPlayers.get(0).getPlayerId())
@@ -1641,8 +1641,8 @@ class GameStateServiceTest {
                     .smallBlind(5)
                     .bigBlind(10)
                     .handContributions(Map.of())
-                    .preHandCarryOver(0)
-                    .everyoneHasHadInitialTurn(true)
+                    .carryOverPot(0)
+                    .allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of())
                     .scheduledTaskDeadlines(Map.of())
                     .build();
@@ -1729,7 +1729,7 @@ class GameStateServiceTest {
                         new Card(Rank.TEN, Suit.CLUBS),
                         new Card(Rank.TEN, Suit.SPADES)))
                 .pot(0)
-                .dealerAnchorPlayerId("p-1")
+                .dealerPlayerId("p-1")
                 .smallBlindPlayerId("p-1")
                 .bigBlindPlayerId("p-2")
                 .currentPlayerId("p-2")
@@ -1739,10 +1739,10 @@ class GameStateServiceTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handContributions(Map.of())
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .lastSettlementResult(settlement)
                 .readyCountdownDeadlineEpochMs(FIXED_INSTANT.toEpochMilli() + 10000)
-                .everyoneHasHadInitialTurn(true)
+                .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 
@@ -1804,7 +1804,7 @@ class GameStateServiceTest {
                 .remainingDeck(List.of())
                 .communityCards(List.of())
                 .pot(100)
-                .dealerAnchorPlayerId("p-a1")
+                .dealerPlayerId("p-a1")
                 .smallBlindPlayerId("p-a1")
                 .bigBlindPlayerId("p-a2")
                 .currentPlayerId("p-a1")
@@ -1814,9 +1814,9 @@ class GameStateServiceTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handContributions(Map.of())
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .lastSettlementResult(new HandSettlementResult(Map.of("p-a1", 100), Map.of(), Set.of("p-a1"), 0, true))
-                .everyoneHasHadInitialTurn(true)
+                .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 
@@ -1836,7 +1836,7 @@ class GameStateServiceTest {
                         new Card(Rank.THREE, Suit.DIAMONDS),
                         new Card(Rank.FOUR, Suit.HEARTS)))
                 .pot(40)
-                .dealerAnchorPlayerId("p-b1")
+                .dealerPlayerId("p-b1")
                 .smallBlindPlayerId("p-b1")
                 .bigBlindPlayerId("p-b2")
                 .currentPlayerId("p-b1")
@@ -1846,9 +1846,9 @@ class GameStateServiceTest {
                 .smallBlind(10)
                 .bigBlind(20)
                 .handContributions(Map.of())
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .lastSettlementResult(null)
-                .everyoneHasHadInitialTurn(true)
+                .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
                 
@@ -2246,7 +2246,7 @@ class GameStateServiceTest {
                 .remainingDeck(List.of())
                 .communityCards(VIEW_BOARD)
                 .pot(30)
-                .dealerAnchorPlayerId("a")
+                .dealerPlayerId("a")
                 .smallBlindPlayerId("a")
                 .bigBlindPlayerId("b")
                 .currentPlayerId("a")
@@ -2256,11 +2256,11 @@ class GameStateServiceTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handContributions(Map.of("a", 10, "b", 20))
-                .preHandCarryOver(0)
+                .carryOverPot(0)
                 .lastSettlementResult(settlement)
                 .readyCountdownDeadlineEpochMs(countdown ? 12_345L : null)
                 .readyGateState(gate)
-                .everyoneHasHadInitialTurn(false)
+                .allPlayersHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(deadlines)
                 .handNumber(3L)

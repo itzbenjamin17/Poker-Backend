@@ -149,12 +149,12 @@ class AggregateSnapshotMapperTest {
         Game game = Game.restoreBuilder().gameId("room-2").players(players).activePlayerIds(List.of("a", "b"))
                 .remainingDeck(List.of()).communityCards(List.of()).pot(3).currentPlayerId("a").currentHighestBet(0)
                 .currentPhase(GamePhase.SHOWDOWN)
-                .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).preHandCarryOver(3)
+                .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).carryOverPot(3)
                 .lastFullRaise(10).lastActedWagerByPlayer(Map.of("a", 20))
-                .handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a").smallBlindPlayerId("a")
+                .handSeatOrder(List.of("a", "b")).dealerPlayerId("a").smallBlindPlayerId("a")
                 .bigBlindPlayerId("b").lastSettlementResult(new HandSettlementResult(Map.of("a", 50), Map.of("b", 2),
                         Set.of("a"), 3, true))
-                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 123L))
                 .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 9L))
                 .handNumber(7).readyGateState(ReadyGateState.WAITING_FOR_PLAYERS).forfeitPending(true).stateRevision(19)
@@ -239,13 +239,13 @@ class AggregateSnapshotMapperTest {
                 .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
                 .currentPlayerId("a").currentHighestBet(0)
                 .currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10).handContributions(Map.of())
-                .preHandCarryOver(0).lastFullRaise(0).lastActedWagerByPlayer(Map.of())
-                .handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
-                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .carryOverPot(0).lastFullRaise(0).lastActedWagerByPlayer(Map.of())
+                .handSeatOrder(List.of("a", "b")).dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
                 .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 1L))
                 .handNumber(1).readyGateState(ReadyGateState.CLOSED).forfeitPending(false).stateRevision(42)
-                .retainedTerminalResult(terminalResult)
+                .gameEndResult(terminalResult)
                 .build();
 
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
@@ -254,7 +254,7 @@ class AggregateSnapshotMapperTest {
         byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, game));
         String json = new String(snapshot, StandardCharsets.UTF_8);
         assertFalse(json.contains("schemaVersion"));
-        assertTrue(json.contains("\"retainedTerminalResult\""));
+        assertTrue(json.contains("\"gameEndResult\""));
         assertTrue(json.contains("\"winner\":\"Alice\""));
         assertTrue(json.contains("\"winnerChips\":2000"));
         assertTrue(json.contains("\"inactivityDeadlineEpochMs\":null"));
@@ -290,10 +290,10 @@ class AggregateSnapshotMapperTest {
                 .communityCards(List.of()).pot(500).currentPlayerId("a")
                 .currentHighestBet(150).currentPhase(GamePhase.PRE_FLOP).gameOver(false)
                 .smallBlind(5).bigBlind(10).handContributions(Map.of("a", 100, "b", 100, "s1", 150, "s2", 150))
-                .preHandCarryOver(0).lastFullRaise(100)
+                .carryOverPot(0).lastFullRaise(100)
                 .lastActedWagerByPlayer(Map.of("a", 100)).handSeatOrder(List.of("a", "b", "s1", "s2"))
-                .dealerAnchorPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
-                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of("a"))
+                .dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of("a"))
                 .scheduledTaskDeadlines(Map.of()).build();
         AggregateSnapshotMapper mapper = new AggregateSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
@@ -628,14 +628,14 @@ class AggregateSnapshotMapperTest {
                 .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
                 .currentPlayerId("a")
                 .currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10)
-                .handContributions(Map.of()).preHandCarryOver(0).lastFullRaise(0)
-                .lastActedWagerByPlayer(Map.of()).handSeatOrder(List.of("a", "b")).dealerAnchorPlayerId("a")
+                .handContributions(Map.of()).carryOverPot(0).lastFullRaise(0)
+                .lastActedWagerByPlayer(Map.of()).handSeatOrder(List.of("a", "b")).dealerPlayerId("a")
                 .smallBlindPlayerId("a").bigBlindPlayerId("b")
-                .everyoneHasHadInitialTurn(true).actedPlayersInRound(Set.of())
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
                 .scheduledTaskGenerations(Map.of(ScheduledGameTask.CLEANUP, 1L))
                 .handNumber(1).readyGateState(ReadyGateState.CLOSED).forfeitPending(false).stateRevision(42)
-                .retainedTerminalResult(terminalResult).build();
+                .gameEndResult(terminalResult).build();
 
         ObjectNode serialized = JSON.valueToTree(
                 new AggregateSnapshotMapper(JSON).captureStateImage(room, game));
@@ -693,7 +693,7 @@ class AggregateSnapshotMapperTest {
         assertEquals("Alice", newMapper().deserialize(JSON.writeValueAsBytes(snapshot))
                 .game().getGameEndResult().winner());
 
-        playerOf((ObjectNode) snapshot.at("/game/retainedTerminalResult"), 1).set("holeCards", cardArray());
+        playerOf((ObjectNode) snapshot.at("/game/gameEndResult"), 1).set("holeCards", cardArray());
         RecoveredAggregate recovered = newMapper().deserialize(JSON.writeValueAsBytes(snapshot));
         assertEquals(List.of(), recovered.game().getGameEndResult().finalState().players().get(1).holeCards());
     }
@@ -1451,7 +1451,7 @@ class AggregateSnapshotMapperTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handSeatOrder(List.of("p1", "p2", "p3"))
-                .dealerAnchorPlayerId("p1")
+                .dealerPlayerId("p1")
                 .smallBlindPlayerId(null)
                 .bigBlindPlayerId(null)
                 .currentPlayerId("p2")

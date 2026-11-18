@@ -84,21 +84,21 @@
     "bigBlind" : 10,
     "handContributions" : { },
     "readyCountdownDeadlineEpochMs" : null,
-    "everyoneHasHadInitialTurn" : true,
+    "allPlayersHadInitialTurn" : true,
     "actedPlayerIds" : [ ],
     "scheduledTaskDeadlines" : {
       "CLEANUP" : 999999
     },
-    "preHandCarryOver" : 0,
+    "carryOverPot" : 0,
     "lastFullRaise" : 0,
     "lastActedWagerByPlayer" : { },
     "handSeatOrder" : [ "a", "b" ],
-    "dealerAnchorPlayerId" : "a",
+    "dealerPlayerId" : "a",
     "smallBlindPlayerId" : "a",
     "bigBlindPlayerId" : "b",
     "currentPlayerId" : "a",
     "lastSettlementResult" : null,
-    "terminalCarryOverSettled" : false,
+    "finalPotSettled" : false,
     "readyGateState" : "CLOSED",
     "handNumber" : 1,
     "scheduledTaskGenerations" : {
@@ -106,7 +106,7 @@
     },
     "forfeitPending" : false,
     "stateRevision" : 42,
-    "retainedTerminalResult" : {
+    "gameEndResult" : {
       "type" : "GAME_END",
       "gameId" : "room-terminal",
       "winner" : "Alice",

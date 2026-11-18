@@ -176,7 +176,7 @@ public class Game {
                 ? new ArrayList<>(builder.getCommunityCards())
                 : new ArrayList<>();
         this.pot = builder.getPot();
-        this.carryOverPot = builder.getPreHandCarryOver();
+        this.carryOverPot = builder.getCarryOverPot();
         this.currentPhase = builder.getCurrentPhase();
         this.gameOver = builder.isGameOver();
         this.smallBlind = builder.getSmallBlind();
@@ -185,22 +185,22 @@ public class Game {
                 ? new HashMap<>(builder.getHandContributions())
                 : new HashMap<>();
         this.lastSettlementResult = builder.getLastSettlementResult();
-        this.finalPotSettled = builder.isTerminalCarryOverSettled();
+        this.finalPotSettled = builder.isFinalPotSettled();
         this.forfeitPending = builder.isForfeitPending();
         this.handNumber = builder.getHandNumber();
         this.stateRevision = builder.getStateRevision();
-        this.gameEndResult = builder.getRetainedTerminalResult();
+        this.gameEndResult = builder.getGameEndResult();
 
         this.seating = new TableSeating(
                 builder.getHandSeatOrder(),
-                builder.getDealerAnchorPlayerId(),
+                builder.getDealerPlayerId(),
                 builder.getSmallBlindPlayerId(),
                 builder.getBigBlindPlayerId(),
                 builder.getCurrentPlayerId(),
                 this.players);
         this.bettingRound = new BettingRound(
                 builder.getCurrentHighestBet(),
-                builder.isEveryoneHasHadInitialTurn(),
+                builder.isAllPlayersHadInitialTurn(),
                 builder.getActedPlayersInRound(),
                 builder.getLastFullRaise(),
                 builder.getLastActedWagerByPlayer());
