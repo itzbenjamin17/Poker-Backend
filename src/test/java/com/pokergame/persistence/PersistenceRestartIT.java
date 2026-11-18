@@ -86,8 +86,7 @@ class PersistenceRestartIT {
                         "--poker.persistence.enabled=true",
                         "--poker.persistence.directory=" + walDirectory.toString().replace('\\', '/'),
                         "--poker.persistence.current-key-id=current",
-                        "--poker.persistence.keys.current=" + key,
-                        "--poker.rate-limiting.enabled=false");
+                        "--poker.persistence.keys.current=" + key);
     }
 
     private SessionConnectEvent connectEvent(

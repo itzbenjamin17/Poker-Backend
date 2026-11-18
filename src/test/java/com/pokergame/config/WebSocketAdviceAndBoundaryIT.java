@@ -68,12 +68,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * readiness rejection feedback, and invalid-action protection across {@code /user/queue/private}.
  */
 @Tag("integration")
-@SpringBootTest(
-        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {
-                "poker.persistence.enabled=false",
-                "poker.rate-limiting.enabled=false"
-        })
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @DisplayName("WebSocket advice and request boundary integration")
 class WebSocketAdviceAndBoundaryIT {

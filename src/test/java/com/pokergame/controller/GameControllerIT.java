@@ -47,14 +47,12 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import com.pokergame.security.EndpointRateLimitFilter;
 import com.pokergame.security.PayloadSizeFilter;
-import org.springframework.test.context.TestPropertySource;
 
 /** Tests game controller behavior. */
 @Tag("integration")
 @WebMvcTest(GameController.class)
 @AutoConfigureMockMvc(addFilters = false)
 @ActiveProfiles("test")
-@TestPropertySource(locations = "classpath:application-test.properties")
 class GameControllerIT {
 
     @Autowired

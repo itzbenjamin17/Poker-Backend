@@ -59,10 +59,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @ActiveProfiles("test")
 @TestPropertySource(
-        locations = "classpath:application-test.properties",
         properties = {
                 "spring.main.allow-bean-definition-overriding=true",
-                "poker.rate-limiting.enabled=false",
                 "poker.game.game-end-display-delay-ms=60000",
                 "poker.game.ready-countdown-ms=60000"
         })

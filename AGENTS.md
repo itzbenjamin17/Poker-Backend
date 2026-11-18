@@ -6,6 +6,8 @@ Canonical architecture, domain invariants, and agent-role definitions live in [d
 
 - Use Java 25 and the checked-in Maven wrapper: `.\mvnw.cmd` on Windows, `./mvnw` on POSIX.
 - Follow the 3-tier test layout: `@Tag("unit")` `*Test.java` (zero Spring context, run via `.\mvnw.cmd test`), `@Tag("integration")` `*IT.java`, and `@Tag("e2e")` `*E2E.java` (run via Failsafe in `.\mvnw.cmd verify`, or filtered with `-Dgroups=integration` / `-Dgroups=e2e`).
+  - **Integration (`*IT`):** checks one boundary or behaviour (security, rate limits, persistence, timing, a controller's web layer) with real Spring wiring. It may assert on internal beans and may start a real port.
+  - **E2E (`*E2E`):** a multi-step player journey through the public REST and STOMP interfaces only. Internal beans are allowed for setup, cleanup and waiting on subscriptions, never for assertions.
 - For Maven checks, redirect full output to a local `.scratch/` log (create `.scratch/` first if it does not exist), for example: `.\mvnw.cmd test "-Dtest=ClassName" > .scratch/test.log 2>&1` or `.\mvnw.cmd verify "-Dit.test=ClassIT" > .scratch/verify.log 2>&1`.
 - Report the command, pass/fail status, test counts, and log path. On failure, inspect the relevant error and stack trace; keep full logs out of the conversation.
 - Run the narrowest check that covers changed behavior during iteration. Run the full suite (`.\mvnw.cmd verify`) once after integrated code changes before claiming completion; documentation-only changes use relevant documentation checks.

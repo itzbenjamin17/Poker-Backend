@@ -56,10 +56,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @Tag("integration")
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {
-                "poker.persistence.enabled=false",
-                "poker.rate-limiting.enabled=true"
-        })
+        properties = "poker.rate-limiting.enabled=true")
 @ActiveProfiles("test")
 @DisplayName("HTTP security, rate-limit, and sanitization integration")
 class HttpSecurityIT {

@@ -61,8 +61,6 @@ import static org.awaitility.Awaitility.await;
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
-                "poker.persistence.enabled=false",
-                "poker.rate-limiting.enabled=false",
                 "poker.game.round-end-display-delay-ms=0",
                 "poker.game.ready-countdown-ms=600000"
         })

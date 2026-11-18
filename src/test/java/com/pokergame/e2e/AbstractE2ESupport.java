@@ -61,8 +61,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
-                "poker.persistence.enabled=false",
-                "poker.rate-limiting.enabled=false",
                 "poker.game.round-end-display-delay-ms=0",
                 "poker.game.ready-countdown-ms=3000",
                 "poker.game.game-end-display-delay-ms=1000"

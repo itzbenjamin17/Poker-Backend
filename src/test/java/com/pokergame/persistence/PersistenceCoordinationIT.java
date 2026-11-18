@@ -94,10 +94,8 @@ import static org.awaitility.Awaitility.await;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @ActiveProfiles("test")
 @TestPropertySource(
-        locations = "classpath:application-test.properties",
         properties = {
                 "spring.main.allow-bean-definition-overriding=true",
-                "poker.rate-limiting.enabled=false",
                 "poker.game.game-end-display-delay-ms=60000",
                 "poker.game.ready-countdown-ms=60000"
         })

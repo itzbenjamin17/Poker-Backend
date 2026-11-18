@@ -55,7 +55,7 @@ import com.pokergame.model.Room;
 @WebMvcTest(RoomController.class)
 @AutoConfigureMockMvc(addFilters = false)
 @ActiveProfiles("test")
-@TestPropertySource(locations = "classpath:application-test.properties", properties = "poker.rate-limiting.enabled=true")
+@TestPropertySource(properties = "poker.rate-limiting.enabled=true")
 @Import({
         RateLimitService.class,
         EndpointRateLimitFilter.class,

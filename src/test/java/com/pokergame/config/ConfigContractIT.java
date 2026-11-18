@@ -5,18 +5,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.BeanCreationException;
-import org.springframework.boot.WebApplicationType;
-import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.env.StandardEnvironment;
-import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.core.io.ClassPathResource;
 
 import java.io.InputStream;
-import java.util.Map;
 import java.util.Properties;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -136,25 +130,6 @@ class ConfigContractIT {
     }
 
     /**
-     * Protects the contract that application-e2e.properties explicitly disables persistence and rate limiting.
-     */
-    @Test
-    @DisplayName("should ensure application-e2e.properties explicitly disables persistence and rate limiting")
-    void givenE2eProperties_whenChecked_thenPersistenceAndRateLimitingAreDisabled() throws Exception {
-        Properties props = new Properties();
-        try (InputStream is = new ClassPathResource("application-e2e.properties").getInputStream()) {
-            props.load(is);
-        }
-
-        assertThat(props.getProperty("poker.persistence.enabled"))
-                .withFailMessage("application-e2e.properties must explicitly declare poker.persistence.enabled=false")
-                .isEqualTo("false");
-        assertThat(props.getProperty("poker.rate-limiting.enabled"))
-                .withFailMessage("application-e2e.properties must explicitly declare poker.rate-limiting.enabled=false")
-                .isEqualTo("false");
-    }
-
-    /**
      * Protects the contract that missing placeholders fail fast during bean resolution.
      */
     @Test
@@ -171,31 +146,6 @@ class ConfigContractIT {
                             .hasStackTraceContaining("Could not resolve placeholder 'UNRESOLVED_MANDATORY_ENV_VAR'");
                 });
     }
-
-    /** Covers the profile's config and CLI precedence over an environment requesting persistence. */
-    @Test
-    void persistenceIsDisabledByE2eProfileAndExplicitOverride() {
-        try (ConfigurableApplicationContext context = new SpringApplicationBuilder(E2eTestConfig.class)
-                .web(WebApplicationType.NONE)
-                .profiles("e2e")
-                .run("--springdotenv.enabled=false")) {
-            assertThat(context.getEnvironment().getProperty("poker.persistence.enabled", Boolean.class)).isFalse();
-        }
-
-        try (ConfigurableApplicationContext context = new SpringApplicationBuilder(E2eTestConfig.class)
-                .web(WebApplicationType.NONE)
-                .initializers(ctx -> ctx.getEnvironment().getPropertySources().addAfter(
-                        StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME,
-                        new SystemEnvironmentPropertySource("persistence-test-environment",
-                                Map.of("POKER_PERSISTENCE_ENABLED", "true"))))
-                .run("--springdotenv.enabled=false", "--poker.persistence.enabled=false")) {
-            assertThat(context.getEnvironment().getProperty("POKER_PERSISTENCE_ENABLED")).isEqualTo("true");
-            assertThat(context.getEnvironment().getProperty("poker.persistence.enabled", Boolean.class)).isFalse();
-        }
-    }
-
-    @Configuration
-    static class E2eTestConfig {}
 
     @Configuration
     @EnableConfigurationProperties(PersistenceProperties.class)

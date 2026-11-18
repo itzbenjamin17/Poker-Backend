@@ -46,7 +46,7 @@ java -jar target/Poker-0.0.1-SNAPSHOT.jar
 # Server starts on SERVER_PORT (default in .env.example: http://localhost:8080)
 ```
 
-> **Note:** On macOS/Linux, use `./mvnw` instead of `.\mvnw.cmd`. To run with browser E2E timing and rate-limit overrides, use `.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=e2e"`.
+> **Note:** On macOS/Linux, use `./mvnw` instead of `.\mvnw.cmd`. To run the backend for the frontend's Playwright run on port 8080, use `.\mvnw.cmd spring-boot:test-run "-Dspring-boot.run.profiles=test,frontend-e2e"`.
 
 **Companion frontend URL:** http://localhost:5173
 
@@ -55,7 +55,7 @@ java -jar target/Poker-0.0.1-SNAPSHOT.jar
 | Technology | Version | Purpose |
 | --- | --- | --- |
 | **Java** | 25 | Language runtime and modern language features |
-| **Spring Boot** | 4.0.6 | Web, Security, WebSocket/STOMP, Validation, Actuator, AspectJ |
+| **Spring Boot** | 4.0.9 | Web, Security, WebSocket/STOMP, Validation, Actuator, AspectJ |
 | **JJWT** | 0.13.0 | Stateless JWT creation and verification |
 | **Bucket4j** | 8.10.1 | REST and STOMP rate limiting |
 | **spring-dotenv** | 5.1.0 | Local `.env` configuration loading |

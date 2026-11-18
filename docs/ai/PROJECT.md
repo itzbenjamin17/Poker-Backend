@@ -4,7 +4,7 @@ This is the canonical project context for agents. Root `AGENTS.md` and `GEMINI.m
 
 ## Project Overview
 
-A Java 25 and Spring Boot 4.0.6 server for real-time multiplayer Texas Hold'em, paired with the React client in `../frontend-poker`. It owns room membership, poker rules, chip accounting, hand progression, deadlines, public/private projections, and player authorization.
+A Java 25 and Spring Boot 4.0.9 server for real-time multiplayer Texas Hold'em, paired with the React client in `../frontend-poker`. It owns room membership, poker rules, chip accounting, hand progression, deadlines, public/private projections, and player authorization.
 
 Live rooms and games reside in memory, with encrypted state-image WAL persistence restoring their exact state after a single-server restart (disabled by default only for local development and non-persistence tests). There is no database, account-registration flow, or multi-node writer design.
 
@@ -24,7 +24,7 @@ Use Java 25 and the checked-in Maven wrapper. On Windows:
 | `.\mvnw.cmd verify "-Dit.test=LifecycleCoordinationIT"` | Run one integration or E2E test class. |
 | `.\mvnw.cmd clean package` | Compile, run unit tests, and package the application. |
 | `.\mvnw.cmd spring-boot:run` | Run with local environment configuration. |
-| `.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=e2e"` | Run with browser-test feature/timing overrides. |
+| `.\mvnw.cmd spring-boot:test-run "-Dspring-boot.run.profiles=test,frontend-e2e"` | Run on port 8080 for the frontend's Playwright run (no `.env` needed). |
 
 On POSIX shells use `./mvnw`. Runtime port is configured by `SERVER_PORT`; 8080 is the companion frontend's expected development port, not a hardcoded application default.
 
@@ -38,7 +38,7 @@ Configuration groups include:
 - `POKER_RATE_LIMITING_ENABLED`.
 - `POKER_PERSISTENCE_ENABLED`, directory, current key ID/key material, and compaction thresholds.
 
-The `e2e` profile in [application-e2e.properties](../../src/main/resources/application-e2e.properties) disables rate limiting and persistence and shortens ready/game-end timing. It still relies on base runtime configuration for other settings.
+The `frontend-e2e` test profile in [src/test/resources/application-frontend-e2e.properties](../../src/test/resources/application-frontend-e2e.properties) is used together with `test` (`test,frontend-e2e`) by the frontend's Playwright run; it sets `server.port=8080` and the display/ready timings the browser specs depend on while inheriting the `test` baseline.
 
 The `test` profile is defined in [src/test/resources/application-test.properties](../../src/test/resources/application-test.properties). It uses a random port, test keys, short lifecycle timings, and disabled rate limiting/persistence. Those test resources are not the production runtime configuration; persistence-specific tests enable their own recovery settings.
 
@@ -146,7 +146,10 @@ For bug fixes and game-rule changes, write a failing behavioral regression test 
 
 When running Maven checks, redirect full output to a local log file under `.scratch/` and report the command, pass/fail status, test counts, and log path. On failure, inspect only the relevant error and stack trace. Run the narrowest check covering changed behavior during iteration and the full suite once after integrated code changes. For documentation-only changes, use relevant documentation checks such as validating local links and inspecting the diff. Stage files explicitly by path (`git add <file>`), preserve unrelated working-tree changes, and push or create remote PRs/issues only when explicitly requested.
 
-Tests under `src/test/java/com/pokergame/` follow a 3-tier pyramid: `@Tag("unit")` `*Test.java` unit tests mirroring production packages with zero Spring context; `@Tag("integration")` `*IT.java` slice, coordination, security, timing, and persistence suites; and `@Tag("e2e")` `*E2E.java` black-box REST + STOMP journeys under `com.pokergame.e2e`. Find relevant tests from those packages rather than rely on a cached test count.
+Tests under `src/test/java/com/pokergame/` follow a 3-tier pyramid: `@Tag("unit")` `*Test.java` unit tests mirroring production packages with zero Spring context; `@Tag("integration")` `*IT.java` suites; and `@Tag("e2e")` `*E2E.java` suites under `com.pokergame.e2e`. Find relevant tests from those packages rather than rely on a cached test count.
+
+- **Integration (`*IT`):** checks one boundary or behaviour (security, rate limits, persistence, timing, a controller's web layer) with real Spring wiring. It may assert on internal beans and may start a real port.
+- **E2E (`*E2E`):** a multi-step player journey through the public REST and STOMP interfaces only. Internal beans are allowed for setup, cleanup and waiting on subscriptions, never for assertions.
 
 [The CI workflow](../../.github/workflows/deploy.yml) runs `./mvnw clean verify` with Java 25 on pushes and pull requests targeting `main`. Successful pushes to `main` then build/push Docker images. The Dockerfile packages with tests skipped after that separate test job; a Docker build alone is not test evidence.
 
