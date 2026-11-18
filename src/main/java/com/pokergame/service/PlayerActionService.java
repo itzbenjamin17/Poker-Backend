@@ -118,18 +118,18 @@ public class PlayerActionService {
 
         PlayerDecision decision = new PlayerDecision(
                 actionRequest.action(),
-                actionRequest.amount() != null ? actionRequest.amount() : 0,
+                actionRequest.amount(),
                 currentPlayer.getPlayerId());
 
         TurnOutcome outcome = game.processPlayerDecision(currentPlayer, decision);
         taskScheduler.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
         taskScheduler.resetGameInactivity(game);
 
-        if (outcome.actionNotice() != null) {
+        if (outcome.playerActionNotice() != null) {
             logger.info("Sending conversion message to player {}: {}",
-                    currentPlayer.getName(), outcome.actionNotice());
+                    currentPlayer.getName(), outcome.playerActionNotice());
             gameStateService.sendPrivatePlayerNotification(
-                    gameId, currentPlayer.getName(), outcome.actionNotice(), ResponseMessage.PLAYER_NOTIFICATION);
+                    gameId, currentPlayer.getName(), outcome.playerActionNotice(), ResponseMessage.PLAYER_NOTIFICATION);
         }
 
         readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, outcome, true);

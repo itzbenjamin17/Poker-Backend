@@ -203,7 +203,7 @@ public class Game {
                 builder.isAllPlayersHadInitialTurn(),
                 builder.getActedPlayersInRound(),
                 builder.getLastFullRaise(),
-                builder.getLastActedWagerByPlayer());
+                builder.getPreviousBets());
         this.readyGate = new ReadyGate(
                 this.players,
                 builder.getReadyGateState(),
@@ -306,32 +306,26 @@ public class Game {
     }
 
     /**
-     * Evaluates whether forced blinds leave an actionable player or trigger an automatic runout or showdown.
+     * Evaluates whether forced blinds leave a player who can act or trigger an automatic advance or showdown.
      *
      * @return the next turn or phase outcome
      */
     public TurnOutcome advanceAfterBlinds() {
-        BettingRound.ForcedBlindProgression progression = bettingRound.afterForcedBlinds(activePlayers, isHandOver());
-        if (progression == BettingRound.ForcedBlindProgression.HAND_OVER) {
-            return advanceTurnOrPhase(null, false);
-        }
-        if (progression == BettingRound.ForcedBlindProgression.AUTO_RUNOUT) {
-            return new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, null);
-        }
-        if (BettingRound.needsNextActor(getCurrentPlayer())) {
+        TurnOutcome outcome = advanceTurnOrPhase(null, false);
+        if (outcome.type() == TurnOutcome.TurnOutcomeType.NEXT_PLAYER && !getCurrentPlayer().canAct()) {
             seating.nextPlayer(activePlayers);
         }
-        return new TurnOutcome(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, null);
+        return outcome;
     }
 
     /**
-     * Validates and applies {@code player}'s betting decision and advances the turn, street, or showdown.
+     * Validates and applies {@code player}'s betting decision and advances the turn, betting round, or showdown.
      *
      * @param player   the acting player
      * @param decision the requested action and chip amount
      * @return a {@link TurnOutcome} describing the resulting progression
      * @throws IllegalStateException       if {@code decision} is missing
-     * @throws BadRequestException         if the wager amount violates bet or raise sizing rules
+     * @throws BadRequestException         if the bet amount violates bet or raise sizing rules
      * @throws UnauthorisedActionException if the action is not available to {@code player}
      */
     public TurnOutcome processPlayerDecision(Player player, PlayerDecision decision) {
@@ -339,23 +333,23 @@ public class Game {
             throw new IllegalStateException("Invalid player action");
         }
 
-        BettingRound.DecisionResult result = bettingRound.prepareDecision(
+        BettingRound.ValidatedDecision validated = bettingRound.validateDecision(
                 player, decision, activePlayers, bigBlind);
-        PlayerDecision actualDecision = result.decision();
+        PlayerDecision appliedDecision = validated.decision();
 
         int potBeforeDecision = this.pot;
-        int wagerBeforeDecision = bettingRound.getCurrentHighestBet();
+        int highestBetBeforeDecision = bettingRound.getCurrentHighestBet();
 
-        this.pot += player.doAction(actualDecision.action(), result.amount());
+        this.pot += player.doAction(appliedDecision.action(), validated.amount());
 
         PotCalculator.trackContribution(handContributions, player, this.pot - potBeforeDecision, gameId);
-        bettingRound.recordAppliedDecision(player, bigBlind, wagerBeforeDecision);
+        bettingRound.recordAppliedDecision(player, bigBlind, highestBetBeforeDecision);
 
-        return advanceTurnOrPhase(result.actionNotice(), true);
+        return advanceTurnOrPhase(validated.playerActionNotice(), true);
     }
 
     /**
-     * Advances turn or street progression after a player has been removed from the table.
+     * Advances turn or phase progression after a player has been removed from the table.
      *
      * @return the resulting {@link TurnOutcome}
      * @throws IllegalStateException if no active players remain
@@ -364,7 +358,7 @@ public class Game {
         if (activePlayers.isEmpty()) {
             throw new IllegalStateException("No active players remain after removal");
         }
-        bettingRound.reconcileHighestBetAfterRemoval(activePlayers);
+        bettingRound.recalculateHighestBetAfterRemoval(activePlayers);
         return advanceTurnOrPhase(null, false);
     }
 
@@ -762,8 +756,8 @@ public class Game {
         return bettingRound.getLastFullRaise();
     }
 
-    public Map<String, Integer> getLastActedWagerByPlayerSnapshot() {
-        return bettingRound.getLastActedWagerByPlayerSnapshot();
+    public Map<String, Integer> getPreviousBetsSnapshot() {
+        return bettingRound.getPreviousBetsSnapshot();
     }
 
     public HandSettlementResult getLastSettlementResult() {
@@ -1064,19 +1058,19 @@ public class Game {
         PotCalculator.trackContribution(handContributions, player, player.getCurrentBet() - betBefore, gameId);
     }
 
-    private TurnOutcome advanceTurnOrPhase(String actionNotice, boolean moveToNextPlayer) {
+    private TurnOutcome advanceTurnOrPhase(String playerActionNotice, boolean moveToNextPlayer) {
         bettingRound.markInitialTurnsIfAllActed(activePlayers);
         TurnOutcome.TurnOutcomeType outcome = bettingRound.nextProgression(activePlayers, isHandOver(), currentPhase);
         if (outcome == TurnOutcome.TurnOutcomeType.SHOWDOWN) {
             conductShowdown();
-            return new TurnOutcome(outcome, actionNotice);
+            return new TurnOutcome(outcome, playerActionNotice);
         }
         if (outcome == TurnOutcome.TurnOutcomeType.PHASE_ADVANCED) {
             advancePhase();
         } else if (outcome == TurnOutcome.TurnOutcomeType.NEXT_PLAYER && moveToNextPlayer) {
             seating.nextPlayer(activePlayers);
         }
-        return new TurnOutcome(outcome, actionNotice);
+        return new TurnOutcome(outcome, playerActionNotice);
     }
 
     private void advancePhase() {

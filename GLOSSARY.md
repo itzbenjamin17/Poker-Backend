@@ -88,6 +88,35 @@ True when all opponents leave or time out while one sole contender remains disco
 **`Room.isFinished()` (`isFinished`)**:
 Room-level flag mirroring `gameOver` once the match finishes so `RoomService` keeps an empty room alive for post-game review instead of destroying it immediately.
 
+## Poker Rules & Betting
+
+**Betting round (street)**:
+One cycle of betting during a stage of a hand (`PRE_FLOP`, `FLOP`, `TURN`, or `RIVER`), ending once every player who can still act has had a turn and either matched the highest bet or folded.
+
+**Blinds (`smallBlind`, `bigBlind`)**:
+Mandatory starting bets posted before cards are dealt by the two players after the dealer (or by the dealer and opponent in a two-player game) so every hand begins with chips in the pot.
+
+**Hole cards**:
+The two private face-down cards dealt to each player at the start of a hand.
+
+**Community cards (board)**:
+Up to five shared face-up cards dealt to the center of the table across the flop (three cards), turn (fourth card), and river (fifth card).
+
+**Check / Call / Bet / Raise / Fold (`PlayerAction`)**:
+The five standard turn choices: pass without betting when nothing is owed (`CHECK`), match the current highest bet (`CALL`), place the first bet of a round (`BET`), increase an existing bet (`RAISE`), or give up the hand and any chips already put in (`FOLD`).
+
+**All-in (`ALL_IN`)**:
+Putting all of a player's remaining chips into the pot; an all-in player stays in the hand to contest the pot up to their contribution but takes no further turns.
+
+**Full raise vs. short all-in (reopening betting)**:
+A raise of at least the minimum raise increment (the previous full raise in the round, or the big blind if none yet). If an all-in player raises by less than that full increment (a *short all-in*), players who have already acted in the round may call or fold but cannot raise again unless someone else makes a full raise.
+
+**Auto-advance (runout)**:
+Automatically dealing the remaining community cards on a timer to showdown when at most one player still has chips left to bet and no player owes a call.
+
+**Contender**:
+A player who is not out of the match and either is still in an unfinished hand or still holds chips.
+
 ## Client Payloads & Views
 
 **Public snapshot (`PublicGameStateResponse`)**:

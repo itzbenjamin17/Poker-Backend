@@ -41,7 +41,7 @@ class PlayerReconnectE2E extends AbstractE2ESupport {
         StompSession currentSession = connectSession(stompClient, currentToken);
         StompSession otherSession = connectSession(stompClient, otherToken);
 
-        currentSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CALL, null));
+        currentSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CALL, 0));
 
         otherSession.disconnect();
 
@@ -57,7 +57,7 @@ class PlayerReconnectE2E extends AbstractE2ESupport {
             assertThat(findPlayer(state, otherPlayerName).path("status").asText()).isEqualTo("ACTIVE");
         });
 
-        reconnectedOtherSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CHECK, null));
+        reconnectedOtherSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CHECK, 0));
 
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             JsonNode flopState = readGameState(gameId, hostToken);

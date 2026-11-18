@@ -184,7 +184,7 @@ final class PotCalculator {
         if (inputs.isSettled()) {
             return List.of(inputs.pot());
         }
-        if (BettingRound.hasActionablePlayerOwingCall(inputs.activePlayers(), inputs.currentHighestBet())) {
+        if (BettingRound.anyPlayerNeedsToCall(inputs.activePlayers(), inputs.currentHighestBet())) {
             return projectLayersWhileCallIsOwed(inputs);
         }
         if (!inputs.hasAllIn()) {
@@ -208,7 +208,7 @@ final class PotCalculator {
             return 0;
         }
         if (!inputs.hasAllIn()
-                || BettingRound.hasActionablePlayerOwingCall(inputs.activePlayers(), inputs.currentHighestBet())) {
+                || BettingRound.anyPlayerNeedsToCall(inputs.activePlayers(), inputs.currentHighestBet())) {
             return 0;
         }
         return computeLiveAllocations(inputs).uncalledTotal();

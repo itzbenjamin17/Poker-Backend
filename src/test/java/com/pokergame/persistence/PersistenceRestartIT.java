@@ -164,7 +164,7 @@ class PersistenceRestartIT {
 
             String currentActor = withRoomLock(first, roomId, () -> games.getGame(roomId).getCurrentPlayer().getName());
             first.getBean(PlayerActionService.class).processPlayerAction(
-                    roomId, new PlayerActionRequest(PlayerAction.CALL, null), currentActor);
+                    roomId, new PlayerActionRequest(PlayerAction.CALL, 0), currentActor);
 
             withRoomLock(first, roomId, () -> {
                 Game updated = games.getGame(roomId);
@@ -208,7 +208,7 @@ class PersistenceRestartIT {
             assertThat(countActiveScheduledFutures(second)).isGreaterThan(0);
 
             second.getBean(PlayerActionService.class).processPlayerAction(
-                    roomId, new PlayerActionRequest(PlayerAction.CHECK, null), nextActor);
+                    roomId, new PlayerActionRequest(PlayerAction.CHECK, 0), nextActor);
             withRoomLock(second, roomId, () -> {
                 assertThat(games.getGame(roomId).getStateRevision()).isGreaterThan(revisionAfterRecovery);
                 return null;
@@ -703,7 +703,7 @@ class PersistenceRestartIT {
 
             String actor = withRoomLock(first, roomId, () -> games.getGame(roomId).getCurrentPlayer().getName());
             first.getBean(PlayerActionService.class).processPlayerAction(
-                    roomId, new PlayerActionRequest(PlayerAction.CALL, null), actor);
+                    roomId, new PlayerActionRequest(PlayerAction.CALL, 0), actor);
 
             expectedRevision = withRoomLock(first, roomId, () -> games.getGame(roomId).getStateRevision());
             expectedTotalChips = withRoomLock(first, roomId, () -> totalChipsInGame(games.getGame(roomId)));

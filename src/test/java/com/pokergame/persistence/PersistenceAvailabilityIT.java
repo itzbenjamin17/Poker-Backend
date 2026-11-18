@@ -165,7 +165,7 @@ class PersistenceAvailabilityIT {
             initialRevision = game.getStateRevision();
         }
 
-        playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), actorName);
+        playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, 0), actorName);
 
         assertThat(walStore.isHealthy()).isFalse();
         assertThat(walStore.unsavedRoomCount()).isEqualTo(1);

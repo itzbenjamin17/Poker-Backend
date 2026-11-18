@@ -1465,7 +1465,7 @@ class PlayerDepartureHandlerTest {
                     Future<?> fold = executor.submit(() -> {
                         barrier.await(5, TimeUnit.SECONDS);
                         withRoomLock(roomId, () -> playerActionService.processPlayerAction(
-                                roomId, new PlayerActionRequest(PlayerAction.FOLD, null), currentPlayer.getName()));
+                                roomId, new PlayerActionRequest(PlayerAction.FOLD, 0), currentPlayer.getName()));
                         return null;
                     });
                     Future<?> leave = executor.submit(() -> {

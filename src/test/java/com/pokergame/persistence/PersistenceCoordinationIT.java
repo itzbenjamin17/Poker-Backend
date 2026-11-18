@@ -437,7 +437,7 @@ class PersistenceCoordinationIT {
 
             Future<Throwable> queuedAction = executor.submit(() -> {
                 try {
-                    gameController.performAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, null), retiredAlice);
+                    gameController.performAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, 0), retiredAlice);
                     return null;
                 } catch (Throwable t) {
                     return t;
@@ -557,7 +557,7 @@ class PersistenceCoordinationIT {
 
         String actor = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
         assertThatCode(() -> playerActionService.processPlayerAction(
-                roomId, new PlayerActionRequest(PlayerAction.CALL, null), actor))
+                roomId, new PlayerActionRequest(PlayerAction.CALL, 0), actor))
                 .doesNotThrowAnyException();
 
         assertThat(walStore.isHealthy()).isFalse();
@@ -734,7 +734,7 @@ class PersistenceCoordinationIT {
             return null;
         });
         assertThatThrownBy(() -> gameController.performAction(
-                actRoomId, new PlayerActionRequest(PlayerAction.FOLD, null), actorPrincipal))
+                actRoomId, new PlayerActionRequest(PlayerAction.FOLD, 0), actorPrincipal))
                 .isInstanceOf(BadRequestException.class)
                 .satisfies(ex -> assertThat(((BadRequestException) ex).actionErrorCode()).isEqualTo("GAME_EXPIRED"));
         awaitGameAbandoned(actRoomId);
@@ -743,7 +743,7 @@ class PersistenceCoordinationIT {
         gameLifecycleService.createGameFromRoom(readyRoomId);
         String folder = withRoomLock(roomCoordinator, readyRoomId, () ->
                 gameLifecycleService.getGame(readyRoomId).getCurrentPlayer().getName());
-        playerActionService.processPlayerAction(readyRoomId, new PlayerActionRequest(PlayerAction.FOLD, null), folder);
+        playerActionService.processPlayerAction(readyRoomId, new PlayerActionRequest(PlayerAction.FOLD, 0), folder);
         PlayerPrincipal readyHost = roomFixtures.principalFor(readyRoomId, "Host");
         withRoomLock(roomCoordinator, readyRoomId, () -> {
             assertThat(gameLifecycleService.getGame(readyRoomId).isReadyCountdownActive()).isTrue();
@@ -804,7 +804,7 @@ class PersistenceCoordinationIT {
                 .broadcastGameState(Mockito.argThat(g -> g != null && roomId.equals(g.getGameId())));
 
         assertThatThrownBy(() -> playerActionService.processPlayerAction(
-                roomId, new PlayerActionRequest(PlayerAction.CALL, null), before.actorName()))
+                roomId, new PlayerActionRequest(PlayerAction.CALL, 0), before.actorName()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Simulated applyTurnOutcome failure");
 

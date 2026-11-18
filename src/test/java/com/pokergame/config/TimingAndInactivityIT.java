@@ -276,7 +276,7 @@ class TimingAndInactivityIT {
             if (actor == null) {
                 return;
             }
-            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, null), actor);
+            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, 0), actor);
         }
         throw new IllegalStateException("Ready gate did not open after folding");
     }
@@ -715,7 +715,7 @@ class TimingAndInactivityIT {
                     states.getPublicGameStateSnapshot(lifecycle.getGame(roomId)).turnDeadlineEpochMs());
 
             clock.setMillis(deadline1 - 1);
-            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), actor1);
+            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, 0), actor1);
 
             withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
@@ -738,13 +738,13 @@ class TimingAndInactivityIT {
 
             clock.setMillis(deadline);
             assertThatThrownBy(() ->
-                    playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), actor))
+                    playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, 0), actor))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("Turn deadline expired");
 
             clock.setMillis(deadline + 1_000L);
             assertThatThrownBy(() ->
-                    playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), actor))
+                    playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, 0), actor))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("Turn deadline expired");
         }
@@ -800,7 +800,7 @@ class TimingAndInactivityIT {
             });
 
             clock.advanceByMillis(5_000L);
-            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), stale.actor());
+            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, 0), stale.actor());
 
             String actor2 = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
             assertThat(actor2).isNotEqualTo(stale.actor());
@@ -823,7 +823,7 @@ class TimingAndInactivityIT {
 
             String firstActor = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
             clock.advanceByMillis(20_000L);
-            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), firstActor);
+            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, 0), firstActor);
 
             String secondActor = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
             clock.advanceByMillis(15_000L);
@@ -843,7 +843,7 @@ class TimingAndInactivityIT {
         void noTurnDeadlineDuringShowdown() throws Exception {
             String roomId = createStartedAndConnectedGame("TurnShowdown", "Guest");
             String firstActor = withRoomLock(roomCoordinator, roomId, () -> lifecycle.getGame(roomId).getCurrentPlayer().getName());
-            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, null), firstActor);
+            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, 0), firstActor);
 
             var state = withRoomLock(roomCoordinator, roomId, () -> states.getPublicGameStateSnapshot(lifecycle.getGame(roomId)));
             assertThat(state.turnDeadlineEpochMs()).isNull();
@@ -927,7 +927,7 @@ class TimingAndInactivityIT {
         assertThat(turnDeadlineBefore).isNotNull();
 
         assertThatThrownBy(() -> playerActionService.processPlayerAction(
-                roomId, new PlayerActionRequest(PlayerAction.CHECK, null), actor))
+                roomId, new PlayerActionRequest(PlayerAction.CHECK, 0), actor))
                 .isInstanceOf(UnauthorisedActionException.class)
                 .satisfies(ex -> assertThat(((UnauthorisedActionException) ex).actionErrorCode())
                         .isEqualTo("CHECK_NOT_AVAILABLE"));

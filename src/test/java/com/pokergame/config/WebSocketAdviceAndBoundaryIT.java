@@ -331,7 +331,7 @@ class WebSocketAdviceAndBoundaryIT {
             StompSession session = connectJsonSession(otherToken);
             CompletableFuture<ActionErrorResponse> errorFuture = subscribePrivateErrors(session);
 
-            Integer amount = action == PlayerAction.BET || action == PlayerAction.RAISE ? 100 : null;
+            Integer amount = action == PlayerAction.BET || action == PlayerAction.RAISE ? 100 : 0;
             session.send("/app/" + gameSession.roomId() + "/action", new PlayerActionRequest(action, amount));
 
             ActionErrorResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);

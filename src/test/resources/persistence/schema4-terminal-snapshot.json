@@ -91,7 +91,7 @@
     },
     "carryOverPot" : 0,
     "lastFullRaise" : 0,
-    "lastActedWagerByPlayer" : { },
+    "previousBets" : { },
     "handSeatOrder" : [ "a", "b" ],
     "dealerPlayerId" : "a",
     "smallBlindPlayerId" : "a",

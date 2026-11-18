@@ -56,7 +56,7 @@ class GameRestoreBuilderTest {
         HandSettlementResult settlement = new HandSettlementResult(
                 Map.of("p1", 450), Map.of(), Set.of("p1"), 0, true);
         int lastFullRaise = 70;
-        Map<String, Integer> lastActedWager = Map.of("p1", 100, "p2", 100);
+        Map<String, Integer> previousBets = Map.of("p1", 100, "p2", 100);
         List<String> seatOrder = List.of("p2", "p3", "p1");
         Set<String> actedPlayers = Set.of("p1", "p2");
 
@@ -97,7 +97,7 @@ class GameRestoreBuilderTest {
                 .handContributions(contributions)                   // 17
                 .lastSettlementResult(settlement)                   // 18
                 .lastFullRaise(lastFullRaise)                       // 19
-                .lastActedWagerByPlayer(lastActedWager)             // 20
+                .previousBets(previousBets)                         // 20
                 .handSeatOrder(seatOrder)                           // 21
                 .dealerPlayerId("p2")                               // 22
                 .smallBlindPlayerId("p3")                           // 23
@@ -135,7 +135,7 @@ class GameRestoreBuilderTest {
         assertEquals(contributions, game.getHandContributionsSnapshot());            // 17
         assertEquals(settlement, game.getLastSettlementResult());                    // 18
         assertEquals(lastFullRaise, game.getLastFullRaise());                    // 19
-        assertEquals(lastActedWager, game.getLastActedWagerByPlayerSnapshot());      // 20
+        assertEquals(previousBets, game.getPreviousBetsSnapshot());                  // 20
         assertEquals(seatOrder, game.getHandSeatOrderSnapshot());                    // 21
         assertEquals("p2", game.getDealerPlayerId());                                // 22
         assertEquals("p3", game.getSmallBlindPlayerId());                            // 23
@@ -478,7 +478,7 @@ class GameRestoreBuilderTest {
                 .actedPlayersInRound(mutableActed)
                 .scheduledTaskDeadlines(mutableDeadlines)
                 .lastFullRaise(20)
-                .lastActedWagerByPlayer(mutableWagers)
+                .previousBets(mutableWagers)
                 .build();
 
         // Mutate inputs after build()
@@ -494,7 +494,7 @@ class GameRestoreBuilderTest {
         assertEquals(Set.of("p1"), game.getActedPlayerIdsSnapshot());
         assertEquals(Map.of(ScheduledGameTask.CLEANUP, 9999L), game.getScheduledTaskDeadlinesSnapshot());
         assertEquals(20, game.getLastFullRaise());
-        assertEquals(Map.of("p1", 20), game.getLastActedWagerByPlayerSnapshot());
+        assertEquals(Map.of("p1", 20), game.getPreviousBetsSnapshot());
     }
 
     @Test
@@ -550,7 +550,7 @@ class GameRestoreBuilderTest {
                 .handContributions(Map.of())
                 .lastSettlementResult(null)
                 .lastFullRaise(0)
-                .lastActedWagerByPlayer(Map.of())
+                .previousBets(Map.of())
                 .handSeatOrder(List.of())
                 .dealerPlayerId("p1")
                 .smallBlindPlayerId("p1")
@@ -606,7 +606,7 @@ class GameRestoreBuilderTest {
                     .remainingDeck(mutableDeck)
                     .handContributions(mutableContribs)
                     .lastFullRaise(40)
-                    .lastActedWagerByPlayer(mutableWagers)
+                    .previousBets(mutableWagers)
                     .handSeatOrder(mutableSeatOrder)
                     .actedPlayersInRound(mutableActed)
                     .scheduledTaskDeadlines(mutableDeadlines)
@@ -634,7 +634,7 @@ class GameRestoreBuilderTest {
             assertEquals(3, game.getRemainingDeckSnapshot().size());
             assertEquals(75, game.getHandContributionsSnapshot().get("p3"));
             assertEquals(40, game.getLastFullRaise());
-            assertEquals(20, game.getLastActedWagerByPlayerSnapshot().get("p2"));
+            assertEquals(20, game.getPreviousBetsSnapshot().get("p2"));
             assertEquals(List.of("p1", "p2", "p3"), game.getHandSeatOrderSnapshot());
             assertTrue(game.getActedPlayerIdsSnapshot().contains("p2"));
             assertEquals(9000L, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
@@ -658,7 +658,7 @@ class GameRestoreBuilderTest {
             assertEquals(2, game.getCommunityCards().size(), "communityCards was affected by post-build mutation");
             assertEquals(3, game.getRemainingDeckSnapshot().size(), "remainingDeck was affected by post-build mutation");
             assertEquals(2, game.getHandContributionsSnapshot().size(), "handContributions was affected by post-build mutation");
-            assertEquals(2, game.getLastActedWagerByPlayerSnapshot().size(), "lastActedWagerByPlayer was affected by post-build mutation");
+            assertEquals(2, game.getPreviousBetsSnapshot().size(), "previousBets was affected by post-build mutation");
             assertEquals(3, game.getHandSeatOrderSnapshot().size(), "handSeatOrder was affected by post-build mutation");
             assertEquals(2, game.getActedPlayerIdsSnapshot().size(), "actedPlayersInRound was affected by post-build mutation");
             assertEquals(2, game.getScheduledTaskDeadlinesSnapshot().size(), "scheduledTaskDeadlines was affected by post-build mutation");
@@ -1081,7 +1081,7 @@ class GameRestoreBuilderTest {
                     .handContributions(Map.of())
                     .lastSettlementResult(null)
                     .lastFullRaise(0)
-                    .lastActedWagerByPlayer(Map.of())
+                    .previousBets(Map.of())
                     .handSeatOrder(List.of())
                     .dealerPlayerId("p1")
                     .smallBlindPlayerId("p1")

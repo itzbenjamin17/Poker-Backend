@@ -127,7 +127,7 @@ class GameTest {
             int currentPlayerPosition,
             Map<String, Integer> contributions,
             int lastFullRaise,
-            Map<String, Integer> lastActedWagerByPlayer) {
+            Map<String, Integer> previousBets) {
         return Game.restoreBuilder()
                 .gameId(id)
                 .players(handPlayers)
@@ -147,7 +147,7 @@ class GameTest {
                 .handContributions(contributions)
                 .carryOverPot(0)
                 .lastFullRaise(lastFullRaise)
-                .lastActedWagerByPlayer(lastActedWagerByPlayer)
+                .previousBets(previousBets)
                 .allPlayersHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
                 .scheduledTaskDeadlines(Map.of())
@@ -927,7 +927,7 @@ class GameTest {
             int prevBet = deep1.getCurrentBet();
             TurnOutcome raiseOutcome = sidePotGame.processPlayerDecision(
                     deep1, new PlayerDecision(PlayerAction.RAISE, 100, deep1.getPlayerId()));
-            assertNull(raiseOutcome.actionNotice());
+            assertNull(raiseOutcome.playerActionNotice());
             assertTrue(deep1.getCurrentBet() > prevBet);
             assertEquals(deep1.getCurrentBet(), sidePotGame.getCurrentHighestBet());
 
@@ -941,8 +941,8 @@ class GameTest {
             Player shortCaller = shortCallGame.getCurrentPlayer();
             TurnOutcome callOutcome = shortCallGame.processPlayerDecision(
                     shortCaller, new PlayerDecision(PlayerAction.CALL, 0, shortCaller.getPlayerId()));
-            assertNotNull(callOutcome.actionNotice());
-            assertTrue(callOutcome.actionNotice().contains("converted to all-in"));
+            assertNotNull(callOutcome.playerActionNotice());
+            assertTrue(callOutcome.playerActionNotice().contains("converted to all-in"));
             assertEquals(0, shortCaller.getChips());
             assertTrue(shortCaller.isAllIn());
         }

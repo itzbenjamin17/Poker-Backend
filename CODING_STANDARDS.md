@@ -22,7 +22,8 @@ Reviewers enforce these standards on every change. System architecture and runti
   7. `public` methods
   8. Package-private methods
   9. `private` helper methods
-  10. Nested records, enums, or helper types
+  10. Simple getters and setters
+  11. Nested records, enums, or helper types
 - **Constructors and DI:** Use a single constructor per `@Service`, `@Component`, or controller bean injected directly by Spring (omit test-only constructor overloads, `@Autowired(required = false)` setters, `Objects.requireNonNull` on Spring-injected beans, and `@Lazy self` / `mutationProxy()` fields). Use `ObjectProvider<...>` when a scheduled callback needs a proxy, and `AopContext.currentProxy()` (with a direct fallback) when a same-bean call must enter `@DurableMutation`.
 - **Null-handling:** `import static java.util.Objects.requireNonNull;` and use `requireNonNull(arg, "arg must not be null");` as a standalone statement for arguments validated without logging. Keep `if (obj == null)` checks when logging or throwing a domain exception.
 - **Validation and exceptions:** Annotate validated REST request bodies with `@Valid`. Map client and state rejections through `BadRequestException` or `IllegalArgumentException` (400), `UnauthorisedActionException` (403), `ResourceNotFoundException` (404), `ConflictException` (409), and `TooManyRequestsException` (429). Throw `IllegalStateException` (500) directly when an internal invariant is broken and let `ControllerExceptionHandler` log the error once.

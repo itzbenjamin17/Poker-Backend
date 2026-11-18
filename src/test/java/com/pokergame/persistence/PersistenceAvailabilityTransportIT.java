@@ -235,7 +235,7 @@ class PersistenceAvailabilityTransportIT {
         JsonNode httpState = getJson("/api/game/" + roomId + "/state", aliceToken);
         assertThat(httpState.path("stateRevision").asLong()).isGreaterThanOrEqualTo(revisionBefore);
 
-        actorSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.CALL, null));
+        actorSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.CALL, 0));
 
         Awaitility.await().atMost(TIMEOUT).until(() -> !messages.isEmpty());
         assertThat(walStore.isHealthy()).isFalse();

@@ -244,7 +244,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             String firstPhase = beforeFirstAction.path("phase").asText();
             String firstActor = performActionByCurrentPlayer(
                     gameId,
-                    new PlayerActionRequest(PlayerAction.CALL, null),
+                    new PlayerActionRequest(PlayerAction.CALL, 0),
                     hostActor,
                     guestActor,
                     state -> !firstCurrentPlayer.equals(state.path("currentPlayerName").asText())
@@ -254,7 +254,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             String secondCurrentPlayer = beforeSecondAction.path("currentPlayerName").asText();
             String secondActor = performActionByCurrentPlayer(
                     gameId,
-                    new PlayerActionRequest(PlayerAction.FOLD, null),
+                    new PlayerActionRequest(PlayerAction.FOLD, 0),
                     hostActor,
                     guestActor,
                     state -> "SHOWDOWN".equals(state.path("phase").asText())
@@ -286,7 +286,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
 
             performActionByCurrentPlayer(
                     gameId,
-                    new PlayerActionRequest(PlayerAction.CALL, null),
+                    new PlayerActionRequest(PlayerAction.CALL, 0),
                     host,
                     guest,
                     state -> "PRE_FLOP".equals(state.path("phase").asText())
@@ -294,7 +294,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
 
             performActionByCurrentPlayer(
                     gameId,
-                    new PlayerActionRequest(PlayerAction.CHECK, null),
+                    new PlayerActionRequest(PlayerAction.CHECK, 0),
                     host,
                     guest,
                     state -> "FLOP".equals(state.path("phase").asText())
@@ -303,7 +303,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
 
             performActionByCurrentPlayer(
                     gameId,
-                    new PlayerActionRequest(PlayerAction.CHECK, null),
+                    new PlayerActionRequest(PlayerAction.CHECK, 0),
                     host,
                     guest,
                     state -> "FLOP".equals(state.path("phase").asText())
@@ -311,7 +311,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
 
             performActionByCurrentPlayer(
                     gameId,
-                    new PlayerActionRequest(PlayerAction.CHECK, null),
+                    new PlayerActionRequest(PlayerAction.CHECK, 0),
                     host,
                     guest,
                     state -> "TURN".equals(state.path("phase").asText())
@@ -441,7 +441,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             StompSession actingSession = HOST_NAME.equals(initialState.currentPlayerName())
                     ? hostSession
                     : otherSession;
-            actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
+            actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, 0));
 
             PublicGameStateResponse nextState = nextStateFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
@@ -478,7 +478,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             reconnectedSession.subscribe("/game/" + roomId, new PublicStateFrameHandler(nextStateFuture));
             awaitBrokerSubscription("/game/" + roomId);
 
-            reconnectedSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
+            reconnectedSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, 0));
 
             PublicGameStateResponse nextState = nextStateFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
             assertThat(nextState).isNotNull();
@@ -511,7 +511,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             StompSession actingSession = HOST_NAME.equals(initialState.currentPlayerName())
                     ? hostSession
                     : otherSession;
-            actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
+            actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, 0));
 
             PublicGameStateResponse readyGateState = readyGateOpenFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
             assertThat(readyGateState.phase()).isEqualTo(GamePhase.SHOWDOWN);
@@ -590,7 +590,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             StompSession actingSession = HOST_NAME.equals(initialState.currentPlayerName())
                     ? hostSession
                     : otherSession;
-            actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
+            actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, 0));
 
             PublicGameStateResponse readyGateState = readyGateOpenFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
             assertThat(readyGateState.phase()).isEqualTo(GamePhase.SHOWDOWN);
@@ -675,7 +675,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
                 }
             });
 
-            host.session().send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CHECK, null));
+            host.session().send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CHECK, 0));
 
             ActionErrorResponse error = rejection.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
             assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
@@ -695,13 +695,13 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
     }
 
     private void checkDownToShowdown(String gameId, PlayerActor host, PlayerActor guest) throws Exception {
-        performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CALL, null), host, guest, s -> true);
+        performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CALL, 0), host, guest, s -> true);
         for (int step = 0; step < 6; step++) {
-            performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, null), host, guest, s -> true);
+            performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, 0), host, guest, s -> true);
         }
         performActionByCurrentPlayer(
                 gameId,
-                new PlayerActionRequest(PlayerAction.CHECK, null),
+                new PlayerActionRequest(PlayerAction.CHECK, 0),
                 host,
                 guest,
                 state -> "SHOWDOWN".equals(state.path("phase").asText()));

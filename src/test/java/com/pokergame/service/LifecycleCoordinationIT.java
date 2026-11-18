@@ -189,7 +189,7 @@ class LifecycleCoordinationIT {
 
             String actorName = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
             assertThatCode(() -> playerActionService.processPlayerAction(
-                    roomId, new PlayerActionRequest(PlayerAction.CALL, null), actorName))
+                    roomId, new PlayerActionRequest(PlayerAction.CALL, 0), actorName))
                     .doesNotThrowAnyException();
 
             withRoomLock(roomCoordinator, roomId, () -> {
@@ -491,7 +491,7 @@ class LifecycleCoordinationIT {
             });
 
             playerActionService.processPlayerAction(
-                    roomId, new PlayerActionRequest(PlayerAction.CALL, null), turn1.actor());
+                    roomId, new PlayerActionRequest(PlayerAction.CALL, 0), turn1.actor());
 
             TurnSnapshot turn2 = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = gameLifecycleService.getGame(roomId);
@@ -520,10 +520,10 @@ class LifecycleCoordinationIT {
 
             // Fold remaining players to complete hand 1 -> opens ready gate
             playerActionService.processPlayerAction(
-                    roomId, new PlayerActionRequest(PlayerAction.FOLD, null), turn2.actor());
+                    roomId, new PlayerActionRequest(PlayerAction.FOLD, 0), turn2.actor());
             String turn3Actor = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
             playerActionService.processPlayerAction(
-                    roomId, new PlayerActionRequest(PlayerAction.FOLD, null), turn3Actor);
+                    roomId, new PlayerActionRequest(PlayerAction.FOLD, 0), turn3Actor);
 
             // Start hand 2 via READY_TIMEOUT expiry
             TurnSnapshot readyTimer = withRoomLock(roomCoordinator, roomId, () -> {
@@ -625,7 +625,7 @@ class LifecycleCoordinationIT {
                         default -> bobPrincipal;
                     };
                     try {
-                        gameController.performAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), actorPrincipal);
+                        gameController.performAction(roomId, new PlayerActionRequest(PlayerAction.CALL, 0), actorPrincipal);
                     } catch (Exception ignored) {
                         // Action may fail if turn timeout raced ahead
                     }
@@ -672,7 +672,7 @@ class LifecycleCoordinationIT {
                     roomService.getRoom(roomId).getInactivityDeadlineEpochMs());
             String actor = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
 
-            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, null), actor);
+            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.CALL, 0), actor);
             gameLifecycleService.abandonGameIfInactive(roomId, originalDeadline);
 
             withRoomLock(roomCoordinator, roomId, () -> {
@@ -691,7 +691,7 @@ class LifecycleCoordinationIT {
 
             long hand = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
             String firstActor = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
-            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, null), firstActor);
+            playerActionService.processPlayerAction(roomId, new PlayerActionRequest(PlayerAction.FOLD, 0), firstActor);
 
             gameLifecycleService.markPlayerReadyForNextHand(roomId, "Host");
             long deadline = withRoomLock(roomCoordinator, roomId, () ->

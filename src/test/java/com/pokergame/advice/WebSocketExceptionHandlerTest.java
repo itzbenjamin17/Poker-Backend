@@ -266,7 +266,7 @@ class WebSocketExceptionHandlerTest {
     @Test
     void typedRequestPayloadRecoversAction() {
         PlayerActionRequest request =
-                new PlayerActionRequest(PlayerAction.FOLD, null);
+                new PlayerActionRequest(PlayerAction.FOLD, 0);
         Message<PlayerActionRequest> frame = MessageBuilder.withPayload(request)
                 .setHeader("simpDestination", "/app/" + gameId + "/action").build();
 

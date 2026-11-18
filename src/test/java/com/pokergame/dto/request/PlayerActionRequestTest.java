@@ -64,10 +64,15 @@ class PlayerActionRequestTest {
 
     @ParameterizedTest
     @EnumSource(value = PlayerAction.class, names = {"FOLD", "CHECK", "CALL", "ALL_IN"})
-    @DisplayName("Non-wagering actions allow null or zero amount and reject non-zero amount")
+    @DisplayName("Non-wagering actions require zero amount and reject null or non-zero amount")
     void nonWageringActionsRejectNonZeroAmount(PlayerAction action) {
-        assertTrue(validator.validate(new PlayerActionRequest(action, null)).isEmpty());
         assertTrue(validator.validate(new PlayerActionRequest(action, 0)).isEmpty());
+
+        BadRequestException missing = assertThrows(
+                BadRequestException.class,
+                () -> new PlayerActionRequest(action, null));
+        assertEquals("UNEXPECTED_AMOUNT", missing.actionErrorCode());
+        assertTrue(missing.getMessage().contains(action.name()));
 
         BadRequestException unexpected = assertThrows(
                 BadRequestException.class,

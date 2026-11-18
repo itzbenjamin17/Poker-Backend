@@ -4,12 +4,12 @@ package com.pokergame.dto.internal;
  * Represents the outcome of a player's decision during their turn.
  * Used to communicate state changes from the Game model back to the orchestrating service.
  *
- * @param type         The type of outcome resulting from the action.
- * @param actionNotice An optional message if the action was converted (e.g., CALL to ALL_IN).
+ * @param type               The type of outcome resulting from the action.
+ * @param playerActionNotice An optional message if the action was converted (e.g., CALL to ALL_IN).
  */
 public record TurnOutcome(
     TurnOutcomeType type,
-    String actionNotice
+    String playerActionNotice
 ) {
     /**
      * Defines the possible game progressions after a player's action.

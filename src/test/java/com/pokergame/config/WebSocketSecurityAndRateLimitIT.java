@@ -534,7 +534,7 @@ class WebSocketSecurityAndRateLimitIT {
             StompSession session1 = connectSessionWithErrorHandler(stompClient, player1.path("token").asText(), errorReceived);
 
             if (destination.endsWith("/action") && !destination.contains("/room/")) {
-                session1.send(destination, new PlayerActionRequest(PlayerAction.FOLD, null));
+                session1.send(destination, new PlayerActionRequest(PlayerAction.FOLD, 0));
             } else {
                 session1.send(destination, "{}");
             }
@@ -559,7 +559,7 @@ class WebSocketSecurityAndRateLimitIT {
 
             String actor = readGameState(roomId, hostToken).path("currentPlayerName").asText();
             StompSession actingSession = "Player1".equals(actor) ? hostSession : guestSession;
-            actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, null));
+            actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, 0));
 
             JsonNode opened = Awaitility.await().atMost(TIMEOUT).until(
                     () -> readGameState(roomId, hostToken),
@@ -617,7 +617,7 @@ class WebSocketSecurityAndRateLimitIT {
             assertThat(afterStale.path("currentPlayerName").asText()).isEqualTo(currentPlayer);
 
             StompSession validSession = connectSession(stompClient, validActingToken);
-            validSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CALL, null));
+            validSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CALL, 0));
 
             Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
                 JsonNode next = readGameState(gameId, hostToken);

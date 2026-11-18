@@ -76,8 +76,8 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
      * @param actedPlayerIds                who has already made a move this round
      * @param scheduledTaskDeadlines        when upcoming automatic actions are supposed to happen
      * @param carryOverPot                  explicit chips carried from a completed prior hand
-     * @param lastFullRaise                 last full-raise increment this street, or 0 if none yet
-     * @param lastActedWagerByPlayer        each player's wager baseline for raise-reopening decisions
+     * @param lastFullRaise                 last full-raise increment in this round, or 0 if none yet
+     * @param previousBets                  each player's total bet in this round after their most recent turn
      * @param handSeatOrder                 stable seats retained across departures during this hand
      * @param dealerPlayerId                original dealer identity for correct clockwise position recovery
      * @param smallBlindPlayerId            actual small blind payer identity, even if that player departed
@@ -98,7 +98,7 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
             Map<String, Integer> handContributions,
             Long readyCountdownDeadlineEpochMs, boolean allPlayersHadInitialTurn, Set<String> actedPlayerIds,
             Map<ScheduledGameTask, Long> scheduledTaskDeadlines, int carryOverPot,
-            int lastFullRaise, Map<String, Integer> lastActedWagerByPlayer,
+            int lastFullRaise, Map<String, Integer> previousBets,
             List<String> handSeatOrder, String dealerPlayerId, String smallBlindPlayerId,
             String bigBlindPlayerId, String currentPlayerId, SettlementState lastSettlementResult,
             boolean finalPotSettled, ReadyGateState readyGateState, long handNumber,
