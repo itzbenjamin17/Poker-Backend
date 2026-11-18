@@ -246,7 +246,6 @@ public class Game {
 
         activePlayers.clear();
         for (Player player : players) {
-            player.setReadyForNextHand(false);
             if (!player.getIsOut()) {
                 player.resetAttributes();
                 activePlayers.add(player);
@@ -275,7 +274,7 @@ public class Game {
      */
     public void dealHoleCards() {
         for (Player player : activePlayers) {
-            player.getHoleCards().addAll(deck.dealCards(2));
+            player.setHoleCards(deck.dealCards(2));
         }
     }
 
@@ -361,9 +360,9 @@ public class Game {
         int wagerBeforeDecision = bettingRound.getCurrentHighestBet();
 
         switch (actualDecision.action()) {
-            case FOLD, CHECK -> player.doAction(actualDecision.action(), 0, this.pot);
-            case CALL, BET, RAISE -> this.pot = player.doAction(actualDecision.action(), result.amount(), this.pot);
-            case ALL_IN -> this.pot = player.doAction(PlayerAction.ALL_IN, 0, this.pot);
+            case FOLD, CHECK -> player.doAction(actualDecision.action(), 0);
+            case CALL, BET, RAISE -> this.pot += player.doAction(actualDecision.action(), result.amount());
+            case ALL_IN -> this.pot += player.doAction(PlayerAction.ALL_IN, 0);
         }
 
         PotCalculator.trackContribution(handContributions, player, this.pot - potBeforeDecision, gameId);
@@ -1034,9 +1033,9 @@ public class Game {
     private void postBlind(Player player, int blindAmount) {
         int betBefore = player.getCurrentBet();
         if (player.getChips() <= blindAmount) {
-            this.pot = player.doAction(PlayerAction.ALL_IN, 0, this.pot);
+            this.pot += player.doAction(PlayerAction.ALL_IN, 0);
         } else {
-            this.pot = player.doAction(PlayerAction.BET, blindAmount, this.pot);
+            this.pot += player.doAction(PlayerAction.BET, blindAmount);
         }
         PotCalculator.trackContribution(handContributions, player, player.getCurrentBet() - betBefore, gameId);
     }

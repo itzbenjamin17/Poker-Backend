@@ -6,7 +6,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import com.pokergame.exception.BadRequestException;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,11 +59,12 @@ class RoomTest {
      */
     @Test
     void testRoomCreationWithPassword() {
-        Room secureRoom = new Room("room456", "Private Room", "Host", 4, 5, 10, 500, "secret123");
+        Room secureRoom = new Room("room456", "Private Room", "Host", 4, 5, 10, 500,
+                passwordEncoder.encode("secret123"));
 
         assertTrue(secureRoom.hasPassword());
-        assertTrue(secureRoom.checkPassword("secret123"));
-        assertFalse(secureRoom.checkPassword("wrong"));
+        assertTrue(secureRoom.checkPassword("secret123", passwordEncoder));
+        assertFalse(secureRoom.checkPassword("wrong", passwordEncoder));
     }
 
     /**
@@ -72,14 +76,14 @@ class RoomTest {
         Room roomEmptyPass = new Room("room-empty", "Empty Pass Room", "Host", 4, 5, 10, 500, "");
         assertFalse(roomEmptyPass.hasPassword());
         assertNull(roomEmptyPass.getPasswordHash());
-        assertTrue(roomEmptyPass.checkPassword(null));
-        assertTrue(roomEmptyPass.checkPassword("any"));
+        assertTrue(roomEmptyPass.checkPassword(null, passwordEncoder));
+        assertTrue(roomEmptyPass.checkPassword("any", passwordEncoder));
 
         Room roomSpacesPass = new Room("room-spaces", "Spaces Pass Room", "Host", 4, 5, 10, 500, "   ");
         assertFalse(roomSpacesPass.hasPassword());
         assertNull(roomSpacesPass.getPasswordHash());
-        assertTrue(roomSpacesPass.checkPassword(null));
-        assertTrue(roomSpacesPass.checkPassword("any"));
+        assertTrue(roomSpacesPass.checkPassword(null, passwordEncoder));
+        assertTrue(roomSpacesPass.checkPassword("any", passwordEncoder));
     }
 
     /**
@@ -88,16 +92,14 @@ class RoomTest {
     @Test
     @DisplayName("should preserve leading and trailing spaces in password")
     void testRoomCreationWithPasswordPreservingSpaces() {
-        Room roomPreservedPass = new Room("room-spaces-kept", "Kept Pass Room", "Host", 4, 5, 10, 500, "  secret123  ");
+        Room roomPreservedPass = new Room("room-spaces-kept", "Kept Pass Room", "Host", 4, 5, 10, 500,
+                passwordEncoder.encode("  secret123  "));
         assertTrue(roomPreservedPass.hasPassword());
         assertNotNull(roomPreservedPass.getPasswordHash());
         assertNotEquals("  secret123  ", roomPreservedPass.getPasswordHash());
         assertTrue(passwordEncoder.matches("  secret123  ", roomPreservedPass.getPasswordHash()));
-        assertTrue(roomPreservedPass.checkPassword("  secret123  "));
         assertTrue(roomPreservedPass.checkPassword("  secret123  ", passwordEncoder));
-        assertFalse(roomPreservedPass.checkPassword("secret123"));
         assertFalse(roomPreservedPass.checkPassword("secret123", passwordEncoder));
-        assertFalse(roomPreservedPass.checkPassword(null));
         assertFalse(roomPreservedPass.checkPassword(null, passwordEncoder));
     }
 
@@ -351,7 +353,8 @@ class RoomTest {
      */
     @Test
     void testHasPasswordForPrivateRoom() {
-        Room privateRoom = new Room("room456", "Private", "Host", 6, 10, 20, 1000, "password");
+        Room privateRoom = new Room("room456", "Private", "Host", 6, 10, 20, 1000,
+                passwordEncoder.encode("password"));
         assertTrue(privateRoom.hasPassword());
     }
 
@@ -378,9 +381,9 @@ class RoomTest {
      */
     @Test
     void testCheckPasswordForPublicRoom() {
-        assertTrue(room.checkPassword(null));
-        assertTrue(room.checkPassword(""));
-        assertTrue(room.checkPassword("anything"));
+        assertTrue(room.checkPassword(null, passwordEncoder));
+        assertTrue(room.checkPassword("", passwordEncoder));
+        assertTrue(room.checkPassword("anything", passwordEncoder));
     }
 
     /**
@@ -388,12 +391,13 @@ class RoomTest {
      */
     @Test
     void testCheckPasswordForPrivateRoom() {
-        Room privateRoom = new Room("room456", "Private", "Host", 6, 10, 20, 1000, "secret123");
+        Room privateRoom = new Room("room456", "Private", "Host", 6, 10, 20, 1000,
+                passwordEncoder.encode("secret123"));
 
-        assertTrue(privateRoom.checkPassword("secret123"));
-        assertFalse(privateRoom.checkPassword("wrong"));
-        assertFalse(privateRoom.checkPassword(""));
-        assertFalse(privateRoom.checkPassword(null));
+        assertTrue(privateRoom.checkPassword("secret123", passwordEncoder));
+        assertFalse(privateRoom.checkPassword("wrong", passwordEncoder));
+        assertFalse(privateRoom.checkPassword("", passwordEncoder));
+        assertFalse(privateRoom.checkPassword(null, passwordEncoder));
     }
 
     /**
@@ -401,11 +405,12 @@ class RoomTest {
      */
     @Test
     void testCheckPasswordCaseSensitive() {
-        Room privateRoom = new Room("room456", "Private", "Host", 6, 10, 20, 1000, "Secret123");
+        Room privateRoom = new Room("room456", "Private", "Host", 6, 10, 20, 1000,
+                passwordEncoder.encode("Secret123"));
 
-        assertTrue(privateRoom.checkPassword("Secret123"));
-        assertFalse(privateRoom.checkPassword("secret123"));
-        assertFalse(privateRoom.checkPassword("SECRET123"));
+        assertTrue(privateRoom.checkPassword("Secret123", passwordEncoder));
+        assertFalse(privateRoom.checkPassword("secret123", passwordEncoder));
+        assertFalse(privateRoom.checkPassword("SECRET123", passwordEncoder));
     }
 
     /**
@@ -555,6 +560,7 @@ class RoomTest {
         playersWithJoinTime.put("Alice", player1JoinTime);
         playersWithJoinTime.put("Bob", player2JoinTime);
 
+        String encodedPassword = passwordEncoder.encode("secret-pass");
         Room restoredRoom = Room.restoreBuilder()
                 .roomId("room-restore-999")
                 .roomName("Restored High Stakes Room")
@@ -563,7 +569,7 @@ class RoomTest {
                 .smallBlind(25)
                 .bigBlind(50)
                 .buyIn(2500)
-                .password("secret-pass")
+                .passwordHash(encodedPassword)
                 .createdAt(createdAt)
                 .playersWithJoinTime(playersWithJoinTime)
                 .gameStarted(true)
@@ -577,11 +583,8 @@ class RoomTest {
         assertEquals(25, restoredRoom.getSmallBlind());
         assertEquals(50, restoredRoom.getBigBlind());
         assertEquals(2500, restoredRoom.getBuyIn());
-        assertNotNull(restoredRoom.getPasswordHash());
-        assertNotEquals("secret-pass", restoredRoom.getPasswordHash());
-        assertTrue(passwordEncoder.matches("secret-pass", restoredRoom.getPasswordHash()));
+        assertEquals(encodedPassword, restoredRoom.getPasswordHash());
         assertTrue(restoredRoom.hasPassword());
-        assertTrue(restoredRoom.checkPassword("secret-pass"));
         assertTrue(restoredRoom.checkPassword("secret-pass", passwordEncoder));
         assertEquals(createdAt, restoredRoom.getCreatedAt());
         assertEquals(playersWithJoinTime, restoredRoom.getPlayersWithJoinTimeSnapshot());
@@ -623,6 +626,7 @@ class RoomTest {
                 .smallBlind(10)
                 .bigBlind(20)
                 .buyIn(1000)
+                .createdAt(LocalDateTime.now().minusMinutes(10))
                 .playersWithJoinTime(joinTimes)
                 .build();
 
@@ -805,45 +809,9 @@ class RoomTest {
                 .smallBlind(10)
                 .bigBlind(20)
                 .buyIn(1000)
+                .createdAt(LocalDateTime.now())
                 .playersWithJoinTime(joinTimes)
                 .build());
-    }
-
-    @Test
-    @DisplayName("Room hashes raw passwords with BCrypt and protects cleartext from getPassword")
-    void passwordHashing_ConstructorHashesRawPassword_NeverStoresPlaintext() {
-        String raw = "MySecretPass_42!";
-        Room privateRoom = new Room("priv-1", "Private Room", "Host", 4, 10, 20, 500, raw);
-
-        assertTrue(privateRoom.hasPassword());
-        assertNotNull(privateRoom.getPasswordHash());
-        assertNotEquals(raw, privateRoom.getPasswordHash());
-        assertTrue(privateRoom.getPasswordHash().startsWith("$2a$") || privateRoom.getPasswordHash().startsWith("$2b$"));
-
-        // Constant-time checks with and without PasswordEncoder bean
-        assertTrue(privateRoom.checkPassword(raw, passwordEncoder));
-        assertTrue(privateRoom.checkPassword(raw));
-
-        assertFalse(privateRoom.checkPassword("WrongPassword", passwordEncoder));
-        assertFalse(privateRoom.checkPassword("WrongPassword"));
-
-        assertFalse(privateRoom.checkPassword(null, passwordEncoder));
-        assertFalse(privateRoom.checkPassword(null));
-        assertFalse(privateRoom.checkPassword("", passwordEncoder));
-        assertFalse(privateRoom.checkPassword(""));
-    }
-
-    @Test
-    @DisplayName("Room preserves pre-computed BCrypt hash without double-hashing")
-    void passwordHashing_PreHashedPasswordPreservedWithoutDoubleHashing() {
-        String raw = "AlreadyHashedSecret";
-        String bcryptHash = passwordEncoder.encode(raw);
-
-        Room preHashedRoom = new Room("pre-1", "PreHashed Room", "Host", 4, 10, 20, 500, bcryptHash);
-        assertEquals(bcryptHash, preHashedRoom.getPasswordHash(), "Pre-computed hash must be preserved as-is");
-        assertTrue(preHashedRoom.checkPassword(raw, passwordEncoder));
-        assertTrue(preHashedRoom.checkPassword(raw));
-        assertFalse(preHashedRoom.checkPassword("invalid", passwordEncoder));
     }
 
     @Test
@@ -861,6 +829,7 @@ class RoomTest {
                 .bigBlind(20)
                 .buyIn(500)
                 .passwordHash(hash)
+                .createdAt(LocalDateTime.now())
                 .build();
 
         assertEquals(hash, restored.getPasswordHash());
@@ -873,7 +842,8 @@ class RoomTest {
     @DisplayName("Room.toString() masks password and does not expose cleartext or hash")
     void toString_ProtectsPasswordAndNeverExposesPlaintextOrHash() {
         String raw = "SuperSecretPassword123";
-        Room privateRoom = new Room("sec-room", "Secret Room", "HostUser", 4, 10, 20, 500, raw);
+        Room privateRoom = new Room("sec-room", "Secret Room", "HostUser", 4, 10, 20, 500,
+                passwordEncoder.encode(raw));
 
         String str = privateRoom.toString();
         assertTrue(str.contains("[password=[PROTECTED]]"), "toString must mask password with [PROTECTED]");
@@ -893,6 +863,61 @@ class RoomTest {
         assertNull(publicRoom.getPasswordHash());
         assertTrue(publicRoom.checkPassword("any-input", passwordEncoder));
         assertTrue(publicRoom.checkPassword(null, passwordEncoder));
-        assertTrue(publicRoom.checkPassword(""));
+        assertTrue(publicRoom.checkPassword("", passwordEncoder));
+    }
+
+    @Test
+    @DisplayName("setMembershipId rejects non-members and blank membership IDs")
+    void setMembershipId_RejectsNonMembersAndBlankIds() {
+        assertThrows(IllegalStateException.class, () -> room.setMembershipId("Unknown", "mem-1"));
+
+        room.addPlayer("Alice");
+        assertThrows(IllegalArgumentException.class, () -> room.setMembershipId("Alice", null));
+        assertThrows(IllegalArgumentException.class, () -> room.setMembershipId("Alice", "   "));
+
+        room.setMembershipId("Alice", "mem-custom");
+        assertEquals("mem-custom", room.getMembershipId("Alice"));
+    }
+
+    @Test
+    @DisplayName("checkPassword rejects null PasswordEncoder")
+    void checkPassword_RejectsNullEncoder() {
+        Room privateRoom = new Room("priv-null-enc", "Private", "Host", 4, 10, 20, 500,
+                passwordEncoder.encode("secret"));
+
+        assertThrows(NullPointerException.class, () -> privateRoom.checkPassword("secret", null));
+        assertThrows(NullPointerException.class, () -> room.checkPassword("any", null));
+    }
+
+    @Test
+    @DisplayName("restoreBuilder rejects null createdAt")
+    void restoreBuilder_RejectsNullCreatedAt() {
+        assertThrows(NullPointerException.class, () -> Room.restoreBuilder()
+                .roomId("restored-null-created")
+                .roomName("Restored Room")
+                .hostName("Alice")
+                .maxPlayers(6)
+                .smallBlind(10)
+                .bigBlind(20)
+                .buyIn(1000)
+                .build());
+    }
+
+    @Test
+    @DisplayName("Room constructor and addPlayer use the injected Clock for timestamps")
+    void clockOverloads_RecordTimestampsFromInjectedClock() {
+        ZoneId zone = ZoneId.of("UTC");
+        Clock createdClock = Clock.fixed(Instant.parse("2026-01-15T10:00:00Z"), zone);
+        Clock joinClock = Clock.fixed(Instant.parse("2026-01-15T10:05:30Z"), zone);
+
+        Room clockedRoom = new Room("clock-room", "Clock Room", "Host", 6, 10, 20, 1000, null, createdClock);
+        assertEquals(LocalDateTime.of(2026, 1, 15, 10, 0, 0), clockedRoom.getCreatedAt());
+
+        clockedRoom.addPlayer("Alice", joinClock);
+        assertEquals(LocalDateTime.of(2026, 1, 15, 10, 5, 30), clockedRoom.getJoinedAt("Alice"));
+
+        assertThrows(NullPointerException.class,
+                () -> new Room("clock-room", "Clock Room", "Host", 6, 10, 20, 1000, null, (Clock) null));
+        assertThrows(NullPointerException.class, () -> clockedRoom.addPlayer("Bob", null));
     }
 }

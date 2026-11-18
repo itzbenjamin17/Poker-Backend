@@ -590,9 +590,9 @@ class GameStateServiceTest {
                 new Card(Rank.QUEEN, Suit.SPADES),
                 new Card(Rank.JACK, Suit.SPADES),
                 new Card(Rank.TEN, Suit.SPADES));
-        winner.getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.CLUBS),
+        winner.setHoleCards(List.of(new Card(Rank.TWO, Suit.CLUBS),
                 new Card(Rank.THREE, Suit.CLUBS)));
-        other.getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.CLUBS),
+        other.setHoleCards(List.of(new Card(Rank.FOUR, Suit.CLUBS),
                 new Card(Rank.FIVE, Suit.CLUBS)));
         winner.setHandRank(HandRank.ROYAL_FLUSH);
         other.setHandRank(HandRank.ROYAL_FLUSH);
@@ -765,14 +765,10 @@ class GameStateServiceTest {
         List<Player> players = List.of(
                 settledPlayer("Main", "main", 50), settledPlayer("Side1", "side1", 100),
                 settledPlayer("Side2", "side2", 150), settledPlayer("Side3", "side3", 150));
-        players.get(0).getHoleCards().clear();
-        players.get(0).getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
-        players.get(1).getHoleCards().clear();
-        players.get(1).getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.HEARTS), new Card(Rank.SEVEN, Suit.CLUBS)));
-        players.get(2).getHoleCards().clear();
-        players.get(2).getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.DIAMONDS)));
-        players.get(3).getHoleCards().clear();
-        players.get(3).getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.FIVE, Suit.DIAMONDS)));
+        players.get(0).setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+        players.get(1).setHoleCards(List.of(new Card(Rank.NINE, Suit.HEARTS), new Card(Rank.SEVEN, Suit.CLUBS)));
+        players.get(2).setHoleCards(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.DIAMONDS)));
+        players.get(3).setHoleCards(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.FIVE, Suit.DIAMONDS)));
         Game settled = Game.restoreBuilder().gameId(GAME_ID).players(players)
                 .activePlayerIds(players.stream().map(Player::getPlayerId).toList()).remainingDeck(List.of())
                 .communityCards(List.of(
@@ -1031,16 +1027,14 @@ class GameStateServiceTest {
                 new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS),
                 new Card(Rank.KING, Suit.CLUBS), new Card(Rank.KING, Suit.DIAMONDS),
                 new Card(Rank.QUEEN, Suit.SPADES)));
-        winner.getHoleCards().clear();
-        winner.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS)));
+        winner.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS)));
 
         loser.setHandRank(HandRank.ONE_PAIR);
         loser.setBestHand(List.of(
                 new Card(Rank.JACK, Suit.SPADES), new Card(Rank.JACK, Suit.HEARTS),
                 new Card(Rank.TEN, Suit.CLUBS), new Card(Rank.NINE, Suit.DIAMONDS),
                 new Card(Rank.EIGHT, Suit.SPADES)));
-        loser.getHoleCards().clear();
-        loser.getHoleCards().addAll(List.of(new Card(Rank.JACK, Suit.SPADES), new Card(Rank.JACK, Suit.HEARTS)));
+        loser.setHoleCards(List.of(new Card(Rank.JACK, Suit.SPADES), new Card(Rank.JACK, Suit.HEARTS)));
 
         HandSettlementResult settlement = new HandSettlementResult(
                 Map.of(winner.getPlayerId(), 200),
@@ -1141,16 +1135,14 @@ class GameStateServiceTest {
                 new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS),
                 new Card(Rank.ACE, Suit.CLUBS), new Card(Rank.KING, Suit.DIAMONDS),
                 new Card(Rank.KING, Suit.SPADES)));
-        winner.getHoleCards().clear();
-        winner.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS)));
+        winner.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS)));
 
         loser.setHandRank(HandRank.FLUSH);
         loser.setBestHand(List.of(
                 new Card(Rank.KING, Suit.HEARTS), new Card(Rank.QUEEN, Suit.HEARTS),
                 new Card(Rank.TEN, Suit.HEARTS), new Card(Rank.EIGHT, Suit.HEARTS),
                 new Card(Rank.TWO, Suit.HEARTS)));
-        loser.getHoleCards().clear();
-        loser.getHoleCards().addAll(List.of(new Card(Rank.QUEEN, Suit.HEARTS), new Card(Rank.TWO, Suit.HEARTS)));
+        loser.setHoleCards(List.of(new Card(Rank.QUEEN, Suit.HEARTS), new Card(Rank.TWO, Suit.HEARTS)));
 
         HandSettlementResult settlement = new HandSettlementResult(
                 Map.of(winner.getPlayerId(), 300),
@@ -1273,7 +1265,7 @@ class GameStateServiceTest {
      */
     @Test
     void broadcastShowdownResults_WithFoldedPlayer_ShouldMarkAsFolded() {
-        testPlayers.get(1).doAction(PlayerAction.FOLD, 0, 0);
+        testPlayers.get(1).doAction(PlayerAction.FOLD, 0);
         Player winner = testPlayers.getFirst();
         Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 100), Set.of(winner.getPlayerId()));
 
@@ -1290,7 +1282,7 @@ class GameStateServiceTest {
      */
     @Test
     void broadcastShowdownResults_WithAllInPlayer_ShouldMarkAsAllIn() {
-        testPlayers.getFirst().doAction(PlayerAction.ALL_IN, 0, 0);
+        testPlayers.getFirst().doAction(PlayerAction.ALL_IN, 0);
         Player winner = testPlayers.getFirst();
         Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 100), Set.of(winner.getPlayerId()));
 
@@ -1567,8 +1559,7 @@ class GameStateServiceTest {
     void getPrivatePlayerStateSnapshot_ShouldIncludeHandNumberAndDefensivelyCopyCards() {
         testGame.resetForNewHand();
         Player player = testPlayers.get(0);
-        player.getHoleCards().add(new Card(Rank.ACE, Suit.HEARTS));
-        player.getHoleCards().add(new Card(Rank.KING, Suit.SPADES));
+        player.setHoleCards(List.of(new Card(Rank.ACE, Suit.HEARTS), new Card(Rank.KING, Suit.SPADES)));
 
         PrivatePlayerState snapshot = gameStateService.getPrivatePlayerStateSnapshot(testGame, player.getName());
 
@@ -1578,8 +1569,11 @@ class GameStateServiceTest {
         assertEquals(2, snapshot.holeCards().size());
         assertEquals(player.getHoleCards(), snapshot.holeCards());
 
-        // Mutating the original player cards list does not mutate the snapshot
-        player.getHoleCards().add(new Card(Rank.QUEEN, Suit.CLUBS));
+        // Replacing the player's cards does not mutate the captured snapshot
+        player.setHoleCards(List.of(
+                new Card(Rank.ACE, Suit.HEARTS),
+                new Card(Rank.KING, Suit.SPADES),
+                new Card(Rank.QUEEN, Suit.CLUBS)));
         assertEquals(2, snapshot.holeCards().size());
     }
 

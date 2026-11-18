@@ -2,6 +2,7 @@ package com.pokergame.model;
 
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
+import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ReadyCountdownStartOutcome;
 import com.pokergame.enums.ReadyCountdownTimeoutOutcome;
 import com.pokergame.enums.ReadyGateState;
@@ -124,7 +125,7 @@ class ReadyGateTest {
             bob.setDisconnected(false);
             assertTrue(gate.areAllEligiblePlayersReady());
 
-            alice.payChips(0, 1000);
+            alice.doAction(PlayerAction.BET, 1000);
             assertFalse(gate.areAllEligiblePlayersReady());
             alice.addChips(500);
             assertTrue(gate.areAllEligiblePlayersReady());

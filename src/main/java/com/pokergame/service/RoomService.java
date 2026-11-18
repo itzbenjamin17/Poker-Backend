@@ -106,7 +106,7 @@ public class RoomService {
         requireNonNull(request, "request must not be null");
         RoomPasswordPolicy.validateLength(request.getPassword());
         if (request.getSmallBlind() != null && request.getBigBlind() != null
-                && request.getBigBlind() < 2L * request.getSmallBlind()) {
+                && request.getBigBlind() < (long) Room.BIG_BLIND_MULTIPLE * request.getSmallBlind()) {
             throw new BadRequestException("Big blind must be at least twice the small blind.");
         }
         if (request.getBigBlind() != null && request.getBuyIn() != null
@@ -128,7 +128,8 @@ public class RoomService {
                 request.getSmallBlind(),
                 request.getBigBlind(),
                 request.getBuyIn(),
-                passwordToStore);
+                passwordToStore,
+                clock);
 
         synchronized (roomNameLock) {
             if (isRoomNameTaken(sanitizedRoomName)) {
@@ -492,7 +493,7 @@ public class RoomService {
      */
     private String registerMember(Room room, String playerName, long now) {
         String roomId = room.getRoomId();
-        String membershipId = room.addPlayer(playerName);
+        String membershipId = room.addPlayer(playerName, clock);
         long firstConnectDeadline = now + timings.disconnectGracePeriodMs();
         room.setAbsenceDeadline(playerName, firstConnectDeadline);
         PostSaveActions.runAfterSave(() -> eventPublisher.publishEvent(

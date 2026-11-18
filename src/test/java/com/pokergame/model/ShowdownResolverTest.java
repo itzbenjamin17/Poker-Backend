@@ -212,8 +212,8 @@ class ShowdownResolverTest {
     void evaluateHandsStoresEachPlayersOwnEvaluation() {
         Player a = player("a", 100, HandRank.NO_HAND);
         Player b = player("b", 100, HandRank.NO_HAND);
-        a.getHoleCards().addAll(List.of(new Card(Rank.JACK, Suit.DIAMONDS), new Card(Rank.FOUR, Suit.DIAMONDS)));
-        b.getHoleCards().addAll(List.of(new Card(Rank.KING, Suit.CLUBS), new Card(Rank.THREE, Suit.SPADES)));
+        a.setHoleCards(List.of(new Card(Rank.JACK, Suit.DIAMONDS), new Card(Rank.FOUR, Suit.DIAMONDS)));
+        b.setHoleCards(List.of(new Card(Rank.KING, Suit.CLUBS), new Card(Rank.THREE, Suit.SPADES)));
         List<Card> board = List.of(
                 new Card(Rank.TWO, Suit.HEARTS),
                 new Card(Rank.FIVE, Suit.DIAMONDS),

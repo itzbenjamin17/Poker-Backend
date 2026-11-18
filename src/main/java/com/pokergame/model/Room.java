@@ -1,18 +1,16 @@
 package com.pokergame.model;
 
 import com.pokergame.exception.BadRequestException;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -23,10 +21,9 @@ import java.util.UUID;
  *
  * <p>
  * Rooms are created with fixed game parameters (blinds, buy-in, max players)
- * that
- * cannot be changed after creation. Each room can be password-protected for
- * private games. Callers hold the room-ID coordination lease when reading or
- * mutating a published room.
+ * that cannot be changed after creation. Each room can be password-protected
+ * for private games. Callers hold the room-ID coordination lease when reading
+ * or mutating a published room.
  * </p>
  */
 public class Room {
@@ -52,8 +49,6 @@ public class Room {
      * Reads and writes require the room-ID coordination lease after publication.
      */
     private final Map<String, String> playerMembershipIds = new LinkedHashMap<>();
-    private final Set<String> persistedMembershipPlayers = new HashSet<>();
-    private static final PasswordEncoder DEFAULT_PASSWORD_ENCODER = new BCryptPasswordEncoder();
 
     /**
      * Process-local absence deadlines for players awaiting first connection or reconnect grace.
@@ -76,52 +71,63 @@ public class Room {
     private boolean isTerminal;
     private Long inactivityDeadlineEpochMs;
 
-    /** Recognizes an existing BCrypt hash so restored room credentials are not hashed again. */
-    private static boolean isBcryptHash(String value) {
-        if (value == null) {
-            return false;
-        }
-        return value.startsWith("$2a$") || value.startsWith("$2b$") || value.startsWith("$2y$");
-    }
-
-
     /**
-     * Creates a new poker room with the specified configuration.
+     * Creates a new poker room with the specified configuration using the system default clock.
      *
-     * @param roomId     unique identifier for the room
-     * @param roomName   display name for the room
-     * @param hostName   name of the player creating/hosting the room
-     * @param maxPlayers maximum number of players allowed (must be 2-10)
-     * @param smallBlind the small blind amount (must be at least 1)
-     * @param bigBlind   the big blind amount (must be >= small blind)
-     * @param buyIn      the buy-in amount for joining the game
-     * @param password   optional password for room access (null or empty for public
-     *                   rooms)
+     * @param roomId       unique identifier for the room
+     * @param roomName     display name for the room
+     * @param hostName     name of the player creating/hosting the room
+     * @param maxPlayers   maximum number of players allowed (must be 2-10)
+     * @param smallBlind   the small blind amount (must be at least 1)
+     * @param bigBlind     the big blind amount (must be at least twice the small blind)
+     * @param buyIn        the buy-in amount for joining the game
+     * @param passwordHash encoded password hash for private rooms, or {@code null}/blank for public rooms
      * @throws IllegalStateException if any configuration invariant fails
      */
     public Room(String roomId, String roomName, String hostName, int maxPlayers,
-            int smallBlind, int bigBlind, int buyIn, String password) {
-        this(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, password, LocalDateTime.now());
+            int smallBlind, int bigBlind, int buyIn, String passwordHash) {
+        this(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, passwordHash,
+                Clock.systemDefaultZone());
+    }
+
+    /**
+     * Creates a new poker room with the specified configuration and clock.
+     *
+     * @param roomId       unique identifier for the room
+     * @param roomName     display name for the room
+     * @param hostName     name of the player creating/hosting the room
+     * @param maxPlayers   maximum number of players allowed (must be 2-10)
+     * @param smallBlind   the small blind amount (must be at least 1)
+     * @param bigBlind     the big blind amount (must be at least twice the small blind)
+     * @param buyIn        the buy-in amount for joining the game
+     * @param passwordHash encoded password hash for private rooms, or {@code null}/blank for public rooms
+     * @param clock        clock used to record the room creation timestamp
+     * @throws IllegalStateException if any configuration invariant fails
+     */
+    public Room(String roomId, String roomName, String hostName, int maxPlayers,
+            int smallBlind, int bigBlind, int buyIn, String passwordHash, Clock clock) {
+        this(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, passwordHash,
+                LocalDateTime.now(Objects.requireNonNull(clock, "clock must not be null")));
     }
 
     /**
      * Package-private constructor used to restore persisted Room instances with their
      * original creation timestamp.
      *
-     * @param roomId     unique identifier of the room
-     * @param roomName   display name of the room
-     * @param hostName   name of the creator / initial host
-     * @param maxPlayers maximum capacity of the room
-     * @param smallBlind small blind amount
-     * @param bigBlind   big blind amount
-     * @param buyIn      buy-in amount
-     * @param password   optional password for private rooms
-     * @param createdAt  persisted creation timestamp
+     * @param roomId       unique identifier of the room
+     * @param roomName     display name of the room
+     * @param hostName     name of the creator / initial host
+     * @param maxPlayers   maximum capacity of the room
+     * @param smallBlind   small blind amount
+     * @param bigBlind     big blind amount
+     * @param buyIn        buy-in amount
+     * @param passwordHash encoded password hash for private rooms, or {@code null}/blank for public rooms
+     * @param createdAt    persisted creation timestamp
      * @throws IllegalStateException if any configuration invariant fails
      */
     Room(String roomId, String roomName, String hostName, int maxPlayers,
-            int smallBlind, int bigBlind, int buyIn, String password, LocalDateTime createdAt) {
-
+            int smallBlind, int bigBlind, int buyIn, String passwordHash, LocalDateTime createdAt) {
+        Objects.requireNonNull(createdAt, "createdAt must not be null");
         if (roomId == null || roomId.trim().isEmpty()) {
             throw new IllegalStateException("Room ID cannot be null or empty.");
         }
@@ -138,14 +144,13 @@ public class Room {
         if (smallBlind < MIN_SMALL_BLIND) {
             throw new IllegalStateException("Small blind must be at least " + MIN_SMALL_BLIND + ".");
         }
-        if (bigBlind < BIG_BLIND_MULTIPLE * smallBlind) {
+        if (bigBlind < (long) BIG_BLIND_MULTIPLE * smallBlind) {
             throw new IllegalStateException("Big blind must be at least twice the small blind.");
         }
         if (buyIn < bigBlind) {
             throw new IllegalStateException(
                     "Buy-in must be at least the big blind amount.");
         }
-
 
         this.roomId = roomId;
         this.roomName = roomName;
@@ -154,15 +159,9 @@ public class Room {
         this.smallBlind = smallBlind;
         this.bigBlind = bigBlind;
         this.buyIn = buyIn;
-        if (password == null || password.trim().isEmpty()) {
-            this.passwordHash = null;
-        } else if (isBcryptHash(password)) {
-            this.passwordHash = password;
-        } else {
-            this.passwordHash = DEFAULT_PASSWORD_ENCODER.encode(password);
-        }
+        this.passwordHash = (passwordHash == null || passwordHash.trim().isEmpty()) ? null : passwordHash;
         this.playersWithJoinTime = new LinkedHashMap<>();
-        this.createdAt = createdAt != null ? createdAt : LocalDateTime.now();
+        this.createdAt = createdAt;
     }
 
     /**
@@ -186,11 +185,12 @@ public class Room {
         private int smallBlind;
         private int bigBlind;
         private int buyIn;
-        private String password;
+        private String passwordHash;
         private LocalDateTime createdAt;
         private Map<String, LocalDateTime> playersWithJoinTime;
         private Map<String, String> playerMembershipIds;
         private boolean gameStarted;
+        private Long inactivityDeadlineEpochMs;
 
         public RoomRestoreBuilder roomId(String roomId) {
             this.roomId = roomId;
@@ -227,13 +227,8 @@ public class Room {
             return this;
         }
 
-        public RoomRestoreBuilder password(String password) {
-            this.password = password;
-            return this;
-        }
-
         public RoomRestoreBuilder passwordHash(String passwordHash) {
-            this.password = passwordHash;
+            this.passwordHash = passwordHash;
             return this;
         }
 
@@ -257,45 +252,29 @@ public class Room {
             return this;
         }
 
-        private boolean terminal;
-        private Long inactivityDeadlineEpochMs;
-
         public RoomRestoreBuilder inactivityDeadlineEpochMs(Long inactivityDeadlineEpochMs) {
             this.inactivityDeadlineEpochMs = inactivityDeadlineEpochMs;
             return this;
         }
 
-        /**
-         * Sets whether the restored room has reached a terminal state (post-game review or closure).
-         *
-         * @param terminal {@code true} if the room is terminal, {@code false} otherwise
-         * @return this builder instance
-         */
-        public RoomRestoreBuilder terminal(boolean terminal) {
-            this.terminal = terminal;
-            return this;
-        }
-
         public Room build() {
-            Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, password, createdAt);
-            room.playersWithJoinTime.clear();
+            Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn,
+                    passwordHash, createdAt);
             if (playersWithJoinTime != null) {
                 if (playersWithJoinTime.size() > maxPlayers) {
-                    throw new IllegalStateException("Restored players count exceeds maxPlayers: " + playersWithJoinTime.size() + " > " + maxPlayers);
+                    throw new IllegalStateException(
+                            "Restored players count exceeds maxPlayers: " + playersWithJoinTime.size() + " > " + maxPlayers);
                 }
                 room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
                 for (String playerName : room.playersWithJoinTime.keySet()) {
                     String persistedId = playerMembershipIds != null ? playerMembershipIds.get(playerName) : null;
-                    if (persistedId != null && !persistedId.isBlank()) {
-                        room.playerMembershipIds.put(playerName, persistedId);
-                        room.persistedMembershipPlayers.add(playerName);
-                    } else {
-                        room.playerMembershipIds.put(playerName, UUID.randomUUID().toString());
-                    }
+                    String membershipId = (persistedId != null && !persistedId.isBlank())
+                            ? persistedId
+                            : UUID.randomUUID().toString();
+                    room.playerMembershipIds.put(playerName, membershipId);
                 }
             }
             room.isGameStarted = gameStarted;
-            room.isTerminal = terminal;
             room.inactivityDeadlineEpochMs = inactivityDeadlineEpochMs;
             return room;
         }
@@ -311,21 +290,38 @@ public class Room {
     }
 
     /**
-     * Adds a player to the room if they are not already present and the room has capacity.
+     * Adds a player to the room using the system default clock if they are not already present
+     * and the room has capacity.
      *
      * @param playerName the name of the player to add
      * @return the process-local membership ID for the added player
-     * @throws BadRequestException if the player is already in the room
+     * @throws BadRequestException   if the player is already in the room
      * @throws IllegalStateException if the room is full
      */
     public String addPlayer(String playerName) {
+        return addPlayer(playerName, Clock.systemDefaultZone());
+    }
+
+    /**
+     * Adds a player to the room if they are not already present and the room has capacity,
+     * recording their join timestamp from {@code clock}.
+     *
+     * @param playerName the name of the player to add
+     * @param clock      clock used to record the player's join timestamp
+     * @return the process-local membership ID for the added player
+     * @throws BadRequestException   if the player is already in the room
+     * @throws IllegalStateException if the room is full
+     */
+    public String addPlayer(String playerName, Clock clock) {
+        Objects.requireNonNull(clock, "clock must not be null");
         if (playersWithJoinTime.containsKey(playerName)) {
-            throw new BadRequestException(String.format("Cannot add %s to room as they are already in the room", playerName));
+            throw new BadRequestException(
+                    String.format("Cannot add %s to room as they are already in the room", playerName));
         }
         if (isFull()) {
             throw new IllegalStateException("Room is full");
         }
-        playersWithJoinTime.put(playerName, LocalDateTime.now());
+        playersWithJoinTime.put(playerName, LocalDateTime.now(clock));
         String membershipId = UUID.randomUUID().toString();
         playerMembershipIds.put(playerName, membershipId);
         return membershipId;
@@ -335,18 +331,17 @@ public class Room {
      * Removes a player from the room.
      *
      * @param playerName the name of the player to remove
+     * @throws BadRequestException if the player is not currently in the room
      */
     public void removePlayer(String playerName) {
-        if (playersWithJoinTime.containsKey(playerName)) {
-            playersWithJoinTime.remove(playerName);
-            playerMembershipIds.remove(playerName);
-            persistedMembershipPlayers.remove(playerName);
-            playerAbsenceDeadlines.remove(playerName);
-            connectedPlayers.remove(playerName);
-        } else {
+        if (!playersWithJoinTime.containsKey(playerName)) {
             throw new BadRequestException(
-                String.format("Cannot remove %s from room as they are not already in the room", playerName));
+                    String.format("Cannot remove %s from room as they are not already in the room", playerName));
         }
+        playersWithJoinTime.remove(playerName);
+        playerMembershipIds.remove(playerName);
+        playerAbsenceDeadlines.remove(playerName);
+        connectedPlayers.remove(playerName);
     }
 
     /**
@@ -375,55 +370,28 @@ public class Room {
      * @return true if the room has a password hash, false otherwise
      */
     public boolean hasPassword() {
-        return passwordHash != null && !passwordHash.trim().isEmpty();
-    }
-
-    /**
-     * Verifies if the provided raw password matches the room's password hash using constant-time verification.
-     * Returns true for public rooms (no password required).
-     *
-     * @param inputPassword the cleartext password to check
-     * @return true if the password matches or room is public, false otherwise
-     */
-    public boolean checkPassword(String inputPassword) {
-        return checkPassword(inputPassword, DEFAULT_PASSWORD_ENCODER);
+        return passwordHash != null && !passwordHash.isEmpty();
     }
 
     /**
      * Verifies if the provided raw password matches the room's password hash using
-     * constant-time verification provided by PasswordEncoder.
-     * Returns true for public rooms (no password required).
+     * {@code passwordEncoder}. Returns {@code true} for public rooms.
      *
-     * @param rawPassword the cleartext password to check
+     * @param rawPassword     the cleartext password to check
      * @param passwordEncoder the password encoder to use for verification
-     * @return true if password matches or room is public, false otherwise
+     * @return {@code true} if password matches or room is public, {@code false} otherwise
      */
     public boolean checkPassword(String rawPassword, PasswordEncoder passwordEncoder) {
+        Objects.requireNonNull(passwordEncoder, "passwordEncoder must not be null");
         if (!hasPassword()) {
             return true;
         }
         if (rawPassword == null) {
             return false;
         }
-        PasswordEncoder encoder = passwordEncoder != null ? passwordEncoder : DEFAULT_PASSWORD_ENCODER;
-        if (encoder != DEFAULT_PASSWORD_ENCODER || isBcryptHash(passwordHash)) {
-            try {
-                return encoder.matches(rawPassword, passwordHash);
-            } catch (Exception e) {
-                return false;
-            }
-        }
-        return MessageDigest.isEqual(
-                rawPassword.getBytes(StandardCharsets.UTF_8),
-                passwordHash.getBytes(StandardCharsets.UTF_8));
+        return passwordEncoder.matches(rawPassword, passwordHash);
     }
 
-    /**
-     * Returns a string representation of this room including name, ID, host, and
-     * player count, masking any sensitive credentials.
-     *
-     * @return formatted string describing the room with masked password status
-     */
     @Override
     public String toString() {
         String protectedPass = hasPassword() ? "[PROTECTED]" : "none";
@@ -431,12 +399,10 @@ public class Room {
                 + " players [password=" + protectedPass + "]";
     }
 
-    /** @return absolute inactivity deadline, or null when no deadline is set */
     public Long getInactivityDeadlineEpochMs() {
         return inactivityDeadlineEpochMs;
     }
 
-    /** @param deadlineEpochMs persisted absolute inactivity deadline */
     public void setInactivityDeadlineEpochMs(Long deadlineEpochMs) {
         inactivityDeadlineEpochMs = deadlineEpochMs;
     }
@@ -473,29 +439,14 @@ public class Room {
         return deadline != null && deadline == expectedDeadlineMs;
     }
 
-    /**
-     * Returns the unique room identifier.
-     *
-     * @return the room ID
-     */
     public String getRoomId() {
         return roomId;
     }
 
-    /**
-     * Returns the display name of the room.
-     *
-     * @return the room name
-     */
     public String getRoomName() {
         return roomName;
     }
 
-    /**
-     * Returns the name of the player hosting the room.
-     *
-     * @return the host's name
-     */
     public String getHostName() {
         return hostName;
     }
@@ -512,56 +463,26 @@ public class Room {
         this.hostName = hostName;
     }
 
-    /**
-     * Returns the list of player names currently in the room.
-     *
-     * @return the player list
-     */
     public List<String> getPlayers() {
         return new ArrayList<>(playersWithJoinTime.keySet());
     }
 
-    /**
-     * Returns the maximum number of players allowed in the room.
-     *
-     * @return the maximum player count
-     */
     public int getMaxPlayers() {
         return maxPlayers;
     }
 
-    /**
-     * Returns the small blind amount for this room.
-     *
-     * @return the small blind value
-     */
     public int getSmallBlind() {
         return smallBlind;
     }
 
-    /**
-     * Returns the big blind amount for this room.
-     *
-     * @return the big blind value
-     */
     public int getBigBlind() {
         return bigBlind;
     }
 
-    /**
-     * Returns the buy-in amount required to join the game.
-     *
-     * @return the buy-in value
-     */
     public int getBuyIn() {
         return buyIn;
     }
 
-    /**
-     * Returns the timestamp when the room was created.
-     *
-     * @return the creation time
-     */
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
@@ -587,32 +508,23 @@ public class Room {
     }
 
     /**
-     * Checks whether the player's membership ID was explicitly populated from a persisted snapshot.
-     *
-     * @param playerName the name of the player
-     * @return true if restored from a persisted membership ID, false otherwise
-     */
-    public boolean hasPersistedMembershipId(String playerName) {
-        return persistedMembershipPlayers.contains(playerName);
-    }
-
-    /**
      * Updates the membership ID for an existing player in the room.
      *
-     * @param playerName the name of the player
+     * @param playerName   the name of the player
      * @param membershipId the membership ID to assign
+     * @throws IllegalStateException    if {@code playerName} is not a member of the room
+     * @throws IllegalArgumentException if {@code membershipId} is null or blank
      */
     public void setMembershipId(String playerName, String membershipId) {
-        if (hasPlayer(playerName) && membershipId != null && !membershipId.isBlank()) {
-            playerMembershipIds.put(playerName, membershipId);
+        if (!hasPlayer(playerName)) {
+            throw new IllegalStateException("Cannot set membership ID for non-member: " + playerName);
         }
+        if (membershipId == null || membershipId.isBlank()) {
+            throw new IllegalArgumentException("membershipId must not be blank");
+        }
+        playerMembershipIds.put(playerName, membershipId);
     }
 
-    /**
-     * Returns the hashed password for private rooms.
-     *
-     * @return room password hash, or {@code null} for a public room
-     */
     public String getPasswordHash() {
         return passwordHash;
     }
@@ -636,18 +548,18 @@ public class Room {
     }
 
     /**
-     * Checks if this room is in a terminal post-game state.
+     * Checks if gameplay in this room has ended and the room is retained for post-game review.
      *
-     * @return true if game is terminal
+     * @return {@code true} if gameplay in this room has ended
      */
     public boolean isTerminal() {
         return isTerminal;
     }
 
     /**
-     * Marks this room as a terminal post-game persistence container.
+     * Marks whether gameplay in this room has ended and the room is retained for post-game review.
      *
-     * @param terminal whether the room is in post-game review
+     * @param terminal {@code true} if gameplay has ended
      */
     public void setTerminal(boolean terminal) {
         this.isTerminal = terminal;
@@ -660,7 +572,7 @@ public class Room {
      * @return membership ID, or null if player is not in room
      */
     public String getMembershipId(String playerName) {
-        return playerName == null ? null : playerMembershipIds.get(playerName);
+        return playerMembershipIds.get(playerName);
     }
 
     /**

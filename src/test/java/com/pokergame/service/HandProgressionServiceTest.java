@@ -381,10 +381,8 @@ class HandProgressionServiceTest {
                         new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
                         new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.DIAMONDS),
                         new Card(Rank.THREE, Suit.CLUBS)));
-                winner.getHoleCards().clear();
-                winner.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
-                loser.getHoleCards().clear();
-                loser.getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
+                winner.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+                loser.setHoleCards(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
                 assertFalse(delayedProgression.applyAutoAdvanceTimeout(riverTournamentOver));
             }
             assertTrue(riverTournamentOver.isGameDecided());

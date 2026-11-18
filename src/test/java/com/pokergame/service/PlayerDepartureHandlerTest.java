@@ -198,7 +198,7 @@ class PlayerDepartureHandlerTest {
         if (delta > 0) {
             player.addChips(delta);
         } else if (delta < 0) {
-            player.payChips(0, -delta);
+            player.doAction(PlayerAction.BET, -delta);
         }
     }
 

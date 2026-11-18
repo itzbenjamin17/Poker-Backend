@@ -89,6 +89,7 @@ class RoomServiceTest {
     private TaskScheduler taskScheduler;
 
     private MutableClock clock;
+    private PasswordEncoder passwordEncoder;
     private RoomCoordinator roomCoordinator;
     private RoomService roomService;
     /** Stands in for the Spring proxy that the lobby timer uses for the durable close. */
@@ -99,8 +100,9 @@ class RoomServiceTest {
     @BeforeEach
     void setUp() {
         clock = new MutableClock(1_900_000_000_000L);
+        passwordEncoder = new BCryptPasswordEncoder();
         roomCoordinator = new RoomCoordinator();
-        roomService = newService(eventPublisher, new BCryptPasswordEncoder(), roomCoordinator);
+        roomService = newService(eventPublisher, passwordEncoder, roomCoordinator);
         validCreateRequest = new CreateRoomRequest("Test Room", "HostPlayer", 6, 5, 10, 100, null);
     }
 
@@ -234,8 +236,8 @@ class RoomServiceTest {
             assertThat(room).isNotNull();
             assertThat(room.hasPassword()).isTrue();
             assertThat(room.getPasswordHash()).startsWith("$2");
-            assertThat(room.checkPassword("secret123")).isTrue();
-            assertThat(room.checkPassword("wrongpassword")).isFalse();
+            assertThat(room.checkPassword("secret123", passwordEncoder)).isTrue();
+            assertThat(room.checkPassword("wrongpassword", passwordEncoder)).isFalse();
         }
 
         @Test
@@ -299,8 +301,8 @@ class RoomServiceTest {
             Room room = coordinatedGetRoom(roomId);
             assertThat(room.hasPassword()).isTrue();
             assertThat(room.getPasswordHash()).startsWith("$2");
-            assertThat(room.checkPassword("  secret123  ")).isTrue();
-            assertThat(room.checkPassword("secret123")).isFalse();
+            assertThat(room.checkPassword("  secret123  ", passwordEncoder)).isTrue();
+            assertThat(room.checkPassword("secret123", passwordEncoder)).isFalse();
 
             joinByName(roomService, new JoinRoomRequest("Spaced Pass Room", "NewPlayer", "  secret123  "));
             assertThat(room.getPlayers()).contains("NewPlayer");

@@ -36,9 +36,9 @@ class GameRestoreBuilderTest {
     @DisplayName("restoreAll36Fields_EveryPropertyFaithfullyRestored: asserts all 36 fields")
     void restoreAll36Fields_EveryPropertyFaithfullyRestored() {
         Player p1 = player("p1", "Alice", 1000);
-        p1.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+        p1.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
         Player p2 = player("p2", "Bob", 800);
-        p2.getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.CLUBS)));
+        p2.setHoleCards(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.CLUBS)));
         Player p3 = player("p3", "Charlie", 600);
         List<Player> allPlayers = List.of(p1, p2, p3);
         List<String> activeIds = List.of("p1", "p2");
@@ -170,9 +170,9 @@ class GameRestoreBuilderTest {
     @DisplayName("A restored hand with no settlement yet evaluates its contenders' hands at showdown")
     void restoredHandWithoutSettlement_ConductShowdownEvaluatesHands() {
         Player p1 = player("p1", "Alice", 1000);
-        p1.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+        p1.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
         Player p2 = player("p2", "Bob", 800);
-        p2.getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.CLUBS)));
+        p2.setHoleCards(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.CLUBS)));
         Game game = Game.restoreBuilder().gameId(GAME_ID).players(List.of(p1, p2))
                 .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of())
                 .communityCards(List.of(new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),

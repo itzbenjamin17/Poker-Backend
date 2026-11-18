@@ -2,22 +2,19 @@ package com.pokergame.model;
 
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
-import com.pokergame.exception.UnauthorisedActionException;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Represents a poker player with hole cards, chips, and betting capabilities.
- * Manages player state including folding, all-in status, and current bets.
+ * Represents a poker player with hole cards, chips, and betting state.
  *
  * <p>
- * <b>WARNING:</b> This class performs basic state and accounting validation
- * but does not enforce Poker game rules. Use PlayerActionService for
- * rule-validated actions.
+ * <b>WARNING:</b> This class performs basic state and chip-accounting validation
+ * but does not enforce poker betting rules. Use {@link BettingRound} and {@link Game}
+ * for rule-validated actions.
  * </p>
- *
  */
 public class Player {
     private final String name;
@@ -37,12 +34,39 @@ public class Player {
     /**
      * Creates a new player with the specified name and starting chip count.
      *
-     * @param name the player's name
+     * @param name     the player's name
      * @param playerId stable player identity
-     * @param chips the starting number of chips for the player
+     * @param chips    the starting number of chips for the player
      * @throws IllegalStateException if {@code name}, {@code playerId}, or {@code chips} is invalid
      */
     public Player(String name, String playerId, int chips) {
+        validateIdentityAndChips(name, playerId, chips);
+        this.name = name;
+        this.playerId = playerId;
+        this.chips = chips;
+        this.holeCards = new ArrayList<>();
+        this.bestHand = new ArrayList<>();
+        this.handRank = HandRank.NO_HAND;
+    }
+
+    private Player(PlayerRestoreBuilder builder) {
+        validateIdentityAndChips(builder.name, builder.playerId, builder.chips);
+        this.name = builder.name;
+        this.playerId = builder.playerId;
+        this.chips = builder.chips;
+        this.holeCards = builder.holeCards != null ? new ArrayList<>(builder.holeCards) : new ArrayList<>();
+        this.bestHand = builder.bestHand != null ? new ArrayList<>(builder.bestHand) : new ArrayList<>();
+        this.handRank = builder.handRank != null ? builder.handRank : HandRank.NO_HAND;
+        this.currentBet = builder.currentBet;
+        this.hasFolded = builder.hasFolded;
+        this.isAllIn = builder.allIn;
+        this.isOut = builder.out;
+        this.isDisconnected = builder.disconnected;
+        this.disconnectDeadlineEpochMs = builder.disconnectDeadlineEpochMs;
+        this.isReadyForNextHand = builder.readyForNextHand;
+    }
+
+    private static void validateIdentityAndChips(String name, String playerId, int chips) {
         if (name == null || name.trim().isEmpty()) {
             throw new IllegalStateException("Player name required");
         }
@@ -52,20 +76,6 @@ public class Player {
         if (playerId == null || playerId.trim().isEmpty()) {
             throw new IllegalStateException("Player ID cannot be empty");
         }
-
-        this.name = name;
-        this.playerId = playerId;
-        this.chips = chips;
-        this.holeCards = new ArrayList<>();
-        this.bestHand = new ArrayList<>();
-        this.currentBet = 0;
-        this.handRank = HandRank.NO_HAND;
-        this.hasFolded = false;
-        this.isAllIn = false;
-        this.isOut = false;
-        this.isDisconnected = false;
-        this.disconnectDeadlineEpochMs = null;
-        this.isReadyForNextHand = false;
     }
 
     /**
@@ -161,18 +171,7 @@ public class Player {
         }
 
         public Player build() {
-            Player player = new Player(name, playerId, chips);
-            player.holeCards = new ArrayList<>(holeCards);
-            player.bestHand = new ArrayList<>(bestHand);
-            player.handRank = handRank;
-            player.currentBet = currentBet;
-            player.hasFolded = hasFolded;
-            player.isAllIn = allIn;
-            player.isOut = out;
-            player.isDisconnected = disconnected;
-            player.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
-            player.isReadyForNextHand = readyForNextHand;
-            return player;
+            return new Player(this);
         }
     }
 
@@ -197,59 +196,42 @@ public class Player {
         this.currentBet = 0;
     }
 
-    private int goAllIn(int pot) {
+    private int goAllIn() {
+        int committed = chips;
         isAllIn = true;
-        pot += chips;
-        currentBet += chips;
+        currentBet += committed;
         chips = 0;
-        return pot;
+        return committed;
     }
 
     /**
-     * Executes a player action and returns the updated pot value.
+     * Executes a player action and returns the chips committed by this action.
      *
      * <p>
      * <b>IMPORTANT:</b> The caller is responsible for calculating the correct
      * amount needed for betting actions (BET, RAISE, CALL). This method does NOT
      * validate or calculate bet amounts - it uses the provided amount directly.
      * </p>
-     * 
-     * @param action the poker action to perform (FOLD, CHECK, CALL, BET, RAISE,
-     *               ALL_IN)
-     * @param amount the chip amount for betting actions (ignored for FOLD, CHECK,
-     *               ALL_IN)
-     * @param pot    the current pot value
-     * @return the updated pot value after the action
-     * @throws UnauthorisedActionException if the action is not recognised
+     *
+     * @param action the poker action to perform (FOLD, CHECK, CALL, BET, RAISE, ALL_IN)
+     * @param amount the chip amount for betting actions (ignored for FOLD, CHECK, ALL_IN)
+     * @return the number of chips committed to the pot
+     * @throws IllegalStateException if a betting amount is negative or exceeds available chips
      */
-    public int doAction(PlayerAction action, int amount, int pot) {
-        switch (action) {
-            case RAISE, BET, CALL -> {
-                return payChips(pot, amount);
-            }
-            case ALL_IN -> {
-                return goAllIn(pot);
-            }
+    public int doAction(PlayerAction action, int amount) {
+        Objects.requireNonNull(action, "action must not be null");
+        return switch (action) {
+            case RAISE, BET, CALL -> payChips(amount);
+            case ALL_IN -> goAllIn();
             case FOLD -> {
                 hasFolded = true;
-                return pot;
+                yield 0;
             }
-            case CHECK -> {
-                return pot;
-            }
-            default -> throw new UnauthorisedActionException("Invalid action requested. Please try again.");
-        }
+            case CHECK -> 0;
+        };
     }
 
-    /**
-     * Moves chips from player to pot and updates the current bet.
-     *
-     * @param pot    the current pot value
-     * @param amount the amount of chips to pay
-     * @return the updated pot value
-     * @throws IllegalStateException if {@code amount} is negative or exceeds available chips
-     */
-    public int payChips(int pot, int amount) {
+    private int payChips(int amount) {
         if (amount < 0) {
             throw new IllegalStateException("Chip amount cannot be negative");
         }
@@ -263,78 +245,52 @@ public class Player {
             this.isAllIn = true;
         }
         this.currentBet += amount;
-        pot += amount;
-        return pot;
+        return amount;
     }
 
     /**
-     * Adds the amount (most likely from the pot) and adds it to the player's chips
-     * 
-     * @param amount the amount to add to the chips
+     * Adds {@code amount} chips to this player's stack.
+     *
+     * @param amount the chips to add
      */
     public void addChips(int amount) {
         this.chips += amount;
     }
 
-    /**
-     * Returns the player's hole cards.
-     *
-     * @return the player's hole card list
-     */
     public List<Card> getHoleCards() {
-        return holeCards;
+        return List.copyOf(holeCards);
     }
 
     /**
-     * Returns the player's current bet in this round.
+     * Replaces the player's hole cards with a defensive copy of {@code cards}.
      *
-     * @return the current bet amount
+     * @param cards the dealt hole cards
      */
+    public void setHoleCards(List<Card> cards) {
+        Objects.requireNonNull(cards, "cards must not be null");
+        this.holeCards = new ArrayList<>(cards);
+    }
+
     public int getCurrentBet() {
         return currentBet;
     }
 
-    /**
-     * Returns the number of chips the player has remaining.
-     *
-     * @return the chip count
-     */
     public int getChips() {
         return chips;
     }
 
-    /**
-     * Returns the player's name.
-     *
-     * @return the player's name
-     */
     public String getName() {
         return name;
     }
 
-    /**
-     * Returns whether the player has folded in the current hand.
-     *
-     * @return true if the player has folded, false otherwise
-     */
     public boolean getHasFolded() {
         return hasFolded;
     }
 
-    /**
-     * Returns whether the player is all-in.
-     *
-     * @return true if the player is all-in, false otherwise
-     */
     public boolean getIsAllIn() {
         return isAllIn;
     }
 
-    /**
-     * Returns whether the player is out of the game (no chips).
-     *
-     * @return true if the player is out, false otherwise
-     */
     public boolean getIsOut() {
         return isOut;
     }
@@ -357,96 +313,46 @@ public class Player {
         return isInHand() && !isAllIn;
     }
 
-    /**
-     * Returns whether the player is currently disconnected and waiting to
-     * reconnect.
-     *
-     * @return true if disconnected, false otherwise
-     */
     public boolean getIsDisconnected() {
         return isDisconnected;
     }
 
-    /**
-     * Returns the UTC epoch milliseconds when disconnect grace expires.
-     *
-     * @return disconnect deadline in epoch milliseconds, or null if not
-     *         disconnected
-     */
     public Long getDisconnectDeadlineEpochMs() {
         return disconnectDeadlineEpochMs;
     }
 
-    /**
-     * Returns whether the player has confirmed readiness for the next hand.
-     *
-     * @return true if ready, false otherwise
-     */
     public boolean getIsReadyForNextHand() {
         return isReadyForNextHand;
     }
 
     /**
-     * Sets the player to be out, should only be used when the player has no chips
-     *
+     * Marks the player as out of the game, such as when eliminated with zero chips
+     * or after forfeiting on departure.
      */
     public void setIsOut() {
         this.isOut = true;
     }
 
-    /**
-     * Marks whether this player is disconnected from the current game session.
-     *
-     * @param disconnected true if disconnected, false if reconnected
-     */
     public void setDisconnected(boolean disconnected) {
         this.isDisconnected = disconnected;
     }
 
-    /**
-     * Sets the UTC epoch milliseconds when this player's disconnect grace ends.
-     *
-     * @param disconnectDeadlineEpochMs deadline timestamp, or null when connected
-     */
     public void setDisconnectDeadlineEpochMs(Long disconnectDeadlineEpochMs) {
         this.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
     }
 
-    /**
-     * Sets whether this player is ready to continue to the next hand.
-     *
-     * @param readyForNextHand true if ready, false otherwise
-     */
     public void setReadyForNextHand(boolean readyForNextHand) {
         this.isReadyForNextHand = readyForNextHand;
     }
 
-    /**
-     * Returns the player's best five-card poker hand.
-     *
-     * @return list of cards representing the best hand
-     */
     public List<Card> getBestHand() {
-        return bestHand;
+        return List.copyOf(bestHand);
     }
 
-    /**
-     * Returns the player's ID
-     *
-     * @return returns the player's ID
-     */
     public String getPlayerId() {
         return playerId;
     }
 
-    /**
-     * Returns the poker hand ranking for this player's best hand.
-     * Rankings from strongest to weakest: ROYAL_FLUSH, STRAIGHT_FLUSH,
-     * FOUR_OF_A_KIND, FULL_HOUSE, FLUSH, STRAIGHT, THREE_OF_A_KIND,
-     * TWO_PAIR, ONE_PAIR, HIGH_CARD.
-     *
-     * @return the HandRank enum representing the player's best hand
-     */
     public HandRank getHandRank() {
         return handRank;
     }
@@ -455,10 +361,10 @@ public class Player {
      * Stores evaluated cards separately from hole cards so showdown results can be
      * rendered without recomputing against a later board state.
      *
-     * @param cards evaluated best five-card hand
+     * @param cards evaluated best five-card hand, or {@code null} for empty
      */
     public void setBestHand(List<Card> cards) {
-        bestHand = cards;
+        this.bestHand = cards != null ? new ArrayList<>(cards) : new ArrayList<>();
     }
 
     /**

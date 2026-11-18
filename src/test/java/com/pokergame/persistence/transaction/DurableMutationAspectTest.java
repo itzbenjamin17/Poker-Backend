@@ -1,6 +1,7 @@
 package com.pokergame.persistence.transaction;
 
 import com.pokergame.config.RoomTimingProperties;
+import com.pokergame.enums.PlayerAction;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.RoomAggregate;
 import com.pokergame.persistence.RoomAggregates;
@@ -487,7 +488,7 @@ class DurableMutationAspectTest {
 
         ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
             // Simulate dirty uncommitted mutation before throwing
-            bob.payChips(0, 500);
+            bob.doAction(PlayerAction.BET, 500);
             throw new RuntimeException("Simulated domain action failure");
         });
 

@@ -37,6 +37,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.TaskScheduler;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Clock;
@@ -76,12 +77,15 @@ import java.io.UncheckedIOException;
 @Tag("unit")
 class AggregateSnapshotMapperTest {
 
+    private static final PasswordEncoder PASSWORD_ENCODER = new BCryptPasswordEncoder();
+
     /**
      * Protects the contract that active game round trip preserves exact next cards and authoritative state.
      */
     @Test
     void activeGameRoundTripPreservesExactNextCardsAndAuthoritativeState() {
-        Room room = new Room("room-1", "Night Game", "Alice", 6, 5, 10, 1000, "secret");
+        Room room = new Room("room-1", "Night Game", "Alice", 6, 5, 10, 1000,
+                PASSWORD_ENCODER.encode("secret"));
         room.addPlayer("Alice");
         room.addPlayer("Bob");
         room.setGameStarted(true);
@@ -98,7 +102,7 @@ class AggregateSnapshotMapperTest {
 
         assertEquals(room.getRoomName(), recovered.room().getRoomName());
         assertEquals(room.getHostName(), recovered.room().getHostName());
-        assertTrue(recovered.room().checkPassword("secret"));
+        assertTrue(recovered.room().checkPassword("secret", PASSWORD_ENCODER));
         assertEquals(game.getPot(), recovered.game().getPot());
         assertEquals(game.getCurrentPlayer().getPlayerId(), recovered.game().getCurrentPlayer().getPlayerId());
         assertEquals(game.getPlayers().getFirst().getHoleCards(),
@@ -136,7 +140,8 @@ class AggregateSnapshotMapperTest {
 
     @Test
     void settlementAndTerminalRoundTripPreservesState() {
-        Room room = new Room("room-2", "Recovery", "Alice", 4, 5, 10, 1000, "secret");
+        Room room = new Room("room-2", "Recovery", "Alice", 4, 5, 10, 1000,
+                PASSWORD_ENCODER.encode("secret"));
         room.addPlayer("Alice");
         room.addPlayer("Bob");
         room.setGameStarted(true);
@@ -415,7 +420,7 @@ class AggregateSnapshotMapperTest {
         assertNotNull(jsonBytes);
 
         // Mutating live game after capture does not alter captured image or serialization
-        p1.payChips(0, 500);
+        p1.doAction(PlayerAction.BET, 500);
         RecoveredAggregate recovered = mapper.deserialize(jsonBytes);
         assertEquals(1000, recovered.game().getPlayers().get(0).getChips(),
                 "Captured snapshot must be independent from post-capture live game mutations");
@@ -441,7 +446,7 @@ class AggregateSnapshotMapperTest {
         try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
             Future<byte[]> capture;
             try (LockLease _ = coordinator.acquire(roomId)) {
-                alice.payChips(0, 10);
+                alice.doAction(PlayerAction.BET, 10);
                 capture = executor.submit(() -> {
                     try (LockLease _ = coordinator.acquire(roomId)) {
                         return mapper.serialize(mapper.captureStateImage(room, game));
@@ -487,7 +492,8 @@ class AggregateSnapshotMapperTest {
                 JsonMapper.builder().findAndAddModules().build());
 
         String rawSecret = "VerySecretPassphrase123!";
-        Room room = new Room("pw-room", "Protected Room", "Host", 4, 10, 20, 500, rawSecret);
+        Room room = new Room("pw-room", "Protected Room", "Host", 4, 10, 20, 500,
+                PASSWORD_ENCODER.encode(rawSecret));
         room.addPlayer("Host");
 
         byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, null));
@@ -508,8 +514,8 @@ class AggregateSnapshotMapperTest {
         // Verifications on restored room
         assertTrue(restoredRoom.hasPassword());
         assertEquals(room.getPasswordHash(), restoredRoom.getPasswordHash(), "restored Room must have exact passwordHash preserved");
-        assertTrue(restoredRoom.checkPassword(rawSecret), "restored Room must match raw password against restored passwordHash");
-        assertFalse(restoredRoom.checkPassword("WrongPass"), "restored Room must reject invalid password");
+        assertTrue(restoredRoom.checkPassword(rawSecret, PASSWORD_ENCODER), "restored Room must match raw password against restored passwordHash");
+        assertFalse(restoredRoom.checkPassword("WrongPass", PASSWORD_ENCODER), "restored Room must reject invalid password");
     }
 
     @Test
@@ -528,8 +534,8 @@ class AggregateSnapshotMapperTest {
         Room restored = recovered.room();
         assertFalse(restored.hasPassword());
         assertNull(restored.getPasswordHash());
-        assertTrue(restored.checkPassword("any"));
-        assertTrue(restored.checkPassword(null));
+        assertTrue(restored.checkPassword("any", PASSWORD_ENCODER));
+        assertTrue(restored.checkPassword(null, PASSWORD_ENCODER));
     }
 
     @Test
@@ -762,7 +768,7 @@ class AggregateSnapshotMapperTest {
     private static AggregateStateImage.RoomState roomState(String roomId, int maxPlayers, int smallBlind,
             int bigBlind, int buyIn) {
         return new AggregateStateImage.RoomState(roomId, "Room", "Host", maxPlayers, smallBlind, bigBlind, buyIn,
-                null, null, Map.of(), Map.of(), false, null);
+                null, LocalDateTime.of(2024, 1, 1, 12, 0), Map.of(), Map.of(), false, null);
     }
 
     private static AggregateStateImage lobbyImage(AggregateStateImage.RoomState room) {
@@ -850,7 +856,7 @@ class AggregateSnapshotMapperTest {
     @DisplayName("restoreStateImage reconciles the host against actual room membership")
     void restoreStateImage_HostReconciliation_FallsBackThroughMembership(String name, String hostName, Map<String, LocalDateTime> members, String expectedHost) {
         AggregateStateImage.RoomState room = new AggregateStateImage.RoomState("r", "Room", hostName, 6, 5, 10,
-                100, null, null, members, Map.of(), false, null);
+                100, null, LocalDateTime.of(2024, 1, 1, 12, 0), members, Map.of(), false, null);
         AggregateStateImage image = new AggregateStateImage(false, room, null);
 
         RecoveredAggregate recovered = newMapper().restoreStateImage(image);
@@ -898,7 +904,7 @@ class AggregateSnapshotMapperTest {
         AggregateSnapshotMapper mapper = newMapper();
 
         Room restored = mapper.restoreRoom(new AggregateStateImage.RoomState("r", "Room", "Host", 6, 5, 10, 100,
-                null, null, null, Map.of(), false, null));
+                null, LocalDateTime.of(2024, 1, 1, 12, 0), null, Map.of(), false, null));
         assertEquals("r", restored.getRoomId());
         assertTrue(restored.getPlayersWithJoinTimeSnapshot().isEmpty());
 
@@ -927,7 +933,8 @@ class AggregateSnapshotMapperTest {
         }
 
         private Room createRoom(String roomId, List<Player> players) {
-            Room room = new Room(roomId, "Empirical Table", players.getFirst().getName(), 6, 10, 20, 1000, "secret-pass");
+            Room room = new Room(roomId, "Empirical Table", players.getFirst().getName(), 6, 10, 20, 1000,
+                    PASSWORD_ENCODER.encode("secret-pass"));
             for (Player p : players) {
                 room.addPlayer(p.getName());
             }

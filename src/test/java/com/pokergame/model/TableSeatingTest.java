@@ -267,8 +267,8 @@ class TableSeatingTest {
         @Test
         void moveToFirstPostFlopActor_SelectsClockwiseAfterDealerAnchorEvenIfDealerOrSbDeparted() {
             List<Player> all = createPlayerList(4);
-            all.get(1).doAction(PlayerAction.FOLD, 0, 0);
-            all.get(2).doAction(PlayerAction.ALL_IN, 0, 0);
+            all.get(1).doAction(PlayerAction.FOLD, 0);
+            all.get(2).doAction(PlayerAction.ALL_IN, 0);
 
             TableSeating standard = new TableSeating(
                     seatOrderOf(all), "p0", "p1", "p2", "p3", all);
@@ -293,7 +293,7 @@ class TableSeatingTest {
         @Test
         void moveToFirstPostFlopActor_FallbackPrefersFirstActionableOverGetFirst() {
             List<Player> active = createPlayerList(3);
-            active.get(0).doAction(PlayerAction.FOLD, 0, 0);
+            active.get(0).doAction(PlayerAction.FOLD, 0);
             TableSeating disjoint = new TableSeating(
                     List.of("x1", "x2"), "missing", null, null, "p0", active);
 
@@ -308,8 +308,8 @@ class TableSeatingTest {
         @Test
         void nextPlayer_SkipsFoldedAllInWrapsAndHandlesAllNonActionable() {
             List<Player> players = createPlayerList(4);
-            players.get(1).doAction(PlayerAction.FOLD, 0, 0);
-            players.get(2).doAction(PlayerAction.ALL_IN, 0, 0);
+            players.get(1).doAction(PlayerAction.FOLD, 0);
+            players.get(2).doAction(PlayerAction.ALL_IN, 0);
             TableSeating seating = new TableSeating(
                     seatOrderOf(players), "p0", "p1", "p2", "p0", players);
 
@@ -319,11 +319,11 @@ class TableSeatingTest {
             seating.nextPlayer(players);
             assertEquals("p0", seating.getCurrentPlayerId());
 
-            players.get(3).doAction(PlayerAction.FOLD, 0, 0);
+            players.get(3).doAction(PlayerAction.FOLD, 0);
             seating.nextPlayer(players);
             assertEquals("p0", seating.getCurrentPlayerId());
 
-            players.get(0).doAction(PlayerAction.FOLD, 0, 0);
+            players.get(0).doAction(PlayerAction.FOLD, 0);
             seating.nextPlayer(players);
             assertEquals("p0", seating.getCurrentPlayerId());
         }
@@ -356,7 +356,7 @@ class TableSeatingTest {
             assertEquals("p0", tailDeparted.getCurrentPlayerId());
 
             List<Player> midDepartedActive = new ArrayList<>(List.of(all.get(0), all.get(2), all.get(3)));
-            midDepartedActive.get(1).doAction(PlayerAction.FOLD, 0, 0);
+            midDepartedActive.get(1).doAction(PlayerAction.FOLD, 0);
             TableSeating midDeparted = new TableSeating(
                     seatOrderOf(all), "p0", null, null, "p1", all);
 
@@ -374,7 +374,7 @@ class TableSeatingTest {
             nullCur.nextPlayer(active);
             assertEquals("p0", nullCur.getCurrentPlayerId());
 
-            active.get(0).doAction(PlayerAction.FOLD, 0, 0);
+            active.get(0).doAction(PlayerAction.FOLD, 0);
             TableSeating foldedSeatZero = new TableSeating(
                     seatOrderOf(active), "p0", null, null, "unknown", active);
             foldedSeatZero.nextPlayer(active);
@@ -397,7 +397,7 @@ class TableSeatingTest {
             assertEquals("p2", seating.getCurrentPlayer(active).getPlayerId());
             assertEquals("p1", seating.getDealerPlayerId());
 
-            all.get(3).doAction(PlayerAction.FOLD, 0, 0);
+            all.get(3).doAction(PlayerAction.FOLD, 0);
             removeFromTable(table, active, seating, all.get(2));
             assertEquals("p1", seating.getCurrentPlayer(active).getPlayerId());
             assertEquals("p2", seating.getSmallBlindPlayerId(active));
@@ -603,9 +603,9 @@ class TableSeatingTest {
                         temp /= 3;
                         Player p = createPlayer("p" + i, "Player_" + i, mode == 2 ? 0 : 1000);
                         if (mode == 1) {
-                            p.doAction(PlayerAction.FOLD, 0, 0);
+                            p.doAction(PlayerAction.FOLD, 0);
                         } else if (mode == 2) {
-                            p.doAction(PlayerAction.ALL_IN, 0, 0);
+                            p.doAction(PlayerAction.ALL_IN, 0);
                         } else {
                             actionable[i] = true;
                         }

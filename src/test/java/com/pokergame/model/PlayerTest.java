@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
@@ -92,100 +93,95 @@ class PlayerTest {
 
     @Test
     void testFoldAction() {
-        int pot = 100;
-        int newPot = player.doAction(PlayerAction.FOLD, 0, pot);
+        int committed = player.doAction(PlayerAction.FOLD, 0);
 
-        assertEquals(100, newPot, "Pot should not change on fold");
+        assertEquals(0, committed, "Fold should commit 0 chips");
         assertTrue(player.getHasFolded());
         assertEquals(1000, player.getChips(), "Chips should not change on fold");
     }
 
     @Test
     void testCheckAction() {
-        int pot = 100;
-        int newPot = player.doAction(PlayerAction.CHECK, 0, pot);
+        int committed = player.doAction(PlayerAction.CHECK, 0);
 
-        assertEquals(100, newPot, "Pot should not change on check");
+        assertEquals(0, committed, "Check should commit 0 chips");
         assertEquals(1000, player.getChips(), "Chips should not change on check");
         assertEquals(0, player.getCurrentBet());
     }
 
     @Test
     void testBetAction() {
-        int pot = 100;
         int betAmount = 50;
-        int newPot = player.doAction(PlayerAction.BET, betAmount, pot);
+        int committed = player.doAction(PlayerAction.BET, betAmount);
 
-        assertEquals(150, newPot, "Pot should increase by bet amount");
+        assertEquals(betAmount, committed, "Committed chips should equal bet amount");
         assertEquals(950, player.getChips(), "Chips should decrease by bet amount");
         assertEquals(50, player.getCurrentBet());
     }
 
     @Test
     void testCallAction() {
-        int pot = 100;
         int callAmount = 50;
-        int newPot = player.doAction(PlayerAction.CALL, callAmount, pot);
+        int committed = player.doAction(PlayerAction.CALL, callAmount);
 
-        assertEquals(150, newPot);
+        assertEquals(callAmount, committed);
         assertEquals(950, player.getChips());
         assertEquals(50, player.getCurrentBet());
     }
 
     @Test
     void testRaiseAction() {
-        int pot = 100;
         int raiseAmount = 100;
-        int newPot = player.doAction(PlayerAction.RAISE, raiseAmount, pot);
+        int committed = player.doAction(PlayerAction.RAISE, raiseAmount);
 
-        assertEquals(200, newPot);
+        assertEquals(raiseAmount, committed);
         assertEquals(900, player.getChips());
         assertEquals(100, player.getCurrentBet());
     }
 
     @Test
     void testAllInAction() {
-        int pot = 100;
-        int newPot = player.doAction(PlayerAction.ALL_IN, 0, pot);
+        int committed = player.doAction(PlayerAction.ALL_IN, 0);
 
-        assertEquals(1100, newPot, "All chips should go to pot");
+        assertEquals(1000, committed, "All chips should be committed");
         assertEquals(0, player.getChips(), "Player should have no chips left");
         assertTrue(player.getIsAllIn());
         assertEquals(1000, player.getCurrentBet());
     }
 
     @Test
-    void testPayChips() {
-        int pot = 100;
-        int newPot = player.payChips(pot, 250);
+    void testBetCommitsExactAmount() {
+        int committed = player.doAction(PlayerAction.BET, 250);
 
-        assertEquals(350, newPot);
+        assertEquals(250, committed);
         assertEquals(750, player.getChips());
         assertEquals(250, player.getCurrentBet());
     }
 
     @Test
-    void testPayChipsMarksAllInWhenStackReachesZero() {
+    void testBetMarksAllInWhenStackReachesZero() {
         Player shortStack = new Player("Short", "short-1", 50);
-        int newPot = shortStack.payChips(100, 50);
+        int committed = shortStack.doAction(PlayerAction.BET, 50);
 
-        assertEquals(150, newPot);
+        assertEquals(50, committed);
         assertEquals(0, shortStack.getChips());
         assertTrue(shortStack.getIsAllIn());
         assertEquals(50, shortStack.getCurrentBet());
     }
 
     @Test
-    void testPayChipsRejectsNegativeAndInsufficientAmounts() {
+    void testDoActionRejectsNegativeAndInsufficientAmounts() {
         IllegalStateException negative = assertThrows(
                 IllegalStateException.class,
-                () -> player.payChips(100, -1));
+                () -> player.doAction(PlayerAction.BET, -1));
         assertEquals("Chip amount cannot be negative", negative.getMessage());
 
         IllegalStateException insufficient = assertThrows(
                 IllegalStateException.class,
-                () -> player.payChips(100, 1001));
+                () -> player.doAction(PlayerAction.BET, 1001));
         assertEquals("Insufficient chips for this action", insufficient.getMessage());
+
+        assertThrows(NullPointerException.class, () -> player.doAction(null, 0));
     }
 
     @Test
@@ -199,8 +195,8 @@ class PlayerTest {
 
     @Test
     void testResetAttributes() {
-        player.doAction(PlayerAction.BET, 100, 0);
-        player.doAction(PlayerAction.FOLD, 0, 0);
+        player.doAction(PlayerAction.BET, 100);
+        player.doAction(PlayerAction.FOLD, 0);
         player.setHandRank(HandRank.FLUSH);
         player.setBestHand(List.of(new Card(Rank.ACE, Suit.SPADES)));
 
@@ -216,7 +212,7 @@ class PlayerTest {
 
     @Test
     void testResetCurrentBet() {
-        player.doAction(PlayerAction.BET, 100, 0);
+        player.doAction(PlayerAction.BET, 100);
         assertEquals(100, player.getCurrentBet());
 
         player.resetCurrentBet();
@@ -253,10 +249,10 @@ class PlayerTest {
 
     @Test
     void testMultipleBetsIncrementCurrentBet() {
-        player.doAction(PlayerAction.BET, 100, 0);
+        player.doAction(PlayerAction.BET, 100);
         assertEquals(100, player.getCurrentBet());
 
-        player.doAction(PlayerAction.RAISE, 200, 0);
+        player.doAction(PlayerAction.RAISE, 200);
         assertEquals(300, player.getCurrentBet());
         assertEquals(700, player.getChips());
     }
@@ -265,11 +261,11 @@ class PlayerTest {
     void testPlayerStatePersistsAcrossActions() {
         int pot = 0;
 
-        pot = player.doAction(PlayerAction.BET, 100, pot);
+        pot += player.doAction(PlayerAction.BET, 100);
         assertEquals(100, pot);
         assertEquals(900, player.getChips());
 
-        pot = player.doAction(PlayerAction.RAISE, 200, pot);
+        pot += player.doAction(PlayerAction.RAISE, 200);
         assertEquals(300, pot);
         assertEquals(700, player.getChips());
         assertEquals(300, player.getCurrentBet());
@@ -278,11 +274,10 @@ class PlayerTest {
     @Test
     void testAllInWithPartialChips() {
         Player shortStack = new Player("ShortStack", "player999", 50);
-        int pot = 100;
 
-        int newPot = shortStack.doAction(PlayerAction.ALL_IN, 0, pot);
+        int committed = shortStack.doAction(PlayerAction.ALL_IN, 0);
 
-        assertEquals(150, newPot);
+        assertEquals(50, committed);
         assertEquals(0, shortStack.getChips());
         assertTrue(shortStack.getIsAllIn());
         assertEquals(50, shortStack.getCurrentBet());
@@ -411,5 +406,78 @@ class PlayerTest {
 
         assertEquals(expectedInHand, candidate.isInHand());
         assertEquals(expectedCanAct, candidate.canAct());
+    }
+
+    @Test
+    void testGetHoleCardsAndGetBestHandReturnUnmodifiableLists() {
+        List<Card> holeCards = player.getHoleCards();
+        List<Card> bestHand = player.getBestHand();
+        Card card = new Card(Rank.ACE, Suit.SPADES);
+
+        assertThrows(UnsupportedOperationException.class, () -> holeCards.add(card));
+        assertThrows(UnsupportedOperationException.class, () -> bestHand.add(card));
+    }
+
+    @Test
+    void testSetBestHandDefensivelyCopiesInputAndHandlesNull() {
+        List<Card> mutableHand = new ArrayList<>(List.of(
+                new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.KING, Suit.SPADES),
+                new Card(Rank.QUEEN, Suit.SPADES),
+                new Card(Rank.JACK, Suit.SPADES),
+                new Card(Rank.TEN, Suit.SPADES)));
+
+        player.setBestHand(mutableHand);
+        mutableHand.clear();
+
+        assertEquals(5, player.getBestHand().size());
+
+        player.setBestHand(null);
+        assertTrue(player.getBestHand().isEmpty());
+    }
+
+    @Test
+    void testRestoreBuilderHandlesNullCardLists() {
+        Player restored = Player.restoreBuilder()
+                .name("Alice")
+                .playerId("p1")
+                .chips(500)
+                .build();
+
+        assertTrue(restored.getHoleCards().isEmpty());
+        assertTrue(restored.getBestHand().isEmpty());
+        assertEquals(HandRank.NO_HAND, restored.getHandRank());
+    }
+
+    @Test
+    void testSetHoleCardsDefensivelyCopiesInputAndRejectsNull() {
+        List<Card> mutableCards = new ArrayList<>(List.of(
+                new Card(Rank.ACE, Suit.SPADES),
+                new Card(Rank.KING, Suit.SPADES)));
+
+        player.setHoleCards(mutableCards);
+        mutableCards.clear();
+
+        assertEquals(2, player.getHoleCards().size());
+        assertThrows(NullPointerException.class, () -> player.setHoleCards(null));
+    }
+
+    @Test
+    void testRestoreBuilderValidatesIdentityAndChips() {
+        assertThrows(IllegalStateException.class, () -> Player.restoreBuilder()
+                .name(" ")
+                .playerId("p1")
+                .chips(100)
+                .build());
+        assertThrows(IllegalStateException.class, () -> Player.restoreBuilder()
+                .name("Alice")
+                .playerId(" ")
+                .chips(100)
+                .build());
+        assertThrows(IllegalStateException.class, () -> Player.restoreBuilder()
+                .name("Alice")
+                .playerId("p1")
+                .chips(-1)
+                .build());
     }
 }

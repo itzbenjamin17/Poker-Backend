@@ -372,10 +372,10 @@ class GameTest {
             Player playerTwo = game.getPlayers().get(1);
             Player playerThree = game.getPlayers().get(2);
 
-            playerOne.doAction(PlayerAction.FOLD, 0, game.getPot());
+            playerOne.doAction(PlayerAction.FOLD, 0);
             playerTwo.setBestHand(List.of(new Card(Rank.ACE, Suit.SPADES)));
             playerTwo.setHandRank(HandRank.ONE_PAIR);
-            playerThree.doAction(PlayerAction.BET, 100, 0);
+            playerThree.doAction(PlayerAction.BET, 100);
 
             String dealerBeforeReset = game.getDealerPlayerId();
             int dealerIndexBeforeReset = game.getActivePlayers().stream()
@@ -410,14 +410,14 @@ class GameTest {
         @Test
         void testResetForNewHandEliminatesZeroChipPlayersAndEndsGameWhenOneRemains() {
             Player first = game.getActivePlayers().getFirst();
-            first.doAction(PlayerAction.ALL_IN, 0, 0);
+            first.doAction(PlayerAction.ALL_IN, 0);
             assertFalse(game.resetForNewHand());
             assertTrue(first.getIsOut());
             assertEquals(2, game.getActivePlayers().size());
             assertFalse(game.isGameOver());
 
             Player second = game.getActivePlayers().getFirst();
-            second.doAction(PlayerAction.ALL_IN, 0, 0);
+            second.doAction(PlayerAction.ALL_IN, 0);
             assertTrue(game.resetForNewHand());
             assertEquals(1, game.getActivePlayers().size());
             assertTrue(game.isGameOver());
@@ -440,7 +440,7 @@ class GameTest {
         @Test
         void testResetForNewHandWithEliminatedPlayers() {
             Player eliminated = game.getActivePlayers().getFirst();
-            eliminated.doAction(PlayerAction.ALL_IN, 0, 0);
+            eliminated.doAction(PlayerAction.ALL_IN, 0);
             eliminated.setIsOut();
 
             game.resetForNewHand();
@@ -452,8 +452,8 @@ class GameTest {
         @Test
         void testIsGameDecidedWhenOnePlayerHasChips() {
             assertFalse(game.isGameDecided());
-            game.getPlayers().get(1).doAction(PlayerAction.ALL_IN, 0, 0);
-            game.getPlayers().get(2).doAction(PlayerAction.ALL_IN, 0, 0);
+            game.getPlayers().get(1).doAction(PlayerAction.ALL_IN, 0);
+            game.getPlayers().get(2).doAction(PlayerAction.ALL_IN, 0);
             assertTrue(game.isGameDecided());
         }
 
@@ -463,7 +463,7 @@ class GameTest {
             game.markGameOver();
             assertTrue(game.isGameOver());
 
-            players.get(0).payChips(0, 1000);
+            players.get(0).doAction(PlayerAction.BET, 1000);
             players.get(0).setIsOut();
 
             Player winner = GameEligibility.resolveWinner(game, null);
@@ -605,7 +605,7 @@ class GameTest {
             Game invalidRaiseGame = createStandardGame(3, 1000);
             invalidRaiseGame.postBlinds();
             Player badRaiser = invalidRaiseGame.getActivePlayers().getFirst();
-            badRaiser.doAction(PlayerAction.BET, 10, 0);
+            badRaiser.doAction(PlayerAction.BET, 10);
             BadRequestException nonIncreasing = assertThrows(BadRequestException.class, () ->
                     invalidRaiseGame.processPlayerDecision(
                             badRaiser, new PlayerDecision(PlayerAction.RAISE, 5, badRaiser.getPlayerId())));
@@ -1025,9 +1025,9 @@ class GameTest {
         @Test
         void deadUpperLayersJoinNearestEligibleLowerAllocation() {
             Player a = restoredPlayer("A", "a", 0, 0, false);
-            a.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+            a.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
             Player b = restoredPlayer("B", "b", 0, 0, false);
-            b.getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.DIAMONDS), new Card(Rank.SEVEN, Suit.HEARTS)));
+            b.setHoleCards(List.of(new Card(Rank.TWO, Suit.DIAMONDS), new Card(Rank.SEVEN, Suit.HEARTS)));
             Player c = restoredPlayer("c", "C", 0, false, true, false);
             Player d = restoredPlayer("d", "D", 0, false, true, false);
 
@@ -1056,9 +1056,9 @@ class GameTest {
         @Test
         void departedContributionStillDefinesSidePotAndCannotReceiveRefund() {
             Player shortPlayer = new Player("Short", "s", 0);
-            shortPlayer.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+            shortPlayer.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
             Player midPlayer = new Player("Mid", "m", 150);
-            midPlayer.getHoleCards().addAll(List.of(new Card(Rank.TWO, Suit.DIAMONDS), new Card(Rank.SEVEN, Suit.HEARTS)));
+            midPlayer.setHoleCards(List.of(new Card(Rank.TWO, Suit.DIAMONDS), new Card(Rank.SEVEN, Suit.HEARTS)));
             Game departedGame = Game.restoreBuilder().gameId("departed-contributor").players(List.of(shortPlayer, midPlayer))
                     .activePlayerIds(List.of("s", "m")).remainingDeck(List.of()).communityCards(List.of(
                             new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
@@ -1174,8 +1174,7 @@ class GameTest {
         }
 
         private static void deal(Player player, int strength) {
-            player.getHoleCards().clear();
-            player.getHoleCards().addAll(HOLE_BY_STRENGTH.get(strength));
+            player.setHoleCards(HOLE_BY_STRENGTH.get(strength));
         }
 
         @Test
@@ -1305,7 +1304,7 @@ class GameTest {
                 Collections.shuffle(deck, rng);
                 int nextCard = 5;
                 for (Player player : table) {
-                    player.getHoleCards().addAll(deck.subList(nextCard, nextCard + 2));
+                    player.setHoleCards(deck.subList(nextCard, nextCard + 2));
                     nextCard += 2;
                 }
                 int chipsBefore = table.stream().mapToInt(Player::getChips).sum();
@@ -1328,8 +1327,8 @@ class GameTest {
         @Test
         void testConductShowdownWithOnePlayerRefundOnlyAndMultiplePlayers() {
             game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.BET, 100, "p3"));
-            game.getActivePlayers().get(0).doAction(PlayerAction.FOLD, 0, 0);
-            game.getActivePlayers().get(1).doAction(PlayerAction.FOLD, 0, 0);
+            game.getActivePlayers().get(0).doAction(PlayerAction.FOLD, 0);
+            game.getActivePlayers().get(1).doAction(PlayerAction.FOLD, 0);
 
             List<Player> uncalledWinners = game.conductShowdown();
             assertTrue(uncalledWinners.isEmpty());
@@ -1337,11 +1336,11 @@ class GameTest {
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
 
             Game multiGame = createStandardGame(3, 1000);
-            multiGame.getActivePlayers().get(0).getHoleCards().addAll(List.of(
+            multiGame.getActivePlayers().get(0).setHoleCards(List.of(
                     new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
-            multiGame.getActivePlayers().get(1).getHoleCards().addAll(List.of(
+            multiGame.getActivePlayers().get(1).setHoleCards(List.of(
                     new Card(Rank.TWO, Suit.DIAMONDS), new Card(Rank.SEVEN, Suit.HEARTS)));
-            multiGame.getActivePlayers().get(2).getHoleCards().addAll(List.of(
+            multiGame.getActivePlayers().get(2).setHoleCards(List.of(
                     new Card(Rank.THREE, Suit.HEARTS), new Card(Rank.EIGHT, Suit.CLUBS)));
 
             multiGame.processPlayerDecision(multiGame.getActivePlayers().getFirst(), new PlayerDecision(PlayerAction.BET, 100, "p0"));
@@ -1368,8 +1367,8 @@ class GameTest {
             Player josh = headsUpGame.getActivePlayers().getFirst();
             Player benjamin = headsUpGame.getActivePlayers().get(1);
 
-            josh.getHoleCards().addAll(List.of(new Card(Rank.THREE, Suit.SPADES), new Card(Rank.KING, Suit.DIAMONDS)));
-            benjamin.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.HEARTS), new Card(Rank.TEN, Suit.CLUBS)));
+            josh.setHoleCards(List.of(new Card(Rank.THREE, Suit.SPADES), new Card(Rank.KING, Suit.DIAMONDS)));
+            benjamin.setHoleCards(List.of(new Card(Rank.ACE, Suit.HEARTS), new Card(Rank.TEN, Suit.CLUBS)));
             headsUpGame.getCommunityCards().addAll(List.of(
                     new Card(Rank.THREE, Suit.DIAMONDS), new Card(Rank.JACK, Suit.CLUBS),
                     new Card(Rank.ACE, Suit.SPADES), new Card(Rank.EIGHT, Suit.HEARTS),
@@ -1389,7 +1388,7 @@ class GameTest {
             game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 51, "p1"));
             game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 51, "p2"));
             game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 51, "p3"));
-            game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0, game.getPot());
+            game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0);
             game.getCommunityCards().addAll(ROYAL_FLUSH_BOARD);
             game.conductShowdown();
 
@@ -1408,7 +1407,7 @@ class GameTest {
             game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 51, "p1"));
             game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 51, "p2"));
             game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 51, "p3"));
-            game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0, game.getPot());
+            game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0);
             game.getCommunityCards().addAll(ROYAL_FLUSH_BOARD);
             game.conductShowdown();
 
@@ -1437,9 +1436,9 @@ class GameTest {
             basic.processPlayerDecision(d, new PlayerDecision(PlayerAction.CALL, 0, d.getPlayerId()));
             basic.getCommunityCards().clear();
             basic.getCommunityCards().addAll(flushStraightBoard);
-            s.getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
-            m.getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
-            d.getHoleCards().addAll(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
+            s.setHoleCards(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
+            m.setHoleCards(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
+            d.setHoleCards(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
             basic.conductShowdown();
             assertEquals(150, s.getChips());
             assertEquals(350, m.getChips());
@@ -1454,9 +1453,9 @@ class GameTest {
             splitSide.processPlayerDecision(splitSide.getPlayers().get(2), new PlayerDecision(PlayerAction.CALL, 0, "d1"));
             splitSide.getCommunityCards().clear();
             splitSide.getCommunityCards().addAll(flushStraightBoard);
-            splitSide.getPlayers().get(0).getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
-            splitSide.getPlayers().get(1).getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
-            splitSide.getPlayers().get(2).getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.CLUBS), new Card(Rank.NINE, Suit.DIAMONDS)));
+            splitSide.getPlayers().get(0).setHoleCards(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
+            splitSide.getPlayers().get(1).setHoleCards(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
+            splitSide.getPlayers().get(2).setHoleCards(List.of(new Card(Rank.EIGHT, Suit.CLUBS), new Card(Rank.NINE, Suit.DIAMONDS)));
             splitSide.conductShowdown();
             assertEquals(150, splitSide.getPlayers().get(0).getChips());
             assertEquals(250, splitSide.getPlayers().get(1).getChips());
@@ -1471,10 +1470,10 @@ class GameTest {
             multi.processPlayerDecision(multi.getPlayers().get(0), new PlayerDecision(PlayerAction.CALL, 0, "a1"));
             multi.getCommunityCards().clear();
             multi.getCommunityCards().addAll(flushStraightBoard);
-            multi.getPlayers().get(0).getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
-            multi.getPlayers().get(1).getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
-            multi.getPlayers().get(2).getHoleCards().addAll(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.SEVEN, Suit.CLUBS)));
-            multi.getPlayers().get(3).getHoleCards().addAll(List.of(new Card(Rank.SIX, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
+            multi.getPlayers().get(0).setHoleCards(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
+            multi.getPlayers().get(1).setHoleCards(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
+            multi.getPlayers().get(2).setHoleCards(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.SEVEN, Suit.CLUBS)));
+            multi.getPlayers().get(3).setHoleCards(List.of(new Card(Rank.SIX, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
             multi.conductShowdown();
             assertEquals(200, multi.getPlayers().get(0).getChips());
             assertEquals(150, multi.getPlayers().get(1).getChips());
@@ -1487,11 +1486,11 @@ class GameTest {
             foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(1), new PlayerDecision(PlayerAction.BET, 150, "m1"));
             foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(0), new PlayerDecision(PlayerAction.CALL, 0, "s1"));
             foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(2), new PlayerDecision(PlayerAction.CALL, 0, "f1"));
-            foldedEdge.getPlayers().get(2).doAction(PlayerAction.FOLD, 0, 0);
+            foldedEdge.getPlayers().get(2).doAction(PlayerAction.FOLD, 0);
             foldedEdge.getCommunityCards().clear();
             foldedEdge.getCommunityCards().addAll(flushStraightBoard);
-            foldedEdge.getPlayers().get(0).getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
-            foldedEdge.getPlayers().get(1).getHoleCards().addAll(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
+            foldedEdge.getPlayers().get(0).setHoleCards(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
+            foldedEdge.getPlayers().get(1).setHoleCards(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
             foldedEdge.conductShowdown();
             assertEquals(150, foldedEdge.getPlayers().get(0).getChips());
             assertEquals(350, foldedEdge.getPlayers().get(1).getChips());
@@ -1506,10 +1505,10 @@ class GameTest {
             splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(0), new PlayerDecision(PlayerAction.CALL, 0, "a1"));
             splitRemainder.getCommunityCards().clear();
             splitRemainder.getCommunityCards().addAll(flushStraightBoard);
-            splitRemainder.getPlayers().get(0).getHoleCards().addAll(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
-            splitRemainder.getPlayers().get(1).getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
-            splitRemainder.getPlayers().get(2).getHoleCards().addAll(List.of(new Card(Rank.EIGHT, Suit.CLUBS), new Card(Rank.NINE, Suit.DIAMONDS)));
-            splitRemainder.getPlayers().get(3).getHoleCards().addAll(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
+            splitRemainder.getPlayers().get(0).setHoleCards(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
+            splitRemainder.getPlayers().get(1).setHoleCards(List.of(new Card(Rank.EIGHT, Suit.HEARTS), new Card(Rank.NINE, Suit.CLUBS)));
+            splitRemainder.getPlayers().get(2).setHoleCards(List.of(new Card(Rank.EIGHT, Suit.CLUBS), new Card(Rank.NINE, Suit.DIAMONDS)));
+            splitRemainder.getPlayers().get(3).setHoleCards(List.of(new Card(Rank.SEVEN, Suit.HEARTS), new Card(Rank.KING, Suit.CLUBS)));
             splitRemainder.conductShowdown();
             assertEquals(200, splitRemainder.getPlayers().get(0).getChips());
             assertEquals(77, splitRemainder.getPlayers().get(1).getChips());
@@ -1529,9 +1528,9 @@ class GameTest {
                     new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
                     new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.DIAMONDS),
                     new Card(Rank.THREE, Suit.CLUBS)));
-            shover.getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
-            uncalledRefund.getActivePlayers().get(1).getHoleCards().addAll(List.of(new Card(Rank.KING, Suit.SPADES), new Card(Rank.ACE, Suit.SPADES)));
-            uncalledRefund.getActivePlayers().get(2).getHoleCards().addAll(List.of(new Card(Rank.THREE, Suit.HEARTS), new Card(Rank.KING, Suit.HEARTS)));
+            shover.setHoleCards(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
+            uncalledRefund.getActivePlayers().get(1).setHoleCards(List.of(new Card(Rank.KING, Suit.SPADES), new Card(Rank.ACE, Suit.SPADES)));
+            uncalledRefund.getActivePlayers().get(2).setHoleCards(List.of(new Card(Rank.THREE, Suit.HEARTS), new Card(Rank.KING, Suit.HEARTS)));
             uncalledRefund.conductShowdown();
             assertEquals(460, shover.getChips());
             assertEquals(1020, uncalledRefund.getActivePlayers().get(1).getChips());
@@ -1646,10 +1645,8 @@ class GameTest {
                     new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
                     new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.CLUBS),
                     new Card(Rank.THREE, Suit.DIAMONDS)));
-            p1.getHoleCards().clear();
-            p1.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
-            p2.getHoleCards().clear();
-            p2.getHoleCards().addAll(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
+            p1.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+            p2.setHoleCards(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
 
             List<Player> firstWinners = idemp.conductShowdown();
             assertEquals(1, firstWinners.size());
@@ -1663,7 +1660,7 @@ class GameTest {
             Game voidGame = createStandardGame(2, 100);
             voidGame.processPlayerDecision(voidGame.getPlayers().get(0), new PlayerDecision(PlayerAction.BET, 50, "p0"));
             voidGame.processPlayerDecision(voidGame.getPlayers().get(1), new PlayerDecision(PlayerAction.CALL, 50, "p1"));
-            voidGame.getPlayers().forEach(pl -> pl.doAction(PlayerAction.FOLD, 0, voidGame.getPot()));
+            voidGame.getPlayers().forEach(pl -> pl.doAction(PlayerAction.FOLD, 0));
             assertTrue(voidGame.conductShowdown().isEmpty());
             assertEquals(100, voidGame.getLastSettlementResult().remainder());
             assertFalse(voidGame.resetForNewHand());
@@ -1792,11 +1789,11 @@ class GameTest {
             // Side pot with its own leftover chip (101) and rotated dealer 's2' -> 's1' is clockwise left of 's2' and gets +1.
             Player s0 = restoredPlayer("s0", "S0", 69, false, true, false);
             Player s1 = restoredPlayer("S1", "s1", 50, 0, true);
-            s1.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.DIAMONDS), new Card(Rank.FOUR, Suit.DIAMONDS)));
+            s1.setHoleCards(List.of(new Card(Rank.ACE, Suit.DIAMONDS), new Card(Rank.FOUR, Suit.DIAMONDS)));
             Player s2 = restoredPlayer("S2", "s2", 50, 0, true);
-            s2.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.HEARTS), new Card(Rank.FOUR, Suit.HEARTS)));
+            s2.setHoleCards(List.of(new Card(Rank.ACE, Suit.HEARTS), new Card(Rank.FOUR, Suit.HEARTS)));
             Player s3 = restoredPlayer("S3", "s3", 0, 0, true);
-            s3.getHoleCards().addAll(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+            s3.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
             Game sidePotOdd = Game.restoreBuilder().gameId("side-pot-odd-chip")
                     .players(List.of(s0, s1, s2, s3)).activePlayerIds(List.of("s0", "s1", "s2", "s3"))
                     .remainingDeck(List.of()).communityCards(List.of(
@@ -1889,7 +1886,7 @@ class GameTest {
 
             Game voidGame = createStandardGame(2, 100);
             voidGame.getPlayers().getFirst().setHandRank(HandRank.ROYAL_FLUSH);
-            voidGame.getPlayers().forEach(p -> p.doAction(PlayerAction.FOLD, 0, voidGame.getPot()));
+            voidGame.getPlayers().forEach(p -> p.doAction(PlayerAction.FOLD, 0));
             voidGame.conductShowdown();
             assertTrue(voidGame.isHandSettled());
             assertFalse(voidGame.wasContestedShowdown());
@@ -2372,7 +2369,7 @@ class GameTest {
             Game readyGame = createStandardGame(3, 1000);
             dealToRiverAndShowdown(readyGame);
             readyGame.openOrWaitReadyGate(50_000L);
-            readyGame.getPlayers().get(1).doAction(PlayerAction.ALL_IN, 0, 0);
+            readyGame.getPlayers().get(1).doAction(PlayerAction.ALL_IN, 0);
             readyGame.getPlayers().get(0).setReadyForNextHand(true);
             assertFalse(readyGame.areAllEligiblePlayersReady());
             readyGame.getPlayers().get(2).setReadyForNextHand(true);
