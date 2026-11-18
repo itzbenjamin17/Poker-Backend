@@ -214,7 +214,7 @@ final class PotCalculator {
         return computeLiveAllocations(inputs).uncalledTotal();
     }
 
-    /**
+    /*
      * Projects display layers while an active player still owes a call. Nothing is uncalled yet because the
      * owing player may still match the top bet, so chips above the highest all-in stay in an open top layer
      * and the layers always add up to the whole pot.
@@ -252,7 +252,7 @@ final class PotCalculator {
         return List.copyOf(liveLayers);
     }
 
-    /** Distinct hand contributions of the all-in players still in the hand, lowest first. */
+    // Distinct hand contributions of the all-in players still in the hand, lowest first.
     private static List<Integer> allInContributionCaps(PotInputs inputs) {
         Set<String> allInIds = inputs.activePlayers().stream()
                 .filter(player -> player.isAllIn() && player.isInHand())
@@ -317,7 +317,7 @@ final class PotCalculator {
         }
     }
 
-    /** Callers pass a non-empty {@code eligiblePlayers}. */
+    // Callers pass a non-empty eligiblePlayers.
     private static void appendAllocationCoalescingSameEligibility(
             List<PotAllocation> allocations,
             int amount,

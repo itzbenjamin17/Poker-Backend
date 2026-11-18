@@ -175,13 +175,13 @@ class GameTimerRegistry {
         }
     }
 
-    /** The two inactivity timers a room can have; a room is never in both states at once. */
+    // The two inactivity timers a room can have; a room is never in both states at once.
     private enum InactivityTimer {
         LOBBY,
         GAME
     }
 
-    /** Key identifying one timer slot for a room: exactly one of {@code task} or {@code inactivity} is set. */
+    // Key identifying one timer slot for a room: exactly one of task or inactivity is set.
     private record RuntimeTaskKey(String roomId, ScheduledGameTask task, InactivityTimer inactivity) {
         static RuntimeTaskKey forTask(String roomId, ScheduledGameTask task) {
             return new RuntimeTaskKey(roomId, task, null);
@@ -196,7 +196,7 @@ class GameTimerRegistry {
         }
     }
 
-    /** Tracks completion or cancellation that can occur before the scheduler returns its future. */
+    // Tracks completion or cancellation that can occur before the scheduler returns its future.
     private static final class RuntimeTask {
         private volatile ScheduledFuture<?> future;
         private volatile boolean completed;

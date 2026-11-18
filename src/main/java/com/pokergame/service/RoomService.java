@@ -37,6 +37,10 @@ import org.springframework.stereotype.Service;
 /**
  * Manages poker rooms during creation, joining, lobby membership changes, host tracking,
  * and lobby inactivity cleanup.
+ *
+ * <p>Room-ID lookups and reads require the calling thread to hold the room lock via
+ * {@link RoomCoordinator}. Name lookups synchronize on {@code roomNameLock} to keep room
+ * names unique across IDs.
  */
 @Service
 public class RoomService {
@@ -234,6 +238,7 @@ public class RoomService {
     /**
      * Removes one or more players from a room, whether it is a lobby or has a started or finished
      * game, and sets the room host to {@code nextHost}. A room left with no players is closed.
+     * Caller must hold the room lock.
      *
      * @param roomId      the unique ID of the room
      * @param playerNames the departing player names; names not in the room are ignored
@@ -287,6 +292,7 @@ public class RoomService {
 
     /**
      * Broadcasts after save that the room's game has started, attaching the current room snapshot.
+     * Caller must hold the room lock.
      *
      * @param roomId the unique ID of the room whose game just started
      */
@@ -298,6 +304,7 @@ public class RoomService {
 
     /**
      * Builds the client-facing room summary DTO including settings, host indicator, and players.
+     * Caller must hold the room lock.
      *
      * @param roomId the unique ID of the room
      * @return formatted room state for REST and WebSocket responses
@@ -358,6 +365,7 @@ public class RoomService {
 
     /**
      * Returns whether {@code playerName} is currently the host of {@code roomId}.
+     * Caller must hold the room lock.
      *
      * @param roomId     the unique ID of the room
      * @param playerName the player name to check
@@ -424,6 +432,7 @@ public class RoomService {
 
     /**
      * Checks whether the lobby for {@code roomId} has expired and closes it if so.
+     * Caller must hold the room lock.
      *
      * @param roomId the unique ID of the room
      * @return {@code true} if the room was expired and closed
@@ -462,13 +471,9 @@ public class RoomService {
         destroyRoom(roomId);
     }
 
-    /**
+    /*
      * Finds an active room by name using case-insensitive matching.
-     * Callers must not read mutable {@link Room} fields without acquiring the room lock
-     * ({@link RoomCoordinator#acquire(String) RoomCoordinator.acquire(room.getRoomId())}).
-     *
-     * @param roomName the room name to search for
-     * @return the matching room, or {@code null} if not found
+     * Callers must not read mutable Room fields without acquiring the room lock.
      */
     private Room findRoomByName(String roomName) {
         if (roomName == null) {
@@ -484,13 +489,6 @@ public class RoomService {
         return findRoomByName(roomName) != null;
     }
 
-    /**
-     * Adds {@code playerName} to {@code room}, gives them until {@code now} plus the disconnect
-     * grace period to connect for the first time, and publishes {@link RoomMemberRegistered}
-     * after save.
-     *
-     * @return the new membership ID
-     */
     private String registerMember(Room room, String playerName, long now) {
         String roomId = room.getRoomId();
         String membershipId = room.addPlayer(playerName, clock);
@@ -501,7 +499,6 @@ public class RoomService {
         return membershipId;
     }
 
-    /** Pushes the lobby inactivity deadline to {@code now} plus the lobby timeout and reschedules its timer. */
     private void extendLobbyInactivity(Room room, long now) {
         long deadlineEpochMs = now + timings.lobbyInactivityMs();
         room.setInactivityDeadlineEpochMs(deadlineEpochMs);

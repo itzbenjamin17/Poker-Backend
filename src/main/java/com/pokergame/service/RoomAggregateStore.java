@@ -14,6 +14,9 @@ import org.springframework.stereotype.Component;
 /**
  * Lets persistence read, swap and remove a room together with its game, keeping the room's
  * game flags and timers consistent with whichever game is live.
+ *
+ * <p>All operations run under the caller's room lock; {@link #remove} and {@link #install}
+ * verify lock ownership via {@link RoomCoordinator#assertHeldByCurrentThread(String)}.
  */
 @Component
 class RoomAggregateStore implements RoomAggregates {
@@ -40,6 +43,12 @@ class RoomAggregateStore implements RoomAggregates {
         this.roomCoordinator = roomCoordinator;
     }
 
+    /**
+     * Returns the current room and game pair for {@code roomId} under the caller's room lock.
+     *
+     * @param roomId the unique ID of the room
+     * @return the live room and game pair, or {@code null} if no room exists
+     */
     @Override
     public RoomAggregate find(String roomId) {
         requireNonNull(roomId, "roomId must not be null");
@@ -47,6 +56,12 @@ class RoomAggregateStore implements RoomAggregates {
         return room == null ? null : new RoomAggregate(room, activeGames.get(roomId));
     }
 
+    /**
+     * Replaces the live room and game pair under the caller's room lock and restarts active
+     * timers immediately for the restored state.
+     *
+     * @param aggregate the room and game state to install
+     */
     @Override
     public void replace(RoomAggregate aggregate) {
         requireNonNull(aggregate, "aggregate must not be null");
@@ -64,6 +79,12 @@ class RoomAggregateStore implements RoomAggregates {
         }
     }
 
+    /**
+     * Cancels all timers and removes the room and game from memory.
+     * Caller must hold the room lock for {@code roomId}.
+     *
+     * @param roomId the unique ID of the room to remove
+     */
     @Override
     public void remove(String roomId) {
         requireNonNull(roomId, "roomId must not be null");
@@ -80,6 +101,7 @@ class RoomAggregateStore implements RoomAggregates {
     /**
      * Makes {@code room} and {@code game} the live pair without scheduling any timers. Timers of a
      * game that was live before are cancelled. A {@code null} game leaves the room as a lobby.
+     * Caller must hold the room lock for {@code room.getRoomId()}.
      *
      * @param room the room to make live
      * @param game the room's game, or {@code null} for a lobby

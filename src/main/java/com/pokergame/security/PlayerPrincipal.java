@@ -58,29 +58,14 @@ public record PlayerPrincipal(String playerName, String roomId, String membershi
         }
     }
 
-    /**
-     * Returns the player name.
-     *
-     * @return player name
-     */
     public String getPlayerName() {
         return playerName;
     }
 
-    /**
-     * Returns the room ID.
-     *
-     * @return room ID
-     */
     public String getRoomId() {
         return roomId;
     }
 
-    /**
-     * Returns the membership ID.
-     *
-     * @return membership ID, or null if not set
-     */
     public String getMembershipId() {
         return membershipId;
     }

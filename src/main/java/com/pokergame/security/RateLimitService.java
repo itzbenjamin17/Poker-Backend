@@ -101,31 +101,14 @@ public class RateLimitService {
         evictIdleWsBuckets(60_000);
     }
 
-    /**
-     * Returns the number of currently tracked WebSocket rate-limit bucket entries.
-     *
-     * @return current count of WebSocket rate-limit entries
-     */
     public int wsBucketCount() {
         return wsBuckets.size();
     }
 
-    /**
-     * Checks whether a rate-limit bucket exists for the given username.
-     *
-     * @param username user composite name
-     * @return {@code true} if a bucket exists, {@code false} otherwise
-     */
     public boolean hasWsBucket(String username) {
         return wsBuckets.containsKey(username);
     }
 
-    /**
-     * Overrides the last access timestamp of a WebSocket bucket for unit testing.
-     *
-     * @param username user composite name
-     * @param epochMs  timestamp in milliseconds
-     */
     void setLastAccessForTesting(String username, long epochMs) {
         WsBucketEntry entry = wsBuckets.get(username);
         if (entry != null) {
@@ -146,9 +129,6 @@ public class RateLimitService {
         }
     }
 
-    /**
-     * Resets all buckets. Used for testing.
-     */
     public void reset() {
         restBuckets.clear();
         wsBuckets.clear();

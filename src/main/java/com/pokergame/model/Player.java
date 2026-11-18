@@ -261,11 +261,6 @@ public class Player {
         return List.copyOf(holeCards);
     }
 
-    /**
-     * Replaces the player's hole cards with a defensive copy of {@code cards}.
-     *
-     * @param cards the dealt hole cards
-     */
     public void setHoleCards(List<Card> cards) {
         Objects.requireNonNull(cards, "cards must not be null");
         this.holeCards = new ArrayList<>(cards);
@@ -357,22 +352,10 @@ public class Player {
         return handRank;
     }
 
-    /**
-     * Stores evaluated cards separately from hole cards so showdown results can be
-     * rendered without recomputing against a later board state.
-     *
-     * @param cards evaluated best five-card hand, or {@code null} for empty
-     */
     public void setBestHand(List<Card> cards) {
         this.bestHand = cards != null ? new ArrayList<>(cards) : new ArrayList<>();
     }
 
-    /**
-     * Stores the rank paired with {@link #setBestHand(List)} for stable comparison
-     * and recovery.
-     *
-     * @param handRank evaluated rank
-     */
     public void setHandRank(HandRank handRank) {
         this.handRank = handRank;
     }

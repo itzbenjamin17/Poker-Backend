@@ -29,7 +29,7 @@ final class BettingRound {
     private int currentHighestBet;
     private boolean allPlayersHadInitialTurn;
     private final Set<String> actedPlayersInRound;
-    /** Size of the last full raise this street, or 0 when none has been made yet (the big blind applies). */
+    // Size of the last full raise this street, or 0 when none has been made yet (the big blind applies).
     private int lastFullRaise;
     private final Map<String, Integer> lastActedWagerByPlayer;
 
@@ -423,17 +423,17 @@ final class BettingRound {
         return Map.copyOf(lastActedWagerByPlayer);
     }
 
-    /** Chips {@code player} must add to match the highest bet this street. */
+    // Chips player must add to match the highest bet this street.
     private int amountOwed(Player player) {
         return Math.max(0, currentHighestBet - player.getCurrentBet());
     }
 
-    /** Size of the smallest full raise this street: the last full raise, or the big blind if none yet. */
+    // Size of the smallest full raise this street: the last full raise, or the big blind if none yet.
     private int fullRaiseSize(int bigBlind) {
         return lastFullRaise > 0 ? lastFullRaise : bigBlind;
     }
 
-    /** Whether {@code player} may raise: false after only a short all-in raise since they last acted. */
+    // Whether player may raise: false after only a short all-in raise since they last acted.
     private boolean bettingReopenedFor(Player player, int bigBlind) {
         Integer actedAt = lastActedWagerByPlayer.get(player.getPlayerId());
         return actedAt == null || currentHighestBet - actedAt >= fullRaiseSize(bigBlind);

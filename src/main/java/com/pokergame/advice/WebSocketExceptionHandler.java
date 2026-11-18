@@ -32,7 +32,7 @@ import org.springframework.validation.method.MethodValidationException;
 /**
  * Centralized exception handler for STOMP-over-WebSocket messaging traffic.
  *
- * <h3>Why this class is needed</h3>
+ * <h2>Why this class is needed</h2>
  * <p>
  * Unlike REST endpoints (handled by {@code ControllerExceptionHandler}),
  * WebSocket
@@ -46,7 +46,7 @@ import org.springframework.validation.method.MethodValidationException;
  * disrupted.
  * </p>
  *
- * <h3>Security Guarantee</h3>
+ * <h2>Security Guarantee</h2>
  * <p>
  * Routing is strictly anchored to the authenticated {@link PlayerPrincipal}
  * session identity,
@@ -195,10 +195,7 @@ public class WebSocketExceptionHandler {
         return null;
     }
 
-    /**
-     * Recovers the requested action from the original frame without guessing from
-     * exception text.
-     */
+    // Recovers the requested action from the original frame without guessing from exception text.
     private PlayerAction rejectedAction(Message<?> message) {
         Object payload = message.getPayload();
         if (payload instanceof PlayerActionRequest request)

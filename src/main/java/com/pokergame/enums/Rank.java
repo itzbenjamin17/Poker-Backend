@@ -33,20 +33,10 @@ public enum Rank {
         this.displayName = displayName;
     }
 
-    /**
-     * Returns the numeric poker value of this rank.
-     *
-     * @return value from 2 through 14
-     */
     public int getValue() {
         return value;
     }
 
-    /**
-     * Returns the human-readable rank label.
-     *
-     * @return display name
-     */
     public String getDisplayName() {
         return displayName;
     }

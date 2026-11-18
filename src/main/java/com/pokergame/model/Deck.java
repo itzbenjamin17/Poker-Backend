@@ -58,10 +58,7 @@ public class Deck {
         }
     }
 
-    /**
-     * Uses a cryptographically strong random source so future private cards are not
-     * predictable from the weaker default pseudo-random generator.
-     */
+    // Uses a cryptographically strong random source so future private cards are not predictable.
     private void shuffle() {
         Collections.shuffle(cards, SHUFFLE_RANDOM);
     }

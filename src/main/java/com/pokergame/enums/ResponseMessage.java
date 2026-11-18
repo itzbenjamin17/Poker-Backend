@@ -27,11 +27,6 @@ public enum ResponseMessage {
         this.message = message;
     }
 
-    /**
-     * Returns the serialized notification category.
-     *
-     * @return wire-format message value
-     */
     public String getMessage() {
         return message;
     }

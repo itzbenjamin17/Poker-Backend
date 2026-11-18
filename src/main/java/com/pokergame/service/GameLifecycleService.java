@@ -226,6 +226,7 @@ public class GameLifecycleService {
 
     /**
      * Returns whether an unexpired game currently exists for {@code gameId}.
+     * Caller must hold the room lock.
      *
      * @param gameId the unique ID of the game
      * @return {@code true} if a live or uncleaned game exists
@@ -238,6 +239,7 @@ public class GameLifecycleService {
 
     /**
      * Returns whether {@code playerName} is currently seated (not eliminated) in {@code gameId}.
+     * Caller must hold the room lock.
      *
      * @param gameId     the unique ID of the game
      * @param playerName the player name to check
@@ -259,6 +261,7 @@ public class GameLifecycleService {
     /**
      * Verifies that {@code membershipId} matches the active session membership for
      * {@code playerName} in {@code gameId}.
+     * Caller must hold the room lock.
      *
      * @param gameId       the unique ID of the room/game
      * @param playerName   the authenticated player name
@@ -347,6 +350,7 @@ public class GameLifecycleService {
 
     /**
      * Returns the saved final summary of a finished game for {@code playerName}.
+     * Caller must hold the room lock.
      *
      * @param gameId     the unique ID of the game
      * @param playerName the requesting player's name

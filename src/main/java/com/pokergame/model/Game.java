@@ -688,12 +688,6 @@ public class Game {
         return activePlayers;
     }
 
-    /**
-     * Returns the player whose turn it currently is.
-     *
-     * @return the current player
-     * @throws IllegalStateException if no active players remain
-     */
     public Player getCurrentPlayer() {
         return seating.getCurrentPlayer(activePlayers);
     }
@@ -712,11 +706,6 @@ public class Game {
         return communityCards;
     }
 
-    /**
-     * Returns an immutable copy of the remaining deck cards in draw order.
-     *
-     * @return remaining deck cards
-     */
     public List<Card> getRemainingDeckSnapshot() {
         return deck.getRemainingCardsSnapshot();
     }
@@ -783,29 +772,14 @@ public class Game {
                 player, players, activePlayers, seating, currentPhase, bigBlind);
     }
 
-    /**
-     * Returns whether every active player has had at least one turn in the current betting round.
-     *
-     * @return {@code true} if all active players have had an initial turn
-     */
     public boolean hasAllPlayersHadInitialTurn() {
         return bettingRound.hasAllPlayersHadInitialTurn();
     }
 
-    /**
-     * Returns an immutable copy of player IDs that have acted in the current betting round.
-     *
-     * @return set of acted player IDs
-     */
     public Set<String> getActedPlayerIdsSnapshot() {
         return bettingRound.getActedPlayerIdsSnapshot();
     }
 
-    /**
-     * Returns an immutable copy of each player's chip contributions in the current hand.
-     *
-     * @return player ID to contributed chips map
-     */
     public Map<String, Integer> getHandContributionsSnapshot() {
         return Map.copyOf(handContributions);
     }
@@ -822,11 +796,6 @@ public class Game {
         return lastSettlementResult;
     }
 
-    /**
-     * Returns whether the current or most recent hand has completed pot settlement.
-     *
-     * @return {@code true} if hand settlement is complete
-     */
     public boolean isHandSettled() {
         return lastSettlementResult != null;
     }
@@ -890,40 +859,18 @@ public class Game {
         return readyGate.areAllEligiblePlayersReady();
     }
 
-    /**
-     * Returns the scheduled deadline in epoch milliseconds for {@code task}, or {@code null} when not scheduled.
-     *
-     * @param task delayed task type
-     * @return scheduled deadline in epoch milliseconds, or {@code null}
-     */
     public Long getScheduledTaskDeadline(ScheduledGameTask task) {
         return scheduling.getDeadline(task);
     }
 
-    /**
-     * Returns whether an all-in auto-advance to showdown is currently scheduled.
-     *
-     * @return {@code true} if the auto-advance task has a scheduled deadline
-     */
     public boolean isAutoAdvancing() {
         return scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE) != null;
     }
 
-    /**
-     * Returns the current monotonic schedule count for {@code task}.
-     *
-     * @param task delayed task type
-     * @return schedule count, or {@code 0} if never scheduled
-     */
     public long getTimerVersion(ScheduledGameTask task) {
         return scheduling.getTimerVersion(task);
     }
 
-    /**
-     * Returns an immutable copy of all currently scheduled task deadlines.
-     *
-     * @return task-to-deadline map
-     */
     public Map<ScheduledGameTask, Long> getScheduledTaskDeadlinesSnapshot() {
         return scheduling.deadlinesSnapshot();
     }
@@ -932,12 +879,6 @@ public class Game {
         return scheduling.timerVersionsSnapshot();
     }
 
-    /**
-     * Returns whether this game has reached or passed its scheduled cleanup deadline.
-     *
-     * @param nowEpochMs current epoch timestamp in milliseconds
-     * @return {@code true} if cleanup deadline is set and {@code nowEpochMs} is at or past it
-     */
     public boolean isCleanupExpired(long nowEpochMs) {
         return scheduling.isCleanupExpired(nowEpochMs);
     }
@@ -1076,20 +1017,10 @@ public class Game {
         return pausedForDisconnectedSurvivor;
     }
 
-    /**
-     * Returns whether the game is settled or over without being paused for a disconnected survivor.
-     *
-     * @return {@code true} if the game has finished or can finalize without waiting on a disconnected survivor
-     */
     public boolean isMatchConcluded() {
         return !pausedForDisconnectedSurvivor && (gameOver || (isHandSettled() && isGameDecided()));
     }
 
-    /**
-     * Returns whether the current hand has not yet reached a settled {@link GamePhase#SHOWDOWN}.
-     *
-     * @return {@code true} if the hand is still running or settled outside showdown
-     */
     public boolean isHandInProgress() {
         return currentPhase != GamePhase.SHOWDOWN || !isHandSettled();
     }
@@ -1098,11 +1029,6 @@ public class Game {
         return gameEndResult;
     }
 
-    /**
-     * Returns whether the game concluded via abandonment rather than normal or forfeit settlement.
-     *
-     * @return {@code true} if a terminal game-end result is stored and marked abandoned
-     */
     public boolean isAbandoned() {
         return gameEndResult != null && gameEndResult.abandoned();
     }

@@ -80,74 +80,34 @@ public class CreateRoomRequest {
         this.password = (password != null && password.trim().isEmpty()) ? null : password;
     }
 
-    /**
-     * Returns the room display name.
-     *
-     * @return room name
-     */
     public String getRoomName() {
         return roomName;
     }
 
-    /**
-     * Returns the creating player's display name.
-     *
-     * @return player name
-     */
     public String getPlayerName() {
         return playerName;
     }
 
-    /**
-     * Replaces the player name, typically with its sanitized representation.
-     *
-     * @param playerName player name to retain
-     */
     public void setPlayerName(String playerName) {
         this.playerName = playerName;
     }
 
-    /**
-     * Returns the maximum room capacity.
-     *
-     * @return maximum player count
-     */
     public Integer getMaxPlayers() {
         return maxPlayers;
     }
 
-    /**
-     * Returns the small blind amount.
-     *
-     * @return small blind
-     */
     public Integer getSmallBlind() {
         return smallBlind;
     }
 
-    /**
-     * Returns the big blind amount.
-     *
-     * @return big blind
-     */
     public Integer getBigBlind() {
         return bigBlind;
     }
 
-    /**
-     * Returns each player's starting chip count.
-     *
-     * @return room buy-in
-     */
     public Integer getBuyIn() {
         return buyIn;
     }
 
-    /**
-     * Returns the optional room password.
-     *
-     * @return password, possibly {@code null} or blank
-     */
     public String getPassword() {
         return password;
     }

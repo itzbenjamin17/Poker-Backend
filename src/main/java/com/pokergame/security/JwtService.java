@@ -179,7 +179,7 @@ public class JwtService {
                 .getPayload();
     }
 
-    /** Reads the current membership claim, accepting the older claim spelling when present. */
+    // Reads the current membership claim, accepting the legacy "mid" claim when present.
     private static String resolveMembershipId(Claims claims) {
         String membershipId = claims.get("membershipId", String.class);
         if (membershipId == null) {

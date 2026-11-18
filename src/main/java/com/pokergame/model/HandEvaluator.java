@@ -15,7 +15,6 @@ import static java.util.Objects.requireNonNull;
  */
 public class HandEvaluator {
 
-    /** The number of cards in a poker hand. */
     private static final int HAND_SIZE = 5;
 
     /**
@@ -58,13 +57,7 @@ public class HandEvaluator {
         return new HandEvaluationResult(bestHand, bestRank);
     }
 
-    /**
-     * Works out which poker hand a 5-card hand makes. The cards must be sorted from lowest to
-     * highest value, which {@link #getBestHand(List, List)} does before calling this.
-     *
-     * @param cards exactly {@value #HAND_SIZE} cards, sorted from lowest to highest value
-     * @return the hand rank the cards make
-     */
+    // Cards must be sorted lowest to highest, which getBestHand guarantees.
     private HandRank evaluateHand(List<Card> cards) {
         if (isRoyalFlush(cards))
             return HandRank.ROYAL_FLUSH;
@@ -97,7 +90,7 @@ public class HandEvaluator {
      * group comes before a smaller one, and a higher value comes before a lower one. So a full
      * house lists its three of a kind and then its pair, and two pair lists the higher pair, the
      * lower pair and then the extra card. Straights are the exception: only the top card counts,
-     * and in the ace-low straight (A-2-3-4-5) that top card is the five. Royal flushes always tie.
+     * and in the ace-low straight (A-2-3-4-5) that top card is the five. Royal flushes and NO_HAND always tie.
      *
      * @param first  one 5-card hand
      * @param second another 5-card hand with the same rank
@@ -119,10 +112,7 @@ public class HandEvaluator {
         };
     }
 
-    /**
-     * Lists a hand's card values from most to least important: bigger groups of equal cards
-     * first, and within a group size the higher value first.
-     */
+    // Card values ordered most important first: larger groups first, higher values first within a group.
     private List<Integer> tiebreakValues(List<Card> hand) {
         return rankCounts(hand).entrySet().stream()
                 .sorted(Comparator.<Map.Entry<Rank, Long>, Long>comparing(Map.Entry::getValue)
@@ -142,7 +132,7 @@ public class HandEvaluator {
         return Integer.compare(first.size(), second.size());
     }
 
-    /** The top card of a straight; the ace counts as low (so the top is five) in A-2-3-4-5. */
+    // Top card of a straight; ace counts as 5 in A-2-3-4-5.
     private int straightTopValue(List<Card> straight) {
         boolean hasAce = straight.stream().anyMatch(card -> card.rank() == Rank.ACE);
         boolean hasTwo = straight.stream().anyMatch(card -> card.rank() == Rank.TWO);
@@ -226,12 +216,10 @@ public class HandEvaluator {
         return rankCounts(hand).containsValue(2L);
     }
 
-    /** How many cards of each rank the hand holds. */
     private static Map<Rank, Long> rankCounts(List<Card> hand) {
         return hand.stream().collect(Collectors.groupingBy(Card::rank, Collectors.counting()));
     }
 
-    /** The rank counts from largest to smallest, for example {@code [3, 2]} for a full house. */
     private static List<Long> sortedCounts(List<Card> hand) {
         return rankCounts(hand).values().stream().sorted(Collections.reverseOrder()).toList();
     }

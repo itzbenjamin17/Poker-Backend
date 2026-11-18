@@ -85,9 +85,6 @@ public class PayloadSizeFilter extends OncePerRequestFilter {
         response.getWriter().write("{\"message\": \"Request payload too large. Maximum allowed is 10KB.\"}");
     }
 
-    /**
-     * Signals that more than {@link #MAX_PAYLOAD_SIZE} bytes were read from the request body.
-     */
     private static final class PayloadTooLargeException extends IOException {
         private final long bytesRead;
 
@@ -100,9 +97,6 @@ public class PayloadSizeFilter extends OncePerRequestFilter {
         }
     }
 
-    /**
-     * Request wrapper that exposes a byte-counting input stream enforcing the payload bound.
-     */
     private static final class BoundedRequest extends HttpServletRequestWrapper {
         private BoundedServletInputStream inputStream;
 
@@ -119,10 +113,7 @@ public class PayloadSizeFilter extends OncePerRequestFilter {
         }
     }
 
-    /**
-     * Counting {@link ServletInputStream} that throws once the cumulative byte count exceeds the
-     * payload limit, so unbounded (chunked / unknown-length) bodies cannot stream past the bound.
-     */
+    // Throws once the cumulative byte count exceeds MAX_PAYLOAD_SIZE so chunked/unknown-length bodies stay bounded.
     private static final class BoundedServletInputStream extends ServletInputStream {
         private final ServletInputStream delegate;
         private long bytesRead;

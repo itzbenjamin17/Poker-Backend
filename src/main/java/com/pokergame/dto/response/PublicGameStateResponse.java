@@ -38,7 +38,7 @@ import com.pokergame.enums.PlayerAction;
  *                                      win.
  * @param handSettled                   Whether retained settlement metadata proves this hand completed; an empty
  *                                      winner list can describe a void hand with carried-over chips.
- * @param carryOverAmount               The explicit unresolved chip amount retained for a later hand or terminal payout.
+ * @param carryOverAmount               The explicit unresolved chip amount retained for a later hand or final payout.
  * @param legalActions                  Authoritative actions for the current actor; empty means no actor can act.
  * @param minimumBetAmount              Minimum bet in incremental chip units, nullable when no actor can bet.
  * @param minimumRaiseAmount            Full minimum raise in incremental chip units, including the call amount; a

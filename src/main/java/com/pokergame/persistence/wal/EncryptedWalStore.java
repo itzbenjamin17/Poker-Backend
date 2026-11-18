@@ -409,21 +409,18 @@ public final class EncryptedWalStore {
 
     /**
      * Reports overall store health for the persistence health indicator.
-     * Returns {@code true} only when startup recovery succeeded and no room has an outstanding write failure.
      *
-     * @return {@code true} if startup recovery succeeded and no room has an outstanding write failure
+     * @return {@code true} only when startup recovery succeeded and no room has an outstanding write failure
      */
     public boolean isHealthy() {
         return !recoveryFailed.get() && failedRooms.isEmpty();
     }
 
     /**
-     * Checks whether persistence is healthy for a specific room.
-     * Returns {@code true} when startup recovery succeeded and {@code roomId} has no outstanding write failure,
-     * independent of write failures in other rooms.
+     * Checks whether persistence is healthy for {@code roomId}, independent of other rooms.
      *
      * @param roomId the room to check
-     * @return {@code true} if ordinary persistence operations for {@code roomId} can proceed
+     * @return {@code true} when startup recovery succeeded and {@code roomId} has no outstanding write failure
      */
     public boolean isHealthy(String roomId) {
         return !recoveryFailed.get() && roomId != null && !failedRooms.contains(roomId);

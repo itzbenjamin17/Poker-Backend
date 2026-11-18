@@ -27,9 +27,9 @@ import jakarta.validation.Valid;
 import static java.util.Objects.requireNonNull;
 
 /**
- * REST controller for active poker game operations.
- * Manages player actions and game departures using WebSocket for real-time
- * updates.
+ * REST and STOMP controller for active poker game operations: gameplay actions,
+ * public and private state snapshots, disconnect win claims, and post-game review.
+ * Room departures live in {@link RoomController}.
  * Secured operations hold the room lease from membership validation through completion.
  */
 @RestController
@@ -193,7 +193,7 @@ public class GameController {
     }
 
     /**
-     * Fetches the frozen terminal result for post-game review.
+     * Fetches the frozen final game result for post-game review.
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param gameId          game identifier
@@ -211,7 +211,7 @@ public class GameController {
         String playerName = playerPrincipal.playerName();
         logger.debug("Player {} requested game review for {}", playerName, gameId);
 
-        // Security check: ensure the token is actually for THIS game/room (null-safe)
+        // Security check: ensure the token is actually for THIS game/room
         playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
@@ -227,7 +227,7 @@ public class GameController {
      *
      * @param gameId    game identifier
      * @param playerPrincipal authenticated player principal
-     * @return terminal result confirmation
+     * @return final game result confirmation
      */
     @PostMapping("/{gameId}/claim-win")
     public ResponseEntity<ApiResponse<GameEndResponse>> claimWin(
@@ -240,7 +240,7 @@ public class GameController {
         String playerName = playerPrincipal.playerName();
         logger.info("Player {} attempting to claim win in game {}", playerName, gameId);
 
-        // Security check: ensure the token is actually for THIS game/room (null-safe)
+        // Security check: ensure the token is actually for THIS game/room
         playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
         try (LockLease _ = roomCoordinator.acquire(gameId)) {

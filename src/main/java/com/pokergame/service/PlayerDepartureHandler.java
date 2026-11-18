@@ -24,7 +24,10 @@ import org.springframework.stereotype.Component;
 /**
  * Coordinates player removals, disconnects, reconnects, disconnect grace expirations, turn
  * timeouts, host transfer, and disconnect win claims across rooms and live games.
- * After game over, connections aren't tracked, and everyone stays a member until cleanup.
+ * Once the game is over, game-seat connection tracking and disconnect removals stop; explicit
+ * leaves still detach room members when {@code game.isMatchConcluded()}, and
+ * {@code markPlayerReconnected} still updates room presence via {@code markRoomMemberConnected}
+ * when no finished game blocks it.
  * Every method needs the room lock for the room it works on.
  */
 @Component
@@ -84,15 +87,6 @@ class PlayerDepartureHandler {
         removePlayersFromRoomAndGame(roomId, playerNames, room, game);
     }
 
-    /**
-     * Removes departing players from the lobby, or from the room and its game, transferring host
-     * ownership, settling forfeits, or cleaning up an empty room as appropriate.
-     *
-     * @param roomId      the unique ID of the room/game
-     * @param playerNames names of departing players
-     * @param room        the backing room
-     * @param game        the active game, or {@code null} if still in lobby
-     */
     private void removePlayersFromRoomAndGame(String roomId, Collection<String> playerNames, Room room, Game game) {
         List<String> departing = List.copyOf(new LinkedHashSet<>(playerNames));
         List<String> departingRoomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
@@ -348,16 +342,8 @@ class PlayerDepartureHandler {
                 actorToDepart, timings.turnAllowanceMs(), gameId);
     }
 
-    /**
-     * Selects the next room host when current members depart, keeping the current host if still
-     * present or otherwise picking the first remaining connected contender, disconnected contender,
-     * or room member in join order.
-     *
-     * @param room             the current room
-     * @param game             the active game, or {@code null}
-     * @param departingMembers names of members about to leave
-     * @return the next host's name, or {@code null} if no members remain
-     */
+    // Keeps the current host if still present, or otherwise picks the first remaining connected
+    // contender, disconnected contender, or room member in join order.
     private String selectNextHost(Room room, Game game, Collection<String> departingMembers) {
         String currentHost = room.getHostName();
         List<String> remaining = room.getPlayers().stream()

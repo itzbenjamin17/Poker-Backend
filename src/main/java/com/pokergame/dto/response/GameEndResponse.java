@@ -3,7 +3,7 @@ package com.pokergame.dto.response;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
- * Represents the terminal game-end message broadcast when a winner is determined
+ * Represents the final game-end message broadcast when a winner is determined
  * or the game is abandoned due to inactivity.
  *
  * @param type        wire-format message category, always {@code "GAME_END"}.
@@ -12,7 +12,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * @param winnerChips the winner's final chip stack, or null if abandoned.
  * @param isForfeit   true if the game ended due to a player leaving/disconnecting.
  * @param abandoned   true if the game was abandoned without a winner.
- * @param reason      terminal reason, e.g. "INACTIVITY" when abandoned.
+ * @param reason      end reason, e.g. "INACTIVITY" when abandoned.
  * @param message     a human-readable summary of the result.
  * @param finalState  a frozen final-state snapshot that the client can freeze
  *                    and use for the post-game review screen.

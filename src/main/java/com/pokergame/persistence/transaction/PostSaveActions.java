@@ -92,12 +92,6 @@ public final class PostSaveActions {
         }
     }
 
-    /**
-     * Holds the room ID and queued post-save actions for the active thread.
-     *
-     * @param roomId  the room being modified
-     * @param actions actions to run after the change is accepted and saved
-     */
     private record Context(String roomId, List<Runnable> actions) {
     }
 }

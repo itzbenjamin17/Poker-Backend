@@ -22,11 +22,6 @@ public enum PlayerStatus {
         this.status = status;
     }
 
-    /**
-     * Returns the serialized status value.
-     *
-     * @return wire-format status
-     */
     public String getStatus() {
         return status;
     }

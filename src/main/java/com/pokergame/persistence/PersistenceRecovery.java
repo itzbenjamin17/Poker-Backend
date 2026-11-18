@@ -74,12 +74,6 @@ public final class PersistenceRecovery implements ApplicationRunner {
         recover();
     }
 
-    /**
-     * Tells us if the server has finished loading all the games from disk.
-     * Even if the files on disk are fine, the server isn't ready until this is true.
-     *
-     * @return {@code true} only after all games and timers are fully loaded and ready
-     */
     public boolean isComplete() {
         return complete;
     }

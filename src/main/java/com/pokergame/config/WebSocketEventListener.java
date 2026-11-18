@@ -296,7 +296,7 @@ public class WebSocketEventListener {
      *
      * @param roomId         room identity
      * @param playerName     member identity
-     * @param membershipId   opaque process-local membership identity from Room.addPlayer
+     * @param membershipId   opaque session-bound membership identity from Room.addPlayer
      * @param deadlineEpochMs original acceptance deadline
      */
     public void registerInitialConnection(String roomId, String playerName, String membershipId, long deadlineEpochMs) {
@@ -454,7 +454,7 @@ public class WebSocketEventListener {
         return sessions != null && !sessions.isEmpty();
     }
 
-    /**
+    /*
      * A scheduled grace-period cleanup for one player membership in one room.
      * Reconnect handling cancels it, and the cleanup callback checks that this exact
      * instance is still the registered one (by identity) before removing anyone, so
@@ -494,10 +494,7 @@ public class WebSocketEventListener {
         return roomCoordinator.acquire(roomId);
     }
 
-    /**
-     * Returns the room/player key used only for runtime connection tracking.
-     * Spring private routing uses the separate membership-bound principal name.
-     */
+    // Runtime connection tracking key; Spring private routing uses the separate membership-bound principal name.
     private static String playerKey(PlayerPrincipal principal) {
         return principal.playerName() + ":" + principal.roomId();
     }
@@ -544,7 +541,7 @@ public class WebSocketEventListener {
         publishRoomDestroyed(event.roomId());
     }
 
-    /**
+    /*
      * Runs transient-state cleanup on the scheduler so the publisher, which still holds
      * the room lease while after-commit callbacks run, is not delayed by it. The cleanup
      * takes the room lease itself and so runs once the publishing mutation has released it.

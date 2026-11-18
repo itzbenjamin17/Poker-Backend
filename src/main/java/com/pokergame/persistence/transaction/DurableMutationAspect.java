@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Aspect
 public final class DurableMutationAspect {
     private static final Logger logger = LoggerFactory.getLogger(DurableMutationAspect.class);
-    /** A save appends a prepare record and a commit record to the room's log. */
+    // A save appends a prepare record and a commit record to the room's log.
     private static final int WAL_RECORDS_PER_SAVE = 2;
 
     private final EncryptedWalStore store;
@@ -222,7 +222,7 @@ public final class DurableMutationAspect {
         pendingSaves.remove(roomId, pending);
     }
 
-    /**
+    /*
      * Records a failure that happened in this aspect (snapshot, serialization or restore) so the store
      * marks the room unsaved. Failures inside store calls are recorded by the store itself.
      */
@@ -258,13 +258,13 @@ public final class DurableMutationAspect {
         return new RollbackState(image, Map.copyOf(connections));
     }
 
-    /** Process-local connectivity is intentionally separate from the persisted image. */
+    // Process-local connectivity is intentionally separate from the persisted image.
     private record ConnectionState(boolean connected, Long absenceDeadline) { }
 
-    /** A null image denotes a room that did not exist before the rejected command. */
+    // A null image denotes a room that did not exist before the rejected command.
     private record RollbackState(RoomSnapshot image, Map<String, ConnectionState> connections) { }
 
-    /**
+    /*
      * Restores the independent pre-mutation RAM image after a rejection. Disk may lag
      * accepted gameplay, so WAL bytes are never a safe rollback source.
      */
@@ -298,7 +298,7 @@ public final class DurableMutationAspect {
         }
     }
 
-    /** Ensures a pre-mutation WAL prepare failure on an existing room is retried later. */
+    // Ensures a pre-mutation WAL prepare failure on an existing room is retried later.
     private void queuePrepareRecoverySaveIfNeeded(String roomId) {
         if (pendingSaves.containsKey(roomId)) return;
         try {
@@ -319,7 +319,7 @@ public final class DurableMutationAspect {
         }
     }
 
-    /** Removes an uncommitted creation WAL only when prepare ran and no accepted room remains. */
+    // Removes an uncommitted creation WAL only when prepare ran and no accepted room remains.
     private void cleanupAbortedCreation(String roomId, boolean prepared) {
         roomCoordinator.assertHeldByCurrentThread(roomId);
         try {
@@ -350,7 +350,7 @@ public final class DurableMutationAspect {
         return roomId;
     }
 
-    /** Finds the one parameter marked {@link RoomId} or {@link GameId}; the result is cached per method. */
+    // Finds the one parameter marked @RoomId or @GameId; the result is cached per method.
     private static int findRoomIdParameter(Method method) {
         Parameter[] parameters = method.getParameters();
         int found = -1;

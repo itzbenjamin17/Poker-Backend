@@ -44,11 +44,6 @@ public record Card(Rank rank, Suit suit) {
         return r + suit.name().charAt(0);
     }
 
-    /**
-     * Returns the numeric value of this card.
-     *
-     * @return the card's numeric value (2-14)
-     */
     public int getValue() {
         return rank.getValue();
     }

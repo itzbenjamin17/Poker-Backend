@@ -39,24 +39,24 @@ public class Room {
     private final String roomId;
     private final String roomName;
     private String hostName;
-    /**
+    /*
      * Join-order and arrival timestamps for players in this room.
      * Guarded by the room lock after publication.
      */
     private final LinkedHashMap<String, LocalDateTime> playersWithJoinTime;
-    /**
+    /*
      * Session membership identities created per addPlayer and preserved across WAL snapshots.
      * Reads and writes require the room lock after publication.
      */
     private final Map<String, String> playerMembershipIds = new LinkedHashMap<>();
 
-    /**
+    /*
      * Process-local absence deadlines for players awaiting first connection or reconnect grace.
      * Guarded by the room lock after publication. Excluded from WAL serialization.
      */
     private final Map<String, Long> playerAbsenceDeadlines = new LinkedHashMap<>();
 
-    /**
+    /*
      * Process-local active socket presence bounded by room membership.
      * Guarded by the room lock after publication. Excluded from WAL serialization.
      */
@@ -280,11 +280,6 @@ public class Room {
         }
     }
 
-    /**
-     * Checks if the room has reached its maximum player capacity.
-     *
-     * @return true if the room is full, false otherwise
-     */
     public boolean isFull() {
         return playersWithJoinTime.size() >= maxPlayers;
     }
@@ -294,7 +289,7 @@ public class Room {
      * and the room has capacity.
      *
      * @param playerName the name of the player to add
-     * @return the process-local membership ID for the added player
+     * @return the session-bound membership ID for the added player
      * @throws BadRequestException   if the player is already in the room
      * @throws IllegalStateException if the room is full
      */
@@ -308,7 +303,7 @@ public class Room {
      *
      * @param playerName the name of the player to add
      * @param clock      clock used to record the player's join timestamp
-     * @return the process-local membership ID for the added player
+     * @return the session-bound membership ID for the added player
      * @throws BadRequestException   if the player is already in the room
      * @throws IllegalStateException if the room is full
      */
@@ -344,31 +339,14 @@ public class Room {
         connectedPlayers.remove(playerName);
     }
 
-    /**
-     * Checks if a player is currently in the room.
-     *
-     * @param playerName the name of the player to check
-     * @return true if the player is in the room, false otherwise
-     */
     public boolean hasPlayer(String playerName) {
         return playersWithJoinTime.containsKey(playerName);
     }
 
-    /**
-     * Returns the timestamp when a player joined the room.
-     *
-     * @param playerName the name of the player
-     * @return the join timestamp, or null if player not found
-     */
     public LocalDateTime getJoinedAt(String playerName) {
         return playersWithJoinTime.get(playerName);
     }
 
-    /**
-     * Checks if this room is password-protected.
-     *
-     * @return true if the room has a password hash, false otherwise
-     */
     public boolean hasPassword() {
         return passwordHash != null && !passwordHash.isEmpty();
     }
@@ -529,58 +507,26 @@ public class Room {
         return passwordHash;
     }
 
-    /**
-     * Distinguishes lobby host-leave behavior from active-game host transfer.
-     *
-     * @return whether gameplay has started
-     */
     public boolean isGameStarted() {
         return isGameStarted;
     }
 
-    /**
-     * Records the lifecycle boundary that changes host and cleanup rules.
-     *
-     * @param gameStarted whether gameplay has started
-     */
     public void setGameStarted(boolean gameStarted) {
         this.isGameStarted = gameStarted;
     }
 
-    /**
-     * Checks if gameplay in this room has ended and the room is retained for post-game review.
-     *
-     * @return {@code true} if gameplay in this room has ended
-     */
     public boolean isFinished() {
         return isFinished;
     }
 
-    /**
-     * Marks whether gameplay in this room has ended and the room is retained for post-game review.
-     *
-     * @param finished {@code true} if gameplay has ended
-     */
     public void setFinished(boolean finished) {
         this.isFinished = finished;
     }
 
-    /**
-     * Returns the opaque process-local membership ID for a player in this room.
-     *
-     * @param playerName the name of the player
-     * @return membership ID, or null if player is not in room
-     */
     public String getMembershipId(String playerName) {
         return playerMembershipIds.get(playerName);
     }
 
-    /**
-     * Returns the process-local absence deadline epoch ms for a player in this room.
-     *
-     * @param playerName the name of the player
-     * @return absence deadline epoch ms, or null if none set
-     */
     public Long getAbsenceDeadline(String playerName) {
         return playerAbsenceDeadlines.get(playerName);
     }
@@ -599,12 +545,6 @@ public class Room {
         }
     }
 
-    /**
-     * Checks if a player currently has an active confirmed connection in this room.
-     *
-     * @param playerName the name of the player
-     * @return true if connected, false otherwise
-     */
     public boolean isPlayerConnected(String playerName) {
         return connectedPlayers.contains(playerName);
     }
