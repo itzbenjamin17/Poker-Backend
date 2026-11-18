@@ -218,6 +218,36 @@ class RoomCoordinatorTest {
     }
 
     @Test
+    @DisplayName("closing a reentrant lease multiple times is idempotent and preserves the outer lock")
+    void closingReentrantLeaseMultipleTimesIsIdempotentAndPreservesOuterLock() {
+        String roomId = "room-1";
+        String otherRoomId = "room-2";
+        LockLease outer = roomCoordinator.acquire(roomId);
+        LockLease inner = roomCoordinator.acquire(roomId);
+        assertThat(roomCoordinator.lockReservationCount(roomId)).isEqualTo(2);
+
+        inner.close();
+        assertDoesNotThrow(inner::close);
+
+        assertThat(roomCoordinator.isHeldByCurrentThread(roomId)).isTrue();
+        assertThat(roomCoordinator.lockReservationCount(roomId)).isEqualTo(1);
+        assertDoesNotThrow(() -> roomCoordinator.assertHeldByCurrentThread(roomId));
+        assertThatThrownBy(() -> roomCoordinator.acquire(otherRoomId))
+                .isInstanceOf(IllegalStateException.class);
+
+        outer.close();
+        assertDoesNotThrow(outer::close);
+
+        assertThat(roomCoordinator.isHeldByCurrentThread(roomId)).isFalse();
+        assertThat(roomCoordinator.lockReservationCount(roomId)).isEqualTo(0);
+        assertThat(roomCoordinator.activeLockCount()).isEqualTo(0);
+        try (LockLease other = roomCoordinator.acquire(otherRoomId)) {
+            assertThat(other).isNotNull();
+            assertThat(roomCoordinator.isHeldByCurrentThread(otherRoomId)).isTrue();
+        }
+    }
+
+    @Test
     @DisplayName("null arguments reject cleanly with NullPointerException")
     void nullArgumentsValidation() {
         assertThatThrownBy(() -> roomCoordinator.acquire(null))

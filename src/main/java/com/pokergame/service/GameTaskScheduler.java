@@ -155,27 +155,16 @@ class GameTaskScheduler {
     }
 
     /**
-     * Extends the inactivity deadline for an active game if it has not yet finished.
+     * Extends {@code game}'s inactivity deadline by the configured allowance and reschedules its
+     * timer if the game has not yet finished.
      *
-     * @param gameId the room/game ID
+     * @param game the active game instance
      */
-    void resetGameInactivity(String gameId) {
-        Game game = activeGames.get(gameId);
-        if (game != null) {
-            resetGameInactivity(gameId, game);
-        }
-    }
-
-    /**
-     * Extends {@code game}'s inactivity deadline by the configured allowance and reschedules its timer.
-     *
-     * @param gameId the room/game ID
-     * @param game   the active game instance
-     */
-    void resetGameInactivity(String gameId, Game game) {
+    void resetGameInactivity(Game game) {
         if (game.isGameOver()) {
             return;
         }
+        String gameId = game.getGameId();
         long now = clock.millis();
         Room room = roomService.getRoom(gameId);
         if (room != null) {

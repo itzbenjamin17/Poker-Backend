@@ -238,7 +238,7 @@ class GameTaskSchedulerTest {
                 .schedule(callbackCaptor.capture(), instantCaptor.capture());
 
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-            scheduler.resetGameInactivity(GAME_ID);
+            scheduler.resetGameInactivity(game);
         }
 
         long expectedDeadline = BASE_EPOCH_MS + TestTimings.GAME_INACTIVITY_ALLOWANCE_MS;
@@ -252,7 +252,7 @@ class GameTaskSchedulerTest {
         game.markGameOver();
         mutableClock.setMillis(BASE_EPOCH_MS + 5_000L);
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-            scheduler.resetGameInactivity(GAME_ID, game);
+            scheduler.resetGameInactivity(game);
         }
         assertEquals(expectedDeadline, room.getInactivityDeadlineEpochMs());
     }

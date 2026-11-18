@@ -5,7 +5,6 @@ import com.pokergame.util.RoomCoordinator;
 
 import static java.util.Objects.requireNonNull;
 
-import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
@@ -21,7 +20,6 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Objects;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -146,20 +144,6 @@ public class GameLifecycleService {
     }
 
     /**
-     * Applies the result of a player decision under the room lock, updating timers and
-     * broadcasting the next turn, all-in progression, or showdown state.
-     *
-     * @param gameId                     the unique ID of the game
-     * @param game                       the active game instance
-     * @param outcome                    the turn outcome returned by {@link Game}
-     * @param notifyImmediateAutoAdvance {@code true} to broadcast an immediate auto-advance notice
-     */
-    @DurableMutation
-    public void applyTurnOutcome(@GameId String gameId, Game game, TurnOutcome outcome, boolean notifyImmediateAutoAdvance) {
-        readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, outcome, notifyImmediateAutoAdvance);
-    }
-
-    /**
      * Abandons the game due to inactivity only if {@code expectedDeadlineEpochMs} still matches
      * the room's current deadline and has expired.
      *
@@ -183,16 +167,6 @@ public class GameLifecycleService {
     @DurableMutation
     public void abandonGameDueToInactivity(@GameId String gameId) {
         completionHandler.abandonGameDueToInactivity(gameId);
-    }
-
-    /**
-     * Extends the active game's inactivity deadline and reschedules its inactivity timer.
-     *
-     * @param gameId the unique ID of the game
-     */
-    @DurableMutation
-    public void resetGameInactivity(@GameId String gameId) {
-        taskScheduler.resetGameInactivity(gameId);
     }
 
     /**
@@ -232,7 +206,7 @@ public class GameLifecycleService {
         switch (task) {
             case TURN_TIMEOUT -> departureHandler.handleTurnTimeout(game);
             case AUTO_ADVANCE -> readinessCoordinator.applyAutoAdvanceTimeoutAndOpenReadyGateIfNeeded(game);
-            case READY_TIMEOUT -> readinessCoordinator.handleReadyTimeout(gameId, game, expectedDeadline);
+            case READY_TIMEOUT -> readinessCoordinator.handleReadyTimeout(game, expectedDeadline);
             case NEW_HAND -> readinessCoordinator.startNewHandAndOpenReadyGateIfNeeded(gameId);
             case READY_OPEN -> readinessCoordinator.openReadyGate(game);
             case GAME_END -> completionHandler.handleGameEnd(gameId);
@@ -248,18 +222,6 @@ public class GameLifecycleService {
      */
     public void cancelTimers(String gameId, boolean keepCleanup) {
         runtimeTimers.cancelAllForGame(gameId, keepCleanup);
-    }
-
-    /**
-     * Returns whether {@code gameId} has an active inactivity deadline that has already elapsed.
-     *
-     * @param gameId the unique ID of the game
-     * @return {@code true} if the game's inactivity deadline has passed
-     */
-    public boolean isGameInactivityExpired(String gameId) {
-        roomCoordinator.assertHeldByCurrentThread(gameId);
-        Room room = roomService.getRoom(gameId);
-        return room != null && room.isInactivityExpired(clock.millis());
     }
 
     /**
@@ -287,11 +249,10 @@ public class GameLifecycleService {
         }
         roomCoordinator.assertHeldByCurrentThread(gameId);
         Game game = activeGames.get(gameId);
-        if (game == null || game.getPlayers() == null) {
+        if (game == null) {
             return false;
         }
         return game.getPlayers().stream()
-                .filter(Objects::nonNull)
                 .anyMatch(player -> playerName.equals(player.getName()) && !player.getIsOut());
     }
 
@@ -369,15 +330,6 @@ public class GameLifecycleService {
     @DurableMutation
     public void unmarkPlayerReadyForNextHand(@GameId String gameId, String playerName) {
         readinessCoordinator.unmarkPlayerReadyForNextHand(gameId, playerName);
-    }
-
-    /**
-     * Cancels the current turn timeout timer for {@code gameId}.
-     *
-     * @param gameId the unique ID of the game
-     */
-    public void cancelTurnTimeout(String gameId) {
-        runtimeTimers.cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
     }
 
     /**

@@ -2,7 +2,6 @@ package com.pokergame.service;
 
 import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.response.GameEndResponse;
-import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -67,8 +66,7 @@ class GameCompletionHandler {
      * @param forfeitedPlayers names of players who forfeited
      */
     void handleGameEndWithForfeits(String gameId, Player preferredWinner, Set<String> forfeitedPlayers) {
-        Set<String> forfeits = forfeitedPlayers == null ? Set.of() : Set.copyOf(forfeitedPlayers);
-        handleGameEndInternal(gameId, true, preferredWinner, forfeits);
+        handleGameEndInternal(gameId, true, preferredWinner, Set.copyOf(forfeitedPlayers));
     }
 
     /**
@@ -103,7 +101,6 @@ class GameCompletionHandler {
      * @param gameId the unique ID of the game
      */
     void abandonGameDueToInactivity(String gameId) {
-        runtimeTimers.cancelInactivity(gameId);
         Game game = activeGames.get(gameId);
         if (game == null) {
             return;
@@ -114,13 +111,8 @@ class GameCompletionHandler {
         }
         game.markGameOver();
         game.closeReadyCountdown();
-        game.invalidateProgressionTasks();
+        game.clearAllScheduledTasks();
         runtimeTimers.cancelAllForGame(gameId, true);
-        game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
-        game.clearScheduledTask(ScheduledGameTask.TURN_TIMEOUT);
-        game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
-        game.clearScheduledTask(ScheduledGameTask.READY_OPEN);
-        game.clearScheduledTask(ScheduledGameTask.NEW_HAND);
         GameEndResponse event = gameStateService.advanceRevisionAndBuildAbandonment(game);
         game.setGameEndResult(event);
 
@@ -171,7 +163,7 @@ class GameCompletionHandler {
             throw new IllegalStateException("Finished game " + gameId + " has no stored game end result");
         }
         if (!wasPlayerInGame(game, result, playerName)) {
-            throw new UnauthorisedActionException("You are not part of this game's terminal result.");
+            throw new UnauthorisedActionException("You are not part of this game's game result.");
         }
         return result;
     }
@@ -203,6 +195,7 @@ class GameCompletionHandler {
                     "Game has expired due to inactivity");
         }
     }
+
     /**
      * Clears and removes an abandoned game from memory once no non-eliminated players or room members remain.
      *
@@ -215,9 +208,7 @@ class GameCompletionHandler {
             return;
         }
         game.closeReadyCountdown();
-        for (ScheduledGameTask task : ScheduledGameTask.values()) {
-            game.clearScheduledTask(task);
-        }
+        game.clearAllScheduledTasks();
         runtimeTimers.cancelAllForGame(gameId, false);
         activeGames.remove(gameId);
     }
@@ -256,12 +247,10 @@ class GameCompletionHandler {
     }
 
     private static boolean wasPlayerInGame(Game game, GameEndResponse result, String playerName) {
-        boolean inFinalState = result != null
-                && result.finalState() != null
+        boolean inFinalState = result.finalState() != null
                 && result.finalState().players() != null
                 && result.finalState().players().stream().anyMatch(p -> p.name().equals(playerName));
-        boolean inGameRoster = game.getPlayers() != null
-                && game.getPlayers().stream().anyMatch(p -> p.getName().equals(playerName));
+        boolean inGameRoster = game.getPlayers().stream().anyMatch(p -> p.getName().equals(playerName));
         return inFinalState || inGameRoster;
     }
 }

@@ -2329,6 +2329,16 @@ class GameTest {
             aggGame.clearScheduledTask(ScheduledGameTask.CLEANUP);
             assertNull(aggGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
 
+            for (ScheduledGameTask task : ScheduledGameTask.values()) {
+                aggGame.scheduleTask(task, 70_000L + task.ordinal());
+            }
+            java.util.Map<ScheduledGameTask, Long> gensBeforeClearAll = aggGame.getScheduledTaskGenerationsSnapshot();
+            aggGame.clearAllScheduledTasks();
+            for (ScheduledGameTask task : ScheduledGameTask.values()) {
+                assertNull(aggGame.getScheduledTaskDeadline(task));
+                assertEquals(gensBeforeClearAll.get(task) + 1, aggGame.getScheduledTaskGeneration(task));
+            }
+
             GameEndResponse endResponse = new GameEndResponse(
                     "GAME_END", "game-adversarial-1", "Alice", 2000, false, "Game Over", null);
             aggGame.setGameEndResult(endResponse);

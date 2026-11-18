@@ -370,18 +370,8 @@ class GameReadinessCoordinatorTest {
     class HandleReadyTimeoutTests {
 
         @Test
-        @DisplayName("ignores stale deadline and cancels timer when game is null")
-        void handleReadyTimeout_StaleDeadlineAndNullGame() {
-            @SuppressWarnings("unchecked")
-            ScheduledFuture<Object> readyFuture = mock(ScheduledFuture.class);
-            doReturn(readyFuture).when(springScheduler).schedule(any(Runnable.class), any(Instant.class));
-            timerRegistry.schedule(GAME_ID, ScheduledGameTask.READY_TIMEOUT, BASE_EPOCH_MS + 1_000L, () -> {});
-
-            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.handleReadyTimeout(GAME_ID, null, BASE_EPOCH_MS);
-            }
-            verify(readyFuture).cancel(false);
-
+        @DisplayName("ignores stale deadline")
+        void handleReadyTimeout_StaleDeadline() {
             Game game = createShowdownGame(List.of(
                     new Player("Host", "host", 1000),
                     new Player("Player2", "p2", 1000)));
@@ -392,7 +382,7 @@ class GameReadinessCoordinatorTest {
             long handBefore = game.getHandNumber();
 
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.handleReadyTimeout(GAME_ID, game, expectedDeadline - 100L);
+                readinessCoordinator.handleReadyTimeout(game, expectedDeadline - 100L);
             }
             assertTrue(game.isReadyCountdownActive());
             assertEquals(handBefore, game.getHandNumber());
@@ -414,7 +404,7 @@ class GameReadinessCoordinatorTest {
             p2.setDisconnected(true);
             clearInvocations(gameStateService);
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.handleReadyTimeout(GAME_ID, game, deadline);
+                readinessCoordinator.handleReadyTimeout(game, deadline);
             }
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, game.getReadyGateState());
             assertEquals(hand1, game.getHandNumber());
@@ -425,7 +415,7 @@ class GameReadinessCoordinatorTest {
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 readinessCoordinator.openReadyGate(game);
                 long secondDeadline = game.getReadyCountdownDeadlineEpochMs();
-                readinessCoordinator.handleReadyTimeout(GAME_ID, game, secondDeadline);
+                readinessCoordinator.handleReadyTimeout(game, secondDeadline);
             }
             assertEquals(hand1 + 1, game.getHandNumber());
             assertFalse(game.isReadyCountdownActive());
@@ -448,7 +438,7 @@ class GameReadinessCoordinatorTest {
             host.setReadyForNextHand(true);
             p2.setReadyForNextHand(true);
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.completeReadyCountdownIfEveryoneReady(game);
+                assertFalse(readinessCoordinator.completeReadyCountdownIfEveryoneReady(game));
             }
             assertEquals(handBefore, game.getHandNumber());
 
@@ -460,7 +450,7 @@ class GameReadinessCoordinatorTest {
             }
             host.setReadyForNextHand(true);
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.completeReadyCountdownIfEveryoneReady(game);
+                assertFalse(readinessCoordinator.completeReadyCountdownIfEveryoneReady(game));
             }
             assertTrue(game.isReadyCountdownActive());
             assertEquals(handBefore, game.getHandNumber());
@@ -468,7 +458,7 @@ class GameReadinessCoordinatorTest {
             // Countdown open and everyone ready: next hand is dealt
             p2.setReadyForNextHand(true);
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                readinessCoordinator.completeReadyCountdownIfEveryoneReady(game);
+                assertTrue(readinessCoordinator.completeReadyCountdownIfEveryoneReady(game));
             }
             assertEquals(handBefore + 1, game.getHandNumber());
         }

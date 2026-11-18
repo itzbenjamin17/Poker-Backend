@@ -87,6 +87,16 @@ final class GameScheduling {
         }
     }
 
+    /**
+     * Clears every scheduled task (including {@link ScheduledGameTask#CLEANUP}) and increments
+     * their schedule counts so any in-flight timer callback is ignored.
+     */
+    void clearAllTasks() {
+        for (ScheduledGameTask task : ScheduledGameTask.values()) {
+            clearTask(task);
+        }
+    }
+
     Long getDeadline(ScheduledGameTask task) {
         return task == null ? null : deadlines.get(task);
     }

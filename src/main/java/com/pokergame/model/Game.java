@@ -574,6 +574,14 @@ public class Game {
     }
 
     /**
+     * Clears every scheduled task (including {@link ScheduledGameTask#CLEANUP}) and increments
+     * their schedule counts.
+     */
+    public void clearAllScheduledTasks() {
+        scheduling.clearAllTasks();
+    }
+
+    /**
      * Claims execution of a firing timer callback against current game state.
      *
      * @param task               task type that fired

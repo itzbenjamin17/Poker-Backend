@@ -167,9 +167,7 @@ class LifecycleCoordinationIT {
             assertThatThrownBy(() -> gameLifecycleService.validatePlayerMembership(roomId, "Host", "mem"))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("does not hold room lock for room: " + roomId);
-            assertThatThrownBy(() -> gameLifecycleService.isGameInactivityExpired(roomId))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("does not hold room lock for room: " + roomId);
+
             assertThatThrownBy(() -> gameLifecycleService.getGameReview(roomId, "Host"))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("does not hold room lock for room: " + roomId);

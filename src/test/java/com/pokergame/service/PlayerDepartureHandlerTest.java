@@ -1436,7 +1436,7 @@ class PlayerDepartureHandlerTest {
         void removePlayers_ConcurrentWithPlayerAction_NonCurrentDisconnect_PreservesTurnIndex()
                 throws Exception {
             PlayerActionService playerActionService = new PlayerActionService(
-                    gameLifecycleService, gameStateService, mutableClock);
+                    activeGames, completionHandler, scheduler, readinessCoordinator, gameStateService, mutableClock);
             ConcurrentHashMap<String, Room> roomsById = new ConcurrentHashMap<>();
             when(roomService.getRoom(anyString())).thenAnswer(inv -> roomsById.get(inv.<String>getArgument(0)));
 

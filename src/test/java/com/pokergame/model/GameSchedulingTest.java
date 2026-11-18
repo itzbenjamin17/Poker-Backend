@@ -178,6 +178,21 @@ class GameSchedulingTest {
             assertDoesNotThrow(() -> scheduling.invalidateProgressionTasks());
             assertTrue(scheduling.deadlinesSnapshot().isEmpty());
         }
+
+        @Test
+        void clearAllTasks_ClearsEveryTaskIncludingCleanupAndBumpsGenerations() {
+            for (ScheduledGameTask task : ScheduledGameTask.values()) {
+                scheduling.scheduleTask(task, 100L + task.ordinal());
+            }
+
+            scheduling.clearAllTasks();
+
+            assertTrue(scheduling.deadlinesSnapshot().isEmpty());
+            for (ScheduledGameTask task : ScheduledGameTask.values()) {
+                assertNull(scheduling.getDeadline(task));
+                assertEquals(2L, scheduling.getGeneration(task));
+            }
+        }
     }
 
     @Nested

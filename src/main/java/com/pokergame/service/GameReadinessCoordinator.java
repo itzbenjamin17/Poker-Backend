@@ -141,20 +141,15 @@ class GameReadinessCoordinator {
      * Processes expiration of the ready countdown for {@code expectedDeadline} and starts the next
      * hand if the gate forces remaining players ready.
      *
-     * @param gameId           the unique ID of the game
-     * @param game             the active game instance, or {@code null} if removed
+     * @param game             the active game instance
      * @param expectedDeadline the deadline captured when the ready timeout was scheduled
      */
-    void handleReadyTimeout(String gameId, Game game, long expectedDeadline) {
-        if (game == null) {
-            cancelTimeout(gameId);
-            return;
-        }
+    void handleReadyTimeout(Game game, long expectedDeadline) {
         switch (game.expireReadyCountdown(expectedDeadline)) {
             case IGNORE_STALE -> {
             }
             case WAITING_FOR_PLAYERS -> {
-                cancelTimeout(gameId);
+                cancelTimeout(game.getGameId());
                 gameStateService.broadcastGameState(game);
             }
             case FORCED_READY -> completeReadyCountdown(game);
@@ -167,11 +162,15 @@ class GameReadinessCoordinator {
      * ready players.
      *
      * @param game the active game instance
+     * @return {@code true} if the countdown was open, everyone was ready, and it completed;
+     *         {@code false} otherwise
      */
-    void completeReadyCountdownIfEveryoneReady(Game game) {
+    boolean completeReadyCountdownIfEveryoneReady(Game game) {
         if (game.isReadyCountdownActive() && game.areAllEligiblePlayersReady()) {
             completeReadyCountdown(game);
+            return true;
         }
+        return false;
     }
 
     /**
@@ -215,12 +214,11 @@ class GameReadinessCoordinator {
         boolean previouslyReady = player != null && player.getIsReadyForNextHand();
         game.setPlayerReadyForNextHand(playerName, ready);
         if (previouslyReady != ready) {
-            taskScheduler.resetGameInactivity(gameId, game);
+            taskScheduler.resetGameInactivity(game);
         }
         logger.debug("Player {} {} ready for next hand in game {}",
                 playerName, ready ? "marked" : "unmarked", gameId);
-        if (ready && game.areAllEligiblePlayersReady()) {
-            completeReadyCountdown(game);
+        if (ready && completeReadyCountdownIfEveryoneReady(game)) {
             return;
         }
         gameStateService.broadcastGameState(game);

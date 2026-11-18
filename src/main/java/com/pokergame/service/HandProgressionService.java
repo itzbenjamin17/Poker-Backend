@@ -51,21 +51,20 @@ class HandProgressionService {
             logger.warn("Cannot start new hand - game {} not found", gameId);
             return false;
         }
-        logger.info("Starting new hand for game: {}", gameId);
         if (game.isForfeitPending()) {
             return false;
         }
         if (game.isGameOver()) {
-            if (!game.isFinalPotSettled()) {
-                completion.handleGameEnd(gameId);
-            }
+            completion.handleGameEnd(gameId);
             return false;
         }
-        if (game.getHandNumber() > 0 && (game.getCurrentPhase() != GamePhase.SHOWDOWN || !game.isHandSettled())) {
+        boolean handStillInProgress = game.getCurrentPhase() != GamePhase.SHOWDOWN || !game.isHandSettled();
+        if (game.getHandNumber() > 0 && handStillInProgress) {
             logger.warn("Ignoring new-hand request for unsettled game {} hand {}", gameId, game.getHandNumber());
             return false;
         }
 
+        logger.info("Starting new hand for game: {}", gameId);
         runtimeTimers.cancelProgressionForGame(gameId);
         game.invalidateProgressionTasks();
         game.closeReadyCountdown();
@@ -74,7 +73,7 @@ class HandProgressionService {
         // Reset before dealing so a decided game preserves the previous final board cleanly.
         boolean gameEnded = game.resetForNewHand();
         if (gameEnded) {
-            logger.warn("Game {} became over after reset", gameId);
+            logger.info("Game {} became over after reset", gameId);
             completion.handleGameEnd(gameId);
             return false;
         }
@@ -146,20 +145,25 @@ class HandProgressionService {
     }
 
     /**
-     * Deals the next street or resolves showdown for a single all-in auto-advance step.
+     * Executes an auto-advance timer step and either schedules the next street or transitions to
+     * post-hand readiness/game-end handling when showdown completes.
      *
-     * @param gameId the unique ID of the game
-     * @return {@code true} if the hand has reached showdown or finished
+     * @param game the active game instance
+     * @return {@code true} if the ready gate should open immediately, {@code false} otherwise
      */
-    boolean advanceAutoAdvanceStep(String gameId) {
-        Game game = activeGames.get(gameId);
-        if (game == null || game.isForfeitPending() || game.isGameOver()) {
-            return true;
+    boolean applyAutoAdvanceTimeout(Game game) {
+        if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
+            return false;
         }
-        if (game.isHandSettled() || game.isFinalPotSettled()) {
-            logger.info("Skipping stale auto-advance callback for settled game {}", gameId);
-            return true;
+        boolean complete = dealNextStreet(game);
+        if (complete) {
+            return schedulePostShowdownProgression(game);
         }
+        scheduling.scheduleAutoAdvance(game.getGameId());
+        return false;
+    }
+
+    private boolean dealNextStreet(Game game) {
         return switch (game.getCurrentPhase()) {
             case PRE_FLOP -> {
                 game.dealFlop();
@@ -182,33 +186,9 @@ class HandProgressionService {
                 gameStateService.broadcastAutoAdvanceComplete(game);
                 yield true;
             }
-            case SHOWDOWN -> {
-                logger.warn("Auto-advance step invoked for game {} already in SHOWDOWN - skipping duplicate distribution",
-                        gameId);
-                yield true;
-            }
+            case SHOWDOWN -> throw new IllegalStateException(
+                    "Unexpected phase during auto-advance: " + game.getCurrentPhase());
         };
-    }
-
-    /**
-     * Executes an auto-advance timer step and either schedules the next street or transitions to
-     * post-hand readiness/game-end handling when showdown completes.
-     *
-     * @param game the active game instance
-     * @return {@code true} if the ready gate should open immediately, {@code false} otherwise
-     */
-    boolean applyAutoAdvanceTimeout(Game game) {
-        String gameId = game.getGameId();
-        if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
-            game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
-            return false;
-        }
-        boolean complete = advanceAutoAdvanceStep(gameId);
-        if (complete) {
-            return schedulePostShowdownProgression(game);
-        }
-        scheduling.scheduleAutoAdvance(gameId);
-        return false;
     }
 
     private boolean schedulePostShowdownProgression(Game game) {

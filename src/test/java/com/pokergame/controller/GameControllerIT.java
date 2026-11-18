@@ -367,7 +367,7 @@ class GameControllerIT {
     @DisplayName("GET /api/game/{gameId}/review - Forbidden when player not in terminal roster (403)")
     void getGameReview_NotInTerminalRoster() throws Exception {
         when(gameLifecycleService.getGameReview(gameId, playerName))
-                .thenThrow(new UnauthorisedActionException("You are not part of this game's terminal result."));
+                .thenThrow(new UnauthorisedActionException("You are not part of this game's game result."));
 
         mockMvc.perform(get("/api/game/{gameId}/review", gameId)
                 .principal(auth))

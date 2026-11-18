@@ -221,7 +221,7 @@ class GameLifecycleServiceTest {
         Game game = createShowdownGame();
         clearInvocations(gameStateService, taskScheduler);
         withRoomLock(ROOM_ID, () ->
-                gameLifecycleService.applyTurnOutcome(ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
+                readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
         clearInvocations(gameStateService, taskScheduler);
         return game;
     }
@@ -244,8 +244,8 @@ class GameLifecycleServiceTest {
             Game game = createShowdownGame();
             clearInvocations(gameStateService);
 
-            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true));
+            withRoomLock(ROOM_ID, () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(
+                    game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true));
 
             assertTrue(game.isReadyCountdownActive());
             assertEquals(game.getReadyCountdownDeadlineEpochMs(),
@@ -263,8 +263,8 @@ class GameLifecycleServiceTest {
             stubGameEndCapture();
             Game game = createShowdownGame();
 
-            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true));
+            withRoomLock(ROOM_ID, () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(
+                    game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true));
 
             assertFalse(game.isReadyCountdownActive());
             assertEquals(BASE_EPOCH_MS + 2_500L,
@@ -280,8 +280,8 @@ class GameLifecycleServiceTest {
             setPlayerChips(game.getPlayers().getLast(), 0);
             assertTrue(game.isGameDecided());
 
-            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true));
+            withRoomLock(ROOM_ID, () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(
+                    game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true));
 
             assertFalse(game.isReadyCountdownActive());
             assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
@@ -459,8 +459,8 @@ class GameLifecycleServiceTest {
             game.getPlayers().forEach(player -> setPlayerChips(player, 100));
             HandSettlementResult settled = game.getLastSettlementResult();
             withRoomLock(roomId, () -> {
-                gameLifecycleService.applyTurnOutcome(
-                        roomId, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false);
+                readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(
+                        game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false);
             });
             long readyDeadline = game.getReadyCountdownDeadlineEpochMs();
             withRoomLock(roomId, () -> {
@@ -490,8 +490,8 @@ class GameLifecycleServiceTest {
             wireLifecycle(DEFAULT_GAME_END_DISPLAY_MS, DEFAULT_ROUND_END_DISPLAY_MS, 60_000L);
             stubGameEndCapture();
             Game game = createShowdownGame();
-            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
+            withRoomLock(ROOM_ID, () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(
+                    game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
             long currentDeadline = game.getReadyCountdownDeadlineEpochMs();
             long hand = game.getHandNumber();
             long gen = game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT);
@@ -604,7 +604,6 @@ class GameLifecycleServiceTest {
             assertThrows(IllegalStateException.class, () -> gameLifecycleService.getGame("missing"));
             assertThrows(IllegalStateException.class, () -> gameLifecycleService.gameExists("missing"));
             assertThrows(IllegalStateException.class, () -> gameLifecycleService.playerExistsInGame("missing", "Host"));
-            assertThrows(IllegalStateException.class, () -> gameLifecycleService.isGameInactivityExpired("missing"));
             assertThrows(IllegalStateException.class, () -> gameLifecycleService.getGameReview("missing", "Host"));
             assertThrows(IllegalStateException.class,
                     () -> gameLifecycleService.validatePlayerMembership("missing", "Host", "mem-1"));
@@ -612,13 +611,6 @@ class GameLifecycleServiceTest {
             assertFalse(gameLifecycleService.playerExistsInGame(null, "Host"));
             assertFalse(gameLifecycleService.playerExistsInGame(ROOM_ID, null));
 
-            Game nullPlayersGame = mock(Game.class);
-            when(nullPlayersGame.getGameId()).thenReturn("mock-null-players");
-            when(nullPlayersGame.getPlayers()).thenReturn(null);
-            withRoomLock("mock-null-players", () -> {
-                activeGames.replace(nullPlayersGame);
-                assertFalse(gameLifecycleService.playerExistsInGame("mock-null-players", "Host"));
-            });
 
             Player active = new Player("Alice", "p1", 100);
             Player out = new Player("Bob", "p2", 0);
@@ -764,7 +756,6 @@ class GameLifecycleServiceTest {
             assertFalse(game.isGameOver(), "Early check before deadline must not abandon");
 
             mutableClock.setMillis(deadline);
-            assertTrue(withRoomLock(ROOM_ID, () -> gameLifecycleService.isGameInactivityExpired(ROOM_ID)));
             withRoomLock(ROOM_ID, inactivityCallback);
 
             assertTrue(game.isGameOver());
@@ -787,8 +778,8 @@ class GameLifecycleServiceTest {
 
             Game game = getGameLocked(ROOM_ID);
             dealBoardAndShowdown(game);
-            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
+            withRoomLock(ROOM_ID, () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(
+                    game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
 
             // Advance clock 5s and mark first player ready -> extends inactivity deadline & schedules replacement
             mutableClock.setMillis(BASE_EPOCH_MS + 5_000L);
@@ -825,8 +816,8 @@ class GameLifecycleServiceTest {
             wireLifecycle(DEFAULT_GAME_END_DISPLAY_MS, DEFAULT_ROUND_END_DISPLAY_MS, 5_000L);
             stubGameEndCapture();
             Game game = createShowdownGame();
-            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
+            withRoomLock(ROOM_ID, () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(
+                    game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false));
             long deadline = game.getReadyCountdownDeadlineEpochMs();
             long oldGen = game.getScheduledTaskGeneration(ScheduledGameTask.READY_TIMEOUT);
 
@@ -849,8 +840,8 @@ class GameLifecycleServiceTest {
             testRoom.addPlayer("Player3");
             withRoomLock(ROOM_ID, () -> gameLifecycleService.createGameFromRoom(ROOM_ID));
             Game game = getGameLocked(ROOM_ID);
-            withRoomLock(ROOM_ID, () -> gameLifecycleService.applyTurnOutcome(
-                    ROOM_ID, game, new TurnOutcome(TurnOutcomeType.AUTO_ADVANCING, null), true));
+            withRoomLock(ROOM_ID, () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(
+                    game, new TurnOutcome(TurnOutcomeType.AUTO_ADVANCING, null), true));
             long capturedDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE);
             long capturedHand = game.getHandNumber();
             long capturedGen = game.getScheduledTaskGeneration(ScheduledGameTask.AUTO_ADVANCE);
@@ -985,9 +976,9 @@ class GameLifecycleServiceTest {
                 try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                     TurnOutcome autoAdvance = new TurnOutcome(TurnOutcomeType.AUTO_ADVANCING, null);
                     firstSchedule = executor.submit(() -> withRoomLock(ROOM_ID,
-                            () -> gameLifecycleService.applyTurnOutcome(ROOM_ID, game, autoAdvance, false)));
+                            () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, autoAdvance, false)));
                     secondSchedule = executor.submit(() -> withRoomLock(ROOM_ID,
-                            () -> gameLifecycleService.applyTurnOutcome(ROOM_ID, game, autoAdvance, false)));
+                            () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, autoAdvance, false)));
                     Awaitility.await().atMost(Duration.ofSeconds(5))
                             .until(() -> roomCoordinator.lockReservationCount(ROOM_ID) == 3);
                     assertEquals(generationBefore, game.getScheduledTaskGeneration(task));

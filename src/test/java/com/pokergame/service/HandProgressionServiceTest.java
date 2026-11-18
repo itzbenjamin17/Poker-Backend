@@ -299,53 +299,35 @@ class HandProgressionServiceTest {
     class AutoAdvanceTests {
 
         @Test
-        @DisplayName("advanceAutoAdvanceStep deals flop, turn, river, then resolves showdown")
-        void advanceAutoAdvanceStep_WalksAllStreetsThenShowdown() {
+        @DisplayName("applyAutoAdvanceTimeout deals flop, turn, river, then resolves showdown")
+        void applyAutoAdvanceTimeout_WalksAllStreetsThenShowdown() {
             HandProgressionService progression = createProgression(4_000L);
             Game game = createStartedGame();
             clearInvocations(gameStateService);
 
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                assertFalse(progression.advanceAutoAdvanceStep(GAME_ID));
+                assertFalse(progression.applyAutoAdvanceTimeout(game));
                 assertEquals(GamePhase.FLOP, game.getCurrentPhase());
                 assertEquals(3, game.getCommunityCards().size());
                 verify(gameStateService).broadcastGameStateWithAutoAdvance(game, "Dealing flop...");
 
-                assertFalse(progression.advanceAutoAdvanceStep(GAME_ID));
+                assertFalse(progression.applyAutoAdvanceTimeout(game));
                 assertEquals(GamePhase.TURN, game.getCurrentPhase());
                 assertEquals(4, game.getCommunityCards().size());
                 verify(gameStateService).broadcastGameStateWithAutoAdvance(game, "Dealing turn...");
 
-                assertFalse(progression.advanceAutoAdvanceStep(GAME_ID));
+                assertFalse(progression.applyAutoAdvanceTimeout(game));
                 assertEquals(GamePhase.RIVER, game.getCurrentPhase());
                 assertEquals(5, game.getCommunityCards().size());
                 verify(gameStateService).broadcastGameStateWithAutoAdvance(game, "Dealing river...");
 
-                assertTrue(progression.advanceAutoAdvanceStep(GAME_ID));
+                assertFalse(progression.applyAutoAdvanceTimeout(game));
                 assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
+                assertEquals(FIXED_NOW.toEpochMilli() + 4_000L,
+                        game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
                 verify(gameStateService).broadcastShowdownResults(game);
                 verify(gameStateService).broadcastAutoAdvanceComplete(game);
             }
-        }
-
-        @Test
-        @DisplayName("advanceAutoAdvanceStep skips duplicate distribution in SHOWDOWN or already settled games")
-        void advanceAutoAdvanceStep_SkipsShowdownAndSettledGames() {
-            HandProgressionService progression = createProgression(4_000L);
-            Game game = createStartedGame();
-            game.dealFlop();
-            game.dealTurn();
-            game.dealRiver();
-            game.conductShowdown();
-            HandSettlementResult settled = game.getLastSettlementResult();
-            clearInvocations(gameStateService);
-
-            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                assertTrue(progression.advanceAutoAdvanceStep(GAME_ID));
-            }
-
-            assertSame(settled, game.getLastSettlementResult());
-            verifyNoInteractions(gameStateService);
         }
 
         @Test
@@ -411,22 +393,22 @@ class HandProgressionServiceTest {
         }
 
         @Test
-        @DisplayName("applyAutoAdvanceTimeout in SHOWDOWN clears task and returns false")
-        void applyAutoAdvanceTimeout_InShowdown_ClearsTaskAndStops() {
+        @DisplayName("applyAutoAdvanceTimeout in SHOWDOWN returns false without dealing or broadcasting")
+        void applyAutoAdvanceTimeout_InShowdown_ReturnsFalseWithoutDealingOrBroadcasting() {
             HandProgressionService progression = createProgression(4_000L);
             Game game = createStartedGame();
             game.dealFlop();
             game.dealTurn();
             game.dealRiver();
             game.conductShowdown();
-            game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, FIXED_NOW.toEpochMilli() + 4_000L);
+            HandSettlementResult settled = game.getLastSettlementResult();
             clearInvocations(gameStateService, springScheduler);
 
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 assertFalse(progression.applyAutoAdvanceTimeout(game));
             }
 
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+            assertSame(settled, game.getLastSettlementResult());
             verifyNoInteractions(gameStateService, springScheduler);
         }
     }

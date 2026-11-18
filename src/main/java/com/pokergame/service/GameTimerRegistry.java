@@ -3,6 +3,7 @@ package com.pokergame.service;
 import com.pokergame.enums.ScheduledGameTask;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
@@ -19,6 +20,12 @@ import org.springframework.stereotype.Component;
 @Component
 class GameTimerRegistry {
     private static final Logger logger = LoggerFactory.getLogger(GameTimerRegistry.class);
+    private static final List<ScheduledGameTask> PROGRESSION_TASKS = List.of(
+            ScheduledGameTask.TURN_TIMEOUT,
+            ScheduledGameTask.AUTO_ADVANCE,
+            ScheduledGameTask.READY_OPEN,
+            ScheduledGameTask.READY_TIMEOUT,
+            ScheduledGameTask.NEW_HAND);
     private final TaskScheduler taskScheduler;
     private final Clock clock;
 
@@ -109,11 +116,7 @@ class GameTimerRegistry {
      * @param gameId the room/game ID
      */
     void cancelProgressionForGame(String gameId) {
-        cancelTask(gameId, ScheduledGameTask.TURN_TIMEOUT);
-        cancelTask(gameId, ScheduledGameTask.AUTO_ADVANCE);
-        cancelTask(gameId, ScheduledGameTask.READY_OPEN);
-        cancelTask(gameId, ScheduledGameTask.READY_TIMEOUT);
-        cancelTask(gameId, ScheduledGameTask.NEW_HAND);
+        PROGRESSION_TASKS.forEach(task -> cancelTask(gameId, task));
     }
 
     /**
