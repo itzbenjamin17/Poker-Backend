@@ -153,59 +153,6 @@ class DeckTest {
     }
 
     /**
-     * Shuffling permutes the remaining cards without losing or duplicating any of them. The
-     * exact resulting order is not asserted: a correct shuffle may legitimately return the
-     * original ordering, so a "some position differs" oracle would fail with probability 1/52!.
-     */
-    @Test
-    void testShuffle() {
-        Deck unshuffled = new Deck();
-        Deck shuffled = new Deck();
-
-        List<Card> baseline = unshuffled.dealCards(52);
-        shuffled.shuffle();
-        List<Card> afterShuffle = shuffled.dealCards(52);
-
-        // Same 52-card set, no loss or duplication.
-        assertEquals(new HashSet<>(baseline), new HashSet<>(afterShuffle));
-        assertEquals(52, afterShuffle.size());
-        assertEquals(52, new HashSet<>(afterShuffle).size(), "Every card in the shuffled deck must be unique");
-    }
-
-    /**
-     * Protects the expected behavior for multiple shuffle.
-     */
-    @Test
-    void testMultipleShuffle() {
-        // Shuffle should work multiple times on the same deck
-        assertDoesNotThrow(() -> {
-            deck.shuffle();
-            deck.shuffle();
-            deck.shuffle();
-        });
-
-        // Should still be able to deal cards after multiple shuffles
-        List<Card> cards = deck.dealCards(52);
-        assertEquals(52, cards.size());
-    }
-
-    /**
-     * Protects the expected behavior for shuffle after dealing.
-     */
-    @Test
-    void testShuffleAfterDealing() {
-        // Deal some cards
-        deck.dealCards(10);
-
-        // Shuffle remaining cards
-        assertDoesNotThrow(() -> deck.shuffle());
-
-        // Should be able to deal remaining 42 cards
-        List<Card> remainingCards = deck.dealCards(42);
-        assertEquals(42, remainingCards.size());
-    }
-
-    /**
      * Protects the expected behavior for deal all cards individually.
      */
     @Test

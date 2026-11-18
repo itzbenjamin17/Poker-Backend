@@ -11,8 +11,8 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -69,17 +69,13 @@ final class ShowdownResolver {
             PotComputationResult computation, List<Player> players,
             List<String> handSeatOrder, String dealerPlayerId, boolean wentToShowdown) {
         List<PotAllocation> allocations = computation.allocations();
-        if (logger.isDebugEnabled()) {
-            logger.debug("Side-pot allocations for game {}: {}", gameId, PotCalculator.allocationSummary(allocations));
-        }
+        Map<String, Player> playersById = players.stream()
+                .collect(Collectors.toMap(Player::getPlayerId, Function.identity(), (first, second) -> first));
 
         Map<String, Integer> refunds = new HashMap<>();
         // Refund single-owner (uncalled) layers before contested awards.
         for (Map.Entry<String, Integer> entry : computation.uncalledByPlayer().entrySet()) {
-            Player player = players.stream()
-                    .filter(p -> p.getPlayerId().equals(entry.getKey()))
-                    .findFirst()
-                    .orElse(null);
+            Player player = playersById.get(entry.getKey());
 
             if (player == null || !player.isInHand() || entry.getValue() <= 0) {
                 continue;
@@ -87,8 +83,6 @@ final class ShowdownResolver {
 
             player.addChips(entry.getValue());
             refunds.merge(player.getPlayerId(), entry.getValue(), Integer::sum);
-            logger.info("Refunded uncalled chips for game {} | player={} | amount={}",
-                    gameId, player.getName(), entry.getValue());
         }
 
         List<String> seatOrder = resolveSeatOrder(handSeatOrder, players);
@@ -112,13 +106,6 @@ final class ShowdownResolver {
                     ? orderClockwiseFromDealer(potWinners, seatOrder, dealerPlayerId)
                     : potWinners;
 
-            logger.info(
-                    "Resolved side pot {} for game {} | amount={} | eligible={} | winners={} | share={} | oddChips={}",
-                    i, gameId, allocation.amount(),
-                    PotCalculator.playerNames(allocation.eligiblePlayers()),
-                    PotCalculator.playerNames(payoutOrder),
-                    baseShare, oddChips);
-
             for (int w = 0; w < payoutOrder.size(); w++) {
                 Player winner = payoutOrder.get(w);
                 int payout = baseShare + (w < oddChips ? 1 : 0);
@@ -132,12 +119,8 @@ final class ShowdownResolver {
         HandSettlementResult settlement = new HandSettlementResult(awards, refunds,
                 uniqueWinners.stream().map(Player::getPlayerId).collect(Collectors.toSet()),
                 remainder, wentToShowdown);
-        logger.info(
-                "Side-pot distribution complete for game {} | uniqueWinners={} | refundedUncalled={} | potRemainder={}",
-                gameId,
-                PotCalculator.playerNames(new ArrayList<>(uniqueWinners)),
-                refunds.values().stream().mapToInt(Integer::intValue).sum(),
-                remainder);
+        logger.debug("Showdown distribution complete for game {} | pots={} | winners={} | refunds={} | remainder={}",
+                gameId, allocations.size(), settlement.winnerIds(), refunds, remainder);
 
         return new Distribution(new ArrayList<>(uniqueWinners), remainder, settlement);
     }
@@ -149,12 +132,12 @@ final class ShowdownResolver {
      * @return winners; several on a tie, empty if no players
      */
     static List<Player> determineWinners(List<Player> players) {
+        if (players.isEmpty()) {
+            return List.of();
+        }
+
         List<Player> sortablePlayers = new ArrayList<>(players);
         sortablePlayers.sort(Comparator.comparing(Player::getHandRank).reversed());
-
-        if (sortablePlayers.isEmpty()) {
-            return new ArrayList<>();
-        }
 
         Player bestPlayer = sortablePlayers.getFirst();
         List<Player> winners = new ArrayList<>();
@@ -183,14 +166,13 @@ final class ShowdownResolver {
     }
 
     private static List<String> resolveSeatOrder(List<String> handSeatOrder, List<Player> players) {
-        if (handSeatOrder != null && !handSeatOrder.isEmpty()) {
+        if (!handSeatOrder.isEmpty()) {
             return handSeatOrder;
         }
-        if (players == null || players.isEmpty()) {
+        if (players.isEmpty()) {
             return List.of();
         }
         return players.stream()
-                .filter(Objects::nonNull)
                 .map(Player::getPlayerId)
                 .toList();
     }

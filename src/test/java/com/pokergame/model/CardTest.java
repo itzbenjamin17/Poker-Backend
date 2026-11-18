@@ -10,6 +10,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Unit tests for the Card class.
@@ -17,6 +18,25 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 @Tag("unit")
 @DisplayName("Card model")
 class CardTest {
+
+    @Test
+    void rejectsNullRankOrSuit() {
+        assertThrows(NullPointerException.class, () -> new Card(null, Suit.SPADES));
+        assertThrows(NullPointerException.class, () -> new Card(Rank.ACE, null));
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "TWO,CLUBS,2C",
+            "TEN,DIAMONDS,10D",
+            "JACK,HEARTS,JH",
+            "QUEEN,SPADES,QS",
+            "KING,HEARTS,KH",
+            "ACE,SPADES,AS"
+    })
+    void toJsonStringUsesCompactRankAndSuitCode(Rank rank, Suit suit, String expected) {
+        assertEquals(expected, new Card(rank, suit).toJsonString());
+    }
 
     @Test
     void exposesRankAndSuitComponents() {

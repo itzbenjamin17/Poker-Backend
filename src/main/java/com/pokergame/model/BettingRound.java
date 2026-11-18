@@ -35,10 +35,7 @@ final class BettingRound {
 
     /** Creates fresh betting-round state for a new game. */
     BettingRound() {
-        this.currentHighestBet = 0;
-        this.allPlayersHadInitialTurn = false;
         this.actedPlayersInRound = new HashSet<>();
-        this.lastFullRaise = 0;
         this.lastActedWagerByPlayer = new HashMap<>();
     }
 
@@ -193,7 +190,7 @@ final class BettingRound {
         }
         int minimumRaise = getMinimumRaiseAmount(player, bigBlind);
         if (totalBetAfterRaise <= currentHighestBet) {
-            logger.debug("[Game] Invalid raise: player {} tried to raise to {}, current highest bet is {}",
+            logger.debug("Invalid raise: player {} tried to raise to {}, current highest bet is {}",
                     player.getName(), totalBetAfterRaise, currentHighestBet);
             throw new BadRequestException(
                     "Raise amount must result in a bet higher than current highest bet of " + currentHighestBet
@@ -367,7 +364,7 @@ final class BettingRound {
             return List.of();
         }
         Player currentPlayer = seating.getCurrentPlayer(activePlayers);
-        if (currentPlayer == null || !player.getPlayerId().equals(currentPlayer.getPlayerId())) {
+        if (!player.getPlayerId().equals(currentPlayer.getPlayerId())) {
             return List.of();
         }
         List<PlayerAction> actions = new ArrayList<>(List.of(PlayerAction.FOLD));

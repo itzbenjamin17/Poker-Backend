@@ -434,6 +434,23 @@ class PotCalculatorTest {
         assertEquals(List.of(30, 20), breakdown);
     }
 
+    @Test
+    void getPotBreakdown_OutPlayerMarkedAllIn_DoesNotSplitSinglePot() {
+        Player outAllIn = Player.restoreBuilder()
+                .playerId("o1").name("OutAllIn").chips(0).currentBet(0)
+                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
+                .hasFolded(false).allIn(true).out(true).disconnected(false).readyForNextHand(false)
+                .build();
+        Player p1 = playerWithBet("p1", "Alice", 900, 100);
+        Player p2 = playerWithBet("p2", "Bob", 900, 100);
+        List<Player> active = List.of(outAllIn, p1, p2);
+        PotCalculator.PotInputs inputs = new PotCalculator.PotInputs(
+                220, 0, Map.of("o1", 20, "p1", 100, "p2", 100), active, active, null, 100, GAME_ID);
+
+        assertEquals(List.of(220), PotCalculator.getPotBreakdown(inputs));
+        assertEquals(0, PotCalculator.getUncalledAmount(inputs));
+    }
+
     // =========================================================================
     // 4. Uncalled Amount Queries (getUncalledAmount)
     // =========================================================================

@@ -183,14 +183,16 @@ class ShowdownResolverTest {
     void distribute_RefundsUncalledToActivePlayerOnly() {
         Player a = player("a", 0, HandRank.FLUSH);
         Player folded = Player.restoreBuilder().name("f").playerId("f").holeCards(List.of()).bestHand(List.of()).chips(0).hasFolded(true).handRank(HandRank.NO_HAND).build();
+        Player out = Player.restoreBuilder().name("o").playerId("o").holeCards(List.of()).bestHand(List.of()).chips(0).out(true).handRank(HandRank.NO_HAND).build();
         PotComputationResult computation = new PotComputationResult(
-                List.of(new PotAllocation(100, List.of(a))), Map.of("a", 40, "f", 30), 70);
+                List.of(new PotAllocation(100, List.of(a))), Map.of("a", 40, "f", 30, "o", 20, "missing", 10), 100);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
-                GAME_ID, computation, List.of(a, folded), List.of("a", "f"), "a", true);
+                GAME_ID, computation, List.of(a, folded, out), List.of("a", "f", "o"), "a", true);
 
         assertEquals(140, a.getChips());
         assertEquals(0, folded.getChips());
+        assertEquals(0, out.getChips());
         assertEquals(Map.of("a", 40), d.settlement().refunds());
     }
 

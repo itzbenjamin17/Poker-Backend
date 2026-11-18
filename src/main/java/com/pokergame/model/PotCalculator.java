@@ -1,8 +1,5 @@
 package com.pokergame.model;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -27,8 +24,6 @@ import java.util.stream.Collectors;
  */
 final class PotCalculator {
 
-    private static final Logger logger = LoggerFactory.getLogger(PotCalculator.class);
-
     private PotCalculator() {
     }
 
@@ -50,13 +45,6 @@ final class PotCalculator {
         }
 
         handContributions.merge(player.getPlayerId(), amount, Integer::sum);
-
-        logger.debug("Tracked contribution in game {} | player={} | added={} | totalContribution={} | contributions={}",
-                gameId,
-                player.getName(),
-                amount,
-                handContributions.getOrDefault(player.getPlayerId(), 0),
-                handContributions);
     }
 
     /**
@@ -85,9 +73,6 @@ final class PotCalculator {
         List<PotAllocation> allocations = new ArrayList<>();
         Map<String, Integer> uncalledByPlayer = new HashMap<>();
 
-        logger.debug("Building pot allocations for game {} | pot={} | contributions={}",
-                gameId, pot, handContributions);
-
         List<Player> contenders = !eligibleHandContenders.isEmpty()
                 ? eligibleHandContenders
                 : activePlayers.stream().filter(Player::isInHand).toList();
@@ -101,8 +86,6 @@ final class PotCalculator {
                     .distinct()
                     .sorted()
                     .toList();
-
-            logger.debug("Contribution levels for game {}: {}", gameId, contributionLevels);
 
             int previousLevel = 0;
             for (int level : contributionLevels) {
@@ -137,8 +120,6 @@ final class PotCalculator {
                     } else {
                         routeDeadLayerToNearestEligible(allocations, amount, contenders);
                     }
-                    logger.debug("Detected uncalled layer for game {} | level={} | owner={} | amount={}",
-                            gameId, level, ownerId, amount);
                     continue;
                 }
 
@@ -148,15 +129,10 @@ final class PotCalculator {
 
                 if (!eligiblePlayers.isEmpty()) {
                     appendAllocationCoalescingSameEligibility(allocations, amount, eligiblePlayers);
-                    logger.debug(
-                            "Allocation layer for game {} | level={} | layer={} | participants={} | eligible={} | amount={}",
-                            gameId, level, layer, playerNames(participants), playerNames(eligiblePlayers), amount);
                 } else {
                     routeDeadLayerToNearestEligible(allocations, amount, contenders);
                 }
             }
-        } else {
-            logger.debug("No tracked contributions for game {} while building allocations", gameId);
         }
 
         int uncalledTotal = uncalledByPlayer.values().stream().mapToInt(Integer::intValue).sum();
@@ -185,16 +161,9 @@ final class PotCalculator {
         }
         int unallocatedAmount = pot - accounted;
 
-        logger.debug("Allocation totals for game {} | allocated={} | uncalled={} | unallocated={} | pot={}",
-                gameId, allocatedAmount, uncalledTotal, unallocatedAmount, pot);
         if (unallocatedAmount != 0) {
             throw new IllegalStateException("Pot allocation left " + unallocatedAmount
                     + " chips without a pot or a refund owner for game " + gameId);
-        }
-
-        if (logger.isDebugEnabled()) {
-            logger.debug("Final allocations for game {}: {}", gameId, allocationSummary(allocations));
-            logger.debug("Uncalled map for game {}: {}", gameId, uncalledByPlayer);
         }
 
         return new PotComputationResult(allocations, uncalledByPlayer, uncalledTotal);
@@ -210,7 +179,6 @@ final class PotCalculator {
      */
     static List<Integer> getPotBreakdown(PotInputs inputs) {
         if (inputs.pot() <= 0) {
-            logger.debug("Pot breakdown requested for game {} with empty pot", inputs.gameId());
             return List.of();
         }
         if (inputs.isSettled()) {
@@ -220,19 +188,13 @@ final class PotCalculator {
             return projectLayersWhileCallIsOwed(inputs);
         }
         if (!inputs.hasAllIn()) {
-            logger.debug("Pot breakdown for game {} without all-ins: [{}]", inputs.gameId(), inputs.pot());
             return List.of(inputs.pot());
         }
 
         PotComputationResult computation = computeLiveAllocations(inputs);
-        List<Integer> breakdown = computation.allocations().stream()
+        return computation.allocations().stream()
                 .map(PotAllocation::amount)
                 .toList();
-
-        logger.debug("Pot breakdown for game {} with all-ins: {} | uncalled={}",
-                inputs.gameId(), breakdown, computation.uncalledTotal());
-
-        return breakdown;
     }
 
     /**
@@ -401,7 +363,7 @@ final class PotCalculator {
         }
 
         boolean hasAllIn() {
-            return activePlayers.stream().anyMatch(player -> player.getIsAllIn() && !player.getHasFolded());
+            return activePlayers.stream().anyMatch(player -> player.getIsAllIn() && player.isInHand());
         }
     }
 

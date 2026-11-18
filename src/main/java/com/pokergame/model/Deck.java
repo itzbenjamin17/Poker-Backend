@@ -25,10 +25,6 @@ public class Deck {
         shuffle();
     }
 
-    /**
-     * Reconstructs an already shuffled remainder without consuming randomness. This
-     * path exists only for exact restart recovery; normal games use {@link #Deck()}.
-     */
     private Deck(List<Card> cards) {
         this.cards = new ArrayList<>(cards);
     }
@@ -66,7 +62,7 @@ public class Deck {
      * Uses a cryptographically strong random source so future private cards are not
      * predictable from the weaker default pseudo-random generator.
      */
-    public void shuffle() {
+    private void shuffle() {
         Collections.shuffle(cards, SHUFFLE_RANDOM);
     }
 
