@@ -537,9 +537,9 @@ public class GameStateService {
                 player.getChips(),
                 player.getCurrentBet(),
                 resolvePlayerStatus(player),
-                player.getIsAllIn(),
+                player.isAllIn(),
                 isCurrentPlayer,
-                player.getHasFolded(),
+                player.hasFolded(),
                 player.getPlayerId().equals(smallBlindPlayerId),
                 player.getPlayerId().equals(bigBlindPlayerId),
                 handRank,
@@ -548,20 +548,20 @@ public class GameStateService {
                 chipsWon,
                 holeCards,
                 player.getDisconnectDeadlineEpochMs(),
-                player.getIsReadyForNextHand());
+                player.isReadyForNextHand());
     }
 
     private String resolvePlayerStatus(Player player) {
-        if (player.getIsOut()) {
+        if (player.isOut()) {
             return PlayerStatus.OUT.getStatus();
         }
-        if (player.getHasFolded()) {
+        if (player.hasFolded()) {
             return PlayerStatus.FOLDED.getStatus();
         }
-        if (player.getIsDisconnected()) {
+        if (player.isDisconnected()) {
             return PlayerStatus.DISCONNECTED.getStatus();
         }
-        if (player.getIsAllIn()) {
+        if (player.isAllIn()) {
             return PlayerStatus.ALL_IN.getStatus();
         }
         return PlayerStatus.ACTIVE.getStatus();

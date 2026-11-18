@@ -157,7 +157,7 @@ final class ReadyGate {
      */
     boolean areAllEligiblePlayersReady() {
         List<Player> eligiblePlayers = getEligiblePlayers();
-        return eligiblePlayers.size() >= 2 && eligiblePlayers.stream().allMatch(Player::getIsReadyForNextHand);
+        return eligiblePlayers.size() >= 2 && eligiblePlayers.stream().allMatch(Player::isReadyForNextHand);
     }
 
     ReadyGateState getState() {
@@ -202,20 +202,20 @@ final class ReadyGate {
     }
 
     private static boolean isPlayerEligible(Player player) {
-        return !player.getIsOut() && !player.getIsDisconnected() && player.getChips() > 0;
+        return !player.isOut() && !player.isDisconnected() && player.getChips() > 0;
     }
 
     private static void validateReadinessEligibility(Player player, boolean ready) {
         if (isPlayerEligible(player)) {
             return;
         }
-        if (player.getIsOut()) {
+        if (player.isOut()) {
             throw new UnauthorisedActionException("You are out of this game.");
         }
         if (!ready) {
             throw new UnauthorisedActionException("You are not eligible to change readiness.");
         }
-        if (player.getIsDisconnected()) {
+        if (player.isDisconnected()) {
             throw new UnauthorisedActionException("Reconnect before marking ready.");
         }
         throw new UnauthorisedActionException("Players without chips cannot mark ready.");

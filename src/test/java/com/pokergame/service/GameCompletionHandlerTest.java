@@ -217,7 +217,7 @@ class GameCompletionHandlerTest {
                 completionHandler.handleGameEndWithForfeits(ROOM_ID, host, Set.of("Player2"));
             }
 
-            assertTrue(p2.getIsOut());
+            assertTrue(p2.isOut());
             assertTrue(game.isGameOver());
             assertTrue(testRoom.isTerminal());
 

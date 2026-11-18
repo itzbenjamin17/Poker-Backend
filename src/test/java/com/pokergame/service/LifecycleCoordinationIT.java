@@ -565,14 +565,14 @@ class LifecycleCoordinationIT {
             gameLifecycleService.markPlayerDisconnected(roomId, "Alice", staleDeadline);
             withRoomLock(roomCoordinator, roomId, () -> {
                 roomService.getRoom(roomId).setAbsenceDeadline("Alice", staleDeadline);
-                assertThat(gameLifecycleService.getGame(roomId).findPlayerByName("Alice").getIsDisconnected()).isTrue();
+                assertThat(gameLifecycleService.getGame(roomId).findPlayerByName("Alice").isDisconnected()).isTrue();
                 return null;
             });
 
             gameLifecycleService.markPlayerReconnected(roomId, "Alice");
             withRoomLock(roomCoordinator, roomId, () -> {
                 roomService.getRoom(roomId).setPlayerConnected("Alice", true);
-                assertThat(gameLifecycleService.getGame(roomId).findPlayerByName("Alice").getIsDisconnected()).isFalse();
+                assertThat(gameLifecycleService.getGame(roomId).findPlayerByName("Alice").isDisconnected()).isFalse();
                 return null;
             });
 

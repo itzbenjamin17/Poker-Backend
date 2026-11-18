@@ -165,14 +165,14 @@ class ReadyGateTest {
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, gate.getState());
             assertFalse(gate.isCountdownActive());
             assertNull(gate.getCountdownDeadlineEpochMs());
-            assertFalse(alice.getIsReadyForNextHand());
+            assertFalse(alice.isReadyForNextHand());
 
             alice.setReadyForNextHand(true);
             gate.closeCountdown();
             assertEquals(ReadyGateState.CLOSED, gate.getState());
             assertFalse(gate.isCountdownActive());
             assertNull(gate.getCountdownDeadlineEpochMs());
-            assertTrue(alice.getIsReadyForNextHand());
+            assertTrue(alice.isReadyForNextHand());
         }
 
         @Test
@@ -199,9 +199,9 @@ class ReadyGateTest {
 
             ReadyGate activeGate = new ReadyGate(roster, ReadyGateState.COUNTING_DOWN, 50_000L);
             activeGate.setPlayerReady("Alice", true);
-            assertTrue(alice.getIsReadyForNextHand());
+            assertTrue(alice.isReadyForNextHand());
             activeGate.setPlayerReady("Alice", false);
-            assertFalse(alice.getIsReadyForNextHand());
+            assertFalse(alice.isReadyForNextHand());
 
             assertThrows(UnauthorisedActionException.class, () -> activeGate.setPlayerReady("Unknown", true));
             assertThrows(UnauthorisedActionException.class, () -> activeGate.setPlayerReady("Dave", true));
@@ -280,7 +280,7 @@ class ReadyGateTest {
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, gate.getState());
             assertFalse(gate.isCountdownActive());
             assertNull(gate.getCountdownDeadlineEpochMs());
-            assertFalse(p1.getIsReadyForNextHand());
+            assertFalse(p1.isReadyForNextHand());
             assertNull(scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
         }
 
@@ -298,8 +298,8 @@ class ReadyGateTest {
             assertTrue(gate.isCountdownActive());
             assertEquals(50_000L, gate.getCountdownDeadlineEpochMs());
             assertEquals(50_000L, scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
-            assertFalse(p1.getIsReadyForNextHand());
-            assertFalse(p2.getIsReadyForNextHand());
+            assertFalse(p1.isReadyForNextHand());
+            assertFalse(p2.isReadyForNextHand());
         }
 
         @Test
@@ -347,9 +347,9 @@ class ReadyGateTest {
             ReadyCountdownTimeoutOutcome outcome = gate.expireCountdown(false, 1000L, scheduling);
 
             assertEquals(ReadyCountdownTimeoutOutcome.FORCED_READY, outcome);
-            assertTrue(p1.getIsReadyForNextHand());
-            assertTrue(p2.getIsReadyForNextHand());
-            assertFalse(pOut.getIsReadyForNextHand());
+            assertTrue(p1.isReadyForNextHand());
+            assertTrue(p2.isReadyForNextHand());
+            assertFalse(pOut.isReadyForNextHand());
             assertTrue(gate.areAllEligiblePlayersReady());
         }
 
@@ -396,8 +396,8 @@ class ReadyGateTest {
             assertEquals(ReadyCountdownTimeoutOutcome.FORCED_READY,
                     gate.expireCountdown(false, 5000L, new GameScheduling()));
             for (Player p : twentyPlayers) {
-                boolean eligible = !p.getIsOut() && !p.getIsDisconnected() && p.getChips() > 0;
-                assertEquals(eligible, p.getIsReadyForNextHand());
+                boolean eligible = !p.isOut() && !p.isDisconnected() && p.getChips() > 0;
+                assertEquals(eligible, p.isReadyForNextHand());
             }
 
             List<Player> allIneligible = List.of(
@@ -448,9 +448,9 @@ class ReadyGateTest {
                     assertEquals(ReadyCountdownTimeoutOutcome.FORCED_READY, timeoutOutcome);
                     assertTrue(gate.areAllEligiblePlayersReady());
                     for (Player pl : roster) {
-                        boolean eligible = !pl.getIsOut() && !pl.getIsDisconnected() && pl.getChips() > 0;
+                        boolean eligible = !pl.isOut() && !pl.isDisconnected() && pl.getChips() > 0;
                         if (eligible) {
-                            assertTrue(pl.getIsReadyForNextHand());
+                            assertTrue(pl.isReadyForNextHand());
                         }
                     }
                 }

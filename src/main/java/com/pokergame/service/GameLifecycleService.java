@@ -253,7 +253,7 @@ public class GameLifecycleService {
             return false;
         }
         return game.getPlayers().stream()
-                .anyMatch(player -> playerName.equals(player.getName()) && !player.getIsOut());
+                .anyMatch(player -> playerName.equals(player.getName()) && !player.isOut());
     }
 
     /**

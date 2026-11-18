@@ -224,7 +224,7 @@ class PlayerActionServiceTest {
 
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
 
-        assertTrue(currentPlayer.getHasFolded());
+        assertTrue(currentPlayer.hasFolded());
         verify(gameStateService, atLeastOnce()).broadcastGameState(any(Game.class));
     }
 
@@ -363,7 +363,7 @@ class PlayerActionServiceTest {
 
         assertDoesNotThrow(() -> playerActionService.processPlayerAction(GAME_ID, request, currentPlayer.getName()));
         assertEquals(0, currentPlayer.getChips());
-        assertTrue(currentPlayer.getIsAllIn());
+        assertTrue(currentPlayer.isAllIn());
         verify(gameStateService, atLeastOnce()).sendPrivatePlayerNotification(eq(GAME_ID), eq(currentPlayer.getName()),
                 contains("converted to all-in"), eq(ResponseMessage.PLAYER_NOTIFICATION));
     }
@@ -633,8 +633,8 @@ class PlayerActionServiceTest {
                 new PlayerActionRequest(PlayerAction.CALL, null), p2.getName());
 
         // Verify folded player is actually folded
-        assertTrue(p1.getHasFolded());
-        assertFalse(p2.getHasFolded());
+        assertTrue(p1.hasFolded());
+        assertFalse(p2.hasFolded());
     }
 
     // ==================== Conversion Tests ====================
@@ -743,12 +743,12 @@ class PlayerActionServiceTest {
         when(activeGames.get(GAME_ID)).thenReturn(testGame);
 
         Player currentPlayer = testGame.getCurrentPlayer();
-        assertFalse(currentPlayer.getHasFolded());
+        assertFalse(currentPlayer.hasFolded());
 
         PlayerActionRequest foldRequest = new PlayerActionRequest(PlayerAction.FOLD, null);
         playerActionService.processPlayerAction(GAME_ID, foldRequest, currentPlayer.getName());
 
-        assertTrue(currentPlayer.getHasFolded());
+        assertTrue(currentPlayer.hasFolded());
     }
 
     /**
@@ -866,7 +866,7 @@ class PlayerActionServiceTest {
         assertTrue(accepted.get(players.indexOf(firstActor)), "The initial actor can always act");
         for (int index = 0; index < players.size(); index++) {
             Player player = players.get(index);
-            assertEquals(accepted.get(index), player.getIsAllIn(), player.getName());
+            assertEquals(accepted.get(index), player.isAllIn(), player.getName());
             assertEquals(accepted.get(index) ? 0 : startingChips.get(index), player.getChips());
         }
         assertEquals(chipsIncludingPot, players.stream().mapToInt(Player::getChips).sum() + testGame.getPot());
@@ -951,8 +951,8 @@ class PlayerActionServiceTest {
         playerActionService.processPlayerAction(GAME_ID, new PlayerActionRequest(PlayerAction.ALL_IN, null),
                 second.getName());
 
-        assertTrue(first.getIsAllIn());
-        assertTrue(second.getIsAllIn());
+        assertTrue(first.isAllIn());
+        assertTrue(second.isAllIn());
         verify(readinessCoordinator).applyTurnOutcomeAndOpenReadyGateIfNeeded(eq(game),
                 argThat(o -> o.type() == TurnOutcome.TurnOutcomeType.AUTO_ADVANCING), eq(true));
         verify(gameStateService).broadcastAutoAdvanceNotification(game);

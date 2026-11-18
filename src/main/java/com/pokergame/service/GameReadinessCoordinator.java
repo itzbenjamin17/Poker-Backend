@@ -211,7 +211,7 @@ class GameReadinessCoordinator {
         completionHandler.rejectExpiredActivity(gameId);
 
         Player player = game.findPlayerByName(playerName);
-        boolean previouslyReady = player != null && player.getIsReadyForNextHand();
+        boolean previouslyReady = player != null && player.isReadyForNextHand();
         game.setPlayerReadyForNextHand(playerName, ready);
         if (previouslyReady != ready) {
             taskScheduler.resetGameInactivity(game);

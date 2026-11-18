@@ -287,7 +287,7 @@ class GameTest {
                     new Player("ShortSB", "p2", 5),
                     new Player("BigBlind", "p3", 1000)), 10, 20);
             shortSbGame.postBlinds();
-            assertTrue(shortSbGame.getActivePlayers().get(1).getIsAllIn());
+            assertTrue(shortSbGame.getActivePlayers().get(1).isAllIn());
             assertEquals(0, shortSbGame.getActivePlayers().get(1).getChips());
             assertEquals(5, shortSbGame.getActivePlayers().get(1).getCurrentBet());
             assertEquals(20, shortSbGame.getActivePlayers().get(2).getCurrentBet());
@@ -301,7 +301,7 @@ class GameTest {
             shortBbGame.postBlinds();
             assertEquals(10, shortBbGame.getActivePlayers().get(1).getCurrentBet());
             assertEquals(990, shortBbGame.getActivePlayers().get(1).getChips());
-            assertTrue(shortBbGame.getActivePlayers().get(2).getIsAllIn());
+            assertTrue(shortBbGame.getActivePlayers().get(2).isAllIn());
             assertEquals(15, shortBbGame.getActivePlayers().get(2).getCurrentBet());
             assertEquals(0, shortBbGame.getActivePlayers().get(2).getChips());
             assertEquals(25, shortBbGame.getPot());
@@ -312,8 +312,8 @@ class GameTest {
                     new Player("ShortSB", "p2", 7),
                     new Player("ShortBB", "p3", 15)), 10, 20);
             bothShortGame.postBlinds();
-            assertTrue(bothShortGame.getActivePlayers().get(1).getIsAllIn());
-            assertTrue(bothShortGame.getActivePlayers().get(2).getIsAllIn());
+            assertTrue(bothShortGame.getActivePlayers().get(1).isAllIn());
+            assertTrue(bothShortGame.getActivePlayers().get(2).isAllIn());
             assertEquals(7, bothShortGame.getActivePlayers().get(1).getCurrentBet());
             assertEquals(15, bothShortGame.getActivePlayers().get(2).getCurrentBet());
             assertEquals(22, bothShortGame.getPot());
@@ -401,8 +401,8 @@ class GameTest {
                 assertEquals(0, player.getBestHand().size());
                 assertEquals(HandRank.NO_HAND, player.getHandRank());
                 assertEquals(0, player.getCurrentBet());
-                assertFalse(player.getHasFolded());
-                assertFalse(player.getIsAllIn());
+                assertFalse(player.hasFolded());
+                assertFalse(player.isAllIn());
             }
         }
 
@@ -411,7 +411,7 @@ class GameTest {
             Player first = game.getActivePlayers().getFirst();
             first.doAction(PlayerAction.ALL_IN, 0);
             assertFalse(game.resetForNewHand());
-            assertTrue(first.getIsOut());
+            assertTrue(first.isOut());
             assertEquals(2, game.getActivePlayers().size());
             assertFalse(game.isGameOver());
 
@@ -538,7 +538,7 @@ class GameTest {
         void testProcessPlayerDecisionFold() {
             Player player = game.getCurrentPlayer();
             game.processPlayerDecision(player, new PlayerDecision(PlayerAction.FOLD, 0, player.getPlayerId()));
-            assertTrue(player.getHasFolded());
+            assertTrue(player.hasFolded());
             assertEquals(0, game.getPot());
         }
 
@@ -546,7 +546,7 @@ class GameTest {
         void testProcessPlayerDecisionCheckAndCheckWithActiveBet() {
             Player player = game.getCurrentPlayer();
             game.processPlayerDecision(player, new PlayerDecision(PlayerAction.CHECK, 0, player.getPlayerId()));
-            assertFalse(player.getHasFolded());
+            assertFalse(player.hasFolded());
             assertEquals(0, game.getPot());
             assertEquals(0, player.getCurrentBet());
 
@@ -599,7 +599,7 @@ class GameTest {
             assertEquals(1000, allInGame.getPot());
             assertEquals(1000, shover.getCurrentBet());
             assertEquals(0, shover.getChips());
-            assertTrue(shover.getIsAllIn());
+            assertTrue(shover.isAllIn());
 
             Game invalidRaiseGame = createStandardGame(3, 1000);
             invalidRaiseGame.postBlinds();
@@ -698,7 +698,7 @@ class GameTest {
             assertTrue(shortHand.getLegalActionsFor(shortA).contains(PlayerAction.ALL_IN));
             shortHand.processPlayerDecision(shortA, new PlayerDecision(PlayerAction.ALL_IN, 0, "a"));
             assertEquals(150, shortA.getCurrentBet());
-            assertTrue(shortA.getIsAllIn());
+            assertTrue(shortA.isAllIn());
         }
 
         @Test
@@ -726,7 +726,7 @@ class GameTest {
             assertTrue(shortRaise.getLegalActionsFor(shortRaiser).contains(PlayerAction.ALL_IN));
             shortRaise.processPlayerDecision(shortRaiser, new PlayerDecision(PlayerAction.ALL_IN, 0, "shortRaise"));
             assertEquals(110, shortRaiser.getCurrentBet());
-            assertTrue(shortRaiser.getIsAllIn());
+            assertTrue(shortRaiser.isAllIn());
         }
 
         @Test
@@ -900,7 +900,7 @@ class GameTest {
             assertDoesNotThrow(() -> shortBetGame.processPlayerDecision(
                     shortBetActor, new PlayerDecision(PlayerAction.BET, 15, shortBetActor.getPlayerId())));
             assertEquals(15, shortBetActor.getCurrentBet());
-            assertTrue(shortBetActor.getIsAllIn());
+            assertTrue(shortBetActor.isAllIn());
 
             Game shortRaiseGame = createGame("short-raise-allin", List.of(
                     new Player("P1", "p1", 25),
@@ -911,7 +911,7 @@ class GameTest {
             assertDoesNotThrow(() -> shortRaiseGame.processPlayerDecision(
                     shortRaiser, new PlayerDecision(PlayerAction.RAISE, 25, shortRaiser.getPlayerId())));
             assertEquals(25, shortRaiser.getCurrentBet());
-            assertTrue(shortRaiser.getIsAllIn());
+            assertTrue(shortRaiser.isAllIn());
 
             Game sidePotGame = createGame("all-in-raise-game", List.of(
                     new Player("Deep1", "deep1", 1000),
@@ -944,7 +944,7 @@ class GameTest {
             assertNotNull(callOutcome.conversionMessage());
             assertTrue(callOutcome.conversionMessage().contains("converted to all-in"));
             assertEquals(0, shortCaller.getChips());
-            assertTrue(shortCaller.getIsAllIn());
+            assertTrue(shortCaller.isAllIn());
         }
     }
 
@@ -2320,17 +2320,17 @@ class GameTest {
             assertEquals(deadline, aggGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
 
             assertEquals(ReadyCountdownTimeoutOutcome.FORCED_READY, aggGame.expireReadyCountdown(deadline));
-            assertTrue(p1.getIsReadyForNextHand());
-            assertTrue(p2.getIsReadyForNextHand());
+            assertTrue(p1.isReadyForNextHand());
+            assertTrue(p2.isReadyForNextHand());
             assertTrue(aggGame.areAllEligiblePlayersReady());
 
             aggGame.closeReadyCountdown();
             assertEquals(ReadyGateState.CLOSED, aggGame.getReadyGateState());
-            assertTrue(p1.getIsReadyForNextHand());
+            assertTrue(p1.isReadyForNextHand());
 
             aggGame.waitForReadyPlayers();
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, aggGame.getReadyGateState());
-            assertFalse(p1.getIsReadyForNextHand());
+            assertFalse(p1.isReadyForNextHand());
 
             aggGame.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 1500L);
             aggGame.scheduleTask(ScheduledGameTask.CLEANUP, 60000L);
@@ -2372,8 +2372,8 @@ class GameTest {
 
             pauseGame.pauseForDisconnectedSurvivor(leaving);
 
-            assertTrue(leaving.stream().allMatch(Player::getIsOut));
-            assertFalse(survivor.getIsOut());
+            assertTrue(leaving.stream().allMatch(Player::isOut));
+            assertFalse(survivor.isOut());
             assertTrue(pauseGame.isForfeitPending());
             assertFalse(pauseGame.isGameOver());
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, pauseGame.getReadyGateState());

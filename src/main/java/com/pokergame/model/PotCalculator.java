@@ -255,7 +255,7 @@ final class PotCalculator {
     /** Distinct hand contributions of the all-in players still in the hand, lowest first. */
     private static List<Integer> allInContributionCaps(PotInputs inputs) {
         Set<String> allInIds = inputs.activePlayers().stream()
-                .filter(player -> player.getIsAllIn() && player.isInHand())
+                .filter(player -> player.isAllIn() && player.isInHand())
                 .map(Player::getPlayerId)
                 .collect(Collectors.toSet());
         return inputs.handContributions().entrySet().stream()
@@ -363,7 +363,7 @@ final class PotCalculator {
         }
 
         boolean hasAllIn() {
-            return activePlayers.stream().anyMatch(player -> player.getIsAllIn() && player.isInHand());
+            return activePlayers.stream().anyMatch(player -> player.isAllIn() && player.isInHand());
         }
     }
 

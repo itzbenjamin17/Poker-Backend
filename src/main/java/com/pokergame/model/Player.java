@@ -283,15 +283,15 @@ public class Player {
         return name;
     }
 
-    public boolean getHasFolded() {
+    public boolean hasFolded() {
         return hasFolded;
     }
 
-    public boolean getIsAllIn() {
+    public boolean isAllIn() {
         return isAllIn;
     }
 
-    public boolean getIsOut() {
+    public boolean isOut() {
         return isOut;
     }
 
@@ -313,7 +313,7 @@ public class Player {
         return isInHand() && !isAllIn;
     }
 
-    public boolean getIsDisconnected() {
+    public boolean isDisconnected() {
         return isDisconnected;
     }
 
@@ -321,7 +321,7 @@ public class Player {
         return disconnectDeadlineEpochMs;
     }
 
-    public boolean getIsReadyForNextHand() {
+    public boolean isReadyForNextHand() {
         return isReadyForNextHand;
     }
 

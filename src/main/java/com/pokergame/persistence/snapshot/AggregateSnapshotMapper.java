@@ -205,9 +205,9 @@ public final class AggregateSnapshotMapper {
     AggregateStateImage.PlayerState toPlayerState(Player player) {
         return new AggregateStateImage.PlayerState(
                 player.getName(), player.getPlayerId(), cards(player.getHoleCards()), cards(player.getBestHand()),
-                player.getHandRank(), player.getChips(), player.getCurrentBet(), player.getHasFolded(),
-                player.getIsAllIn(), player.getIsOut(), player.getIsDisconnected(),
-                player.getDisconnectDeadlineEpochMs(), player.getIsReadyForNextHand());
+                player.getHandRank(), player.getChips(), player.getCurrentBet(), player.hasFolded(),
+                player.isAllIn(), player.isOut(), player.isDisconnected(),
+                player.getDisconnectDeadlineEpochMs(), player.isReadyForNextHand());
     }
 
     /**

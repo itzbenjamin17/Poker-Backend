@@ -266,7 +266,7 @@ public class Game {
                 logger.info("Setting {} as out (0 chips)", player.getName());
                 player.setIsOut();
             }
-            if (!player.getIsOut()) {
+            if (!player.isOut()) {
                 activePlayers.add(player);
             }
         }
@@ -953,7 +953,7 @@ public class Game {
      * @return {@code true} if the player is not out and either the hand is unsettled or they hold chips
      */
     public boolean isContender(Player player) {
-        if (player.getIsOut()) {
+        if (player.isOut()) {
             return false;
         }
         return endedBeforeShowdown() || player.getChips() > 0;
@@ -984,7 +984,7 @@ public class Game {
             return Optional.empty();
         }
         List<Player> connected = contenders.stream()
-                .filter(player -> !player.getIsDisconnected())
+                .filter(player -> !player.isDisconnected())
                 .toList();
         if (connected.size() != 1) {
             return Optional.empty();
@@ -1013,7 +1013,7 @@ public class Game {
     public List<String> disconnectedContenderNamesExcept(String playerName) {
         return players.stream()
                 .filter(player -> !player.getName().equals(playerName))
-                .filter(player -> isContender(player) && player.getIsDisconnected())
+                .filter(player -> isContender(player) && player.isDisconnected())
                 .map(Player::getName)
                 .toList();
     }
@@ -1025,7 +1025,7 @@ public class Game {
      */
     public boolean isGameDecided() {
         long playersWithChips = players.stream()
-                .filter(player -> !player.getIsOut() && player.getChips() > 0)
+                .filter(player -> !player.isOut() && player.getChips() > 0)
                 .count();
         return playersWithChips <= 1;
     }
@@ -1042,7 +1042,7 @@ public class Game {
      */
     public Player resolveWinner(Player preferredWinner) {
         if (preferredWinner != null) {
-            if (!players.contains(preferredWinner) || preferredWinner.getIsOut()) {
+            if (!players.contains(preferredWinner) || preferredWinner.isOut()) {
                 throw new IllegalStateException(
                         "Preferred winner must be seated on the roster and not out: " + preferredWinner.getName());
             }
@@ -1058,7 +1058,7 @@ public class Game {
         // Tie-break by earliest seat in roster order so abandonments and forfeits resolve
         // deterministically to a single table winner matching table seat priority without inventing a draw.
         return players.stream()
-                .filter(player -> !player.getIsOut())
+                .filter(player -> !player.isOut())
                 .max(Comparator.comparingInt(Player::getChips)
                         .thenComparing(Comparator.comparingInt(players::indexOf).reversed()))
                 .orElseThrow(() -> new IllegalStateException("Cannot resolve winner when every player is out"));

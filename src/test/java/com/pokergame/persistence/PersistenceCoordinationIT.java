@@ -791,7 +791,7 @@ class PersistenceCoordinationIT {
                     actor.getName(),
                     actor.getChips(),
                     actor.getCurrentBet(),
-                    actor.getHasFolded(),
+                    actor.hasFolded(),
                     game.getPot(),
                     game.getStateRevision(),
                     game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
@@ -814,7 +814,7 @@ class PersistenceCoordinationIT {
             assertThat(game.getCurrentPlayer().getName()).isEqualTo(before.actorName());
             assertThat(actor.getChips()).isEqualTo(before.actorChips());
             assertThat(actor.getCurrentBet()).isEqualTo(before.actorBet());
-            assertThat(actor.getHasFolded()).isEqualTo(before.actorFolded());
+            assertThat(actor.hasFolded()).isEqualTo(before.actorFolded());
             assertThat(game.getPot()).isEqualTo(before.pot());
             assertThat(game.getStateRevision()).isEqualTo(before.stateRevision());
             assertThat(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(before.turnDeadline());

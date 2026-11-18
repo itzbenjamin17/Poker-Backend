@@ -108,7 +108,7 @@ public class PlayerActionService {
                     "NOT_YOUR_TURN",
                     "Wait for your turn");
         }
-        if (currentPlayer.getIsDisconnected()) {
+        if (currentPlayer.isDisconnected()) {
             logger.warn("Disconnected player {} attempted to act in game {}", playerName, gameId);
             throw new UnauthorisedActionException(
                     "You are disconnected. Reconnect to continue your turn.",

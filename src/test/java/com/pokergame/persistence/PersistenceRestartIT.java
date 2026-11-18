@@ -476,10 +476,10 @@ class PersistenceRestartIT {
                 Game restoredGame = games.getGame(roomId);
                 Player alice = restoredGame.findPlayerByName("Alice");
                 Player bob = restoredGame.findPlayerByName("Bob");
-                assertThat(alice.getIsDisconnected()).isTrue();
+                assertThat(alice.isDisconnected()).isTrue();
                 assertThat(alice.getDisconnectDeadlineEpochMs()).isEqualTo(longerDeadline);
                 assertThat(restoredRoom.getAbsenceDeadline("Alice")).isEqualTo(longerDeadline);
-                assertThat(bob.getIsDisconnected()).isTrue();
+                assertThat(bob.isDisconnected()).isTrue();
                 assertThat(bob.getDisconnectDeadlineEpochMs()).isLessThan(longerDeadline);
                 return null;
             });

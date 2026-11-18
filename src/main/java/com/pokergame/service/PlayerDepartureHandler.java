@@ -205,7 +205,7 @@ class PlayerDepartureHandler {
             logger.debug("Cannot mark player disconnected: player {} not found in game {}", playerName, gameId);
             return;
         }
-        if (player.getIsDisconnected()) {
+        if (player.isDisconnected()) {
             logger.debug("Player {} already disconnected in game {}", playerName, gameId);
             return;
         }
@@ -239,7 +239,7 @@ class PlayerDepartureHandler {
                 return;
             }
             Player player = game.findPlayerByName(playerName);
-            if (player != null && player.getIsDisconnected()) {
+            if (player != null && player.isDisconnected()) {
                 player.setDisconnected(false);
                 player.setDisconnectDeadlineEpochMs(null);
                 logger.info("Player {} marked reconnected in game {}", playerName, gameId);
@@ -371,7 +371,7 @@ class PlayerDepartureHandler {
         if (game != null) {
             for (String name : remaining) {
                 Player player = game.findPlayerByName(name);
-                if (player != null && game.isContender(player) && !player.getIsDisconnected()) {
+                if (player != null && game.isContender(player) && !player.isDisconnected()) {
                     return name;
                 }
             }
@@ -418,7 +418,7 @@ class PlayerDepartureHandler {
             List<String> departingRoomMembers,
             List<Player> departingGamePlayers,
             Player survivor) {
-        if (survivor.getIsDisconnected()) {
+        if (survivor.isDisconnected()) {
             game.pauseForDisconnectedSurvivor(departingGamePlayers);
             timerRegistry.cancelAllForGame(roomId, false);
             detachRoomMembers(roomId, room, game, departingRoomMembers);
@@ -456,7 +456,7 @@ class PlayerDepartureHandler {
         // no game seat (lobby, or out of the game) keeps it on the room. Once the game is finished,
         // a seated player with no game deadline falls back to the room's deadline.
         Player player = game == null ? null : game.findPlayerByName(playerName);
-        boolean disconnected = player == null ? !room.isPlayerConnected(playerName) : player.getIsDisconnected();
+        boolean disconnected = player == null ? !room.isPlayerConnected(playerName) : player.isDisconnected();
         if (!disconnected) {
             return false;
         }

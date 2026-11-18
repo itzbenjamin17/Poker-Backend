@@ -861,14 +861,14 @@ class PotCalculatorTest {
             for (PotCalculator.PotAllocation alloc : result.allocations()) {
                 assertTrue(alloc.amount() > 0, "Pot layer must be positive for run " + i);
                 for (Player el : alloc.eligiblePlayers()) {
-                    assertFalse(el.getHasFolded(), "Eligible player must not be folded");
-                    assertFalse(el.getIsOut(), "Eligible player must not be out");
+                    assertFalse(el.hasFolded(), "Eligible player must not be folded");
+                    assertFalse(el.isOut(), "Eligible player must not be out");
                 }
             }
 
             for (String uncalledId : result.uncalledByPlayer().keySet()) {
                 assertTrue(allPlayers.stream().anyMatch(p -> p.getPlayerId().equals(uncalledId)
-                        && !p.getHasFolded() && !p.getIsOut()), "Uncalled recipient must be active seated player");
+                        && !p.hasFolded() && !p.isOut()), "Uncalled recipient must be active seated player");
             }
 
             List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
@@ -1056,7 +1056,7 @@ class PotCalculatorTest {
             // Verify that NO folded player is present in ANY allocation's eligible players
             for (PotCalculator.PotAllocation alloc : result.allocations()) {
                 for (Player eligible : alloc.eligiblePlayers()) {
-                    assertFalse(eligible.getHasFolded(), "Folded player found in eligible contenders: " + eligible.getPlayerId());
+                    assertFalse(eligible.hasFolded(), "Folded player found in eligible contenders: " + eligible.getPlayerId());
                 }
             }
 
@@ -1101,7 +1101,7 @@ class PotCalculatorTest {
             // No folded player is eligible
             for (PotCalculator.PotAllocation alloc : result.allocations()) {
                 for (Player eligible : alloc.eligiblePlayers()) {
-                    assertFalse(eligible.getHasFolded());
+                    assertFalse(eligible.hasFolded());
                 }
             }
         }
@@ -1366,7 +1366,7 @@ class PotCalculatorTest {
                 // Invariant 3: No Folded Player in Uncalled Refund
                 for (String refundedId : result.uncalledByPlayer().keySet()) {
                     Player refundedPlayer = allPlayers.stream().filter(pl -> pl.getPlayerId().equals(refundedId)).findFirst().orElseThrow();
-                    assertFalse(refundedPlayer.getHasFolded(),
+                    assertFalse(refundedPlayer.hasFolded(),
                             "Iteration " + iteration + ": Folded player received refund: " + refundedId);
                 }
 
@@ -1374,9 +1374,9 @@ class PotCalculatorTest {
                 for (PotCalculator.PotAllocation alloc : result.allocations()) {
                     assertTrue(alloc.amount() > 0, "Allocation amount must be strictly positive");
                     for (Player eligible : alloc.eligiblePlayers()) {
-                        assertFalse(eligible.getHasFolded(),
+                        assertFalse(eligible.hasFolded(),
                                 "Iteration " + iteration + ": Folded player found in eligible contenders");
-                        assertFalse(eligible.getIsOut(),
+                        assertFalse(eligible.isOut(),
                                 "Iteration " + iteration + ": Out player found in eligible contenders");
                     }
                 }

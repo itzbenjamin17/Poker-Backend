@@ -231,18 +231,18 @@ class RoomRestoreServiceTest {
         verify(roomAggregates).install(room, game);
 
         long expectedFreshDeadline = BASE_EPOCH_MS + DISCONNECT_GRACE_MS;
-        assertTrue(alice.getIsDisconnected());
-        assertFalse(alice.getIsReadyForNextHand());
+        assertTrue(alice.isDisconnected());
+        assertFalse(alice.isReadyForNextHand());
         assertEquals(longerStoredDeadline, alice.getDisconnectDeadlineEpochMs());
         verify(webSocketEventListener).scheduleRecoveredDisconnect(ROOM_ID, "Alice", longerStoredDeadline);
 
-        assertTrue(bob.getIsDisconnected());
-        assertFalse(bob.getIsReadyForNextHand());
+        assertTrue(bob.isDisconnected());
+        assertFalse(bob.isReadyForNextHand());
         assertEquals(expectedFreshDeadline, bob.getDisconnectDeadlineEpochMs());
         verify(webSocketEventListener).scheduleRecoveredDisconnect(ROOM_ID, "Bob", expectedFreshDeadline);
 
-        assertTrue(charlie.getIsDisconnected());
-        assertFalse(charlie.getIsReadyForNextHand());
+        assertTrue(charlie.isDisconnected());
+        assertFalse(charlie.isReadyForNextHand());
         assertEquals(expectedFreshDeadline, charlie.getDisconnectDeadlineEpochMs());
         verify(webSocketEventListener).scheduleRecoveredDisconnect(ROOM_ID, "Charlie", expectedFreshDeadline);
 

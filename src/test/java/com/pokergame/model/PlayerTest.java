@@ -83,9 +83,9 @@ class PlayerTest {
     @Test
     void testInitialState() {
         assertEquals(0, player.getCurrentBet());
-        assertFalse(player.getHasFolded());
-        assertFalse(player.getIsAllIn());
-        assertFalse(player.getIsOut());
+        assertFalse(player.hasFolded());
+        assertFalse(player.isAllIn());
+        assertFalse(player.isOut());
         assertEquals(0, player.getHoleCards().size());
         assertEquals(0, player.getBestHand().size());
         assertEquals(HandRank.NO_HAND, player.getHandRank());
@@ -96,7 +96,7 @@ class PlayerTest {
         int committed = player.doAction(PlayerAction.FOLD, 0);
 
         assertEquals(0, committed, "Fold should commit 0 chips");
-        assertTrue(player.getHasFolded());
+        assertTrue(player.hasFolded());
         assertEquals(1000, player.getChips(), "Chips should not change on fold");
     }
 
@@ -145,7 +145,7 @@ class PlayerTest {
 
         assertEquals(1000, committed, "All chips should be committed");
         assertEquals(0, player.getChips(), "Player should have no chips left");
-        assertTrue(player.getIsAllIn());
+        assertTrue(player.isAllIn());
         assertEquals(1000, player.getCurrentBet());
     }
 
@@ -165,7 +165,7 @@ class PlayerTest {
 
         assertEquals(50, committed);
         assertEquals(0, shortStack.getChips());
-        assertTrue(shortStack.getIsAllIn());
+        assertTrue(shortStack.isAllIn());
         assertEquals(50, shortStack.getCurrentBet());
     }
 
@@ -205,8 +205,8 @@ class PlayerTest {
         assertEquals(0, player.getHoleCards().size());
         assertEquals(0, player.getBestHand().size());
         assertEquals(HandRank.NO_HAND, player.getHandRank());
-        assertFalse(player.getHasFolded());
-        assertFalse(player.getIsAllIn());
+        assertFalse(player.hasFolded());
+        assertFalse(player.isAllIn());
         assertEquals(0, player.getCurrentBet());
     }
 
@@ -222,9 +222,9 @@ class PlayerTest {
 
     @Test
     void testSetIsOut() {
-        assertFalse(player.getIsOut());
+        assertFalse(player.isOut());
         player.setIsOut();
-        assertTrue(player.getIsOut());
+        assertTrue(player.isOut());
     }
 
     @Test
@@ -279,7 +279,7 @@ class PlayerTest {
 
         assertEquals(50, committed);
         assertEquals(0, shortStack.getChips());
-        assertTrue(shortStack.getIsAllIn());
+        assertTrue(shortStack.isAllIn());
         assertEquals(50, shortStack.getCurrentBet());
     }
 
@@ -363,12 +363,12 @@ class PlayerTest {
         assertEquals(HandRank.ROYAL_FLUSH, restored.getHandRank());
         assertEquals(500, restored.getChips());
         assertEquals(50, restored.getCurrentBet());
-        assertFalse(restored.getHasFolded());
-        assertFalse(restored.getIsAllIn());
-        assertFalse(restored.getIsOut());
-        assertTrue(restored.getIsDisconnected());
+        assertFalse(restored.hasFolded());
+        assertFalse(restored.isAllIn());
+        assertFalse(restored.isOut());
+        assertTrue(restored.isDisconnected());
         assertEquals(123456789L, restored.getDisconnectDeadlineEpochMs());
-        assertTrue(restored.getIsReadyForNextHand());
+        assertTrue(restored.isReadyForNextHand());
     }
 
     @ParameterizedTest(name = "hasFolded={0}, isOut={1}, isAllIn={2} -> isInHand={3}, canAct={4}")

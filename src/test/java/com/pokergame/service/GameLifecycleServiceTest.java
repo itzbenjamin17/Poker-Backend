@@ -364,9 +364,9 @@ class GameLifecycleServiceTest {
             Game game = getGameLocked(ROOM_ID);
             Player host = game.findPlayerByName("Host");
             Player player2 = game.findPlayerByName("Player2");
-            assertFalse(host.getIsDisconnected());
+            assertFalse(host.isDisconnected());
             assertNull(host.getDisconnectDeadlineEpochMs());
-            assertTrue(player2.getIsDisconnected());
+            assertTrue(player2.isDisconnected());
             assertEquals(p2Deadline, player2.getDisconnectDeadlineEpochMs());
             verify(roomService).broadcastGameStarted(ROOM_ID);
         }
@@ -398,7 +398,7 @@ class GameLifecycleServiceTest {
             withRoomLock(headsUp.getRoomId(), () -> gameLifecycleService.executeScheduledTask(
                     headsUp.getRoomId(), ScheduledGameTask.NEW_HAND, nextHandDeadline, runout.getHandNumber(), nextHandGen));
 
-            assertTrue(runout.getActivePlayers().stream().allMatch(Player::getIsAllIn));
+            assertTrue(runout.getActivePlayers().stream().allMatch(Player::isAllIn));
             assertEquals(5, runout.getCurrentHighestBet());
             assertNotNull(runout.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
             verify(gameStateService).broadcastGameStateWithAutoAdvance(eq(runout), anyString());
@@ -551,7 +551,7 @@ class GameLifecycleServiceTest {
             UnauthorisedActionException unmarkInactive = assertThrows(UnauthorisedActionException.class,
                     () -> withRoomLock(ROOM_ID, () -> gameLifecycleService.unmarkPlayerReadyForNextHand(ROOM_ID, "Host")));
             assertEquals("Ready countdown is not active.", unmarkInactive.getMessage());
-            assertTrue(liveGame.findPlayerByName("Host").getIsReadyForNextHand());
+            assertTrue(liveGame.findPlayerByName("Host").isReadyForNextHand());
 
             liveGame.findPlayerByName("Host").setReadyForNextHand(false);
             UnauthorisedActionException markInactive = assertThrows(UnauthorisedActionException.class,
