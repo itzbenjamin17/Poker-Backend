@@ -8,13 +8,9 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Represents a poker player with hole cards, chips, and betting state.
- *
- * <p>
- * <b>WARNING:</b> This class performs basic state and chip-accounting validation
- * but does not enforce poker betting rules. Use {@link BettingRound} and {@link Game}
- * for rule-validated actions.
- * </p>
+ * Represents a seated poker player: cards, chip stack, betting state, connection status,
+ * and next-hand readiness. Betting rules and turn validation live in {@link BettingRound}
+ * and {@link Game}.
  */
 public class Player {
     private final String name;
@@ -77,8 +73,8 @@ public class Player {
     }
 
     /**
-     * Resets all player attributes for a new hand.
-     * Clears hole cards, best hand, and resets betting status.
+     * Resets per-hand state (hole cards, best hand, hand rank, current bet, folded/all-in flags,
+     * and next-hand ready flag) while preserving chip stack, out status, and connection state.
      */
     public void resetAttributes() {
         this.holeCards = new ArrayList<>();
@@ -98,13 +94,11 @@ public class Player {
     }
 
     /**
-     * Executes a player action and returns the chips committed by this action.
+     * Applies a player action and returns the chips committed by this action.
      *
      * <p>
-     * <b>IMPORTANT:</b> The caller is responsible for calculating the correct
-     * amount needed for betting actions (BET, RAISE, CALL). This method does NOT
-     * validate or calculate bet amounts - it uses the provided amount directly.
-     * </p>
+     * Does not check poker betting rules or calculate call amounts (use {@link BettingRound});
+     * the caller must supply the validated bet/raise/call amount.
      *
      * @param action the poker action to perform (FOLD, CHECK, CALL, BET, RAISE, ALL_IN)
      * @param amount the chip amount for betting actions (ignored for FOLD, CHECK, ALL_IN)
@@ -133,39 +127,6 @@ public class Player {
         this.chips += amount;
     }
 
-    public List<Card> getHoleCards() {
-        return List.copyOf(holeCards);
-    }
-
-    public void setHoleCards(List<Card> cards) {
-        Objects.requireNonNull(cards, "cards must not be null");
-        this.holeCards = new ArrayList<>(cards);
-    }
-
-    public int getCurrentBet() {
-        return currentBet;
-    }
-
-    public int getChips() {
-        return chips;
-    }
-
-    public String getName() {
-        return name;
-    }
-
-    public boolean hasFolded() {
-        return hasFolded;
-    }
-
-    public boolean isAllIn() {
-        return isAllIn;
-    }
-
-    public boolean isOut() {
-        return isOut;
-    }
-
     /**
      * Returns whether the player is still contesting the current hand (has not folded and is not out).
      *
@@ -184,56 +145,12 @@ public class Player {
         return isInHand() && !isAllIn;
     }
 
-    public boolean isDisconnected() {
-        return isDisconnected;
-    }
-
-    public Long getDisconnectDeadlineEpochMs() {
-        return disconnectDeadlineEpochMs;
-    }
-
-    public boolean isReadyForNextHand() {
-        return isReadyForNextHand;
-    }
-
     /**
      * Marks the player as out of the game, such as when eliminated with zero chips
      * or after forfeiting on departure.
      */
     public void setIsOut() {
         this.isOut = true;
-    }
-
-    public void setDisconnected(boolean disconnected) {
-        this.isDisconnected = disconnected;
-    }
-
-    public void setDisconnectDeadlineEpochMs(Long disconnectDeadlineEpochMs) {
-        this.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
-    }
-
-    public void setReadyForNextHand(boolean readyForNextHand) {
-        this.isReadyForNextHand = readyForNextHand;
-    }
-
-    public List<Card> getBestHand() {
-        return List.copyOf(bestHand);
-    }
-
-    public String getPlayerId() {
-        return playerId;
-    }
-
-    public HandRank getHandRank() {
-        return handRank;
-    }
-
-    public void setBestHand(List<Card> cards) {
-        this.bestHand = cards != null ? new ArrayList<>(cards) : new ArrayList<>();
-    }
-
-    public void setHandRank(HandRank handRank) {
-        this.handRank = handRank;
     }
 
     /**
@@ -299,6 +216,83 @@ public class Player {
         }
         this.currentBet += amount;
         return amount;
+    }
+
+    public List<Card> getHoleCards() {
+        return List.copyOf(holeCards);
+    }
+
+    public void setHoleCards(List<Card> cards) {
+        Objects.requireNonNull(cards, "cards must not be null");
+        this.holeCards = new ArrayList<>(cards);
+    }
+
+    public int getCurrentBet() {
+        return currentBet;
+    }
+
+    public int getChips() {
+        return chips;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public boolean hasFolded() {
+        return hasFolded;
+    }
+
+    public boolean isAllIn() {
+        return isAllIn;
+    }
+
+    public boolean isOut() {
+        return isOut;
+    }
+
+    public boolean isDisconnected() {
+        return isDisconnected;
+    }
+
+    public Long getDisconnectDeadlineEpochMs() {
+        return disconnectDeadlineEpochMs;
+    }
+
+    public boolean isReadyForNextHand() {
+        return isReadyForNextHand;
+    }
+
+    public void setDisconnected(boolean disconnected) {
+        this.isDisconnected = disconnected;
+    }
+
+    public void setDisconnectDeadlineEpochMs(Long disconnectDeadlineEpochMs) {
+        this.disconnectDeadlineEpochMs = disconnectDeadlineEpochMs;
+    }
+
+    public void setReadyForNextHand(boolean readyForNextHand) {
+        this.isReadyForNextHand = readyForNextHand;
+    }
+
+    public List<Card> getBestHand() {
+        return List.copyOf(bestHand);
+    }
+
+    public String getPlayerId() {
+        return playerId;
+    }
+
+    public HandRank getHandRank() {
+        return handRank;
+    }
+
+    public void setBestHand(List<Card> cards) {
+        this.bestHand = cards != null ? new ArrayList<>(cards) : new ArrayList<>();
+    }
+
+    public void setHandRank(HandRank handRank) {
+        this.handRank = handRank;
     }
 
     /**

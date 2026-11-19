@@ -84,22 +84,6 @@ final class GameScheduling {
         }
     }
 
-    Long getScheduledTime(ScheduledGameTask task) {
-        return scheduledTimes.get(task);
-    }
-
-    long getTimerVersion(ScheduledGameTask task) {
-        return timerVersions.getOrDefault(task, 0L);
-    }
-
-    Map<ScheduledGameTask, Long> scheduledTimesSnapshot() {
-        return Map.copyOf(scheduledTimes);
-    }
-
-    Map<ScheduledGameTask, Long> timerVersionsSnapshot() {
-        return Map.copyOf(timerVersions);
-    }
-
     /**
      * Checks whether a scheduled timer should still run, and clears one-time tasks (everything
      * except {@link ScheduledGameTask#CLEANUP}) so they only run once.
@@ -146,5 +130,21 @@ final class GameScheduling {
     boolean isCleanupExpired(long nowEpochMs) {
         Long cleanupRunAt = getScheduledTime(ScheduledGameTask.CLEANUP);
         return cleanupRunAt != null && nowEpochMs >= cleanupRunAt;
+    }
+
+    Long getScheduledTime(ScheduledGameTask task) {
+        return scheduledTimes.get(task);
+    }
+
+    long getTimerVersion(ScheduledGameTask task) {
+        return timerVersions.getOrDefault(task, 0L);
+    }
+
+    Map<ScheduledGameTask, Long> scheduledTimesSnapshot() {
+        return Map.copyOf(scheduledTimes);
+    }
+
+    Map<ScheduledGameTask, Long> timerVersionsSnapshot() {
+        return Map.copyOf(timerVersions);
     }
 }
