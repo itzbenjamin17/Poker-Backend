@@ -345,7 +345,7 @@ class RoomRestoreServiceTest {
             roomRestoreService.resumeRecoveredTimers(ROOM_ID);
 
             assertEquals(BASE_EPOCH_MS + READY_COUNTDOWN_MS,
-                    game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+                    game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
             verify(gameStateService, never()).broadcastGameState(any());
             verify(taskScheduler).schedule(
                     any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + READY_COUNTDOWN_MS)));
@@ -382,7 +382,7 @@ class RoomRestoreServiceTest {
             long expectedDeadline = BASE_EPOCH_MS + READY_COUNTDOWN_MS;
             assertEquals(expectedDeadline, game.getReadyCountdownDeadlineEpochMs());
             assertEquals(expectedDeadline,
-                    game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+                    game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
             verify(gameStateService).broadcastGameState(game);
             verify(taskScheduler).schedule(
                     any(Runnable.class), eq(Instant.ofEpochMilli(expectedDeadline)));

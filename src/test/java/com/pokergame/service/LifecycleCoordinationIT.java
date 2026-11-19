@@ -485,7 +485,7 @@ class LifecycleCoordinationIT {
                 Game game = gameLifecycleService.getGame(roomId);
                 return new TurnSnapshot(
                         game.getCurrentPlayer().getName(),
-                        game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT),
+                        game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT),
                         game.getHandNumber(),
                         game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT));
             });
@@ -497,7 +497,7 @@ class LifecycleCoordinationIT {
                 Game game = gameLifecycleService.getGame(roomId);
                 return new TurnSnapshot(
                         game.getCurrentPlayer().getName(),
-                        game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT),
+                        game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT),
                         game.getHandNumber(),
                         game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT));
             });
@@ -512,7 +512,7 @@ class LifecycleCoordinationIT {
                 Game game = gameLifecycleService.getGame(roomId);
                 assertThat(room.hasPlayer(turn2.actor())).isTrue();
                 assertThat(game.getCurrentPlayer().getName()).isEqualTo(turn2.actor());
-                assertThat(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(turn2.deadline());
+                assertThat(game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(turn2.deadline());
                 assertThat(game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(turn2.timerVersion());
                 assertThat(game.isGameOver()).isFalse();
                 return null;
@@ -530,7 +530,7 @@ class LifecycleCoordinationIT {
                 Game game = gameLifecycleService.getGame(roomId);
                 return new TurnSnapshot(
                         null,
-                        game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT),
+                        game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT),
                         game.getHandNumber(),
                         game.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
             });
@@ -607,7 +607,7 @@ class LifecycleCoordinationIT {
 
             String currentActor = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
             Long turnDeadline = withRoomLock(roomCoordinator, roomId, () ->
-                    gameLifecycleService.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+                    gameLifecycleService.getGame(roomId).getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
             long handNumber = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
             long timerVersion = withRoomLock(roomCoordinator, roomId, () ->
                     gameLifecycleService.getGame(roomId).getTimerVersion(ScheduledGameTask.TURN_TIMEOUT));
@@ -695,7 +695,7 @@ class LifecycleCoordinationIT {
 
             gameLifecycleService.markPlayerReadyForNextHand(roomId, "Host");
             long deadline = withRoomLock(roomCoordinator, roomId, () ->
-                    gameLifecycleService.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+                    gameLifecycleService.getGame(roomId).getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
             long timerVersion = withRoomLock(roomCoordinator, roomId, () ->
                     gameLifecycleService.getGame(roomId).getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
 
@@ -749,7 +749,7 @@ class LifecycleCoordinationIT {
                 Game game = gameLifecycleService.getGame(roomId);
                 assertThat(game.isGameOver()).isTrue();
                 assertThat(roomService.getRoom(roomId).isFinished()).isTrue();
-                return game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
+                return game.getScheduledTaskTime(ScheduledGameTask.CLEANUP);
             });
             long hand = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
             long timerVersion = withRoomLock(roomCoordinator, roomId, () ->
@@ -812,7 +812,7 @@ class LifecycleCoordinationIT {
                     () -> gameLifecycleService.getGame(roomId))).isNotNull();
 
             long cleanupDeadline = withRoomLock(roomCoordinator, roomId, () ->
-                    gameLifecycleService.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+                    gameLifecycleService.getGame(roomId).getScheduledTaskTime(ScheduledGameTask.CLEANUP));
             assertThat(cleanupDeadline).isPositive();
             long hand = withRoomLock(roomCoordinator, roomId, () -> gameLifecycleService.getGame(roomId).getHandNumber());
             long timerVersion = withRoomLock(roomCoordinator, roomId, () ->

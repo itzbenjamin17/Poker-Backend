@@ -531,7 +531,7 @@ class PersistenceCoordinationIT {
             assertThat(room.isPlayerConnected("Bob")).isFalse();
             assertThat(room.getAbsenceDeadline("Bob")).isEqualTo(expectedAbsenceDeadline);
             assertThat(game.isPausedForDisconnectedSurvivor()).isTrue();
-            assertThat(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(expectedTurnDeadline);
+            assertThat(game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(expectedTurnDeadline);
             assertThat(room.getPlayers()).containsExactlyInAnyOrder("Host", "Alice", "Bob");
             return null;
         });
@@ -794,7 +794,7 @@ class PersistenceCoordinationIT {
                     actor.hasFolded(),
                     game.getPot(),
                     game.getStateRevision(),
-                    game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+                    game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
         });
         assertThat(before.turnDeadline()).isNotNull();
         Mockito.clearInvocations(messagingTemplate);
@@ -817,7 +817,7 @@ class PersistenceCoordinationIT {
             assertThat(actor.hasFolded()).isEqualTo(before.actorFolded());
             assertThat(game.getPot()).isEqualTo(before.pot());
             assertThat(game.getStateRevision()).isEqualTo(before.stateRevision());
-            assertThat(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(before.turnDeadline());
+            assertThat(game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(before.turnDeadline());
             return null;
         });
         Mockito.verifyNoInteractions(messagingTemplate);

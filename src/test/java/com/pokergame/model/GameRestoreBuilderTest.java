@@ -111,7 +111,7 @@ class GameRestoreBuilderTest {
                 .gameEndResult(terminalResult)                      // 31
                 .allPlayersHadInitialTurn(true)                     // 32
                 .actedPlayersInRound(actedPlayers)                  // 33
-                .scheduledTaskDeadlines(taskDeadlines)              // 34
+                .scheduledTimes(taskDeadlines)              // 34
                 .timerVersions(timerVersions)                       // 35
                 .build();
 
@@ -151,10 +151,10 @@ class GameRestoreBuilderTest {
         assertTrue(game.toSnapshot().allPlayersHadInitialTurn());                              // 33
         assertEquals(actedPlayers, game.toSnapshot().actedPlayerIds());                // 34
         assertEquals(1700000005000L,
-                game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));      // 35
+                game.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));      // 35
         assertEquals(1700000060000L,
-                game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));           // 35
-        assertEquals(taskDeadlines, game.toSnapshot().scheduledTaskDeadlines());        // 35
+                game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));           // 35
+        assertEquals(taskDeadlines, game.toSnapshot().scheduledTimes());        // 35
         assertEquals(3L,
                 game.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));             // 36
         assertEquals(1L,
@@ -182,7 +182,7 @@ class GameRestoreBuilderTest {
                 .pot(200).currentPlayerId("p1").currentHighestBet(100).currentPhase(GamePhase.FLOP)
                 .smallBlind(15).bigBlind(30).handContributions(Map.of("p1", 100, "p2", 100))
                 .dealerPlayerId("p2").smallBlindPlayerId("p2").bigBlindPlayerId("p1")
-                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                 .build();
 
         game.conductShowdown();
@@ -350,19 +350,19 @@ class GameRestoreBuilderTest {
                 ScheduledGameTask.READY_TIMEOUT, 4L);
 
         Game game = defaultBuilder()
-                .scheduledTaskDeadlines(deadlines)
+                .scheduledTimes(deadlines)
                 .timerVersions(timerVersions)
                 .build();
 
-        assertEquals(50000L, game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
-        assertEquals(60000L, game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
-        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+        assertEquals(50000L, game.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
+        assertEquals(60000L, game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
+        assertNull(game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
 
         assertEquals(2L, game.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
         assertEquals(4L, game.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
         assertEquals(0L, game.getTimerVersion(ScheduledGameTask.CLEANUP));
 
-        assertEquals(deadlines, game.toSnapshot().scheduledTaskDeadlines());
+        assertEquals(deadlines, game.toSnapshot().scheduledTimes());
         assertEquals(timerVersions, game.toSnapshot().timerVersions());
     }
 
@@ -370,11 +370,11 @@ class GameRestoreBuilderTest {
     @DisplayName("scheduledTasks_NullTimerVersionsMapDefaultsGracefully: leaves timerVersions empty")
     void scheduledTasks_NullTimerVersionsMapDefaultsGracefully() {
         Game game = defaultBuilder()
-                .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 99999L))
+                .scheduledTimes(Map.of(ScheduledGameTask.CLEANUP, 99999L))
                 .timerVersions(null)
                 .build();
 
-        assertEquals(99999L, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+        assertEquals(99999L, game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
         assertEquals(0L, game.getTimerVersion(ScheduledGameTask.CLEANUP));
         assertTrue(game.toSnapshot().timerVersions().isEmpty());
     }
@@ -476,7 +476,7 @@ class GameRestoreBuilderTest {
                 .communityCards(mutableCommunity)
                 .handContributions(mutableContribs)
                 .actedPlayersInRound(mutableActed)
-                .scheduledTaskDeadlines(mutableDeadlines)
+                .scheduledTimes(mutableDeadlines)
                 .lastFullRaise(20)
                 .previousBets(mutableWagers)
                 .build();
@@ -492,7 +492,7 @@ class GameRestoreBuilderTest {
         assertEquals(1, game.getCommunityCards().size());
         assertEquals(Map.of("p1", 100), game.toSnapshot().handContributions());
         assertEquals(Set.of("p1"), game.toSnapshot().actedPlayerIds());
-        assertEquals(Map.of(ScheduledGameTask.CLEANUP, 9999L), game.toSnapshot().scheduledTaskDeadlines());
+        assertEquals(Map.of(ScheduledGameTask.CLEANUP, 9999L), game.toSnapshot().scheduledTimes());
         assertEquals(20, game.toSnapshot().lastFullRaise());
         assertEquals(Map.of("p1", 20), game.toSnapshot().previousBets());
     }
@@ -511,7 +511,7 @@ class GameRestoreBuilderTest {
                 .communityCards(List.of())
                 .handContributions(Map.of())
                 .actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of())
+                .scheduledTimes(Map.of())
                 .build();
 
         assertEquals("factory-test", game.getGameId());
@@ -564,7 +564,7 @@ class GameRestoreBuilderTest {
                 .gameEndResult(null)
                 .allPlayersHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of())
+                .scheduledTimes(Map.of())
                 .timerVersions(Map.of());
     }
 
@@ -609,7 +609,7 @@ class GameRestoreBuilderTest {
                     .previousBets(mutableWagers)
                     .handSeatOrder(mutableSeatOrder)
                     .actedPlayersInRound(mutableActed)
-                    .scheduledTaskDeadlines(mutableDeadlines)
+                    .scheduledTimes(mutableDeadlines)
                     .timerVersions(mutableTimerVersions);
 
             // --- Mutate BEFORE build() ---
@@ -637,7 +637,7 @@ class GameRestoreBuilderTest {
             assertEquals(20, game.toSnapshot().previousBets().get("p2"));
             assertEquals(List.of("p1", "p2", "p3"), game.toSnapshot().handSeatOrder());
             assertTrue(game.toSnapshot().actedPlayerIds().contains("p2"));
-            assertEquals(9000L, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            assertEquals(9000L, game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
             assertEquals(2L, game.getTimerVersion(ScheduledGameTask.CLEANUP));
 
             // --- Mutate AFTER build() ---
@@ -661,7 +661,7 @@ class GameRestoreBuilderTest {
             assertEquals(2, game.toSnapshot().previousBets().size(), "previousBets was affected by post-build mutation");
             assertEquals(3, game.toSnapshot().handSeatOrder().size(), "handSeatOrder was affected by post-build mutation");
             assertEquals(2, game.toSnapshot().actedPlayerIds().size(), "actedPlayersInRound was affected by post-build mutation");
-            assertEquals(2, game.toSnapshot().scheduledTaskDeadlines().size(), "scheduledTaskDeadlines was affected by post-build mutation");
+            assertEquals(2, game.toSnapshot().scheduledTimes().size(), "scheduledTimes was affected by post-build mutation");
             assertEquals(2, game.toSnapshot().timerVersions().size(), "timerVersions was affected by post-build mutation");
         }
 
@@ -860,13 +860,13 @@ class GameRestoreBuilderTest {
                     ScheduledGameTask.CLEANUP, Long.MAX_VALUE);
 
             Game game = defaultBuilder()
-                    .scheduledTaskDeadlines(extremeDeadlines)
+                    .scheduledTimes(extremeDeadlines)
                     .timerVersions(extremeTimerVersions)
                     .build();
 
-            assertEquals(0L, game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(-1L, game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
-            assertEquals(Long.MAX_VALUE, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            assertEquals(0L, game.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(-1L, game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(Long.MAX_VALUE, game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
 
             assertEquals(0L, game.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(Long.MAX_VALUE - 1, game.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
@@ -1095,7 +1095,7 @@ class GameRestoreBuilderTest {
                     .gameEndResult(null)
                     .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
-                    .scheduledTaskDeadlines(Map.of())
+                    .scheduledTimes(Map.of())
                     .timerVersions(Map.of());
         }
     }

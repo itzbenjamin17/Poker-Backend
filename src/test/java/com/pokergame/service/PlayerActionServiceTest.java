@@ -1082,7 +1082,7 @@ class PlayerActionServiceTest {
                         new PlayerActionRequest(PlayerAction.CHECK, 0), currentPlayer.getName()));
 
         assertEquals("CHECK_NOT_AVAILABLE", exception.actionErrorCode());
-        assertEquals(deadline, testGame.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+        assertEquals(deadline, testGame.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
         verify(taskScheduler, never()).cancelTask(any(Game.class), eq(ScheduledGameTask.TURN_TIMEOUT));
         verifyNoInteractions(gameStateService);
     }
@@ -1290,7 +1290,7 @@ class PlayerActionServiceTest {
         playerActionService.processPlayerAction(
                 GAME_ID, new PlayerActionRequest(PlayerAction.FOLD, 0), currentPlayer.getName());
 
-        assertNull(testGame.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+        assertNull(testGame.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
         assertTrue(testGame.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT) > timerVersionBefore);
         verify(taskScheduler).cancelTask(testGame, ScheduledGameTask.TURN_TIMEOUT);
         verify(taskScheduler).resetGameInactivity(testGame);
@@ -1319,7 +1319,7 @@ class PlayerActionServiceTest {
                 .carryOverPot(0)
                 .allPlayersHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of(ScheduledGameTask.TURN_TIMEOUT, FIXED_INSTANT.toEpochMilli()))
+                .scheduledTimes(Map.of(ScheduledGameTask.TURN_TIMEOUT, FIXED_INSTANT.toEpochMilli()))
                 
                 .build();
         when(activeGames.get(GAME_ID)).thenReturn(expiredTurnGame);

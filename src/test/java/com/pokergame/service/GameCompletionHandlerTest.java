@@ -141,7 +141,7 @@ class GameCompletionHandlerTest {
                 assertThrows(IllegalStateException.class, () -> completionHandler.handleGameEnd(ROOM_ID));
             }
             verifyNoInteractions(messagingTemplate, taskScheduler);
-            assertNull(emptyGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            assertNull(emptyGame.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
         }
 
         @Test
@@ -202,7 +202,7 @@ class GameCompletionHandlerTest {
             assertFalse(response.abandoned());
             assertTrue(game.isGameOver());
             assertTrue(testRoom.isFinished());
-            assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            assertNotNull(game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
         }
 
         @Test
@@ -228,7 +228,7 @@ class GameCompletionHandlerTest {
             assertTrue(response.isForfeit());
             assertSame(response, game.getGameEndResult());
             assertEquals(BASE_EPOCH_MS + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
-                    game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+                    game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
             verify(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
         }
 
@@ -248,7 +248,7 @@ class GameCompletionHandlerTest {
                     .handContributions(Map.of()).carryOverPot(10)
                     .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, false))
                     .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
-                    .scheduledTaskDeadlines(Map.of()).build();
+                    .scheduledTimes(Map.of()).build();
             registerGame(terminal);
 
             clearInvocations(messagingTemplate);
@@ -301,7 +301,7 @@ class GameCompletionHandlerTest {
             verify(cleanupFuture).cancel(false); // replaced by scheduleGameCleanup inside handleGameEnd
             verify(endCleanupFuture, never()).cancel(false);
             assertEquals(BASE_EPOCH_MS + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
-                    game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+                    game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
         }
     }
 
@@ -345,7 +345,7 @@ class GameCompletionHandlerTest {
             assertTrue(game.getGameEndResult().abandoned());
             assertEquals("INACTIVITY", game.getGameEndResult().reason());
             assertEquals(BASE_EPOCH_MS + 50_000L + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
-                    game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+                    game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
             verify(messagingTemplate).convertAndSend(eq("/game/" + ROOM_ID), eq(game.getGameEndResult()));
         }
 
@@ -366,8 +366,8 @@ class GameCompletionHandlerTest {
             }
 
             assertTrue(game.isGameOver());
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
             assertThat(game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT)).isGreaterThan(timerVersionBefore);
             verify(messagingTemplate, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(GameEndResponse.class));
 

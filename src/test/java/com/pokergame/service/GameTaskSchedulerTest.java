@@ -111,7 +111,7 @@ class GameTaskSchedulerTest {
                 .findFirst()
                 .orElseThrow();
         assertEquals(GAME_ID, autoAdvance.gameId());
-        assertEquals(BASE_EPOCH_MS + 4_000L, autoAdvance.deadline());
+        assertEquals(BASE_EPOCH_MS + 4_000L, autoAdvance.runAtEpochMs());
         assertEquals(game.getHandNumber(), autoAdvance.handNumber());
         assertEquals(game.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE), autoAdvance.timerVersion());
 
@@ -119,7 +119,7 @@ class GameTaskSchedulerTest {
                 .filter(t -> t.task() == ScheduledGameTask.CLEANUP)
                 .findFirst()
                 .orElseThrow();
-        assertEquals(BASE_EPOCH_MS + 60_000L, cleanup.deadline());
+        assertEquals(BASE_EPOCH_MS + 60_000L, cleanup.runAtEpochMs());
         assertEquals(game.getTimerVersion(ScheduledGameTask.CLEANUP), cleanup.timerVersion());
     }
 
@@ -134,7 +134,7 @@ class GameTaskSchedulerTest {
 
         Game game = createAndRegisterGame();
         game.scheduleTask(ScheduledGameTask.NEW_HAND, BASE_EPOCH_MS + 5000L);
-        long deadline = game.getScheduledTaskDeadline(ScheduledGameTask.NEW_HAND);
+        long deadline = game.getScheduledTaskTime(ScheduledGameTask.NEW_HAND);
         long hand = game.getHandNumber();
         long timerVersion = game.getTimerVersion(ScheduledGameTask.NEW_HAND);
         clearInvocations(springScheduler);
@@ -176,10 +176,10 @@ class GameTaskSchedulerTest {
         clearInvocations(springScheduler);
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             assertTrue(scheduler.scheduleReadyCountdownOpen(GAME_ID, 0L));
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
 
             assertFalse(scheduler.scheduleReadyCountdownOpen(GAME_ID, 3_500L));
-            assertEquals(BASE_EPOCH_MS + 3_500L, game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+            assertEquals(BASE_EPOCH_MS + 3_500L, game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
 
             assertThrows(IllegalArgumentException.class, () -> scheduler.scheduleReadyCountdownOpen(GAME_ID, -1L));
             assertThrows(IllegalArgumentException.class, () -> scheduler.scheduleGameCleanup(GAME_ID, -5L));
@@ -203,8 +203,8 @@ class GameTaskSchedulerTest {
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             scheduler.scheduleTurnTimeout(GAME_ID);
             scheduler.scheduleGameEnd(GAME_ID, 2_000L);
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.GAME_END));
         }
 
         game.clearPausedForDisconnectedSurvivor();
@@ -216,11 +216,11 @@ class GameTaskSchedulerTest {
         }
 
         assertEquals(BASE_EPOCH_MS + TestTimings.TURN_ALLOWANCE_MS,
-                game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+                game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
         assertEquals(BASE_EPOCH_MS + 4_000L,
-                game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+                game.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
         assertEquals(BASE_EPOCH_MS + 12_000L,
-                game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+                game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
         verify(springScheduler).schedule(any(Runnable.class),
                 eq(Instant.ofEpochMilli(BASE_EPOCH_MS + TestTimings.TURN_ALLOWANCE_MS)));
         verify(springScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + 4_000L)));
@@ -267,11 +267,11 @@ class GameTaskSchedulerTest {
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             scheduler.scheduleAutoAdvance(GAME_ID);
         }
-        assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+        assertNotNull(game.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
 
         scheduler.cancelTask(game, ScheduledGameTask.AUTO_ADVANCE);
 
-        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+        assertNull(game.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
         verify(autoFuture).cancel(false);
     }
 
@@ -288,11 +288,11 @@ class GameTaskSchedulerTest {
 
         // Stale deadline rejected without clearing
         assertFalse(scheduler.claimTimer(game, ScheduledGameTask.TURN_TIMEOUT, deadline + 1, hand, timerVersion));
-        assertEquals(deadline, game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+        assertEquals(deadline, game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
 
         // Exact match succeeds once and clears deadline
         assertTrue(scheduler.claimTimer(game, ScheduledGameTask.TURN_TIMEOUT, deadline, hand, timerVersion));
-        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+        assertNull(game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
         assertFalse(scheduler.claimTimer(game, ScheduledGameTask.TURN_TIMEOUT, deadline, hand, timerVersion));
 
         // Game over cancels registered non-cleanup runtime timer
@@ -313,10 +313,10 @@ class GameTaskSchedulerTest {
 
         game.markGameOver();
         assertFalse(scheduler.claimTimer(game, ScheduledGameTask.TURN_TIMEOUT, secondDeadline, hand, secondTimerVersion));
-        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+        assertNull(game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
         verify(turnFuture).cancel(false);
         assertTrue(scheduler.claimTimer(game, ScheduledGameTask.CLEANUP, cleanupDeadline, hand, cleanupTimerVersion));
-        assertEquals(cleanupDeadline, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+        assertEquals(cleanupDeadline, game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
         timerRegistry.cancelTask(GAME_ID, ScheduledGameTask.TURN_TIMEOUT);
         verifyNoMoreInteractions(turnFuture);
     }

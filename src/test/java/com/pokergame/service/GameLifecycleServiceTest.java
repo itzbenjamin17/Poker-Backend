@@ -249,9 +249,9 @@ class GameLifecycleServiceTest {
 
             assertTrue(game.isReadyCountdownActive());
             assertEquals(game.getReadyCountdownDeadlineEpochMs(),
-                    game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
+                    game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.GAME_END));
             var broadcasts = inOrder(gameStateService);
             broadcasts.verify(gameStateService).broadcastShowdownResults(game);
             broadcasts.verify(gameStateService).broadcastGameState(game);
@@ -268,9 +268,9 @@ class GameLifecycleServiceTest {
 
             assertFalse(game.isReadyCountdownActive());
             assertEquals(BASE_EPOCH_MS + 2_500L,
-                    game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
+                    game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.GAME_END));
             verify(gameStateService).broadcastShowdownResults(game);
         }
 
@@ -284,10 +284,10 @@ class GameLifecycleServiceTest {
                     game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), true));
 
             assertFalse(game.isReadyCountdownActive());
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
             assertEquals(BASE_EPOCH_MS + TestTimings.FINAL_SHOWDOWN_DISPLAY_DELAY_MS,
-                    game.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
+                    game.getScheduledTaskTime(ScheduledGameTask.GAME_END));
             verify(gameStateService).broadcastShowdownResults(game);
         }
 
@@ -400,7 +400,7 @@ class GameLifecycleServiceTest {
 
             assertTrue(runout.getActivePlayers().stream().allMatch(Player::isAllIn));
             assertEquals(5, runout.getCurrentHighestBet());
-            assertNotNull(runout.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+            assertNotNull(runout.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
             verify(gameStateService).broadcastGameStateWithAutoAdvance(eq(runout), anyString());
 
             Room threeHanded = new Room("forced-call", "Forced call", "Host", 3, 5, 10, 100, null);
@@ -439,7 +439,7 @@ class GameLifecycleServiceTest {
             assertNotNull(actor);
             assertEquals(callHand.getActivePlayers().get(nextActorIndex), actor);
             assertTrue(callHand.getCurrentHighestBet() > actor.getCurrentBet(), "Actor owes the posted blind");
-            assertNull(callHand.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+            assertNull(callHand.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
             assertTrue(callHand.getLegalActionsFor(actor).contains(PlayerAction.CALL));
             verify(gameStateService).broadcastGameState(callHand);
             verify(gameStateService, never()).broadcastGameStateWithAutoAdvance(eq(callHand), anyString());
@@ -707,7 +707,7 @@ class GameLifecycleServiceTest {
 
             assertEquals(GamePhase.SHOWDOWN, immediate.getCurrentPhase());
             assertTrue(immediate.isReadyCountdownActive());
-            assertNull(immediate.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+            assertNull(immediate.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
             var broadcasts = inOrder(gameStateService);
             broadcasts.verify(gameStateService).broadcastShowdownResults(immediate);
             broadcasts.verify(gameStateService).broadcastGameState(immediate);
@@ -723,7 +723,7 @@ class GameLifecycleServiceTest {
 
             assertEquals(GamePhase.SHOWDOWN, delayed.getCurrentPhase());
             assertFalse(delayed.isReadyCountdownActive());
-            assertEquals(BASE_EPOCH_MS + 2_500L, delayed.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+            assertEquals(BASE_EPOCH_MS + 2_500L, delayed.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
         }
 
         private Game autoAdvanceToRiver() {
@@ -842,7 +842,7 @@ class GameLifecycleServiceTest {
             Game game = getGameLocked(ROOM_ID);
             withRoomLock(ROOM_ID, () -> readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(
                     game, new TurnOutcome(TurnOutcomeType.AUTO_ADVANCING, null), true));
-            long capturedDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE);
+            long capturedDeadline = game.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE);
             long capturedHand = game.getHandNumber();
             long capturedVersion = game.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE);
 
@@ -876,7 +876,7 @@ class GameLifecycleServiceTest {
             assertTrue(claimed.isForfeit());
 
             Game game = getGameLocked(ROOM_ID);
-            Long cleanupDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
+            Long cleanupDeadline = game.getScheduledTaskTime(ScheduledGameTask.CLEANUP);
             long cleanupVersion = game.getTimerVersion(ScheduledGameTask.CLEANUP);
             assertNotNull(cleanupDeadline);
 
@@ -982,12 +982,12 @@ class GameLifecycleServiceTest {
                     Awaitility.await().atMost(Duration.ofSeconds(5))
                             .until(() -> roomCoordinator.lockReservationCount(ROOM_ID) == 3);
                     assertEquals(timerVersionBefore, game.getTimerVersion(task));
-                    assertNull(game.getScheduledTaskDeadline(task));
+                    assertNull(game.getScheduledTaskTime(task));
                 }
                 firstSchedule.get(5, TimeUnit.SECONDS);
                 secondSchedule.get(5, TimeUnit.SECONDS);
                 assertEquals(timerVersionBefore + 1, game.getTimerVersion(task));
-                assertNotNull(game.getScheduledTaskDeadline(task));
+                assertNotNull(game.getScheduledTaskTime(task));
                 verify(taskScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
             }
         }

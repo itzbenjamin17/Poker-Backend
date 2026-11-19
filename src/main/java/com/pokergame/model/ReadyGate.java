@@ -142,7 +142,7 @@ final class ReadyGate {
             }
         }
         if (isCountdownActive() && countdownDeadlineEpochMs != null
-                && !Objects.equals(scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT), countdownDeadlineEpochMs)) {
+                && !Objects.equals(scheduling.getScheduledTime(ScheduledGameTask.READY_TIMEOUT), countdownDeadlineEpochMs)) {
             scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, countdownDeadlineEpochMs);
         }
         return repaired;

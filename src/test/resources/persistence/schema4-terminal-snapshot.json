@@ -86,7 +86,7 @@
     "readyCountdownDeadlineEpochMs" : null,
     "allPlayersHadInitialTurn" : true,
     "actedPlayerIds" : [ ],
-    "scheduledTaskDeadlines" : {
+    "scheduledTimes" : {
       "CLEANUP" : 999999
     },
     "carryOverPot" : 0,

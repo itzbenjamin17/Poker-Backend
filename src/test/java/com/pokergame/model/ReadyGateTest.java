@@ -281,7 +281,7 @@ class ReadyGateTest {
             assertFalse(gate.isCountdownActive());
             assertNull(gate.getCountdownDeadlineEpochMs());
             assertFalse(p1.isReadyForNextHand());
-            assertNull(scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.READY_TIMEOUT));
         }
 
         @Test
@@ -297,7 +297,7 @@ class ReadyGateTest {
             assertEquals(ReadyGateState.COUNTING_DOWN, gate.getState());
             assertTrue(gate.isCountdownActive());
             assertEquals(50_000L, gate.getCountdownDeadlineEpochMs());
-            assertEquals(50_000L, scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(50_000L, scheduling.getScheduledTime(ScheduledGameTask.READY_TIMEOUT));
             assertFalse(p1.isReadyForNextHand());
             assertFalse(p2.isReadyForNextHand());
         }
@@ -333,7 +333,7 @@ class ReadyGateTest {
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, gate.getState());
             assertFalse(gate.isCountdownActive());
             assertNull(gate.getCountdownDeadlineEpochMs());
-            assertNull(scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.READY_TIMEOUT));
         }
 
         @Test
@@ -365,21 +365,21 @@ class ReadyGateTest {
             ReadyGate missingTimerOnly = new ReadyGate(
                     List.of(p1, p2), ReadyGateState.COUNTING_DOWN, 4000L);
             assertFalse(missingTimerOnly.repairRecoveredGate(5000L, scheduling));
-            assertEquals(4000L, scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(4000L, scheduling.getScheduledTime(ScheduledGameTask.READY_TIMEOUT));
 
             GameScheduling emptySched = new GameScheduling();
             ReadyGate needsWaiting = new ReadyGate(
                     List.of(p1, player("p3", "Zero", 0)), ReadyGateState.COUNTING_DOWN, null);
             assertTrue(needsWaiting.repairRecoveredGate(5000L, emptySched));
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, needsWaiting.getState());
-            assertNull(emptySched.getDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(emptySched.getScheduledTime(ScheduledGameTask.READY_TIMEOUT));
 
             ReadyGate needsDeadline = new ReadyGate(
                     List.of(p1, p2), ReadyGateState.COUNTING_DOWN, null);
             assertTrue(needsDeadline.repairRecoveredGate(5000L, emptySched));
             assertEquals(ReadyGateState.COUNTING_DOWN, needsDeadline.getState());
             assertEquals(5000L, needsDeadline.getCountdownDeadlineEpochMs());
-            assertEquals(5000L, emptySched.getDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(5000L, emptySched.getScheduledTime(ScheduledGameTask.READY_TIMEOUT));
         }
     }
 

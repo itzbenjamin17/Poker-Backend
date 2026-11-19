@@ -170,7 +170,7 @@ public final class RoomSnapshotMapper {
             game.isGameOver(), game.getSmallBlind(), game.getBigBlind(), snapshot.handContributions(),
             game.getReadyCountdownDeadlineEpochMs(),
             snapshot.allPlayersHadInitialTurn(), snapshot.actedPlayerIds(),
-            snapshot.scheduledTaskDeadlines(), snapshot.carryOverPot(),
+            snapshot.scheduledTimes(), snapshot.carryOverPot(),
             snapshot.lastFullRaise(), snapshot.previousBets(),
             snapshot.handSeatOrder(), snapshot.dealerPlayerId(), game.getSmallBlindPlayerId(),
             game.getBigBlindPlayerId(), snapshot.currentPlayerId(), settlementState(game.getLastSettlementResult()),
@@ -276,7 +276,7 @@ public final class RoomSnapshotMapper {
                 .readyCountdownDeadlineEpochMs(state.readyCountdownDeadlineEpochMs())
                 .allPlayersHadInitialTurn(state.allPlayersHadInitialTurn())
                 .actedPlayersInRound(state.actedPlayerIds())
-                .scheduledTaskDeadlines(state.scheduledTaskDeadlines())
+                .scheduledTimes(state.scheduledTimes())
                 .timerVersions(state.timerVersions())
                 .carryOverPot(state.carryOverPot())
                 .lastFullRaise(state.lastFullRaise())

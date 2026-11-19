@@ -179,7 +179,7 @@ class PersistenceRestartIT {
                             .stream().map(Object::toString).toList());
             revisionBefore = withRoomLock(first, roomId, () -> games.getGame(roomId).getStateRevision());
             turnDeadline = withRoomLock(first, roomId,
-                    () -> games.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+                    () -> games.getGame(roomId).getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
             nextActor = withRoomLock(first, roomId, () -> games.getGame(roomId).getCurrentPlayer().getName());
             assertThat(countActiveScheduledFutures(first)).isGreaterThan(0);
         }
@@ -196,7 +196,7 @@ class PersistenceRestartIT {
                 Game restored = games.getGame(roomId);
                 assertThat(restored).isNotNull();
                 assertThat(restored.getStateRevision()).isGreaterThanOrEqualTo(revisionBefore);
-                assertThat(restored.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(turnDeadline);
+                assertThat(restored.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(turnDeadline);
                 PublicGameStateResponse publicAfter = states.getPublicGameStateSnapshot(restored);
                 assertThat(publicAfter.stateRevision()).isEqualTo(restored.getStateRevision());
                 assertThat(states.getPrivatePlayerStateSnapshot(restored, "Alice").holeCards()
@@ -436,7 +436,7 @@ class PersistenceRestartIT {
                 assertThat(restoredGame.getGameEndResult()).isNotNull();
                 assertThat(restoredGame.getGameEndResult().abandoned()).isTrue();
                 assertThat(restoredGame.getGameEndResult().reason()).isEqualTo("INACTIVITY");
-                assertThat(restoredGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP)).isNotNull();
+                assertThat(restoredGame.getScheduledTaskTime(ScheduledGameTask.CLEANUP)).isNotNull();
                 return null;
             });
             assertThat(countActiveScheduledFutures(second)).isGreaterThan(0);

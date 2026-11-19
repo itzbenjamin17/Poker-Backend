@@ -7,31 +7,31 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Owns scheduled task deadlines and monotonic task schedule counts for {@link Game}.
+ * Owns scheduled task run times and monotonic task schedule counts for {@link Game}.
  */
 final class GameScheduling {
 
-    private final Map<ScheduledGameTask, Long> deadlines;
+    private final Map<ScheduledGameTask, Long> scheduledTimes;
     private final Map<ScheduledGameTask, Long> timerVersions;
 
     /** Creates empty task scheduling state for a new game. */
     GameScheduling() {
-        this.deadlines = new EnumMap<>(ScheduledGameTask.class);
+        this.scheduledTimes = new EnumMap<>(ScheduledGameTask.class);
         this.timerVersions = new EnumMap<>(ScheduledGameTask.class);
     }
 
     /**
      * Reconstructs task scheduling state from saved snapshot fields.
      *
-     * @param deadlines     saved task deadlines keyed by task type
-     * @param timerVersions saved task schedule counters keyed by task type
+     * @param scheduledTimes saved task run times keyed by task type
+     * @param timerVersions  saved task schedule counters keyed by task type
      */
     GameScheduling(
-            Map<ScheduledGameTask, Long> deadlines,
+            Map<ScheduledGameTask, Long> scheduledTimes,
             Map<ScheduledGameTask, Long> timerVersions) {
-        this.deadlines = new EnumMap<>(ScheduledGameTask.class);
-        if (deadlines != null) {
-            this.deadlines.putAll(deadlines);
+        this.scheduledTimes = new EnumMap<>(ScheduledGameTask.class);
+        if (scheduledTimes != null) {
+            this.scheduledTimes.putAll(scheduledTimes);
         }
         this.timerVersions = new EnumMap<>(ScheduledGameTask.class);
         if (timerVersions != null) {
@@ -40,25 +40,25 @@ final class GameScheduling {
     }
 
     /**
-     * Records the deadline for {@code task} and increments its schedule count so earlier timers
+     * Records the run time for {@code task} and increments its schedule count so earlier timers
      * for the same task are ignored.
      *
-     * @param task            delayed task type
-     * @param deadlineEpochMs target execution epoch time in milliseconds
+     * @param task         delayed task type
+     * @param runAtEpochMs target execution epoch time in milliseconds
      */
-    void scheduleTask(ScheduledGameTask task, long deadlineEpochMs) {
-        deadlines.put(task, deadlineEpochMs);
+    void scheduleTask(ScheduledGameTask task, long runAtEpochMs) {
+        scheduledTimes.put(task, runAtEpochMs);
         timerVersions.merge(task, 1L, Long::sum);
     }
 
     /**
-     * Removes the scheduled deadline for {@code task} and increments its schedule count so any
+     * Removes the scheduled run time for {@code task} and increments its schedule count so any
      * in-flight timer callback is ignored.
      *
      * @param task delayed task type
      */
     void clearTask(ScheduledGameTask task) {
-        deadlines.remove(task);
+        scheduledTimes.remove(task);
         timerVersions.merge(task, 1L, Long::sum);
     }
 
@@ -67,7 +67,7 @@ final class GameScheduling {
      * their schedule counts.
      */
     void invalidateProgressionTasks() {
-        for (ScheduledGameTask task : List.copyOf(deadlines.keySet())) {
+        for (ScheduledGameTask task : List.copyOf(scheduledTimes.keySet())) {
             if (task != ScheduledGameTask.CLEANUP) {
                 clearTask(task);
             }
@@ -84,16 +84,16 @@ final class GameScheduling {
         }
     }
 
-    Long getDeadline(ScheduledGameTask task) {
-        return deadlines.get(task);
+    Long getScheduledTime(ScheduledGameTask task) {
+        return scheduledTimes.get(task);
     }
 
     long getTimerVersion(ScheduledGameTask task) {
         return timerVersions.getOrDefault(task, 0L);
     }
 
-    Map<ScheduledGameTask, Long> deadlinesSnapshot() {
-        return Map.copyOf(deadlines);
+    Map<ScheduledGameTask, Long> scheduledTimesSnapshot() {
+        return Map.copyOf(scheduledTimes);
     }
 
     Map<ScheduledGameTask, Long> timerVersionsSnapshot() {
@@ -107,7 +107,7 @@ final class GameScheduling {
      * @param pausedForDisconnectedSurvivor whether the game is paused awaiting a disconnected survivor
      * @param currentHandNumber             current hand number on the game
      * @param task                          task type that fired
-     * @param expectedDeadline              deadline captured when the timer was scheduled
+     * @param expectedRunAtEpochMs          scheduled run time captured when the timer was scheduled
      * @param expectedHandNumber            hand number captured when the timer was scheduled
      * @param expectedTimerVersion          schedule count captured when the timer was scheduled
      * @return {@code true} if the task is still current and can start, {@code false} if stale or
@@ -117,7 +117,7 @@ final class GameScheduling {
             boolean pausedForDisconnectedSurvivor,
             long currentHandNumber,
             ScheduledGameTask task,
-            long expectedDeadline,
+            long expectedRunAtEpochMs,
             long expectedHandNumber,
             long expectedTimerVersion) {
         if (pausedForDisconnectedSurvivor) {
@@ -127,8 +127,8 @@ final class GameScheduling {
                 || getTimerVersion(task) != expectedTimerVersion) {
             return false;
         }
-        Long currentDeadline = getDeadline(task);
-        if (currentDeadline == null || currentDeadline != expectedDeadline) {
+        Long currentRunAt = getScheduledTime(task);
+        if (currentRunAt == null || currentRunAt != expectedRunAtEpochMs) {
             return false;
         }
         if (task != ScheduledGameTask.CLEANUP) {
@@ -138,13 +138,13 @@ final class GameScheduling {
     }
 
     /**
-     * Returns whether the room-cleanup grace deadline has arrived or passed at {@code nowEpochMs}.
+     * Returns whether the scheduled room-cleanup time has arrived or passed at {@code nowEpochMs}.
      *
      * @param nowEpochMs current epoch timestamp in milliseconds
-     * @return {@code true} if a cleanup deadline is armed and expired
+     * @return {@code true} if cleanup is scheduled and due
      */
     boolean isCleanupExpired(long nowEpochMs) {
-        Long cleanupDeadline = getDeadline(ScheduledGameTask.CLEANUP);
-        return cleanupDeadline != null && nowEpochMs >= cleanupDeadline;
+        Long cleanupRunAt = getScheduledTime(ScheduledGameTask.CLEANUP);
+        return cleanupRunAt != null && nowEpochMs >= cleanupRunAt;
     }
 }

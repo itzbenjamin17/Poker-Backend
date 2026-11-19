@@ -92,7 +92,7 @@ public class PlayerActionService {
                     "Wait for the next turn");
         }
 
-        Long turnDeadline = game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT);
+        Long turnDeadline = game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT);
         if (turnDeadline != null && clock.millis() >= turnDeadline) {
             logger.warn("Player {} attempted to act in game {} at or after turn deadline (now={}, deadline={})",
                     playerName, gameId, clock.millis(), turnDeadline);

@@ -50,14 +50,14 @@ class GameTaskScheduler {
      * Captures a timer descriptor for {@code task} tied to {@code game}'s current hand and
      * schedule count so callbacks from cancelled or replaced timers are ignored.
      *
-     * @param game     the active game instance
-     * @param task     the timer type
-     * @param deadline target execution epoch time in milliseconds
+     * @param game         the active game instance
+     * @param task         the timer type
+     * @param runAtEpochMs target execution epoch time in milliseconds
      * @return an immutable timer descriptor
      */
-    static ScheduledTimer createTimer(Game game, ScheduledGameTask task, long deadline) {
+    static ScheduledTimer createTimer(Game game, ScheduledGameTask task, long runAtEpochMs) {
         return new ScheduledTimer(
-                game.getGameId(), task, deadline, game.getHandNumber(), game.getTimerVersion(task));
+                game.getGameId(), task, runAtEpochMs, game.getHandNumber(), game.getTimerVersion(task));
     }
 
     /**
@@ -67,7 +67,7 @@ class GameTaskScheduler {
      * @return immutable descriptors for every timer stored on {@code game}
      */
     static List<ScheduledTimer> listActiveTimers(Game game) {
-        return game.toSnapshot().scheduledTaskDeadlines().entrySet().stream()
+        return game.toSnapshot().scheduledTimes().entrySet().stream()
                 .map(entry -> createTimer(game, entry.getKey(), entry.getValue()))
                 .toList();
     }
@@ -191,26 +191,26 @@ class GameTaskScheduler {
      */
     void registerTimer(ScheduledTimer timer) {
         Game game = activeGames.get(timer.gameId());
-        if (!matches(game, timer.task(), timer.deadline(), timer.handNumber(), timer.timerVersion())) {
+        if (!matches(game, timer.task(), timer.runAtEpochMs(), timer.handNumber(), timer.timerVersion())) {
             return;
         }
-        timerRegistry.schedule(timer.gameId(), timer.task(), timer.deadline(),
+        timerRegistry.schedule(timer.gameId(), timer.task(), timer.runAtEpochMs(),
                 () -> gameLifecycleProvider.getObject().executeScheduledTask(
-                        timer.gameId(), timer.task(), timer.deadline(), timer.handNumber(), timer.timerVersion()));
+                        timer.gameId(), timer.task(), timer.runAtEpochMs(), timer.handNumber(), timer.timerVersion()));
     }
 
     /**
      * Claims a firing timer for execution if it still matches {@code game}'s active hand,
-     * schedule count, and deadline, cancelling any non-cleanup future once the game is over.
+     * schedule count, and run time, cancelling any non-cleanup future once the game is over.
      *
      * @param game         the current game instance, or {@code null} if already removed
      * @param task         the timer type that fired
-     * @param deadline     the deadline captured when the timer was scheduled
+     * @param runAtEpochMs the scheduled run time captured when the timer was scheduled
      * @param handNumber   the hand number captured when the timer was scheduled
      * @param timerVersion the schedule count captured when the timer was scheduled
      * @return {@code true} if the timer callback should execute, {@code false} otherwise
      */
-    boolean claimTimer(Game game, ScheduledGameTask task, long deadline, long handNumber, long timerVersion) {
+    boolean claimTimer(Game game, ScheduledGameTask task, long runAtEpochMs, long handNumber, long timerVersion) {
         if (game == null) {
             return false;
         }
@@ -218,18 +218,18 @@ class GameTaskScheduler {
             cancelTask(game, task);
             return false;
         }
-        return game.startScheduledTaskIfCurrent(task, deadline, handNumber, timerVersion);
+        return game.startScheduledTaskIfCurrent(task, runAtEpochMs, handNumber, timerVersion);
     }
 
-    private void scheduleTask(String gameId, ScheduledGameTask task, long deadline) {
+    private void scheduleTask(String gameId, ScheduledGameTask task, long runAtEpochMs) {
         Game game = activeGames.get(gameId);
         // Quiet no-op by design: the game may already have been removed, and while a forfeit is
         // pending the game is paused for a disconnected survivor, so no timer may be scheduled.
         if (game == null || game.isPausedForDisconnectedSurvivor()) {
             return;
         }
-        game.scheduleTask(task, deadline);
-        registerTimerAfterSave(createTimer(game, task, deadline));
+        game.scheduleTask(task, runAtEpochMs);
+        registerTimerAfterSave(createTimer(game, task, runAtEpochMs));
     }
 
     private static long requireNonNegativeDelay(long delayMs) {
@@ -239,22 +239,22 @@ class GameTaskScheduler {
         return delayMs;
     }
 
-    private static boolean matches(Game game, ScheduledGameTask task, long deadline, long handNumber, long timerVersion) {
+    private static boolean matches(Game game, ScheduledGameTask task, long runAtEpochMs, long handNumber, long timerVersion) {
         return game != null
                 && game.getHandNumber() == handNumber
                 && game.getTimerVersion(task) == timerVersion
-                && Objects.equals(game.getScheduledTaskDeadline(task), deadline);
+                && Objects.equals(game.getScheduledTaskTime(task), runAtEpochMs);
     }
 
     /**
-     * Immutable identifier of a scheduled timer for a specific hand, timer version, and deadline.
+     * Immutable identifier of a scheduled timer for a specific hand, timer version, and run time.
      *
      * @param gameId       the room/game ID
      * @param task         the timer type
-     * @param deadline     target execution epoch time in milliseconds
+     * @param runAtEpochMs target execution epoch time in milliseconds
      * @param handNumber   hand number active when the timer was scheduled
      * @param timerVersion timer version counter for the timer type
      */
-    record ScheduledTimer(String gameId, ScheduledGameTask task, long deadline, long handNumber, long timerVersion) {
+    record ScheduledTimer(String gameId, ScheduledGameTask task, long runAtEpochMs, long handNumber, long timerVersion) {
     }
 }

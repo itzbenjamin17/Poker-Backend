@@ -142,9 +142,9 @@ class HandProgressionServiceTest {
             assertEquals(1L, game.getHandNumber());
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertNotNull(game.getCurrentPlayer());
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
             assertEquals(FIXED_NOW.toEpochMilli() + TestTimings.TURN_ALLOWANCE_MS,
-                    game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+                    game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
             verify(gameStateService).broadcastGameState(game);
         }
 
@@ -226,8 +226,8 @@ class HandProgressionServiceTest {
 
             assertFalse(openGate);
             verify(autoFuture).cancel(false);
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
-            assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
+            assertNotNull(game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
             verify(gameStateService).broadcastGameState(game);
         }
 
@@ -247,7 +247,7 @@ class HandProgressionServiceTest {
                         game, new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null));
             }
 
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
             verify(autoFuture).cancel(false);
         }
 
@@ -263,8 +263,8 @@ class HandProgressionServiceTest {
                         game, new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, null), true));
             }
 
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
-            assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
+            assertNotNull(game.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
             verify(gameStateService).broadcastAutoAdvanceNotification(game);
 
             clearInvocations(gameStateService);
@@ -289,7 +289,7 @@ class HandProgressionServiceTest {
             }
 
             assertTrue(openGateNow);
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
             verify(gameStateService).broadcastShowdownResults(game);
         }
     }
@@ -324,7 +324,7 @@ class HandProgressionServiceTest {
                 assertFalse(progression.applyAutoAdvanceTimeout(game));
                 assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
                 assertEquals(FIXED_NOW.toEpochMilli() + 4_000L,
-                        game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+                        game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
                 verify(gameStateService).broadcastShowdownResults(game);
                 verify(gameStateService).broadcastAutoAdvanceComplete(game);
             }
@@ -339,7 +339,7 @@ class HandProgressionServiceTest {
                 assertFalse(delayedProgression.applyAutoAdvanceTimeout(preFlopGame));
             }
             assertEquals(GamePhase.FLOP, preFlopGame.getCurrentPhase());
-            assertNotNull(preFlopGame.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+            assertNotNull(preFlopGame.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
 
             // Finish river with display delay -> schedules READY_OPEN
             preFlopGame.dealTurn();
@@ -349,7 +349,7 @@ class HandProgressionServiceTest {
             }
             assertEquals(GamePhase.SHOWDOWN, preFlopGame.getCurrentPhase());
             assertEquals(FIXED_NOW.toEpochMilli() + 5_000L,
-                    preFlopGame.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+                    preFlopGame.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
 
             // Finish river with zero display delay -> returns true to open ready gate immediately
             HandProgressionService immediateProgression = createProgression(0L);
@@ -363,7 +363,7 @@ class HandProgressionServiceTest {
                 riverZeroDelay.dealRiver();
                 assertTrue(immediateProgression.applyAutoAdvanceTimeout(riverZeroDelay));
             }
-            assertNull(riverZeroDelay.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+            assertNull(riverZeroDelay.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
 
             // Finish river when tournament decided -> schedules GAME_END after display delay
             Game riverTournamentOver = createGame(List.of(
@@ -387,7 +387,7 @@ class HandProgressionServiceTest {
             }
             assertTrue(riverTournamentOver.isGameDecided());
             assertEquals(FIXED_NOW.toEpochMilli() + TestTimings.FINAL_SHOWDOWN_DISPLAY_DELAY_MS,
-                    riverTournamentOver.getScheduledTaskDeadline(ScheduledGameTask.GAME_END));
+                    riverTournamentOver.getScheduledTaskTime(ScheduledGameTask.GAME_END));
         }
 
         @Test

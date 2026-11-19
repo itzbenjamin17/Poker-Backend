@@ -150,7 +150,7 @@ class GameTest {
                 .previousBets(previousBets)
                 .allPlayersHadInitialTurn(false)
                 .actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of())
+                .scheduledTimes(Map.of())
                 
                 .build();
     }
@@ -197,7 +197,7 @@ class GameTest {
                 .carryOverPot(carryOver)
                 .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of())
+                .scheduledTimes(Map.of())
                 
                 .build();
     }
@@ -517,7 +517,7 @@ class GameTest {
                     .readyCountdownDeadlineEpochMs(9999L)
                     .allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(acted)
-                    .scheduledTaskDeadlines(tasks)
+                    .scheduledTimes(tasks)
                     
                     .build();
 
@@ -766,7 +766,7 @@ class GameTest {
                     .carryOverPot(0)
                     .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
-                    .scheduledTaskDeadlines(Map.of())
+                    .scheduledTimes(Map.of())
                     
                     .build();
             assertEquals(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, matchedGame.advanceAfterBlinds().type());
@@ -792,7 +792,7 @@ class GameTest {
                     .carryOverPot(0)
                     .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
-                    .scheduledTaskDeadlines(Map.of())
+                    .scheduledTimes(Map.of())
                     
                     .build();
             assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, owingGame.advanceAfterBlinds().type());
@@ -824,7 +824,7 @@ class GameTest {
                     .dealerPlayerId("a")
                     .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of("a", "f"))
-                    .scheduledTaskDeadlines(Map.of())
+                    .scheduledTimes(Map.of())
                     
                     .build();
 
@@ -866,7 +866,7 @@ class GameTest {
                     .carryOverPot(0)
                     .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of("allIn"))
-                    .scheduledTaskDeadlines(Map.of())
+                    .scheduledTimes(Map.of())
                     .build();
 
             TurnOutcome outcome = hand.processPlayerDecision(caller, new PlayerDecision(PlayerAction.CALL, 0, "caller"));
@@ -965,7 +965,7 @@ class GameTest {
                     .smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p1", 33, "p2", 33, "p3", 34))
                     .carryOverPot(0).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
 
             assertEquals(1, gameUncalled.getUncalledAmount());
@@ -979,7 +979,7 @@ class GameTest {
                     .smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p1", 33, "p2", 34, "p3", 34))
                     .carryOverPot(0).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
 
             assertEquals(0, oddGame.getUncalledAmount());
@@ -1007,7 +1007,7 @@ class GameTest {
                     .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 100, "b", 100, "f1", 5, "f2", 10, "f3", 15))
                     .carryOverPot(0).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
 
             ordinary.conductShowdown();
@@ -1037,7 +1037,7 @@ class GameTest {
                     .currentPhase(GamePhase.RIVER).gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 50, "b", 100, "c", 200, "d", 200))
                     .carryOverPot(0).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
 
             deadUpper.conductShowdown();
@@ -1065,7 +1065,7 @@ class GameTest {
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("s", 50, "m", 150, "departed", 150))
                     .carryOverPot(0).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
 
             departedGame.conductShowdown();
@@ -1095,7 +1095,7 @@ class GameTest {
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("b", 10, "c", 20)).carryOverPot(0)
                     .allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
 
             deadBlindGame.conductShowdown();
@@ -1127,7 +1127,7 @@ class GameTest {
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("short", 50, "bettor", 250, "owing", 50))
                     .carryOverPot(0).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
             assertEquals(List.of(150, 200), live.getPotBreakdown());
             assertEquals(0, live.getUncalledAmount());
@@ -1165,7 +1165,7 @@ class GameTest {
                     .currentHighestBet(highestBet).currentPhase(GamePhase.RIVER).gameOver(false)
                     .smallBlind(10).bigBlind(20).handContributions(new java.util.HashMap<>(contributions))
                     .carryOverPot(carryOver).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
         }
 
@@ -1604,7 +1604,7 @@ class GameTest {
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("ace", 50, "king", 50)).carryOverPot(0)
                     .allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
             realGame.conductShowdown();
             assertEquals(Set.of("ace"), realGame.getLastSettlementResult().winnerIds());
@@ -1620,7 +1620,7 @@ class GameTest {
                     .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50, "b", 50))
                     .carryOverPot(1).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
             carryGame.conductShowdown();
             assertEquals(100, coA.getChips());
@@ -1674,7 +1674,7 @@ class GameTest {
                     .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
                     .gameOver(true).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50))
                     .carryOverPot(0).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
             assertTrue(unsettled.resetForNewHand());
             assertEquals(0, unsettled.toSnapshot().carryOverPot());
@@ -1705,7 +1705,7 @@ class GameTest {
                     .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of())
                     .carryOverPot(1).lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, false))
                     .allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
             Player oddWinner = oddCarry.settleGameEnd(null, Set.of());
             oddCarry.settleGameEnd(oddWinner, Set.of());
@@ -1744,7 +1744,7 @@ class GameTest {
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("p0", 30, "p1", 30, "p2", 30, "p3", 11))
                     .carryOverPot(0).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
             int totalBeforeThreeWay = threeWay.getPlayers().stream().mapToInt(Player::getChips).sum() + threeWay.getPot();
 
@@ -1772,7 +1772,7 @@ class GameTest {
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("a", 50, "b", 50)).carryOverPot(1)
                     .allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
             int totalBeforeHeadsUp = headsUp.getPlayers().stream().mapToInt(Player::getChips).sum() + headsUp.getPot();
 
@@ -1807,7 +1807,7 @@ class GameTest {
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("s0", 31, "s1", 50, "s2", 50, "s3", 10))
                     .carryOverPot(0).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
             int totalBeforeSidePot = sidePotOdd.getPlayers().stream().mapToInt(Player::getChips).sum() + sidePotOdd.getPot();
 
@@ -1838,7 +1838,7 @@ class GameTest {
                     .gameOver(false).smallBlind(10).bigBlind(20)
                     .handContributions(Map.of("d0", 50, "d2", 50)).carryOverPot(1)
                     .allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTaskDeadlines(Map.of())
+                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
             departedDealer.removePlayer(d1);
             int totalBeforeDeparted = departedDealer.getPlayers().stream().mapToInt(Player::getChips).sum() + departedDealer.getPot();
@@ -2282,7 +2282,7 @@ class GameTest {
                     .players(List.of(new Player("Alice", "p1", 1000), new Player("Bob", "p2", 1000)))
                     .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of()).smallBlind(10).bigBlind(20)
                     .handNumber(42L).stateRevision(199L)
-                    .scheduledTaskDeadlines(Map.of()).timerVersions(Map.of()).build();
+                    .scheduledTimes(Map.of()).timerVersions(Map.of()).build();
             assertEquals(42L, restored.getHandNumber());
             assertEquals(199L, restored.getStateRevision());
             restored.incrementStateRevision();
@@ -2317,7 +2317,7 @@ class GameTest {
             assertEquals(ReadyGateState.COUNTING_DOWN, aggGame.getReadyGateState());
             assertTrue(aggGame.isReadyCountdownActive());
             assertEquals(deadline, aggGame.getReadyCountdownDeadlineEpochMs());
-            assertEquals(deadline, aggGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(deadline, aggGame.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
 
             assertEquals(ReadyCountdownTimeoutOutcome.FORCED_READY, aggGame.expireReadyCountdown(deadline));
             assertTrue(p1.isReadyForNextHand());
@@ -2330,10 +2330,10 @@ class GameTest {
 
             aggGame.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 1500L);
             aggGame.scheduleTask(ScheduledGameTask.CLEANUP, 60000L);
-            assertEquals(1500L, aggGame.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(1500L, aggGame.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(1L, aggGame.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
             aggGame.clearScheduledTask(ScheduledGameTask.CLEANUP);
-            assertNull(aggGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            assertNull(aggGame.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
 
             for (ScheduledGameTask task : ScheduledGameTask.values()) {
                 aggGame.scheduleTask(task, 70_000L + task.ordinal());
@@ -2341,7 +2341,7 @@ class GameTest {
             java.util.Map<ScheduledGameTask, Long> versionsBeforeClearAll = aggGame.toSnapshot().timerVersions();
             aggGame.clearReadyCountdownAndScheduledTasks();
             for (ScheduledGameTask task : ScheduledGameTask.values()) {
-                assertNull(aggGame.getScheduledTaskDeadline(task));
+                assertNull(aggGame.getScheduledTaskTime(task));
                 assertEquals(versionsBeforeClearAll.get(task) + 1, aggGame.getTimerVersion(task));
             }
 
@@ -2369,8 +2369,8 @@ class GameTest {
             assertTrue(pauseGame.isPausedForDisconnectedSurvivor());
             assertFalse(pauseGame.isGameOver());
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, pauseGame.getReadyGateState());
-            assertNull(pauseGame.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(60000L, pauseGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            assertNull(pauseGame.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(60000L, pauseGame.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
         }
 
         @Test
@@ -2390,7 +2390,7 @@ class GameTest {
             fewerOpen.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 99_999L);
             assertEquals(ReadyCountdownStartOutcome.WAITING_FOR_PLAYERS, fewerOpen.openOrWaitReadyGate(50_000L));
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, fewerOpen.getReadyGateState());
-            assertNull(fewerOpen.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(fewerOpen.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
 
             Game fewerExpire = createStandardGame(2, 1000);
             dealToRiverAndShowdown(fewerExpire);
@@ -2398,7 +2398,7 @@ class GameTest {
             fewerExpire.getPlayers().get(1).setDisconnected(true);
             assertEquals(ReadyCountdownTimeoutOutcome.WAITING_FOR_PLAYERS, fewerExpire.expireReadyCountdown(50_000L));
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, fewerExpire.getReadyGateState());
-            assertNull(fewerExpire.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(fewerExpire.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
 
             Player r1 = new Player("Alice", "p1", 1000);
             Player r2 = new Player("Bob", "p2", 1000);
@@ -2409,14 +2409,14 @@ class GameTest {
             assertTrue(repairMissing.repairRecoveredReadyGate(60_000L));
             assertTrue(repairMissing.isReadyCountdownActive());
             assertEquals(60_000L, repairMissing.getReadyCountdownDeadlineEpochMs());
-            assertEquals(60_000L, repairMissing.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(60_000L, repairMissing.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
 
             Game repairReschedule = Game.restoreBuilder().gameId("repair-resched").players(List.of(r1, r2))
                     .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of()).smallBlind(10).bigBlind(20)
                     .currentPhase(GamePhase.SHOWDOWN).readyGateState(ReadyGateState.COUNTING_DOWN)
                     .readyCountdownDeadlineEpochMs(70_000L).build();
             assertFalse(repairReschedule.repairRecoveredReadyGate(60_000L));
-            assertEquals(70_000L, repairReschedule.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(70_000L, repairReschedule.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
         }
 
         @Test
@@ -2430,7 +2430,7 @@ class GameTest {
                     .currentPhase(GamePhase.SHOWDOWN).pausedForDisconnectedSurvivor(true).build();
             assertEquals(ReadyCountdownStartOutcome.IGNORE, pausedGame.openOrWaitReadyGate(50_000L));
             assertEquals(ReadyGateState.CLOSED, pausedGame.getReadyGateState());
-            assertNull(pausedGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(pausedGame.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
 
             Game gameOverGame = Game.restoreBuilder().gameId("rg-over")
                     .players(List.of(p1, p2)).activePlayerIds(List.of("p1", "p2"))
@@ -2438,7 +2438,7 @@ class GameTest {
                     .currentPhase(GamePhase.SHOWDOWN).gameOver(true).build();
             assertEquals(ReadyCountdownStartOutcome.IGNORE, gameOverGame.openOrWaitReadyGate(50_000L));
             assertEquals(ReadyGateState.CLOSED, gameOverGame.getReadyGateState());
-            assertNull(gameOverGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(gameOverGame.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
 
             Player broke = restoredPlayer("Bob", "p2", 0, 0, false);
             Game decidedGame = Game.restoreBuilder().gameId("rg-decided")
@@ -2447,7 +2447,7 @@ class GameTest {
                     .currentPhase(GamePhase.SHOWDOWN).build();
             assertEquals(ReadyCountdownStartOutcome.GAME_DECIDED, decidedGame.openOrWaitReadyGate(50_000L));
             assertEquals(ReadyGateState.CLOSED, decidedGame.getReadyGateState());
-            assertNull(decidedGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(decidedGame.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
 
             Game turnGame = Game.restoreBuilder().gameId("rg-turn")
                     .players(List.of(p1, p2)).activePlayerIds(List.of("p1", "p2"))
@@ -2455,7 +2455,7 @@ class GameTest {
                     .currentPhase(GamePhase.TURN).build();
             assertEquals(ReadyCountdownStartOutcome.IGNORE, turnGame.openOrWaitReadyGate(50_000L));
             assertEquals(ReadyGateState.CLOSED, turnGame.getReadyGateState());
-            assertNull(turnGame.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(turnGame.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
         }
     }
 
@@ -2540,7 +2540,7 @@ class GameTest {
                     .handContributions(Map.of())
                     .lastSettlementResult(settled ? new HandSettlementResult(Map.of("p1", 100), Map.of(), Set.of("p1"), 0, false) : null)
                     .actedPlayersInRound(Set.of())
-                    .scheduledTaskDeadlines(Map.of())
+                    .scheduledTimes(Map.of())
                     .build();
         }
 

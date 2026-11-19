@@ -157,7 +157,7 @@ public class Game {
                 builder.getReadyGateState(),
                 builder.getReadyCountdownDeadlineEpochMs());
         this.scheduling = new GameScheduling(
-                builder.getScheduledTaskDeadlines(),
+                builder.getScheduledTimes(),
                 builder.getTimerVersions());
     }
 
@@ -445,18 +445,18 @@ public class Game {
     }
 
     /**
-     * Records the deadline for {@code task} and increments its schedule count so earlier timers
+     * Records the run time for {@code task} and increments its schedule count so earlier timers
      * for the same task are ignored.
      *
-     * @param task            delayed task type
-     * @param deadlineEpochMs target execution deadline in epoch milliseconds
+     * @param task         delayed task type
+     * @param runAtEpochMs target execution time in epoch milliseconds
      */
-    public void scheduleTask(ScheduledGameTask task, long deadlineEpochMs) {
-        scheduling.scheduleTask(task, deadlineEpochMs);
+    public void scheduleTask(ScheduledGameTask task, long runAtEpochMs) {
+        scheduling.scheduleTask(task, runAtEpochMs);
     }
 
     /**
-     * Removes the scheduled deadline for {@code task} and increments its schedule count so any
+     * Removes the scheduled run time for {@code task} and increments its schedule count so any
      * in-flight timer callback is ignored.
      *
      * @param task delayed task type
@@ -470,18 +470,18 @@ public class Game {
      * except {@link ScheduledGameTask#CLEANUP}) so they only run once.
      *
      * @param task                 task type that fired
-     * @param expectedDeadline     deadline captured when the timer was scheduled
+     * @param expectedRunAtEpochMs scheduled run time captured when the timer was scheduled
      * @param expectedHandNumber   hand number captured when the timer was scheduled
      * @param expectedTimerVersion schedule count captured when the timer was scheduled
      * @return {@code true} if the task is still current and can start, {@code false} otherwise
      */
     public boolean startScheduledTaskIfCurrent(
             ScheduledGameTask task,
-            long expectedDeadline,
+            long expectedRunAtEpochMs,
             long expectedHandNumber,
             long expectedTimerVersion) {
         return scheduling.startScheduledTaskIfCurrent(
-                pausedForDisconnectedSurvivor, handNumber, task, expectedDeadline, expectedHandNumber, expectedTimerVersion);
+                pausedForDisconnectedSurvivor, handNumber, task, expectedRunAtEpochMs, expectedHandNumber, expectedTimerVersion);
     }
 
     /**
@@ -583,7 +583,7 @@ public class Game {
                 Map.copyOf(handContributions),
                 bettingRound.hasAllPlayersHadInitialTurn(),
                 bettingRound.getActedPlayerIdsSnapshot(),
-                scheduling.deadlinesSnapshot(),
+                scheduling.scheduledTimesSnapshot(),
                 scheduling.timerVersionsSnapshot(),
                 bettingRound.getLastFullRaise(),
                 bettingRound.getPreviousBetsSnapshot(),
@@ -745,12 +745,12 @@ public class Game {
         return readyGate.areAllEligiblePlayersReady();
     }
 
-    public Long getScheduledTaskDeadline(ScheduledGameTask task) {
-        return scheduling.getDeadline(task);
+    public Long getScheduledTaskTime(ScheduledGameTask task) {
+        return scheduling.getScheduledTime(task);
     }
 
     public boolean isAutoAdvancing() {
-        return scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE) != null;
+        return scheduling.getScheduledTime(ScheduledGameTask.AUTO_ADVANCE) != null;
     }
 
     public long getTimerVersion(ScheduledGameTask task) {
@@ -1066,7 +1066,7 @@ public class Game {
      * @param handContributions        chips put into the pot this hand by player ID
      * @param allPlayersHadInitialTurn whether every active player has had a turn this round
      * @param actedPlayerIds           player IDs that have acted in the current betting round
-     * @param scheduledTaskDeadlines   armed background task deadlines by task type
+     * @param scheduledTimes           scheduled background task run times by task type
      * @param timerVersions            schedule counters by task type
      * @param lastFullRaise            last full-raise increment in the current betting round
      * @param previousBets             each player's total bet in the current round after their last turn
@@ -1080,7 +1080,7 @@ public class Game {
             Map<String, Integer> handContributions,
             boolean allPlayersHadInitialTurn,
             Set<String> actedPlayerIds,
-            Map<ScheduledGameTask, Long> scheduledTaskDeadlines,
+            Map<ScheduledGameTask, Long> scheduledTimes,
             Map<ScheduledGameTask, Long> timerVersions,
             int lastFullRaise,
             Map<String, Integer> previousBets,
@@ -1091,7 +1091,7 @@ public class Game {
             remainingDeck = List.copyOf(remainingDeck);
             handContributions = Map.copyOf(handContributions);
             actedPlayerIds = Set.copyOf(actedPlayerIds);
-            scheduledTaskDeadlines = Map.copyOf(scheduledTaskDeadlines);
+            scheduledTimes = Map.copyOf(scheduledTimes);
             timerVersions = Map.copyOf(timerVersions);
             previousBets = Map.copyOf(previousBets);
             handSeatOrder = List.copyOf(handSeatOrder);

@@ -582,7 +582,7 @@ class TimingAndInactivityIT {
             long[] timerMeta = withRoomLock(roomCoordinator, roomId, () -> {
                 Game game = lifecycle.getGame(roomId);
                 return new long[]{
-                        game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT),
+                        game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT),
                         game.getHandNumber(),
                         game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT)
                 };
@@ -654,7 +654,7 @@ class TimingAndInactivityIT {
             }
 
             Long cleanupDeadline = withRoomLock(roomCoordinator, roomId, () ->
-                    lifecycle.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+                    lifecycle.getGame(roomId).getScheduledTaskTime(ScheduledGameTask.CLEANUP));
             assertThat(cleanupDeadline).isEqualTo(clock.millis() + gameTimingProperties.gameEndDisplayDelayMs());
         }
     }
@@ -882,7 +882,7 @@ class TimingAndInactivityIT {
 
             lifecycle.abandonGameDueToInactivity(roomId);
             long cleanupDeadline = withRoomLock(roomCoordinator, roomId, () ->
-                    lifecycle.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+                    lifecycle.getGame(roomId).getScheduledTaskTime(ScheduledGameTask.CLEANUP));
             assertThat(graceDeadline).isLessThan(cleanupDeadline);
 
             clock.setMillis(graceDeadline);
@@ -923,7 +923,7 @@ class TimingAndInactivityIT {
             return game.getCurrentPlayer().getName();
         });
         Long turnDeadlineBefore = withRoomLock(roomCoordinator, roomId, () ->
-                lifecycle.getGame(roomId).getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
+                lifecycle.getGame(roomId).getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
         assertThat(turnDeadlineBefore).isNotNull();
 
         assertThatThrownBy(() -> playerActionService.processPlayerAction(
@@ -935,7 +935,7 @@ class TimingAndInactivityIT {
         withRoomLock(roomCoordinator, roomId, () -> {
             Game game = lifecycle.getGame(roomId);
             assertThat(game.getCurrentPlayer().getName()).isEqualTo(actor);
-            assertThat(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(turnDeadlineBefore);
+            assertThat(game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT)).isEqualTo(turnDeadlineBefore);
             return null;
         });
 

@@ -155,7 +155,7 @@ class RoomSnapshotMapperTest {
                 .bigBlindPlayerId("b").lastSettlementResult(new HandSettlementResult(Map.of("a", 50), Map.of("b", 2),
                         Set.of("a"), 3, true))
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 123L))
+                .scheduledTimes(Map.of(ScheduledGameTask.CLEANUP, 123L))
                 .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 9L))
                 .handNumber(7).readyGateState(ReadyGateState.WAITING_FOR_PLAYERS).pausedForDisconnectedSurvivor(true).stateRevision(19)
                 .build();
@@ -242,7 +242,7 @@ class RoomSnapshotMapperTest {
                 .carryOverPot(0).lastFullRaise(0).previousBets(Map.of())
                 .handSeatOrder(List.of("a", "b")).dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
+                .scheduledTimes(Map.of(ScheduledGameTask.CLEANUP, 999999L))
                 .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 1L))
                 .handNumber(1).readyGateState(ReadyGateState.CLOSED).pausedForDisconnectedSurvivor(false).stateRevision(42)
                 .gameEndResult(terminalResult)
@@ -294,7 +294,7 @@ class RoomSnapshotMapperTest {
                 .previousBets(Map.of("a", 100)).handSeatOrder(List.of("a", "b", "s1", "s2"))
                 .dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of("a"))
-                .scheduledTaskDeadlines(Map.of()).build();
+                .scheduledTimes(Map.of()).build();
         RoomSnapshotMapper mapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
@@ -632,7 +632,7 @@ class RoomSnapshotMapperTest {
                 .previousBets(Map.of()).handSeatOrder(List.of("a", "b")).dealerPlayerId("a")
                 .smallBlindPlayerId("a").bigBlindPlayerId("b")
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
-                .scheduledTaskDeadlines(Map.of(ScheduledGameTask.CLEANUP, 999999L))
+                .scheduledTimes(Map.of(ScheduledGameTask.CLEANUP, 999999L))
                 .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 1L))
                 .handNumber(1).readyGateState(ReadyGateState.CLOSED).pausedForDisconnectedSurvivor(false).stateRevision(42)
                 .gameEndResult(terminalResult).build();
@@ -1363,7 +1363,7 @@ class RoomSnapshotMapperTest {
                     .smallBlind(10)
                     .bigBlind(20)
                     .currentPhase(GamePhase.PRE_FLOP)
-                    .scheduledTaskDeadlines(deadlines)
+                    .scheduledTimes(deadlines)
                     .timerVersions(timerVersions)
                     .stateRevision(42L)
                     .handNumber(5L)
@@ -1372,7 +1372,7 @@ class RoomSnapshotMapperTest {
 
             assertEquals(42L, game.getStateRevision());
             assertEquals(5L, game.getHandNumber());
-            assertEquals(deadlines, game.toSnapshot().scheduledTaskDeadlines());
+            assertEquals(deadlines, game.toSnapshot().scheduledTimes());
             assertEquals(timerVersions, game.toSnapshot().timerVersions());
 
             byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
@@ -1380,7 +1380,7 @@ class RoomSnapshotMapperTest {
 
             assertEquals(42L, restored.getStateRevision());
             assertEquals(5L, restored.getHandNumber());
-            assertEquals(deadlines, restored.toSnapshot().scheduledTaskDeadlines());
+            assertEquals(deadlines, restored.toSnapshot().scheduledTimes());
             assertEquals(timerVersions, restored.toSnapshot().timerVersions());
         }
     }

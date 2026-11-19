@@ -506,7 +506,7 @@ public class GameStateService {
                 .minimumBetAmount(currentPlayer == null ? null : game.getBigBlind())
                 .minimumRaiseAmount(currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer))
                 .turnDeadlineEpochMs(
-                        currentPlayer == null ? null : game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT))
+                        currentPlayer == null ? null : game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT))
                 .inactivityDeadlineEpochMs(inactivityDeadlineEpochMs)
                 .build();
     }

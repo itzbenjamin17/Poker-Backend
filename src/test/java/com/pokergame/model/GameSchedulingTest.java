@@ -37,7 +37,7 @@ class GameSchedulingTest {
             long deadline = 1700000000000L;
             scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, deadline);
 
-            assertEquals(deadline, scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(deadline, scheduling.getScheduledTime(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
         }
 
@@ -47,11 +47,11 @@ class GameSchedulingTest {
             assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
 
             scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 2000L);
-            assertEquals(2000L, scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(2000L, scheduling.getScheduledTime(ScheduledGameTask.READY_TIMEOUT));
             assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
 
             scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, 3000L);
-            assertEquals(3000L, scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(3000L, scheduling.getScheduledTime(ScheduledGameTask.READY_TIMEOUT));
             assertEquals(3L, scheduling.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
         }
 
@@ -62,9 +62,9 @@ class GameSchedulingTest {
             scheduling.scheduleTask(ScheduledGameTask.CLEANUP, 300L);
             scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 400L);
 
-            assertEquals(400L, scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(200L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
-            assertEquals(300L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
+            assertEquals(400L, scheduling.getScheduledTime(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(200L, scheduling.getScheduledTime(ScheduledGameTask.NEW_HAND));
+            assertEquals(300L, scheduling.getScheduledTime(ScheduledGameTask.CLEANUP));
 
             assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
@@ -82,7 +82,7 @@ class GameSchedulingTest {
 
             scheduling.clearTask(ScheduledGameTask.READY_OPEN);
 
-            assertNull(scheduling.getDeadline(ScheduledGameTask.READY_OPEN));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.READY_OPEN));
             assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.READY_OPEN));
         }
 
@@ -90,7 +90,7 @@ class GameSchedulingTest {
         void clearTask_UnscheduledTask_IncrementsTimerVersion() {
             scheduling.clearTask(ScheduledGameTask.NEW_HAND);
 
-            assertNull(scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.NEW_HAND));
             assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
         }
 
@@ -101,8 +101,8 @@ class GameSchedulingTest {
 
             scheduling.clearTask(ScheduledGameTask.AUTO_ADVANCE);
 
-            assertNull(scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(2000L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(2000L, scheduling.getScheduledTime(ScheduledGameTask.CLEANUP));
             assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
         }
     }
@@ -121,13 +121,13 @@ class GameSchedulingTest {
 
             scheduling.invalidateProgressionTasks();
 
-            assertNull(scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE));
-            assertNull(scheduling.getDeadline(ScheduledGameTask.READY_OPEN));
-            assertNull(scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
-            assertNull(scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
-            assertNull(scheduling.getDeadline(ScheduledGameTask.GAME_END));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.AUTO_ADVANCE));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.READY_OPEN));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.NEW_HAND));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.GAME_END));
 
-            assertEquals(600L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
+            assertEquals(600L, scheduling.getScheduledTime(ScheduledGameTask.CLEANUP));
             assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
 
             assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
@@ -143,7 +143,7 @@ class GameSchedulingTest {
 
             scheduling.invalidateProgressionTasks();
 
-            assertEquals(9999L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
+            assertEquals(9999L, scheduling.getScheduledTime(ScheduledGameTask.CLEANUP));
             assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
         }
 
@@ -154,7 +154,7 @@ class GameSchedulingTest {
 
             scheduling.invalidateProgressionTasks();
 
-            assertTrue(scheduling.deadlinesSnapshot().isEmpty());
+            assertTrue(scheduling.scheduledTimesSnapshot().isEmpty());
             assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(2L, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
         }
@@ -162,7 +162,7 @@ class GameSchedulingTest {
         @Test
         void invalidateProgressionTasks_EmptyMaps_DoesNotThrow() {
             assertDoesNotThrow(() -> scheduling.invalidateProgressionTasks());
-            assertTrue(scheduling.deadlinesSnapshot().isEmpty());
+            assertTrue(scheduling.scheduledTimesSnapshot().isEmpty());
         }
 
         @Test
@@ -173,9 +173,9 @@ class GameSchedulingTest {
 
             scheduling.clearAllTasks();
 
-            assertTrue(scheduling.deadlinesSnapshot().isEmpty());
+            assertTrue(scheduling.scheduledTimesSnapshot().isEmpty());
             for (ScheduledGameTask task : ScheduledGameTask.values()) {
-                assertNull(scheduling.getDeadline(task));
+                assertNull(scheduling.getScheduledTime(task));
                 assertEquals(2L, scheduling.getTimerVersion(task));
             }
         }
@@ -219,9 +219,9 @@ class GameSchedulingTest {
     class SnapshotIsolationTests {
 
         @Test
-        void deadlinesSnapshot_ReturnsImmutableMap() {
+        void scheduledTimesSnapshot_ReturnsImmutableMap() {
             scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 5000L);
-            Map<ScheduledGameTask, Long> snapshot = scheduling.deadlinesSnapshot();
+            Map<ScheduledGameTask, Long> snapshot = scheduling.scheduledTimesSnapshot();
 
             assertEquals(1, snapshot.size());
             assertEquals(5000L, snapshot.get(ScheduledGameTask.AUTO_ADVANCE));
@@ -241,9 +241,9 @@ class GameSchedulingTest {
         }
 
         @Test
-        void deadlinesSnapshot_IsolatedFromUnderlyingMutations() {
+        void scheduledTimesSnapshot_IsolatedFromUnderlyingMutations() {
             scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 5000L);
-            Map<ScheduledGameTask, Long> snapshot = scheduling.deadlinesSnapshot();
+            Map<ScheduledGameTask, Long> snapshot = scheduling.scheduledTimesSnapshot();
 
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 8000L);
             scheduling.clearTask(ScheduledGameTask.AUTO_ADVANCE);
@@ -282,16 +282,16 @@ class GameSchedulingTest {
         @Test
         void snapshots_MultiVersionIsolation() {
             scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 1000L);
-            Map<ScheduledGameTask, Long> d1 = scheduling.deadlinesSnapshot();
+            Map<ScheduledGameTask, Long> d1 = scheduling.scheduledTimesSnapshot();
             Map<ScheduledGameTask, Long> v1 = scheduling.timerVersionsSnapshot();
 
             scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 2000L);
             scheduling.scheduleTask(ScheduledGameTask.CLEANUP, 60000L);
-            Map<ScheduledGameTask, Long> d2 = scheduling.deadlinesSnapshot();
+            Map<ScheduledGameTask, Long> d2 = scheduling.scheduledTimesSnapshot();
             Map<ScheduledGameTask, Long> v2 = scheduling.timerVersionsSnapshot();
 
             scheduling.invalidateProgressionTasks();
-            Map<ScheduledGameTask, Long> d3 = scheduling.deadlinesSnapshot();
+            Map<ScheduledGameTask, Long> d3 = scheduling.scheduledTimesSnapshot();
             Map<ScheduledGameTask, Long> v3 = scheduling.timerVersionsSnapshot();
 
             assertEquals(1, d1.size());
@@ -315,7 +315,7 @@ class GameSchedulingTest {
         void restoreConstructor_NullMaps_ReturnEmptyImmutableSnapshots() {
             GameScheduling restored = new GameScheduling(null, null);
 
-            Map<ScheduledGameTask, Long> deadlines = restored.deadlinesSnapshot();
+            Map<ScheduledGameTask, Long> deadlines = restored.scheduledTimesSnapshot();
             Map<ScheduledGameTask, Long> timerVersions = restored.timerVersionsSnapshot();
 
             assertTrue(deadlines.isEmpty());
@@ -339,17 +339,17 @@ class GameSchedulingTest {
 
                     scheduling.scheduleTask(task, 10000L + step);
                     assertEquals(expectedBefore + 1, scheduling.getTimerVersion(task));
-                    assertEquals(10000L + step, scheduling.getDeadline(task));
+                    assertEquals(10000L + step, scheduling.getScheduledTime(task));
 
                     scheduling.clearTask(task);
                     assertEquals(expectedBefore + 2, scheduling.getTimerVersion(task));
-                    assertNull(scheduling.getDeadline(task));
+                    assertNull(scheduling.getScheduledTime(task));
                 }
             }
 
             for (ScheduledGameTask task : allTasks) {
                 assertEquals(100L, scheduling.getTimerVersion(task));
-                assertNull(scheduling.getDeadline(task));
+                assertNull(scheduling.getScheduledTime(task));
             }
         }
 
@@ -358,19 +358,19 @@ class GameSchedulingTest {
             long fixedDeadline = 1710000000000L;
             for (long expectedVersion = 1; expectedVersion <= 10; expectedVersion++) {
                 scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, fixedDeadline);
-                assertEquals(fixedDeadline, scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
+                assertEquals(fixedDeadline, scheduling.getScheduledTime(ScheduledGameTask.READY_TIMEOUT));
                 assertEquals(expectedVersion, scheduling.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
             }
         }
 
         @Test
         void clearTask_RepeatedClears_ContinuouslyIncrementsTimerVersion() {
-            assertNull(scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.NEW_HAND));
             assertEquals(0L, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
 
             for (long expectedVersion = 1; expectedVersion <= 10; expectedVersion++) {
                 scheduling.clearTask(ScheduledGameTask.NEW_HAND);
-                assertNull(scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
+                assertNull(scheduling.getScheduledTime(ScheduledGameTask.NEW_HAND));
                 assertEquals(expectedVersion, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
             }
         }
@@ -385,9 +385,9 @@ class GameSchedulingTest {
 
                 scheduling.invalidateProgressionTasks();
 
-                assertEquals(77777L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
+                assertEquals(77777L, scheduling.getScheduledTime(ScheduledGameTask.CLEANUP));
                 assertEquals(1L, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
-                assertEquals(1, scheduling.deadlinesSnapshot().size());
+                assertEquals(1, scheduling.scheduledTimesSnapshot().size());
             }
         }
     }
@@ -402,10 +402,10 @@ class GameSchedulingTest {
         void scheduleTask_PreservesExtremeDeadlinesWithoutTruncation(long extremeDeadline) {
             scheduling.scheduleTask(ScheduledGameTask.READY_TIMEOUT, extremeDeadline);
 
-            Long retrieved = scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT);
+            Long retrieved = scheduling.getScheduledTime(ScheduledGameTask.READY_TIMEOUT);
             assertNotNull(retrieved);
             assertEquals(extremeDeadline, retrieved.longValue());
-            assertEquals(extremeDeadline, scheduling.deadlinesSnapshot().get(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(extremeDeadline, scheduling.scheduledTimesSnapshot().get(ScheduledGameTask.READY_TIMEOUT));
         }
 
         @Test
@@ -417,12 +417,12 @@ class GameSchedulingTest {
             scheduling.scheduleTask(ScheduledGameTask.CLEANUP, Long.MAX_VALUE);
             scheduling.scheduleTask(ScheduledGameTask.GAME_END, 32503680000000L);
 
-            assertEquals(Long.MIN_VALUE, scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(0L, scheduling.getDeadline(ScheduledGameTask.READY_OPEN));
-            assertEquals(-1L, scheduling.getDeadline(ScheduledGameTask.READY_TIMEOUT));
-            assertEquals(1700000000000L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
-            assertEquals(Long.MAX_VALUE, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
-            assertEquals(32503680000000L, scheduling.getDeadline(ScheduledGameTask.GAME_END));
+            assertEquals(Long.MIN_VALUE, scheduling.getScheduledTime(ScheduledGameTask.AUTO_ADVANCE));
+            assertEquals(0L, scheduling.getScheduledTime(ScheduledGameTask.READY_OPEN));
+            assertEquals(-1L, scheduling.getScheduledTime(ScheduledGameTask.READY_TIMEOUT));
+            assertEquals(1700000000000L, scheduling.getScheduledTime(ScheduledGameTask.NEW_HAND));
+            assertEquals(Long.MAX_VALUE, scheduling.getScheduledTime(ScheduledGameTask.CLEANUP));
+            assertEquals(32503680000000L, scheduling.getScheduledTime(ScheduledGameTask.GAME_END));
         }
     }
 
@@ -438,7 +438,7 @@ class GameSchedulingTest {
                     true, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
 
             assertFalse(started);
-            assertEquals(5000L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
+            assertEquals(5000L, scheduling.getScheduledTime(ScheduledGameTask.NEW_HAND));
             assertEquals(timerVersion, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
         }
 
@@ -451,7 +451,7 @@ class GameSchedulingTest {
                     false, 2L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
 
             assertFalse(started);
-            assertEquals(5000L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
+            assertEquals(5000L, scheduling.getScheduledTime(ScheduledGameTask.NEW_HAND));
         }
 
         @Test
@@ -464,7 +464,7 @@ class GameSchedulingTest {
                     false, 1L, ScheduledGameTask.NEW_HAND, 6000L, 1L, currentVersion - 1);
 
             assertFalse(started);
-            assertEquals(6000L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
+            assertEquals(6000L, scheduling.getScheduledTime(ScheduledGameTask.NEW_HAND));
         }
 
         @Test
@@ -476,7 +476,7 @@ class GameSchedulingTest {
                     false, 99L, ScheduledGameTask.CLEANUP, 5000L, 1L, timerVersion);
 
             assertTrue(started);
-            assertEquals(5000L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
+            assertEquals(5000L, scheduling.getScheduledTime(ScheduledGameTask.CLEANUP));
             assertEquals(timerVersion, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
         }
 
@@ -498,7 +498,7 @@ class GameSchedulingTest {
                     false, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
 
             assertTrue(started);
-            assertNull(scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
+            assertNull(scheduling.getScheduledTime(ScheduledGameTask.NEW_HAND));
             assertEquals(timerVersion + 1, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
         }
 

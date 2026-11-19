@@ -179,12 +179,12 @@ public class GameLifecycleService {
     }
 
     /**
-     * Executes a scheduled game timer if the game still expects that deadline, hand number, and
+     * Executes a scheduled game timer if the game still expects that run time, hand number, and
      * timer version.
      *
      * @param gameId               the unique ID of the game
      * @param task                 the timer type that fired
-     * @param expectedDeadline     the captured execution epoch time in milliseconds
+     * @param expectedRunAtEpochMs the captured execution epoch time in milliseconds
      * @param expectedHandNumber   the hand number active when the timer was scheduled
      * @param expectedTimerVersion the timer version active when the timer was scheduled
      */
@@ -192,20 +192,20 @@ public class GameLifecycleService {
     public void executeScheduledTask(
             @GameId String gameId,
             ScheduledGameTask task,
-            long expectedDeadline,
+            long expectedRunAtEpochMs,
             long expectedHandNumber,
             long expectedTimerVersion) {
         if (task == null) {
             return;
         }
         Game game = activeGames.get(gameId);
-        if (!taskScheduler.claimTimer(game, task, expectedDeadline, expectedHandNumber, expectedTimerVersion)) {
+        if (!taskScheduler.claimTimer(game, task, expectedRunAtEpochMs, expectedHandNumber, expectedTimerVersion)) {
             return;
         }
         switch (task) {
             case TURN_TIMEOUT -> departureHandler.handleTurnTimeout(game);
             case AUTO_ADVANCE -> readinessCoordinator.applyAutoAdvanceTimeoutAndOpenReadyGateIfNeeded(game);
-            case READY_TIMEOUT -> readinessCoordinator.handleReadyTimeout(game, expectedDeadline);
+            case READY_TIMEOUT -> readinessCoordinator.handleReadyTimeout(game, expectedRunAtEpochMs);
             case NEW_HAND -> readinessCoordinator.startNewHandAndOpenReadyGateIfNeeded(gameId);
             case READY_OPEN -> readinessCoordinator.openReadyGate(game);
             case GAME_END -> completionHandler.handleGameEnd(gameId);

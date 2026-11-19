@@ -128,7 +128,7 @@ class GameReadinessCoordinatorTest {
             assertTrue(game.isReadyCountdownActive());
             assertEquals(ReadyGateState.COUNTING_DOWN, game.getReadyGateState());
             assertEquals(BASE_EPOCH_MS + READY_COUNTDOWN_MS,
-                    game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+                    game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
             verify(gameStateService).broadcastGameState(game);
         }
 
@@ -201,7 +201,7 @@ class GameReadinessCoordinatorTest {
                 coordinator.startNewHandAndOpenReadyGateIfNeeded(GAME_ID);
                 assertTrue(game.isReadyCountdownActive());
                 assertEquals(BASE_EPOCH_MS + READY_COUNTDOWN_MS,
-                        game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+                        game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
             }
         }
 
@@ -342,7 +342,7 @@ class GameReadinessCoordinatorTest {
             }
             assertEquals(handBefore + 1, game.getHandNumber());
             assertFalse(game.isReadyCountdownActive());
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
         }
 
         @Test

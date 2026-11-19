@@ -268,7 +268,7 @@ class PlayerDepartureHandlerTest {
                 gameDeadlines.put(player.getName(), player.getDisconnectDeadlineEpochMs());
             }
             gameOver = game.isGameOver();
-            scheduledDeadlines = game.toSnapshot().scheduledTaskDeadlines();
+            scheduledDeadlines = game.toSnapshot().scheduledTimes();
             timerVersions = game.toSnapshot().timerVersions();
         }
         return new RoomGameSnapshot(roster, membershipIds, connected, absenceDeadlines,
@@ -391,7 +391,7 @@ class PlayerDepartureHandlerTest {
 
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
             assertTrue(game.isReadyCountdownActive());
-            assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.READY_OPEN));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
             var broadcasts = inOrder(gameStateService);
             broadcasts.verify(gameStateService).broadcastShowdownResults(game);
             broadcasts.verify(gameStateService).broadcastGameState(game);
@@ -568,7 +568,7 @@ class PlayerDepartureHandlerTest {
 
             assertEquals(0, roomPresent.get());
             assertTrue(testRoom.getPlayers().isEmpty());
-            assertTrue(game.toSnapshot().scheduledTaskDeadlines().isEmpty());
+            assertTrue(game.toSnapshot().scheduledTimes().isEmpty());
         }
 
         @Test
@@ -612,7 +612,7 @@ class PlayerDepartureHandlerTest {
                 assertFalse(gameLifecycleService.gameExists(ROOM_ID));
             });
             assertEquals(0, roomPresent.get());
-            assertTrue(game.toSnapshot().scheduledTaskDeadlines().isEmpty());
+            assertTrue(game.toSnapshot().scheduledTimes().isEmpty());
         }
 
         @Test
@@ -631,7 +631,7 @@ class PlayerDepartureHandlerTest {
             for (ScheduledGameTask task : List.of(ScheduledGameTask.READY_OPEN, ScheduledGameTask.READY_TIMEOUT,
                     ScheduledGameTask.AUTO_ADVANCE, ScheduledGameTask.NEW_HAND, ScheduledGameTask.GAME_END)) {
                 game.scheduleTask(task, deadline++);
-                deadlines.put(task, game.getScheduledTaskDeadline(task));
+                deadlines.put(task, game.getScheduledTaskTime(task));
                 timerVersions.put(task, game.getTimerVersion(task));
             }
 
@@ -683,7 +683,7 @@ class PlayerDepartureHandlerTest {
             assertEquals(departingStackBefore, findGamePlayer(restored, departing.getName()).getChips());
             assertEquals(expectedSurvivorEndChips, restoredSurvivor.getChips());
             assertEquals(BASE_EPOCH_MS + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
-                    restored.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+                    restored.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
             verify(taskScheduler, atLeastOnce()).schedule(any(Runnable.class), any(Instant.class));
             verify(gameStateService, times(1)).sendGameEnd(any(GameEndResponse.class));
 
@@ -951,14 +951,14 @@ class PlayerDepartureHandlerTest {
             Game game = getGameLocked(ROOM_ID);
             assertTrue(game.isGameOver());
             assertSame(result, game.getGameEndResult());
-            Long initialCleanup = game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP);
+            Long initialCleanup = game.getScheduledTaskTime(ScheduledGameTask.CLEANUP);
             assertNotNull(initialCleanup);
 
             reset(gameStateService);
             GameEndResponse repeated = withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
             assertSame(result, repeated);
             verify(gameStateService, never()).sendGameEnd(any());
-            assertEquals(initialCleanup, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            assertEquals(initialCleanup, game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
 
             assertThrows(UnauthorisedActionException.class,
                     () -> withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Stranger")));
@@ -1047,7 +1047,7 @@ class PlayerDepartureHandlerTest {
                 assertEquals(0, result.finalState().pot());
                 assertEquals(1510, result.finalState().players().stream()
                         .filter(PublicPlayerState::isWinner).findFirst().orElseThrow().chips());
-                assertNotNull(game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP),
+                assertNotNull(game.getScheduledTaskTime(ScheduledGameTask.CLEANUP),
                         "Cleanup deadline should be scheduled for " + ending);
 
                 try (LockLease _ = roomCoordinator.acquire(gameId)) {
@@ -1557,7 +1557,7 @@ class PlayerDepartureHandlerTest {
             List<Player> stillActive = finalGame.getPlayers().stream().filter(p -> !p.isOut()).toList();
             assertEquals(1, stillActive.size());
             assertEquals(survivor.getName(), stillActive.getFirst().getName());
-            assertNotNull(finalGame.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
+            assertNotNull(finalGame.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
             verify(gameStateService, times(1)).sendGameEnd(any(GameEndResponse.class));
         }
 

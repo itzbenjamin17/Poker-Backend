@@ -48,7 +48,7 @@ public class GameRestoreBuilder {
     private GameEndResponse gameEndResult;
     private boolean allPlayersHadInitialTurn;
     private Set<String> actedPlayersInRound;
-    private Map<ScheduledGameTask, Long> scheduledTaskDeadlines;
+    private Map<ScheduledGameTask, Long> scheduledTimes;
     private Map<ScheduledGameTask, Long> timerVersions;
 
     /**
@@ -213,8 +213,8 @@ public class GameRestoreBuilder {
         return this;
     }
 
-    public GameRestoreBuilder scheduledTaskDeadlines(Map<ScheduledGameTask, Long> scheduledTaskDeadlines) {
-        this.scheduledTaskDeadlines = scheduledTaskDeadlines;
+    public GameRestoreBuilder scheduledTimes(Map<ScheduledGameTask, Long> scheduledTimes) {
+        this.scheduledTimes = scheduledTimes;
         return this;
     }
 
@@ -351,8 +351,8 @@ public class GameRestoreBuilder {
         return actedPlayersInRound;
     }
 
-    Map<ScheduledGameTask, Long> getScheduledTaskDeadlines() {
-        return scheduledTaskDeadlines;
+    Map<ScheduledGameTask, Long> getScheduledTimes() {
+        return scheduledTimes;
     }
 
     Map<ScheduledGameTask, Long> getTimerVersions() {
