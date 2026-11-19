@@ -34,9 +34,9 @@ final class ShowdownResolver {
      *
      * @param winners   ordered unique players who won at least one allocation
      * @param remainder chips left in the table pot when an allocation has no eligible winners
-     * @param settlement settlement record for the hand
+     * @param payout    payout summary for the hand
      */
-    record Distribution(List<Player> winners, int remainder, HandSettlementResult settlement) {
+    record Distribution(List<Player> winners, int remainder, HandPayout payout) {
     }
 
     /**
@@ -116,13 +116,13 @@ final class ShowdownResolver {
             uniqueWinners.addAll(potWinners);
         }
 
-        HandSettlementResult settlement = new HandSettlementResult(awards, refunds,
+        HandPayout payout = new HandPayout(awards, refunds,
                 uniqueWinners.stream().map(Player::getPlayerId).collect(Collectors.toSet()),
                 remainder, wentToShowdown);
         logger.debug("Showdown distribution complete for game {} | pots={} | winners={} | refunds={} | remainder={}",
-                gameId, allocations.size(), settlement.winnerIds(), refunds, remainder);
+                gameId, allocations.size(), payout.winnerIds(), refunds, remainder);
 
-        return new Distribution(new ArrayList<>(uniqueWinners), remainder, settlement);
+        return new Distribution(new ArrayList<>(uniqueWinners), remainder, payout);
     }
 
     /**

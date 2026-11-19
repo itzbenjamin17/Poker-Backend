@@ -18,7 +18,7 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
-import com.pokergame.model.HandSettlementResult;
+import com.pokergame.model.HandPayout;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.PostSaveActions;
@@ -131,8 +131,8 @@ public class GameStateService {
         requireNonNull(game, "game must not be null");
         String gameId = game.getGameId();
 
-        HandSettlementResult settlement = game.getLastSettlementResult();
-        if (settlement == null) {
+        HandPayout payout = game.getLastHandPayout();
+        if (payout == null) {
             throw new IllegalStateException("Cannot broadcast showdown results for unsettled game " + gameId);
         }
 
@@ -140,14 +140,14 @@ public class GameStateService {
 
         // The showdown view sets no current player, so clients do not briefly show Fold/Check
         // controls before the next hand or game-end update arrives.
-        Set<String> winnerIds = settlement.winnerIds();
-        Map<String, Integer> contestedAwards = settlement.contestedAwards();
+        Set<String> winnerIds = payout.winnerIds();
+        Map<String, Integer> potWinnings = payout.potWinnings();
 
         List<Player> winningPlayers = game.getPlayers().stream()
                 .filter(player -> winnerIds.contains(player.getPlayerId()))
                 .toList();
         List<String> winnerNames = winningPlayers.stream().map(Player::getName).toList();
-        Integer equalWinnerAward = computeEqualWinnerAward(winnerIds, contestedAwards);
+        Integer equalWinnerAward = computeEqualWinnerAward(winnerIds, potWinnings);
 
         boolean isActualShowdown = game.wasContestedShowdown();
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
@@ -164,7 +164,7 @@ public class GameStateService {
                     isActive ? player.getHandRank() : null,
                     isActive ? player.getBestHand() : List.of(),
                     isWinner,
-                    contestedAwards.getOrDefault(player.getPlayerId(), 0),
+                    potWinnings.getOrDefault(player.getPlayerId(), 0),
                     (isActive && isActualShowdown) ? player.getHoleCards() : null);
         }).toList();
 
@@ -174,7 +174,7 @@ public class GameStateService {
                 .winningsPerPlayer(equalWinnerAward)
                 .readyCountdown(game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs())
                 .handSettled(true)
-                .carryOverAmount(settlement.remainder())
+                .carryOverAmount(payout.remainder())
                 .build();
 
         sendAfterSave("/game/" + gameId, showdownResponse);
@@ -440,11 +440,11 @@ public class GameStateService {
 
     private PublicGameStateResponse buildLiveGameState(Game game, Long inactivityDeadlineEpochMs) {
         boolean autoAdvancing = game.isAutoAdvancing();
-        HandSettlementResult lastSettlement = game.getLastSettlementResult();
+        HandPayout lastPayout = game.getLastHandPayout();
         boolean inShowdownOrCountdown = game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive();
         boolean handSettled = game.isHandSettled();
-        Set<String> settledWinnerIds = handSettled ? lastSettlement.winnerIds() : Set.of();
-        Map<String, Integer> settledAwards = handSettled ? lastSettlement.contestedAwards() : Map.of();
+        Set<String> settledWinnerIds = handSettled ? lastPayout.winnerIds() : Set.of();
+        Map<String, Integer> settledAwards = handSettled ? lastPayout.potWinnings() : Map.of();
         boolean revealHoleCards = game.wasContestedShowdown();
 
         Player currentPlayer = !inShowdownOrCountdown && !autoAdvancing && !handSettled && !game.getActivePlayers().isEmpty()
@@ -501,7 +501,7 @@ public class GameStateService {
                 .readyCountdown(game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs())
                 .claimWin(claimWinAvailable, claimWinPlayerName)
                 .handSettled(handSettled)
-                .carryOverAmount(handSettled ? lastSettlement.remainder() : null)
+                .carryOverAmount(handSettled ? lastPayout.remainder() : null)
                 .legalActions(currentPlayer == null ? List.of() : game.getLegalActionsFor(currentPlayer))
                 .minimumBetAmount(currentPlayer == null ? null : game.getBigBlind())
                 .minimumRaiseAmount(currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer))
@@ -511,12 +511,12 @@ public class GameStateService {
                 .build();
     }
 
-    private Integer computeEqualWinnerAward(Set<String> winnerIds, Map<String, Integer> contestedAwards) {
+    private Integer computeEqualWinnerAward(Set<String> winnerIds, Map<String, Integer> potWinnings) {
         if (winnerIds == null || winnerIds.isEmpty()) {
             return null;
         }
         List<Integer> awards = winnerIds.stream()
-                .map(id -> contestedAwards.getOrDefault(id, 0))
+                .map(id -> potWinnings.getOrDefault(id, 0))
                 .toList();
         return awards.stream().distinct().count() == 1 ? awards.getFirst() : null;
     }

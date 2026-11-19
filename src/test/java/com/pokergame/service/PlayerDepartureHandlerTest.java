@@ -520,7 +520,7 @@ class PlayerDepartureHandlerTest {
             Game game = getGameLocked(ROOM_ID);
             verify(roomService).removeMembers(eq(ROOM_ID), eq(List.of("Player2")), any());
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
-            assertNull(game.getLastSettlementResult());
+            assertNull(game.getLastHandPayout());
             assertTrue(game.getPlayers().stream()
                     .allMatch(p -> p.getHandRank() == HandRank.NO_HAND && p.getBestHand().isEmpty()));
             verifyNoInteractions(gameStateService);
@@ -1417,7 +1417,7 @@ class PlayerDepartureHandlerTest {
             verifyNobodyRemovedFromRoom();
             assertTrue(testRoom.hasPlayer("Player2"));
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
-            assertNull(game.getLastSettlementResult());
+            assertNull(game.getLastHandPayout());
             assertTrue(game.getPlayers().stream()
                     .allMatch(p -> p.getHandRank() == HandRank.NO_HAND && p.getBestHand().isEmpty()));
             verifyNoInteractions(gameStateService);

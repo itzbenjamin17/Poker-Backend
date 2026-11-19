@@ -832,7 +832,7 @@ class GameTest {
             TurnOutcome outcome = hand.advanceAfterPlayerRemoval();
 
             assertEquals(TurnOutcome.TurnOutcomeType.SHOWDOWN, outcome.type());
-            assertEquals(Set.of("a"), hand.getLastSettlementResult().winnerIds());
+            assertEquals(Set.of("a"), hand.getLastHandPayout().winnerIds());
             assertEquals(1050, a.getChips());
             assertEquals(950, folded.getChips());
             assertEquals(0, hand.getPot());
@@ -1041,12 +1041,12 @@ class GameTest {
                     .build();
 
             deadUpper.conductShowdown();
-            assertEquals(Set.of("a", "b"), deadUpper.getLastSettlementResult().winnerIds());
+            assertEquals(Set.of("a", "b"), deadUpper.getLastHandPayout().winnerIds());
             assertEquals(200, a.getChips());
             assertEquals(350, b.getChips());
             assertEquals(0, deadUpper.getPot());
-            assertEquals(Map.of("a", 200, "b", 350), deadUpper.getLastSettlementResult().contestedAwards());
-            assertTrue(deadUpper.getLastSettlementResult().refunds().isEmpty());
+            assertEquals(Map.of("a", 200, "b", 350), deadUpper.getLastHandPayout().potWinnings());
+            assertTrue(deadUpper.getLastHandPayout().refunds().isEmpty());
         }
 
         @Test
@@ -1073,8 +1073,8 @@ class GameTest {
             assertEquals(150, shortPlayer.getChips());
             assertEquals(350, midPlayer.getChips());
             assertEquals(0, departedGame.getPot());
-            assertEquals(Map.of("s", 150, "m", 200), departedGame.getLastSettlementResult().contestedAwards());
-            assertTrue(departedGame.getLastSettlementResult().refunds().isEmpty());
+            assertEquals(Map.of("s", 150, "m", 200), departedGame.getLastHandPayout().potWinnings());
+            assertTrue(departedGame.getLastHandPayout().refunds().isEmpty());
         }
 
         @Test
@@ -1102,7 +1102,7 @@ class GameTest {
 
             assertEquals(130, contender.getChips());
             assertEquals(0, deadBlindGame.getPot());
-            assertEquals(Map.of("a", 30), deadBlindGame.getLastSettlementResult().contestedAwards());
+            assertEquals(Map.of("a", 30), deadBlindGame.getLastHandPayout().potWinnings());
         }
 
         @Test
@@ -1327,7 +1327,7 @@ class GameTest {
             game.getActivePlayers().get(1).doAction(PlayerAction.FOLD, 0);
 
             game.conductShowdown();
-            assertTrue(game.getLastSettlementResult().winnerIds().isEmpty());
+            assertTrue(game.getLastHandPayout().winnerIds().isEmpty());
             assertEquals(1000, game.getPlayers().get(2).getChips());
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
 
@@ -1349,7 +1349,7 @@ class GameTest {
                     new Card(Rank.THREE, Suit.DIAMONDS)));
 
             multiGame.conductShowdown();
-            assertEquals(Set.of("p0"), multiGame.getLastSettlementResult().winnerIds());
+            assertEquals(Set.of("p0"), multiGame.getLastHandPayout().winnerIds());
             assertEquals(1200, multiGame.getActivePlayers().getFirst().getChips());
             assertEquals(HandRank.ROYAL_FLUSH, multiGame.getActivePlayers().getFirst().getHandRank());
             assertEquals(HandRank.ONE_PAIR, multiGame.getActivePlayers().get(1).getHandRank());
@@ -1375,7 +1375,7 @@ class GameTest {
             headsUpGame.conductShowdown();
             assertEquals(HandRank.ONE_PAIR, josh.getHandRank());
             assertEquals(HandRank.ONE_PAIR, benjamin.getHandRank());
-            assertEquals(Set.of("b1"), headsUpGame.getLastSettlementResult().winnerIds());
+            assertEquals(Set.of("b1"), headsUpGame.getLastHandPayout().winnerIds());
             assertEquals(1010, benjamin.getChips());
             assertEquals(990, josh.getChips());
         }
@@ -1607,10 +1607,10 @@ class GameTest {
                     .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
             realGame.conductShowdown();
-            assertEquals(Set.of("ace"), realGame.getLastSettlementResult().winnerIds());
+            assertEquals(Set.of("ace"), realGame.getLastHandPayout().winnerIds());
             assertEquals(1050, ace.getChips());
             assertEquals(950, king.getChips());
-            assertEquals(Map.of("ace", 100), realGame.getLastSettlementResult().contestedAwards());
+            assertEquals(Map.of("ace", 100), realGame.getLastHandPayout().potWinnings());
 
             Player coA = restoredPlayer("A", "a", 50, 0, true);
             Player coB = restoredPlayer("B", "b", 50, 0, true);
@@ -1628,7 +1628,7 @@ class GameTest {
             assertEquals(0, carryGame.getPot());
             assertEquals(List.of(), carryGame.getPotBreakdown());
             assertEquals(0, carryGame.getUncalledAmount());
-            assertEquals(0, carryGame.getLastSettlementResult().remainder());
+            assertEquals(0, carryGame.getLastHandPayout().remainder());
         }
 
         @Test
@@ -1648,13 +1648,13 @@ class GameTest {
             p2.setHoleCards(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
 
             idemp.conductShowdown();
-            Set<String> firstWinnerIds = idemp.getLastSettlementResult().winnerIds();
+            Set<String> firstWinnerIds = idemp.getLastHandPayout().winnerIds();
             assertEquals(Set.of("p1"), firstWinnerIds);
             assertEquals(2000, p1.getChips());
             assertEquals(0, p2.getChips());
             assertEquals(0, idemp.getPot());
             idemp.conductShowdown();
-            assertEquals(firstWinnerIds, idemp.getLastSettlementResult().winnerIds());
+            assertEquals(firstWinnerIds, idemp.getLastHandPayout().winnerIds());
             assertEquals(2000, p1.getChips());
 
             Game voidGame = createStandardGame(2, 100);
@@ -1662,8 +1662,8 @@ class GameTest {
             voidGame.processPlayerDecision(voidGame.getPlayers().get(1), new PlayerDecision(PlayerAction.CALL, 50, "p1"));
             voidGame.getPlayers().forEach(pl -> pl.doAction(PlayerAction.FOLD, 0));
             voidGame.conductShowdown();
-            assertTrue(voidGame.getLastSettlementResult().winnerIds().isEmpty());
-            assertEquals(100, voidGame.getLastSettlementResult().remainder());
+            assertTrue(voidGame.getLastHandPayout().winnerIds().isEmpty());
+            assertEquals(100, voidGame.getLastHandPayout().remainder());
             assertFalse(voidGame.resetForNewHand());
             assertEquals(100, voidGame.toSnapshot().carryOverPot());
 
@@ -1703,7 +1703,7 @@ class GameTest {
                     .pot(1).dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                     .currentPlayerId("a").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
                     .gameOver(false).smallBlind(10).bigBlind(20).handContributions(Map.of())
-                    .carryOverPot(1).lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 1, false))
+                    .carryOverPot(1).lastHandPayout(new HandPayout(Map.of(), Map.of(), Set.of(), 1, false))
                     .allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
@@ -1711,7 +1711,7 @@ class GameTest {
             oddCarry.settleGameEnd(oddWinner, Set.of());
             assertEquals(101, oddWinner.getChips());
             assertEquals(0, oddCarry.getPot());
-            assertEquals(1, oddCarry.getLastSettlementResult().remainder());
+            assertEquals(1, oddCarry.getLastHandPayout().remainder());
 
             Game conserve = createStandardGame(3, 1000);
             conserve.dealHoleCards();
@@ -1755,7 +1755,7 @@ class GameTest {
             assertEquals(104, p2.getChips());
             assertEquals(89, p3.getChips());
             assertEquals(0, threeWay.getPot());
-            assertEquals(0, threeWay.getLastSettlementResult().remainder());
+            assertEquals(0, threeWay.getLastHandPayout().remainder());
             assertEquals(totalBeforeThreeWay,
                     threeWay.getPlayers().stream().mapToInt(Player::getChips).sum() + threeWay.getPot());
             assertFalse(threeWay.resetForNewHand());
@@ -1781,7 +1781,7 @@ class GameTest {
             assertEquals(100, huA.getChips());
             assertEquals(101, huB.getChips());
             assertEquals(0, headsUp.getPot());
-            assertEquals(0, headsUp.getLastSettlementResult().remainder());
+            assertEquals(0, headsUp.getLastHandPayout().remainder());
             assertEquals(totalBeforeHeadsUp,
                     headsUp.getPlayers().stream().mapToInt(Player::getChips).sum() + headsUp.getPot());
             assertFalse(headsUp.resetForNewHand());
@@ -1818,7 +1818,7 @@ class GameTest {
             assertEquals(100, s2.getChips());
             assertEquals(69, s0.getChips());
             assertEquals(0, sidePotOdd.getPot());
-            assertEquals(0, sidePotOdd.getLastSettlementResult().remainder());
+            assertEquals(0, sidePotOdd.getLastHandPayout().remainder());
             assertEquals(totalBeforeSidePot,
                     sidePotOdd.getPlayers().stream().mapToInt(Player::getChips).sum() + sidePotOdd.getPot());
             assertFalse(sidePotOdd.resetForNewHand());
@@ -1848,7 +1848,7 @@ class GameTest {
             assertEquals(100, d0.getChips());
             assertEquals(101, d2.getChips());
             assertEquals(0, departedDealer.getPot());
-            assertEquals(0, departedDealer.getLastSettlementResult().remainder());
+            assertEquals(0, departedDealer.getLastHandPayout().remainder());
             assertEquals(totalBeforeDeparted,
                     departedDealer.getPlayers().stream().mapToInt(Player::getChips).sum() + departedDealer.getPot());
             assertFalse(departedDealer.resetForNewHand());
@@ -1877,7 +1877,7 @@ class GameTest {
             contested.conductShowdown();
             assertTrue(contested.wasContestedShowdown());
 
-            Set<String> winnerIds = contested.getLastSettlementResult().winnerIds();
+            Set<String> winnerIds = contested.getLastHandPayout().winnerIds();
             Player winner = contested.getPlayers().stream()
                     .filter(p -> winnerIds.contains(p.getPlayerId()))
                     .findFirst()
@@ -2538,7 +2538,7 @@ class GameTest {
                     .smallBlind(10)
                     .bigBlind(20)
                     .handContributions(Map.of())
-                    .lastSettlementResult(settled ? new HandSettlementResult(Map.of("p1", 100), Map.of(), Set.of("p1"), 0, false) : null)
+                    .lastHandPayout(settled ? new HandPayout(Map.of("p1", 100), Map.of(), Set.of("p1"), 0, false) : null)
                     .actedPlayersInRound(Set.of())
                     .scheduledTimes(Map.of())
                     .build();

@@ -44,8 +44,8 @@ The current stage of a poker hand: `PRE_FLOP`, `FLOP`, `TURN`, `RIVER`, or `SHOW
 **PotCalculator**:
 The helper that tracks how many chips each player has put in during a hand (`handContributions`) and splits the main pot, side pots, and uncalled bet refunds when players go all-in.
 
-**HandSettlementResult**:
-The final breakdown at the end of a hand showing who won which pot, any uncalled bets returned, and who received any odd chip from a split pot.
+**HandPayout**:
+The payout summary at the end of a hand showing who won which pot, any uncalled bets returned, and any chips carried over from a void hand.
 
 **ReadyGate (`ReadyGateState`, ready countdown)**:
 The shared between-hand pause and countdown gate (`CLOSED`, `COUNTING_DOWN`, `WAITING_FOR_PLAYERS`) where players mark ready before the next hand is dealt.
@@ -77,7 +77,7 @@ True when `!pausedForDisconnectedSurvivor` and either `gameOver` is true or a se
 True once `settleGameEnd` has awarded any remaining carry-over or unsettled pot to the match winner, preventing duplicate final-pot payouts on retries or crash recovery.
 
 **`isHandSettled()`**:
-True when `lastSettlementResult != null`, meaning the current or most recent hand has completed pot distribution (by fold, void hand, or showdown) and is awaiting the next hand or game end.
+True when `lastHandPayout != null`, meaning the current or most recent hand has completed pot distribution (by fold, void hand, or showdown) and is awaiting the next hand or game end.
 
 **`isHandInProgress()`**:
 True when `currentPhase != GamePhase.SHOWDOWN || !isHandSettled()`, distinguishing an in-progress or pre-showdown hand from a completed showdown so mid-hand zero-chip contenders remain eligible and new-hand requests are rejected while a hand is still running.

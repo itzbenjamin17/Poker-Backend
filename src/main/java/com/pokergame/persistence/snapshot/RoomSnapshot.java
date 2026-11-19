@@ -83,7 +83,7 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
      * @param smallBlindPlayerId            actual small blind payer identity, even if that player departed
      * @param bigBlindPlayerId              actual big blind payer identity, even if that player departed
      * @param currentPlayerId               player ID whose turn it is to act
-     * @param lastSettlementResult          immutable settled awards, refunds, winners and explicit remainder
+     * @param lastHandPayout                immutable pot winnings, refunds, winners, and remainder
      * @param finalPotSettled               guards the final carry-over award against recovery-time repayout
      * @param readyGateState                current ready-gate state machine phase
      * @param handNumber                    authoritative completed-hand count
@@ -100,14 +100,14 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
             Map<ScheduledGameTask, Long> scheduledTimes, int carryOverPot,
             int lastFullRaise, Map<String, Integer> previousBets,
             List<String> handSeatOrder, String dealerPlayerId, String smallBlindPlayerId,
-            String bigBlindPlayerId, String currentPlayerId, SettlementState lastSettlementResult,
+            String bigBlindPlayerId, String currentPlayerId, HandPayoutState lastHandPayout,
             boolean finalPotSettled, ReadyGateState readyGateState, long handNumber,
             Map<ScheduledGameTask, Long> timerVersions, boolean pausedForDisconnectedSurvivor, long stateRevision,
             GameResultState gameEndResult) {
     }
 
-    /** Plain persisted form of the immutable hand settlement result. */
-    public record SettlementState(Map<String, Integer> contestedAwards, Map<String, Integer> refunds,
+    /** Plain persisted form of the immutable hand payout. */
+    public record HandPayoutState(Map<String, Integer> potWinnings, Map<String, Integer> refunds,
             Set<String> winnerIds, int remainder, boolean wentToShowdown) { }
 
     /** Plain persisted form of the immutable game result. */

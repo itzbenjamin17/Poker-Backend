@@ -344,7 +344,7 @@ final class PotCalculator {
      * @param handContributions    per-player chip contributions for this hand
      * @param activePlayers        players active in the hand
      * @param tablePlayers         full table roster
-     * @param lastSettlementResult previous settlement result, or {@code null} before the hand settles
+     * @param lastHandPayout previous settlement result, or {@code null} before the hand settles
      * @param currentHighestBet    highest current street bet
      * @param gameId               game identifier for diagnostics
      */
@@ -354,12 +354,12 @@ final class PotCalculator {
             Map<String, Integer> handContributions,
             List<Player> activePlayers,
             List<Player> tablePlayers,
-            HandSettlementResult lastSettlementResult,
+            HandPayout lastHandPayout,
             int currentHighestBet,
             String gameId) {
 
         boolean isSettled() {
-            return lastSettlementResult != null;
+            return lastHandPayout != null;
         }
 
         boolean hasAllIn() {

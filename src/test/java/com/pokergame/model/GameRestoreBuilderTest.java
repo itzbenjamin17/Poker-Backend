@@ -53,7 +53,7 @@ class GameRestoreBuilderTest {
                 new Card(Rank.QUEEN, Suit.SPADES));
 
         Map<String, Integer> contributions = Map.of("p1", 200, "p2", 250);
-        HandSettlementResult settlement = new HandSettlementResult(
+        HandPayout settlement = new HandPayout(
                 Map.of("p1", 450), Map.of(), Set.of("p1"), 0, true);
         int lastFullRaise = 70;
         Map<String, Integer> previousBets = Map.of("p1", 100, "p2", 100);
@@ -95,7 +95,7 @@ class GameRestoreBuilderTest {
                 .smallBlind(15)                                     // 15
                 .bigBlind(30)                                       // 16
                 .handContributions(contributions)                   // 17
-                .lastSettlementResult(settlement)                   // 18
+                .lastHandPayout(settlement)                   // 18
                 .lastFullRaise(lastFullRaise)                       // 19
                 .previousBets(previousBets)                         // 20
                 .handSeatOrder(seatOrder)                           // 21
@@ -133,7 +133,7 @@ class GameRestoreBuilderTest {
         assertEquals(15, game.getSmallBlind());                                      // 15
         assertEquals(30, game.getBigBlind());                                        // 16
         assertEquals(contributions, game.toSnapshot().handContributions());            // 17
-        assertEquals(settlement, game.getLastSettlementResult());                    // 18
+        assertEquals(settlement, game.getLastHandPayout());                    // 18
         assertEquals(lastFullRaise, game.toSnapshot().lastFullRaise());                    // 19
         assertEquals(previousBets, game.toSnapshot().previousBets());                  // 20
         assertEquals(seatOrder, game.toSnapshot().handSeatOrder());                    // 21
@@ -163,7 +163,7 @@ class GameRestoreBuilderTest {
 
         // A restored hand that already has a settlement returns without modifying the recorded winners
         game.conductShowdown();
-        assertEquals(Set.of("p1"), game.getLastSettlementResult().winnerIds());
+        assertEquals(Set.of("p1"), game.getLastHandPayout().winnerIds());
         assertEquals(1000, p1.getChips());
         assertEquals(800, p2.getChips());
     }
@@ -187,7 +187,7 @@ class GameRestoreBuilderTest {
 
         game.conductShowdown();
 
-        assertEquals(Set.of("p1"), game.getLastSettlementResult().winnerIds());
+        assertEquals(Set.of("p1"), game.getLastHandPayout().winnerIds());
         assertEquals(1200, p1.getChips());
         assertEquals(800, p2.getChips());
         assertEquals(HandRank.ROYAL_FLUSH, p1.getHandRank());
@@ -548,7 +548,7 @@ class GameRestoreBuilderTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .handContributions(Map.of())
-                .lastSettlementResult(null)
+                .lastHandPayout(null)
                 .lastFullRaise(0)
                 .previousBets(Map.of())
                 .handSeatOrder(List.of())
@@ -1079,7 +1079,7 @@ class GameRestoreBuilderTest {
                     .smallBlind(5)
                     .bigBlind(10)
                     .handContributions(Map.of())
-                    .lastSettlementResult(null)
+                    .lastHandPayout(null)
                     .lastFullRaise(0)
                     .previousBets(Map.of())
                     .handSeatOrder(List.of())

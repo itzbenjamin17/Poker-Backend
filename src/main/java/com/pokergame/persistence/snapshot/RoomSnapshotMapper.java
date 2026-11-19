@@ -5,7 +5,7 @@ import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
-import com.pokergame.model.HandSettlementResult;
+import com.pokergame.model.HandPayout;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.PersistenceException;
@@ -173,7 +173,7 @@ public final class RoomSnapshotMapper {
             snapshot.scheduledTimes(), snapshot.carryOverPot(),
             snapshot.lastFullRaise(), snapshot.previousBets(),
             snapshot.handSeatOrder(), snapshot.dealerPlayerId(), game.getSmallBlindPlayerId(),
-            game.getBigBlindPlayerId(), snapshot.currentPlayerId(), settlementState(game.getLastSettlementResult()),
+            game.getBigBlindPlayerId(), snapshot.currentPlayerId(), toHandPayoutState(game.getLastHandPayout()),
             game.isFinalPotSettled(), game.getReadyGateState(), game.getHandNumber(),
             snapshot.timerVersions(), game.isPausedForDisconnectedSurvivor(), game.getStateRevision(),
             toGameResultState(game.getGameEndResult()));
@@ -285,7 +285,7 @@ public final class RoomSnapshotMapper {
                 .dealerPlayerId(state.dealerPlayerId())
                 .smallBlindPlayerId(state.smallBlindPlayerId())
                 .bigBlindPlayerId(state.bigBlindPlayerId())
-                .lastSettlementResult(settlementResult(state.lastSettlementResult()))
+                .lastHandPayout(toHandPayout(state.lastHandPayout()))
                 .finalPotSettled(state.finalPotSettled())
                 .readyGateState(state.readyGateState())
                 .handNumber(state.handNumber())
@@ -430,15 +430,15 @@ public final class RoomSnapshotMapper {
                 state.isReadyForNextHand());
     }
 
-    private static RoomSnapshot.SettlementState settlementState(HandSettlementResult result) {
-        if (result == null) return null;
-        return new RoomSnapshot.SettlementState(result.contestedAwards(), result.refunds(),
-                result.winnerIds(), result.remainder(), result.wentToShowdown());
+    private static RoomSnapshot.HandPayoutState toHandPayoutState(HandPayout payout) {
+        if (payout == null) return null;
+        return new RoomSnapshot.HandPayoutState(payout.potWinnings(), payout.refunds(),
+                payout.winnerIds(), payout.remainder(), payout.wentToShowdown());
     }
 
-    private static HandSettlementResult settlementResult(RoomSnapshot.SettlementState state) {
+    private static HandPayout toHandPayout(RoomSnapshot.HandPayoutState state) {
         if (state == null) return null;
-        return new HandSettlementResult(state.contestedAwards(), state.refunds(),
+        return new HandPayout(state.potWinnings(), state.refunds(),
                 state.winnerIds(), state.remainder(), state.wentToShowdown());
     }
 

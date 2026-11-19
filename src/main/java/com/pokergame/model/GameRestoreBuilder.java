@@ -32,7 +32,7 @@ public class GameRestoreBuilder {
     private int smallBlind;
     private int bigBlind;
     private Map<String, Integer> handContributions;
-    private HandSettlementResult lastSettlementResult;
+    private HandPayout lastHandPayout;
     private int lastFullRaise;
     private Map<String, Integer> previousBets = new HashMap<>();
     private List<String> handSeatOrder = new ArrayList<>();
@@ -133,8 +133,8 @@ public class GameRestoreBuilder {
         return this;
     }
 
-    public GameRestoreBuilder lastSettlementResult(HandSettlementResult result) {
-        this.lastSettlementResult = result;
+    public GameRestoreBuilder lastHandPayout(HandPayout result) {
+        this.lastHandPayout = result;
         return this;
     }
 
@@ -287,8 +287,8 @@ public class GameRestoreBuilder {
         return handContributions;
     }
 
-    HandSettlementResult getLastSettlementResult() {
-        return lastSettlementResult;
+    HandPayout getLastHandPayout() {
+        return lastHandPayout;
     }
 
     int getLastFullRaise() {

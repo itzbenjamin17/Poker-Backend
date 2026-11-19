@@ -13,7 +13,7 @@ import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
-import com.pokergame.model.HandSettlementResult;
+import com.pokergame.model.HandPayout;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.testutil.MutableClock;
@@ -246,7 +246,7 @@ class GameCompletionHandlerTest {
                     .dealerPlayerId("host").smallBlindPlayerId("host").bigBlindPlayerId("p2")
                     .currentPlayerId("host").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false).smallBlind(5).bigBlind(10)
                     .handContributions(Map.of()).carryOverPot(10)
-                    .lastSettlementResult(new HandSettlementResult(Map.of(), Map.of(), Set.of(), 10, false))
+                    .lastHandPayout(new HandPayout(Map.of(), Map.of(), Set.of(), 10, false))
                     .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                     .scheduledTimes(Map.of()).build();
             registerGame(terminal);

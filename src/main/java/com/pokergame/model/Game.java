@@ -49,7 +49,7 @@ public class Game {
     private int pot;
     private int carryOverPot;
     private GamePhase currentPhase;
-    private HandSettlementResult lastSettlementResult;
+    private HandPayout lastHandPayout;
     private long handNumber;
     private long stateRevision;
     private boolean gameOver;
@@ -132,7 +132,7 @@ public class Game {
         this.handContributions = builder.getHandContributions() != null
                 ? new HashMap<>(builder.getHandContributions())
                 : new HashMap<>();
-        this.lastSettlementResult = builder.getLastSettlementResult();
+        this.lastHandPayout = builder.getLastHandPayout();
         this.finalPotSettled = builder.isFinalPotSettled();
         this.pausedForDisconnectedSurvivor = builder.isPausedForDisconnectedSurvivor();
         this.handNumber = builder.getHandNumber();
@@ -197,7 +197,7 @@ public class Game {
         currentPhase = GamePhase.PRE_FLOP;
         bettingRound.resetForNewHand();
         handContributions.clear();
-        lastSettlementResult = null;
+        lastHandPayout = null;
         finalPotSettled = false;
         closeReadyCountdown();
 
@@ -345,7 +345,7 @@ public class Game {
      * and records the hand's payout summary.
      */
     public void conductShowdown() {
-        if (lastSettlementResult != null) {
+        if (lastHandPayout != null) {
             return;
         }
 
@@ -358,7 +358,7 @@ public class Game {
 
         if (showdownPlayers.isEmpty()) {
             // Keep unclaimed chips as carry-over so the ready/new-hand flow can continue safely.
-            lastSettlementResult = new HandSettlementResult(Map.of(), Map.of(), Set.of(), pot, false);
+            lastHandPayout = new HandPayout(Map.of(), Map.of(), Set.of(), pot, false);
             resetHandAccountingAfterShowdown();
             logger.debug("Showdown complete for game {} | contenders=0 | potRemainder={}", gameId, pot);
             return;
@@ -371,7 +371,7 @@ public class Game {
         distributeSidePotsAtShowdown(showdownPlayers, showdownPlayers.size() > 1);
         resetHandAccountingAfterShowdown();
         logger.debug("Showdown complete for game {} | contenders={} | winners={} | potRemainder={}",
-                gameId, showdownPlayers.size(), lastSettlementResult.winnerIds(), pot);
+                gameId, showdownPlayers.size(), lastHandPayout.winnerIds(), pot);
     }
 
     /**
@@ -690,12 +690,12 @@ public class Game {
                 player, players, activePlayers, seating, currentPhase, bigBlind);
     }
 
-    public HandSettlementResult getLastSettlementResult() {
-        return lastSettlementResult;
+    public HandPayout getLastHandPayout() {
+        return lastHandPayout;
     }
 
     public boolean isHandSettled() {
-        return lastSettlementResult != null;
+        return lastHandPayout != null;
     }
 
     /**
@@ -705,7 +705,7 @@ public class Game {
      * @return {@code true} if the hand is settled and two or more players had their hands evaluated
      */
     public boolean wasContestedShowdown() {
-        return lastSettlementResult != null && lastSettlementResult.wentToShowdown();
+        return lastHandPayout != null && lastHandPayout.wentToShowdown();
     }
 
     public String getSmallBlindPlayerId() {
@@ -938,7 +938,7 @@ public class Game {
     private PotCalculator.PotInputs potInputs() {
         return new PotCalculator.PotInputs(
                 pot, carryOverPot, handContributions, activePlayers, players,
-                lastSettlementResult, bettingRound.getCurrentHighestBet(), gameId);
+                lastHandPayout, bettingRound.getCurrentHighestBet(), gameId);
     }
 
     private Player resolveChipWinner() {
@@ -1009,7 +1009,7 @@ public class Game {
                 ShowdownResolver.distribute(gameId, computation, players,
                         seating.getHandSeatOrderSnapshot(), seating.getDealerPlayerId(), wentToShowdown);
         pot = distribution.remainder();
-        lastSettlementResult = distribution.settlement();
+        lastHandPayout = distribution.payout();
     }
 
     private void resetHandAccountingAfterShowdown() {

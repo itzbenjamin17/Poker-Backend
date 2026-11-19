@@ -122,8 +122,8 @@ class ShowdownResolverTest {
         assertEquals(0, b.getChips());
         assertEquals(0, d.remainder());
         assertEquals(List.of(a), d.winners());
-        assertEquals(200, d.settlement().contestedAwards().get("a"));
-        assertTrue(d.settlement().wentToShowdown());
+        assertEquals(200, d.payout().potWinnings().get("a"));
+        assertTrue(d.payout().wentToShowdown());
     }
 
     @Test
@@ -139,8 +139,8 @@ class ShowdownResolverTest {
         assertEquals(50, a.getChips());
         assertEquals(51, b.getChips());
         assertEquals(0, d.remainder());
-        assertEquals(0, d.settlement().remainder());
-        assertEquals(Map.of("a", 50, "b", 51), d.settlement().contestedAwards());
+        assertEquals(0, d.payout().remainder());
+        assertEquals(Map.of("a", 50, "b", 51), d.payout().potWinnings());
     }
 
     @Test
@@ -158,8 +158,8 @@ class ShowdownResolverTest {
         assertEquals(34, a.getChips());
         assertEquals(33, b.getChips());
         assertEquals(0, d.remainder());
-        assertEquals(0, d.settlement().remainder());
-        assertEquals(Map.of("a", 34, "b", 33, "c", 34), d.settlement().contestedAwards());
+        assertEquals(0, d.payout().remainder());
+        assertEquals(Map.of("a", 34, "b", 33, "c", 34), d.payout().potWinnings());
     }
 
     @Test
@@ -193,7 +193,7 @@ class ShowdownResolverTest {
         assertEquals(140, a.getChips());
         assertEquals(0, folded.getChips());
         assertEquals(0, out.getChips());
-        assertEquals(Map.of("a", 40), d.settlement().refunds());
+        assertEquals(Map.of("a", 40), d.payout().refunds());
     }
 
     @Test
@@ -252,8 +252,8 @@ class ShowdownResolverTest {
                 GAME_ID, pots, List.of(a, b, c), List.of("a", "b", "c"), "a", true);
 
         assertEquals(List.of(a, b, c), distribution.winners());
-        assertEquals(Map.of("a", 30, "b", 51, "c", 50), distribution.settlement().contestedAwards());
-        assertEquals(Map.of("c", 12), distribution.settlement().refunds());
+        assertEquals(Map.of("a", 30, "b", 51, "c", 50), distribution.payout().potWinnings());
+        assertEquals(Map.of("c", 12), distribution.payout().refunds());
         assertEquals(62, c.getChips());
         assertEquals(0, distribution.remainder());
     }

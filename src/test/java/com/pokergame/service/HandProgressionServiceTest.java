@@ -10,7 +10,7 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
-import com.pokergame.model.HandSettlementResult;
+import com.pokergame.model.HandPayout;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.util.LockLease;
@@ -399,14 +399,14 @@ class HandProgressionServiceTest {
             game.dealTurn();
             game.dealRiver();
             game.conductShowdown();
-            HandSettlementResult settled = game.getLastSettlementResult();
+            HandPayout settled = game.getLastHandPayout();
             clearInvocations(gameStateService, springScheduler);
 
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 assertFalse(progression.applyAutoAdvanceTimeout(game));
             }
 
-            assertSame(settled, game.getLastSettlementResult());
+            assertSame(settled, game.getLastHandPayout());
             verifyNoInteractions(gameStateService, springScheduler);
         }
     }

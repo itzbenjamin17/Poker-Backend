@@ -17,7 +17,7 @@ import com.pokergame.model.Card;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.model.HandSettlementResult;
+import com.pokergame.model.HandPayout;
 import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
@@ -152,7 +152,7 @@ class RoomSnapshotMapperTest {
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).carryOverPot(3)
                 .lastFullRaise(10).previousBets(Map.of("a", 20))
                 .handSeatOrder(List.of("a", "b")).dealerPlayerId("a").smallBlindPlayerId("a")
-                .bigBlindPlayerId("b").lastSettlementResult(new HandSettlementResult(Map.of("a", 50), Map.of("b", 2),
+                .bigBlindPlayerId("b").lastHandPayout(new HandPayout(Map.of("a", 50), Map.of("b", 2),
                         Set.of("a"), 3, true))
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTimes(Map.of(ScheduledGameTask.CLEANUP, 123L))
@@ -170,7 +170,7 @@ class RoomSnapshotMapperTest {
         byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, game));
         Game restored = mapper.deserialize(snapshot).game();
         assertEquals(3, restored.toSnapshot().carryOverPot());
-        assertEquals(game.getLastSettlementResult(), restored.getLastSettlementResult());
+        assertEquals(game.getLastHandPayout(), restored.getLastHandPayout());
         assertEquals(10, restored.toSnapshot().lastFullRaise());
         assertEquals(List.of("a", "b"), restored.toSnapshot().handSeatOrder());
         assertTrue(restored.isFinalPotSettled());
@@ -189,15 +189,15 @@ class RoomSnapshotMapperTest {
         int aliceBeforeRetry = restored.getPlayers().getFirst().getChips();
         int bobBeforeRetry = restored.getPlayers().get(1).getChips();
         restored.conductShowdown();
-        assertEquals(Set.of("a"), restored.getLastSettlementResult().winnerIds());
+        assertEquals(Set.of("a"), restored.getLastHandPayout().winnerIds());
         assertEquals(aliceBeforeRetry, restored.getPlayers().getFirst().getChips());
         assertEquals(bobBeforeRetry, restored.getPlayers().get(1).getChips());
 
         Map<String, Integer> mutableAwards = new HashMap<>(Map.of("a", 1));
-        HandSettlementResult immutable = new HandSettlementResult(mutableAwards, Map.of(), Set.of("a"), 0, true);
+        HandPayout immutable = new HandPayout(mutableAwards, Map.of(), Set.of("a"), 0, true);
         mutableAwards.put("b", 2);
-        assertEquals(Map.of("a", 1), immutable.contestedAwards());
-        assertThrows(UnsupportedOperationException.class, () -> immutable.contestedAwards().put("b", 2));
+        assertEquals(Map.of("a", 1), immutable.potWinnings());
+        assertThrows(UnsupportedOperationException.class, () -> immutable.potWinnings().put("b", 2));
     }
 
     @Test
@@ -1137,12 +1137,12 @@ class RoomSnapshotMapperTest {
 
             // Conduct Showdown on restored instance
             assertDoesNotThrow(restored::conductShowdown);
-            assertNotNull(restored.getLastSettlementResult());
+            assertNotNull(restored.getLastHandPayout());
             assertTrue(restored.isHandSettled());
         }
 
         @Test
-        @DisplayName("Phase 5: SHOWDOWN snapshot serialization and WAL recovery preserves HandSettlementResult & resetForNewHand")
+        @DisplayName("Phase 5: SHOWDOWN snapshot serialization and WAL recovery preserves HandPayout & resetForNewHand")
         void testPhase_Showdown_WalRecoveryAndResetForNewHand(@TempDir Path tempDir) {
             Player p1 = createPlayer("p1", "Alice", 1000);
             Player p2 = createPlayer("p2", "Bob", 1000);
@@ -1158,8 +1158,8 @@ class RoomSnapshotMapperTest {
             game.dealRiver();
             game.conductShowdown();
 
-            assertNotNull(game.getLastSettlementResult());
-            HandSettlementResult originalSettlement = game.getLastSettlementResult();
+            assertNotNull(game.getLastHandPayout());
+            HandPayout originalSettlement = game.getLastHandPayout();
 
             byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
 
@@ -1175,10 +1175,10 @@ class RoomSnapshotMapperTest {
             RecoveredRoom recovered = snapshotMapper.deserialize(walStore.recoverAll().get(ROOM_ID));
             Game restored = recovered.game();
 
-            assertNotNull(restored.getLastSettlementResult());
-            HandSettlementResult restoredSettlement = restored.getLastSettlementResult();
+            assertNotNull(restored.getLastHandPayout());
+            HandPayout restoredSettlement = restored.getLastHandPayout();
 
-            assertEquals(originalSettlement.contestedAwards(), restoredSettlement.contestedAwards());
+            assertEquals(originalSettlement.potWinnings(), restoredSettlement.potWinnings());
             assertEquals(originalSettlement.refunds(), restoredSettlement.refunds());
             assertEquals(originalSettlement.winnerIds(), restoredSettlement.winnerIds());
             assertEquals(originalSettlement.remainder(), restoredSettlement.remainder());

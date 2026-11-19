@@ -23,7 +23,7 @@ import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
-import com.pokergame.model.HandSettlementResult;
+import com.pokergame.model.HandPayout;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.testutil.MutableClock;
@@ -457,7 +457,7 @@ class GameLifecycleServiceTest {
             Game game = getGameLocked(roomId);
             dealBoardAndShowdown(game);
             game.getPlayers().forEach(player -> setPlayerChips(player, 100));
-            HandSettlementResult settled = game.getLastSettlementResult();
+            HandPayout settled = game.getLastHandPayout();
             withRoomLock(roomId, () -> {
                 readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(
                         game, new TurnOutcome(TurnOutcomeType.SHOWDOWN, null), false);
@@ -471,13 +471,13 @@ class GameLifecycleServiceTest {
 
             assertTrue(game.isReadyCountdownActive());
             assertEquals(readyDeadline, game.getReadyCountdownDeadlineEpochMs());
-            assertSame(settled, game.getLastSettlementResult());
+            assertSame(settled, game.getLastHandPayout());
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
 
             withRoomLock(roomId, () -> gameLifecycleService.markPlayerReadyForNextHand(roomId, "C"));
 
             assertFalse(game.isReadyCountdownActive());
-            assertNull(game.getLastSettlementResult());
+            assertNull(game.getLastHandPayout());
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertEquals(15, game.getPot(), "One hand start posts one set of blinds");
             assertEquals(285, game.getActivePlayers().stream().mapToInt(Player::getChips).sum());

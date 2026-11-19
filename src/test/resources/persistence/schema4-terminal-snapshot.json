@@ -97,7 +97,7 @@
     "smallBlindPlayerId" : "a",
     "bigBlindPlayerId" : "b",
     "currentPlayerId" : "a",
-    "lastSettlementResult" : null,
+    "lastHandPayout" : null,
     "finalPotSettled" : false,
     "readyGateState" : "CLOSED",
     "handNumber" : 1,
