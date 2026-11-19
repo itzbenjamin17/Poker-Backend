@@ -513,7 +513,7 @@ class PersistenceCoordinationIT {
             room.setPlayerConnected("Bob", false);
             room.setAbsenceDeadline("Bob", expectedAbsenceDeadline);
             Game game = gameLifecycleService.getGame(roomId);
-            game.markPausedForDisconnectedSurvivor();
+            game.pauseForDisconnectedSurvivor(List.of());
             game.scheduleTask(ScheduledGameTask.TURN_TIMEOUT, expectedTurnDeadline);
             return null;
         });

@@ -430,87 +430,74 @@ class GameSchedulingTest {
     class TaskClaimAndExpiryTests {
 
         @Test
-        void claimTask_WhenPausedForDisconnectedSurvivor_ReturnsFalseWithoutClearing() {
+        void startScheduledTaskIfCurrent_WhenPausedForDisconnectedSurvivor_ReturnsFalseWithoutClearing() {
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
             long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND);
 
-            boolean claimed = scheduling.claimTask(
-                    true, false, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
+            boolean started = scheduling.startScheduledTaskIfCurrent(
+                    true, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
 
-            assertFalse(claimed);
+            assertFalse(started);
             assertEquals(5000L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
             assertEquals(timerVersion, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
         }
 
         @Test
-        void claimTask_WhenHandNumberStale_ReturnsFalseForNonCleanupTask() {
+        void startScheduledTaskIfCurrent_WhenHandNumberStale_ReturnsFalseForNonCleanupTask() {
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
             long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND);
 
-            boolean claimed = scheduling.claimTask(
-                    false, false, 2L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
+            boolean started = scheduling.startScheduledTaskIfCurrent(
+                    false, 2L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
 
-            assertFalse(claimed);
+            assertFalse(started);
             assertEquals(5000L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
         }
 
         @Test
-        void claimTask_WhenTimerVersionStale_ReturnsFalse() {
+        void startScheduledTaskIfCurrent_WhenTimerVersionStale_ReturnsFalse() {
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 6000L);
             long currentVersion = scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND);
 
-            boolean claimed = scheduling.claimTask(
-                    false, false, 1L, ScheduledGameTask.NEW_HAND, 6000L, 1L, currentVersion - 1);
+            boolean started = scheduling.startScheduledTaskIfCurrent(
+                    false, 1L, ScheduledGameTask.NEW_HAND, 6000L, 1L, currentVersion - 1);
 
-            assertFalse(claimed);
+            assertFalse(started);
             assertEquals(6000L, scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
         }
 
         @Test
-        void claimTask_WhenGameOverAndNonCleanup_ClearsAndReturnsFalse() {
-            scheduling.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 5000L);
-            long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE);
-
-            boolean claimed = scheduling.claimTask(
-                    false, true, 1L, ScheduledGameTask.AUTO_ADVANCE, 5000L, 1L, timerVersion);
-
-            assertFalse(claimed);
-            assertNull(scheduling.getDeadline(ScheduledGameTask.AUTO_ADVANCE));
-            assertEquals(timerVersion + 1, scheduling.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
-        }
-
-        @Test
-        void claimTask_WhenGameOverAndCleanup_ReturnsTrueAndRetainsDeadline() {
+        void startScheduledTaskIfCurrent_WhenCleanupTask_ReturnsTrueAndRetainsDeadlineAcrossHands() {
             scheduling.scheduleTask(ScheduledGameTask.CLEANUP, 5000L);
             long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.CLEANUP);
 
-            boolean claimed = scheduling.claimTask(
-                    false, true, 99L, ScheduledGameTask.CLEANUP, 5000L, 1L, timerVersion);
+            boolean started = scheduling.startScheduledTaskIfCurrent(
+                    false, 99L, ScheduledGameTask.CLEANUP, 5000L, 1L, timerVersion);
 
-            assertTrue(claimed);
+            assertTrue(started);
             assertEquals(5000L, scheduling.getDeadline(ScheduledGameTask.CLEANUP));
             assertEquals(timerVersion, scheduling.getTimerVersion(ScheduledGameTask.CLEANUP));
         }
 
         @Test
-        void claimTask_WhenDeadlineMismatchedOrUnscheduled_ReturnsFalse() {
+        void startScheduledTaskIfCurrent_WhenDeadlineMismatchedOrUnscheduled_ReturnsFalse() {
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
             long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND);
 
-            assertFalse(scheduling.claimTask(false, false, 1L, ScheduledGameTask.NEW_HAND, 4000L, 1L, timerVersion));
-            assertFalse(scheduling.claimTask(false, false, 1L, ScheduledGameTask.READY_OPEN, 5000L, 1L, 0L));
+            assertFalse(scheduling.startScheduledTaskIfCurrent(false, 1L, ScheduledGameTask.NEW_HAND, 4000L, 1L, timerVersion));
+            assertFalse(scheduling.startScheduledTaskIfCurrent(false, 1L, ScheduledGameTask.READY_OPEN, 5000L, 1L, 0L));
         }
 
         @Test
-        void claimTask_Success_ClearsNonCleanupTaskAndIncrementsTimerVersion() {
+        void startScheduledTaskIfCurrent_Success_ClearsNonCleanupTaskAndIncrementsTimerVersion() {
             scheduling.scheduleTask(ScheduledGameTask.NEW_HAND, 5000L);
             long timerVersion = scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND);
 
-            boolean claimed = scheduling.claimTask(
-                    false, false, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
+            boolean started = scheduling.startScheduledTaskIfCurrent(
+                    false, 1L, ScheduledGameTask.NEW_HAND, 5000L, 1L, timerVersion);
 
-            assertTrue(claimed);
+            assertTrue(started);
             assertNull(scheduling.getDeadline(ScheduledGameTask.NEW_HAND));
             assertEquals(timerVersion + 1, scheduling.getTimerVersion(ScheduledGameTask.NEW_HAND));
         }

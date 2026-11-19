@@ -268,8 +268,8 @@ class PlayerDepartureHandlerTest {
                 gameDeadlines.put(player.getName(), player.getDisconnectDeadlineEpochMs());
             }
             gameOver = game.isGameOver();
-            scheduledDeadlines = game.getScheduledTaskDeadlinesSnapshot();
-            timerVersions = game.getTimerVersionsSnapshot();
+            scheduledDeadlines = game.toSnapshot().scheduledTaskDeadlines();
+            timerVersions = game.toSnapshot().timerVersions();
         }
         return new RoomGameSnapshot(roster, membershipIds, connected, absenceDeadlines,
                 gameDisconnected, gameDeadlines, gameOver, scheduledDeadlines, timerVersions);
@@ -540,7 +540,7 @@ class PlayerDepartureHandlerTest {
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
             assertTrue(game.isHandSettled());
             survivor.setDisconnected(true);
-            game.markPausedForDisconnectedSurvivor();
+            game.pauseForDisconnectedSurvivor(List.of());
             game.scheduleTask(ScheduledGameTask.AUTO_ADVANCE, 10L);
             game.scheduleTask(ScheduledGameTask.GAME_END, 10L);
             game.scheduleTask(ScheduledGameTask.CLEANUP, 10L);
@@ -568,7 +568,7 @@ class PlayerDepartureHandlerTest {
 
             assertEquals(0, roomPresent.get());
             assertTrue(testRoom.getPlayers().isEmpty());
-            assertTrue(game.getScheduledTaskDeadlinesSnapshot().isEmpty());
+            assertTrue(game.toSnapshot().scheduledTaskDeadlines().isEmpty());
         }
 
         @Test
@@ -612,7 +612,7 @@ class PlayerDepartureHandlerTest {
                 assertFalse(gameLifecycleService.gameExists(ROOM_ID));
             });
             assertEquals(0, roomPresent.get());
-            assertTrue(game.getScheduledTaskDeadlinesSnapshot().isEmpty());
+            assertTrue(game.toSnapshot().scheduledTaskDeadlines().isEmpty());
         }
 
         @Test

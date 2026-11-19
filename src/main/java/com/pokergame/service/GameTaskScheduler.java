@@ -67,7 +67,7 @@ class GameTaskScheduler {
      * @return immutable descriptors for every timer stored on {@code game}
      */
     static List<ScheduledTimer> listActiveTimers(Game game) {
-        return game.getScheduledTaskDeadlinesSnapshot().entrySet().stream()
+        return game.toSnapshot().scheduledTaskDeadlines().entrySet().stream()
                 .map(entry -> createTimer(game, entry.getKey(), entry.getValue()))
                 .toList();
     }
@@ -214,13 +214,11 @@ class GameTaskScheduler {
         if (game == null) {
             return false;
         }
-        if (game.claimScheduledTask(task, deadline, handNumber, timerVersion)) {
-            return true;
-        }
         if (game.isGameOver() && task != ScheduledGameTask.CLEANUP) {
-            timerRegistry.cancelTask(game.getGameId(), task);
+            cancelTask(game, task);
+            return false;
         }
-        return false;
+        return game.startScheduledTaskIfCurrent(task, deadline, handNumber, timerVersion);
     }
 
     private void scheduleTask(String gameId, ScheduledGameTask task, long deadline) {

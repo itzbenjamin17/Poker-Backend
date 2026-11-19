@@ -61,11 +61,11 @@ class GameCompletionHandler {
      * Settles a forfeited game while keeping the full player roster intact in the final result.
      *
      * @param gameId           the unique ID of the game
-     * @param preferredWinner  the player declared winner, if determined before settlement
+     * @param forfeitWinner    the player declared winner, if determined before settlement
      * @param forfeitedPlayers names of players who forfeited
      */
-    void handleGameEndWithForfeits(String gameId, Player preferredWinner, Set<String> forfeitedPlayers) {
-        handleGameEndInternal(gameId, true, preferredWinner, Set.copyOf(forfeitedPlayers));
+    void handleGameEndWithForfeits(String gameId, Player forfeitWinner, Set<String> forfeitedPlayers) {
+        handleGameEndInternal(gameId, true, forfeitWinner, Set.copyOf(forfeitedPlayers));
     }
 
     /**
@@ -108,9 +108,7 @@ class GameCompletionHandler {
         if (game.isGameOver() && game.getGameEndResult() != null) {
             return;
         }
-        game.markGameOver();
-        game.closeReadyCountdown();
-        game.clearAllScheduledTasks();
+        game.abandonDueToInactivity();
         timerRegistry.cancelAllForGame(gameId, true);
         GameEndResponse event = gameStateService.advanceRevisionAndBuildAbandonment(game);
         game.setGameEndResult(event);
@@ -206,8 +204,7 @@ class GameCompletionHandler {
         if (game.countContenders() != 0 || !room.getPlayers().isEmpty()) {
             return;
         }
-        game.closeReadyCountdown();
-        game.clearAllScheduledTasks();
+        game.clearReadyCountdownAndScheduledTasks();
         timerRegistry.cancelAllForGame(gameId, false);
         activeGames.remove(gameId);
     }
@@ -215,20 +212,20 @@ class GameCompletionHandler {
     private void handleGameEndInternal(
             String gameId,
             boolean isForfeit,
-            Player preferredWinner,
+            Player forfeitWinner,
             Set<String> forfeitedPlayers) {
         Game game = activeGames.get(gameId);
         if (game == null) {
             return;
         }
-        if (game.isPausedForDisconnectedSurvivor() && preferredWinner == null) {
+        if (game.isPausedForDisconnectedSurvivor() && forfeitWinner == null) {
             return;
         }
         if (game.isGameOver() && (game.isFinalPotSettled() || game.isAbandoned())) {
             return;
         }
 
-        Player winner = game.settleGameEnd(preferredWinner, forfeitedPlayers);
+        Player winner = game.settleGameEnd(forfeitWinner, forfeitedPlayers);
         timerRegistry.cancelAllForGame(gameId, true);
 
         Room room = roomService.getRoom(gameId);

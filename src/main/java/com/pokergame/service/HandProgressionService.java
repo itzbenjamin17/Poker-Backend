@@ -65,9 +65,7 @@ class HandProgressionService {
 
         logger.info("Starting new hand for game: {}", gameId);
         timerRegistry.cancelProgressionForGame(gameId);
-        game.invalidateProgressionTasks();
-        game.closeReadyCountdown();
-        game.clearScheduledTask(ScheduledGameTask.CLEANUP);
+        game.clearReadyCountdownAndScheduledTasks();
 
         // Reset before dealing so a decided game preserves the previous final board cleanly.
         boolean gameEnded = game.resetForNewHand();

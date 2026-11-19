@@ -135,7 +135,7 @@ final class TableSeating {
     }
 
     /**
-     * Reconciles {@code currentPlayerId} after {@code removedPlayerId} leaves {@code activePlayers}.
+     * Updates {@code currentPlayerId} after {@code removedPlayerId} leaves {@code activePlayers}.
      *
      * @param activePlayers   active players remaining in the current hand
      * @param removedPlayerId player ID that departed

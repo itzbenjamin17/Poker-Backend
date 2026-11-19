@@ -160,21 +160,22 @@ public final class RoomSnapshotMapper {
         if (game == null) {
             return null;
         }
+        Game.Snapshot snapshot = game.toSnapshot();
         List<RoomSnapshot.PlayerState> playerStates = game.getPlayers().stream().map(this::toPlayerState).toList();
         List<String> activePlayerIds = game.getActivePlayers().stream().map(Player::getPlayerId).toList();
         return new RoomSnapshot.GameState(
             game.getGameId(), playerStates, activePlayerIds,
-            cards(game.getRemainingDeckSnapshot()), cards(game.getCommunityCards()), game.getPot(),
+            cards(snapshot.remainingDeck()), cards(game.getCommunityCards()), game.getPot(),
             game.getCurrentHighestBet(), game.getCurrentPhase(),
-            game.isGameOver(), game.getSmallBlind(), game.getBigBlind(), game.getHandContributionsSnapshot(),
+            game.isGameOver(), game.getSmallBlind(), game.getBigBlind(), snapshot.handContributions(),
             game.getReadyCountdownDeadlineEpochMs(),
-            game.hasAllPlayersHadInitialTurn(), game.getActedPlayerIdsSnapshot(),
-            game.getScheduledTaskDeadlinesSnapshot(), game.getCarryOverPot(),
-            game.getLastFullRaise(), game.getPreviousBetsSnapshot(),
-            game.getHandSeatOrderSnapshot(), game.getDealerPlayerId(), game.getSmallBlindPlayerId(),
-            game.getBigBlindPlayerId(), game.getCurrentPlayerId(), settlementState(game.getLastSettlementResult()),
+            snapshot.allPlayersHadInitialTurn(), snapshot.actedPlayerIds(),
+            snapshot.scheduledTaskDeadlines(), snapshot.carryOverPot(),
+            snapshot.lastFullRaise(), snapshot.previousBets(),
+            snapshot.handSeatOrder(), snapshot.dealerPlayerId(), game.getSmallBlindPlayerId(),
+            game.getBigBlindPlayerId(), snapshot.currentPlayerId(), settlementState(game.getLastSettlementResult()),
             game.isFinalPotSettled(), game.getReadyGateState(), game.getHandNumber(),
-            game.getTimerVersionsSnapshot(), game.isPausedForDisconnectedSurvivor(), game.getStateRevision(),
+            snapshot.timerVersions(), game.isPausedForDisconnectedSurvivor(), game.getStateRevision(),
             toGameResultState(game.getGameEndResult()));
     }
 

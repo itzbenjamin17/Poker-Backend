@@ -10,7 +10,14 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Owns between-hand player readiness state, countdown gating, and timeout evaluation for {@link Game}.
+ * Manages the between-hand pause before the next hand is dealt for {@link Game}:
+ * <ul>
+ *   <li>{@link ReadyGateState#CLOSED}: a hand is in progress or the match has ended.</li>
+ *   <li>{@link ReadyGateState#COUNTING_DOWN}: at least two eligible players (connected, not out,
+ *       with chips) can mark ready before {@code READY_TIMEOUT} forces the next hand to start.</li>
+ *   <li>{@link ReadyGateState#WAITING_FOR_PLAYERS}: fewer than two eligible players are present,
+ *       pausing the countdown until enough players reconnect.</li>
+ * </ul>
  */
 final class ReadyGate {
 

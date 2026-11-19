@@ -199,7 +199,7 @@ class GameTaskSchedulerTest {
         }
 
         Game game = createAndRegisterGame();
-        game.markPausedForDisconnectedSurvivor();
+        game.pauseForDisconnectedSurvivor(List.of());
         try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
             scheduler.scheduleTurnTimeout(GAME_ID);
             scheduler.scheduleGameEnd(GAME_ID, 2_000L);
@@ -307,9 +307,16 @@ class GameTaskSchedulerTest {
                     GAME_ID, ScheduledGameTask.TURN_TIMEOUT, secondDeadline, hand, secondTimerVersion));
         }
 
+        long cleanupDeadline = BASE_EPOCH_MS + 20_000L;
+        game.scheduleTask(ScheduledGameTask.CLEANUP, cleanupDeadline);
+        long cleanupTimerVersion = game.getTimerVersion(ScheduledGameTask.CLEANUP);
+
         game.markGameOver();
         assertFalse(scheduler.claimTimer(game, ScheduledGameTask.TURN_TIMEOUT, secondDeadline, hand, secondTimerVersion));
+        assertNull(game.getScheduledTaskDeadline(ScheduledGameTask.TURN_TIMEOUT));
         verify(turnFuture).cancel(false);
+        assertTrue(scheduler.claimTimer(game, ScheduledGameTask.CLEANUP, cleanupDeadline, hand, cleanupTimerVersion));
+        assertEquals(cleanupDeadline, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
         timerRegistry.cancelTask(GAME_ID, ScheduledGameTask.TURN_TIMEOUT);
         verifyNoMoreInteractions(turnFuture);
     }

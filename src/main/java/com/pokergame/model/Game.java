@@ -25,31 +25,8 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Aggregate root for a live poker game: owns the deck, players, pot accounting, hand phase,
- * and coordinates seating, betting, readiness, and scheduled-task collaborators.
- *
- * <h2>End-state flags</h2>
- * <ul>
- *   <li>{@link #isHandSettled()}: {@code true} once the current or most recent hand has finished
- *       pot distribution ({@code lastSettlementResult != null}), before the next hand resets it.</li>
- *   <li>{@link #isHandInProgress()}: {@code true} while the current hand has not reached a
- *       settled {@link GamePhase#SHOWDOWN}, distinguishing mid-hand play from post-hand state.</li>
- *   <li>{@link #isGameDecided()}: {@code true} when at most one non-out player holds chips, meaning
- *       another hand cannot start even before match-end cleanup marks the game over.</li>
- *   <li>{@link #isPausedForDisconnectedSurvivor()}: {@code true} when all opponents departed leaving one
- *       disconnected contender, pausing hand progression and game-end settlement until reconnect or
- *       grace expiry.</li>
- *   <li>{@link #isGameOver()}: {@code true} once the match has permanently ended (via
- *       {@link #settleGameEnd}, {@link #resetForNewHand}, or {@link #markGameOver()}), stopping
- *       gameplay while retaining post-game review until cleanup.</li>
- *   <li>{@link #isMatchConcluded()}: {@code true} when {@code !pausedForDisconnectedSurvivor} and either
- *       the match is over or a settled hand has decided the winner, so departures no longer affect
- *       live play.</li>
- *   <li>{@link #isFinalPotSettled()}: {@code true} once {@link #settleGameEnd} has awarded any
- *       remaining pot to the match winner, preventing duplicate final-pot payouts on retries.</li>
- *   <li>{@link Room#isFinished()}: room-level mirror of {@link #isGameOver()} that retains an
- *       empty room for post-game review instead of destroying it immediately.</li>
- * </ul>
+ * Represents a live poker game: owns the deck, players, pot, and hand phase, and coordinates
+ * seating, betting, between-hand readiness, and scheduled timers.
  */
 public class Game {
     private static final Logger logger = LoggerFactory.getLogger(Game.class);
@@ -136,42 +113,13 @@ public class Game {
      *                               an active player ID is unknown, or the snapshot has no deck
      */
     Game(GameRestoreBuilder builder) {
-        if (builder.getGameId() == null || builder.getGameId().trim().isEmpty()) {
-            throw new IllegalStateException("Game ID cannot be null or empty");
-        }
-        List<Player> builderPlayers = builder.getPlayers();
-        if (builderPlayers == null || builderPlayers.stream().anyMatch(Objects::isNull)) {
-            throw new IllegalStateException("Invalid players list. Please try again.");
-        }
-        int restoredMaxPlayers = builder.getMaxPlayers();
-        if (restoredMaxPlayers < Room.MIN_PLAYERS || restoredMaxPlayers > Room.MAX_PLAYERS) {
-            throw new IllegalStateException(
-                    "Max players must be between " + Room.MIN_PLAYERS + " and " + Room.MAX_PLAYERS + ".");
-        }
+        validateRestoreBuilder(builder);
 
         this.gameId = builder.getGameId();
-        this.players = new ArrayList<>(builderPlayers);
-        this.maxPlayers = restoredMaxPlayers;
-
-        Map<String, Player> playersById = new HashMap<>();
-        this.players.forEach(player -> playersById.put(player.getPlayerId(), player));
-        this.activePlayers = new ArrayList<>();
-        List<String> activeIds = builder.getActivePlayerIds();
-        if (activeIds != null) {
-            for (String playerId : activeIds) {
-                Player player = playersById.get(playerId);
-                if (player == null) {
-                    throw new IllegalStateException("Snapshot references an unknown active player");
-                }
-                this.activePlayers.add(player);
-            }
-        }
-
-        List<Card> remainingDeck = builder.getRemainingDeck();
-        if (remainingDeck == null) {
-            throw new IllegalStateException("Saved game " + this.gameId + " has no deck");
-        }
-        this.deck = Deck.restore(remainingDeck);
+        this.players = new ArrayList<>(builder.getPlayers());
+        this.maxPlayers = builder.getMaxPlayers();
+        this.activePlayers = restoreActivePlayers(builder, this.players);
+        this.deck = restoreDeck(builder);
         this.communityCards = builder.getCommunityCards() != null
                 ? new ArrayList<>(builder.getCommunityCards())
                 : new ArrayList<>();
@@ -278,7 +226,7 @@ public class Game {
 
     /**
      * Deducts the small and big blinds from the assigned blind players, going all-in when a
-     * player's stack is smaller than the blind.
+     * player's chip stack is smaller than the blind.
      *
      * @throws IllegalStateException if fewer than two active players are seated
      */
@@ -394,7 +342,7 @@ public class Game {
 
     /**
      * Evaluates remaining contenders, refunds uncalled chips, distributes contested side pots,
-     * and records the settled hand result.
+     * and records the hand's payout summary.
      */
     public void conductShowdown() {
         if (lastSettlementResult != null) {
@@ -427,7 +375,7 @@ public class Game {
     }
 
     /**
-     * Removes {@code player} from the game rosters and reconciles seating and betting state.
+     * Removes {@code player} from the game rosters and updates seating and betting state.
      *
      * @param player player to remove
      */
@@ -450,7 +398,8 @@ public class Game {
     }
 
     /**
-     * Evaluates readiness conditions after a hand and opens the countdown or enters waiting state.
+     * Evaluates readiness conditions after a hand and opens the between-hand ready countdown or
+     * enters {@link ReadyGateState#WAITING_FOR_PLAYERS} when fewer than two eligible players are available.
      *
      * @param deadlineEpochMs countdown expiration timestamp in epoch milliseconds
      * @return outcome describing the resulting gate action
@@ -469,7 +418,7 @@ public class Game {
     }
 
     /**
-     * Evaluates expiration of the ready countdown timer for {@code expectedDeadlineEpochMs}.
+     * Evaluates expiration of the between-hand ready countdown timer for {@code expectedDeadlineEpochMs}.
      *
      * @param expectedDeadlineEpochMs deadline captured when the timer was scheduled
      * @return outcome describing whether the expiration was stale, waiting, or forced ready
@@ -479,7 +428,7 @@ public class Game {
     }
 
     /**
-     * Repairs a recovered ready countdown missing its deadline or scheduled task entry.
+     * Repairs a recovered between-hand ready countdown missing its deadline or scheduled task entry.
      *
      * @param fallbackDeadlineEpochMs fallback deadline to apply if the recovered countdown had no deadline
      * @return {@code true} if the gate state was repaired and requires a snapshot broadcast
@@ -489,17 +438,10 @@ public class Game {
     }
 
     /**
-     * Closes the between-hand ready gate without clearing player ready flags.
+     * Closes the between-hand ready countdown without clearing player ready flags.
      */
     public void closeReadyCountdown() {
         readyGate.closeCountdown();
-    }
-
-    /**
-     * Stops ticking readiness while keeping the completed hand visible in waiting state.
-     */
-    public void waitForReadyPlayers() {
-        readyGate.waitForPlayers();
     }
 
     /**
@@ -524,37 +466,22 @@ public class Game {
     }
 
     /**
-     * Clears all scheduled gameplay tasks except {@link ScheduledGameTask#CLEANUP} and increments
-     * their schedule counts.
-     */
-    public void invalidateProgressionTasks() {
-        scheduling.invalidateProgressionTasks();
-    }
-
-    /**
-     * Clears every scheduled task (including {@link ScheduledGameTask#CLEANUP}) and increments
-     * their schedule counts.
-     */
-    public void clearAllScheduledTasks() {
-        scheduling.clearAllTasks();
-    }
-
-    /**
-     * Claims execution of a firing timer callback against current game state.
+     * Checks whether a scheduled timer should still run, and clears one-time tasks (everything
+     * except {@link ScheduledGameTask#CLEANUP}) so they only run once.
      *
      * @param task                 task type that fired
      * @param expectedDeadline     deadline captured when the timer was scheduled
      * @param expectedHandNumber   hand number captured when the timer was scheduled
      * @param expectedTimerVersion schedule count captured when the timer was scheduled
-     * @return {@code true} if the task was claimed for execution, {@code false} otherwise
+     * @return {@code true} if the task is still current and can start, {@code false} otherwise
      */
-    public boolean claimScheduledTask(
+    public boolean startScheduledTaskIfCurrent(
             ScheduledGameTask task,
             long expectedDeadline,
             long expectedHandNumber,
             long expectedTimerVersion) {
-        return scheduling.claimTask(
-                pausedForDisconnectedSurvivor, gameOver, handNumber, task, expectedDeadline, expectedHandNumber, expectedTimerVersion);
+        return scheduling.startScheduledTaskIfCurrent(
+                pausedForDisconnectedSurvivor, handNumber, task, expectedDeadline, expectedHandNumber, expectedTimerVersion);
     }
 
     /**
@@ -572,8 +499,25 @@ public class Game {
     }
 
     /**
+     * Ends the game due to inactivity, closes the ready countdown, and clears all scheduled tasks.
+     */
+    public void abandonDueToInactivity() {
+        gameOver = true;
+        readyGate.closeCountdown();
+        scheduling.clearAllTasks();
+    }
+
+    /**
+     * Closes the ready countdown and clears all scheduled tasks (used when cleaning up an empty abandoned game).
+     */
+    public void clearReadyCountdownAndScheduledTasks() {
+        readyGate.closeCountdown();
+        scheduling.clearAllTasks();
+    }
+
+    /**
      * Pauses the game after its other contenders leave, because the only contender left is
-     * disconnected. Marks {@code leavingPlayers} out, holds the game with a pending forfeit until
+     * disconnected. Marks {@code leavingPlayers} out, moves readiness to waiting state until
      * the survivor reconnects or their grace period ends, and drops queued hand tasks. The cleanup
      * task is kept.
      *
@@ -584,15 +528,8 @@ public class Game {
             leavingPlayer.setIsOut();
         }
         pausedForDisconnectedSurvivor = true;
-        waitForReadyPlayers();
-        invalidateProgressionTasks();
-    }
-
-    /**
-     * Marks the game as awaiting reconnect or grace expiry of the sole remaining disconnected contender.
-     */
-    public void markPausedForDisconnectedSurvivor() {
-        this.pausedForDisconnectedSurvivor = true;
+        readyGate.waitForPlayers();
+        scheduling.invalidateProgressionTasks();
     }
 
     /**
@@ -630,8 +567,29 @@ public class Game {
         }
         markGameOver();
         closeReadyCountdown();
-        invalidateProgressionTasks();
+        scheduling.invalidateProgressionTasks();
         return winner;
+    }
+
+    /**
+     * Captures an immutable snapshot of internal collaborator and accounting state for persistence.
+     *
+     * @return immutable persistence snapshot of internal game fields
+     */
+    public Snapshot toSnapshot() {
+        return new Snapshot(
+                deck.getRemainingCardsSnapshot(),
+                carryOverPot,
+                Map.copyOf(handContributions),
+                bettingRound.hasAllPlayersHadInitialTurn(),
+                bettingRound.getActedPlayerIdsSnapshot(),
+                scheduling.deadlinesSnapshot(),
+                scheduling.timerVersionsSnapshot(),
+                bettingRound.getLastFullRaise(),
+                bettingRound.getPreviousBetsSnapshot(),
+                seating.getHandSeatOrderSnapshot(),
+                seating.getDealerPlayerId(),
+                seating.getCurrentPlayerId());
     }
 
     public void setGameEndResult(GameEndResponse gameEndResult) {
@@ -680,16 +638,8 @@ public class Game {
         return communityCards;
     }
 
-    public List<Card> getRemainingDeckSnapshot() {
-        return deck.getRemainingCardsSnapshot();
-    }
-
     public int getPot() {
         return pot;
-    }
-
-    public int getCarryOverPot() {
-        return carryOverPot;
     }
 
     /**
@@ -740,26 +690,6 @@ public class Game {
                 player, players, activePlayers, seating, currentPhase, bigBlind);
     }
 
-    public boolean hasAllPlayersHadInitialTurn() {
-        return bettingRound.hasAllPlayersHadInitialTurn();
-    }
-
-    public Set<String> getActedPlayerIdsSnapshot() {
-        return bettingRound.getActedPlayerIdsSnapshot();
-    }
-
-    public Map<String, Integer> getHandContributionsSnapshot() {
-        return Map.copyOf(handContributions);
-    }
-
-    public int getLastFullRaise() {
-        return bettingRound.getLastFullRaise();
-    }
-
-    public Map<String, Integer> getPreviousBetsSnapshot() {
-        return bettingRound.getPreviousBetsSnapshot();
-    }
-
     public HandSettlementResult getLastSettlementResult() {
         return lastSettlementResult;
     }
@@ -778,24 +708,12 @@ public class Game {
         return lastSettlementResult != null && lastSettlementResult.wentToShowdown();
     }
 
-    public List<String> getHandSeatOrderSnapshot() {
-        return seating.getHandSeatOrderSnapshot();
-    }
-
-    public String getDealerPlayerId() {
-        return seating.getDealerPlayerId();
-    }
-
     public String getSmallBlindPlayerId() {
         return seating.getSmallBlindPlayerId(activePlayers);
     }
 
     public String getBigBlindPlayerId() {
         return seating.getBigBlindPlayerId(activePlayers);
-    }
-
-    public String getCurrentPlayerId() {
-        return seating.getCurrentPlayerId();
     }
 
     public long getHandNumber() {
@@ -839,14 +757,6 @@ public class Game {
         return scheduling.getTimerVersion(task);
     }
 
-    public Map<ScheduledGameTask, Long> getScheduledTaskDeadlinesSnapshot() {
-        return scheduling.deadlinesSnapshot();
-    }
-
-    public Map<ScheduledGameTask, Long> getTimerVersionsSnapshot() {
-        return scheduling.timerVersionsSnapshot();
-    }
-
     public boolean isCleanupExpired(long nowEpochMs) {
         return scheduling.isCleanupExpired(nowEpochMs);
     }
@@ -878,13 +788,13 @@ public class Game {
     }
 
     /**
-     * Returns the sole connected contender eligible to claim an immediate disconnect win, if one exists.
+     * Finds the sole connected contender eligible to claim an immediate disconnect win, if one exists.
      *
      * @return {@code Optional} containing the sole connected contender when at least two contenders
      *         remain, exactly one is connected, at least one is disconnected, and the game has not
      *         finished or settled as decided; otherwise {@code Optional.empty()}
      */
-    public Optional<Player> disconnectWinClaimant() {
+    public Optional<Player> findClaimWinPlayer() {
         if (gameOver || (isHandSettled() && isGameDecided())) {
             return Optional.empty();
         }
@@ -904,22 +814,22 @@ public class Game {
     /**
      * Checks whether {@code playerName} may claim an immediate disconnect win.
      *
-     * @param playerName prospective claimant name
-     * @return {@code true} if an immediate disconnect win is legal for {@code playerName}
+     * @param playerName player name to check
+     * @return {@code true} if {@code playerName} is eligible to claim a disconnect win
      */
-    public boolean canPlayerClaimWin(String playerName) {
-        return disconnectWinClaimant()
+    public boolean canClaimWin(String playerName) {
+        return findClaimWinPlayer()
                 .filter(claimant -> claimant.getName().equals(playerName))
                 .isPresent();
     }
 
     /**
-     * Returns the names of all disconnected contenders other than {@code playerName}.
+     * Returns the names of all disconnected contenders opposing {@code playerName}.
      *
-     * @param playerName claimant to exclude
-     * @return list of disconnected opponent contender names
+     * @param playerName claiming player to exclude
+     * @return list of disconnected opponent names
      */
-    public List<String> disconnectedContenderNamesExcept(String playerName) {
+    public List<String> disconnectedOpponentsOf(String playerName) {
         return players.stream()
                 .filter(player -> !player.getName().equals(playerName))
                 .filter(player -> isContender(player) && player.isDisconnected())
@@ -937,30 +847,6 @@ public class Game {
                 .filter(player -> !player.isOut() && player.getChips() > 0)
                 .count();
         return playersWithChips <= 1;
-    }
-
-    /**
-     * Resolves the game winner, returning {@code preferredWinner} when provided and eligible, or
-     * otherwise picking the chip leader among players who are not out (breaking ties by earliest
-     * seat).
-     *
-     * @param preferredWinner explicit forfeit survivor, or {@code null} for chip-based resolution
-     * @return resolved non-out winner on the game roster
-     * @throws IllegalStateException if {@code preferredWinner} is not an eligible seated player or
-     *                               no non-out player exists on the roster
-     */
-    public Player resolveWinner(Player preferredWinner) {
-        if (preferredWinner != null) {
-            if (!players.contains(preferredWinner) || preferredWinner.isOut()) {
-                throw new IllegalStateException(
-                        "Preferred winner must be seated on the roster and not out: " + preferredWinner.getName());
-            }
-            return preferredWinner;
-        }
-        if (players.isEmpty()) {
-            throw new IllegalStateException("Cannot resolve winner from an empty roster");
-        }
-        return resolveChipWinner();
     }
 
     public boolean isGameOver() {
@@ -989,6 +875,30 @@ public class Game {
 
     public boolean isAbandoned() {
         return gameEndResult != null && gameEndResult.abandoned();
+    }
+
+    /**
+     * Resolves the game winner, returning {@code forfeitWinner} when provided and eligible, or
+     * otherwise picking the chip leader among players who are not out (breaking ties by earliest
+     * seat).
+     *
+     * @param forfeitWinner explicit forfeit survivor, or {@code null} for chip-based resolution
+     * @return resolved non-out winner on the game roster
+     * @throws IllegalStateException if {@code forfeitWinner} is not an eligible seated player or
+     *                               no non-out player exists on the roster
+     */
+    Player resolveWinner(Player forfeitWinner) {
+        if (forfeitWinner != null) {
+            if (!players.contains(forfeitWinner) || forfeitWinner.isOut()) {
+                throw new IllegalStateException(
+                        "Forfeit winner must be seated on the roster and not out: " + forfeitWinner.getName());
+            }
+            return forfeitWinner;
+        }
+        if (players.isEmpty()) {
+            throw new IllegalStateException("Cannot resolve winner from an empty roster");
+        }
+        return resolveChipWinner();
     }
 
     /**
@@ -1105,5 +1015,86 @@ public class Game {
     private void resetHandAccountingAfterShowdown() {
         handContributions.clear();
         bettingRound.clearActedPlayers();
+    }
+
+    private static void validateRestoreBuilder(GameRestoreBuilder builder) {
+        if (builder.getGameId() == null || builder.getGameId().trim().isEmpty()) {
+            throw new IllegalStateException("Game ID cannot be null or empty");
+        }
+        List<Player> builderPlayers = builder.getPlayers();
+        if (builderPlayers == null || builderPlayers.stream().anyMatch(Objects::isNull)) {
+            throw new IllegalStateException("Invalid players list. Please try again.");
+        }
+        int restoredMaxPlayers = builder.getMaxPlayers();
+        if (restoredMaxPlayers < Room.MIN_PLAYERS || restoredMaxPlayers > Room.MAX_PLAYERS) {
+            throw new IllegalStateException(
+                    "Max players must be between " + Room.MIN_PLAYERS + " and " + Room.MAX_PLAYERS + ".");
+        }
+    }
+
+    private static List<Player> restoreActivePlayers(GameRestoreBuilder builder, List<Player> tablePlayers) {
+        Map<String, Player> playersById = new HashMap<>();
+        tablePlayers.forEach(player -> playersById.put(player.getPlayerId(), player));
+
+        List<Player> restoredActive = new ArrayList<>();
+        List<String> activeIds = builder.getActivePlayerIds();
+        if (activeIds != null) {
+            for (String playerId : activeIds) {
+                Player player = playersById.get(playerId);
+                if (player == null) {
+                    throw new IllegalStateException("Snapshot references an unknown active player");
+                }
+                restoredActive.add(player);
+            }
+        }
+        return restoredActive;
+    }
+
+    private static Deck restoreDeck(GameRestoreBuilder builder) {
+        List<Card> remainingDeck = builder.getRemainingDeck();
+        if (remainingDeck == null) {
+            throw new IllegalStateException("Saved game " + builder.getGameId() + " has no deck");
+        }
+        return Deck.restore(remainingDeck);
+    }
+
+    /**
+     * Immutable persistence snapshot of internal {@link Game} collaborator and accounting state.
+     *
+     * @param remainingDeck            undealt cards left in the deck
+     * @param carryOverPot             chips carried over from an earlier hand
+     * @param handContributions        chips put into the pot this hand by player ID
+     * @param allPlayersHadInitialTurn whether every active player has had a turn this round
+     * @param actedPlayerIds           player IDs that have acted in the current betting round
+     * @param scheduledTaskDeadlines   armed background task deadlines by task type
+     * @param timerVersions            schedule counters by task type
+     * @param lastFullRaise            last full-raise increment in the current betting round
+     * @param previousBets             each player's total bet in the current round after their last turn
+     * @param handSeatOrder            ordered player IDs for the current hand
+     * @param dealerPlayerId           player ID holding the dealer button
+     * @param currentPlayerId          player ID whose turn it currently is
+     */
+    public record Snapshot(
+            List<Card> remainingDeck,
+            int carryOverPot,
+            Map<String, Integer> handContributions,
+            boolean allPlayersHadInitialTurn,
+            Set<String> actedPlayerIds,
+            Map<ScheduledGameTask, Long> scheduledTaskDeadlines,
+            Map<ScheduledGameTask, Long> timerVersions,
+            int lastFullRaise,
+            Map<String, Integer> previousBets,
+            List<String> handSeatOrder,
+            String dealerPlayerId,
+            String currentPlayerId) {
+        public Snapshot {
+            remainingDeck = List.copyOf(remainingDeck);
+            handContributions = Map.copyOf(handContributions);
+            actedPlayerIds = Set.copyOf(actedPlayerIds);
+            scheduledTaskDeadlines = Map.copyOf(scheduledTaskDeadlines);
+            timerVersions = Map.copyOf(timerVersions);
+            previousBets = Map.copyOf(previousBets);
+            handSeatOrder = List.copyOf(handSeatOrder);
+        }
     }
 }

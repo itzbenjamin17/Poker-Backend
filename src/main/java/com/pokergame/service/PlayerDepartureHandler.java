@@ -200,10 +200,10 @@ class PlayerDepartureHandler {
             }
             return completionHandler.getGameReview(gameId, playerName);
         }
-        if (!game.canPlayerClaimWin(playerName)) {
+        if (!game.canClaimWin(playerName)) {
             throw new UnauthorisedActionException("Cannot claim win right now.");
         }
-        List<String> opponents = game.disconnectedContenderNamesExcept(playerName);
+        List<String> opponents = game.disconnectedOpponentsOf(playerName);
         removePlayersFromRoomAndGame(gameId, opponents, room, game);
         return game.getGameEndResult();
     }

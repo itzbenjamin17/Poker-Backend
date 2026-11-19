@@ -121,23 +121,23 @@ class GameRestoreBuilderTest {
         assertEquals(2, game.getActivePlayers().size());                             // 3
         assertEquals(List.of("p1", "p2"),
                 game.getActivePlayers().stream().map(Player::getPlayerId).toList());  // 3
-        assertEquals(deckCards, game.getRemainingDeckSnapshot());                    // 4
+        assertEquals(deckCards, game.toSnapshot().remainingDeck());                    // 4
         assertEquals(community, game.getCommunityCards());                          // 5
         assertEquals(475, game.getPot());                                            // 6
-        assertEquals("p1", game.getCurrentPlayerId());                               // 7
+        assertEquals("p1", game.toSnapshot().currentPlayerId());                               // 7
         assertEquals("p1", game.getCurrentPlayer().getPlayerId());                   // 7
         assertEquals(100, game.getCurrentHighestBet());                              // 11
-        assertEquals(25, game.getCarryOverPot());                                    // 12
+        assertEquals(25, game.toSnapshot().carryOverPot());                                    // 12
         assertEquals(GamePhase.FLOP, game.getCurrentPhase());                        // 13
         assertFalse(game.isGameOver());                                              // 14
         assertEquals(15, game.getSmallBlind());                                      // 15
         assertEquals(30, game.getBigBlind());                                        // 16
-        assertEquals(contributions, game.getHandContributionsSnapshot());            // 17
+        assertEquals(contributions, game.toSnapshot().handContributions());            // 17
         assertEquals(settlement, game.getLastSettlementResult());                    // 18
-        assertEquals(lastFullRaise, game.getLastFullRaise());                    // 19
-        assertEquals(previousBets, game.getPreviousBetsSnapshot());                  // 20
-        assertEquals(seatOrder, game.getHandSeatOrderSnapshot());                    // 21
-        assertEquals("p2", game.getDealerPlayerId());                                // 22
+        assertEquals(lastFullRaise, game.toSnapshot().lastFullRaise());                    // 19
+        assertEquals(previousBets, game.toSnapshot().previousBets());                  // 20
+        assertEquals(seatOrder, game.toSnapshot().handSeatOrder());                    // 21
+        assertEquals("p2", game.toSnapshot().dealerPlayerId());                                // 22
         assertEquals("p3", game.getSmallBlindPlayerId());                            // 23
         assertEquals("p1", game.getBigBlindPlayerId());                              // 24
         assertTrue(game.isFinalPotSettled());                                        // 25
@@ -148,18 +148,18 @@ class GameRestoreBuilderTest {
         assertEquals(7L, game.getHandNumber());                                      // 30
         assertEquals(88L, game.getStateRevision());                                  // 31
         assertEquals(terminalResult, game.getGameEndResult());                       // 32
-        assertTrue(game.hasAllPlayersHadInitialTurn());                              // 33
-        assertEquals(actedPlayers, game.getActedPlayerIdsSnapshot());                // 34
+        assertTrue(game.toSnapshot().allPlayersHadInitialTurn());                              // 33
+        assertEquals(actedPlayers, game.toSnapshot().actedPlayerIds());                // 34
         assertEquals(1700000005000L,
                 game.getScheduledTaskDeadline(ScheduledGameTask.AUTO_ADVANCE));      // 35
         assertEquals(1700000060000L,
                 game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));           // 35
-        assertEquals(taskDeadlines, game.getScheduledTaskDeadlinesSnapshot());        // 35
+        assertEquals(taskDeadlines, game.toSnapshot().scheduledTaskDeadlines());        // 35
         assertEquals(3L,
                 game.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));             // 36
         assertEquals(1L,
                 game.getTimerVersion(ScheduledGameTask.CLEANUP));                  // 36
-        assertEquals(timerVersions, game.getTimerVersionsSnapshot());              // 36
+        assertEquals(timerVersions, game.toSnapshot().timerVersions());              // 36
 
         // A restored hand that already has a settlement returns without modifying the recorded winners
         game.conductShowdown();
@@ -296,7 +296,7 @@ class GameRestoreBuilderTest {
                 .remainingDeck(deckCards)
                 .build();
 
-        assertEquals(deckCards, game.getRemainingDeckSnapshot());
+        assertEquals(deckCards, game.toSnapshot().remainingDeck());
     }
 
     @Test
@@ -322,7 +322,7 @@ class GameRestoreBuilderTest {
         // The card dealt is the last card in the remaining deck list (card3: ACE of SPADES)
         assertEquals(4, game.getCommunityCards().size());
         assertEquals(card3, game.getCommunityCards().get(3));
-        assertEquals(List.of(card1, card2), game.getRemainingDeckSnapshot());
+        assertEquals(List.of(card1, card2), game.toSnapshot().remainingDeck());
     }
 
     @Test
@@ -332,7 +332,7 @@ class GameRestoreBuilderTest {
                 .remainingDeck(List.of())
                 .build();
 
-        assertTrue(game.getRemainingDeckSnapshot().isEmpty());
+        assertTrue(game.toSnapshot().remainingDeck().isEmpty());
     }
 
     // =========================================================================
@@ -362,8 +362,8 @@ class GameRestoreBuilderTest {
         assertEquals(4L, game.getTimerVersion(ScheduledGameTask.READY_TIMEOUT));
         assertEquals(0L, game.getTimerVersion(ScheduledGameTask.CLEANUP));
 
-        assertEquals(deadlines, game.getScheduledTaskDeadlinesSnapshot());
-        assertEquals(timerVersions, game.getTimerVersionsSnapshot());
+        assertEquals(deadlines, game.toSnapshot().scheduledTaskDeadlines());
+        assertEquals(timerVersions, game.toSnapshot().timerVersions());
     }
 
     @Test
@@ -376,7 +376,7 @@ class GameRestoreBuilderTest {
 
         assertEquals(99999L, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
         assertEquals(0L, game.getTimerVersion(ScheduledGameTask.CLEANUP));
-        assertTrue(game.getTimerVersionsSnapshot().isEmpty());
+        assertTrue(game.toSnapshot().timerVersions().isEmpty());
     }
 
     // =========================================================================
@@ -439,7 +439,7 @@ class GameRestoreBuilderTest {
                 .handSeatOrder(customOrder)
                 .build();
 
-        assertEquals(customOrder, game.getHandSeatOrderSnapshot());
+        assertEquals(customOrder, game.toSnapshot().handSeatOrder());
     }
 
     @Test
@@ -455,7 +455,7 @@ class GameRestoreBuilderTest {
                 .handSeatOrder(List.of())
                 .build();
 
-        assertEquals(List.of("p1", "p2", "p3"), game.getHandSeatOrderSnapshot());
+        assertEquals(List.of("p1", "p2", "p3"), game.toSnapshot().handSeatOrder());
     }
 
     // =========================================================================
@@ -490,11 +490,11 @@ class GameRestoreBuilderTest {
 
         // Internal Game state must remain untouched
         assertEquals(1, game.getCommunityCards().size());
-        assertEquals(Map.of("p1", 100), game.getHandContributionsSnapshot());
-        assertEquals(Set.of("p1"), game.getActedPlayerIdsSnapshot());
-        assertEquals(Map.of(ScheduledGameTask.CLEANUP, 9999L), game.getScheduledTaskDeadlinesSnapshot());
-        assertEquals(20, game.getLastFullRaise());
-        assertEquals(Map.of("p1", 20), game.getPreviousBetsSnapshot());
+        assertEquals(Map.of("p1", 100), game.toSnapshot().handContributions());
+        assertEquals(Set.of("p1"), game.toSnapshot().actedPlayerIds());
+        assertEquals(Map.of(ScheduledGameTask.CLEANUP, 9999L), game.toSnapshot().scheduledTaskDeadlines());
+        assertEquals(20, game.toSnapshot().lastFullRaise());
+        assertEquals(Map.of("p1", 20), game.toSnapshot().previousBets());
     }
 
     @Test
@@ -631,12 +631,12 @@ class GameRestoreBuilderTest {
             assertEquals(3, game.getPlayers().size());
             assertEquals(3, game.getActivePlayers().size());
             assertEquals(2, game.getCommunityCards().size());
-            assertEquals(3, game.getRemainingDeckSnapshot().size());
-            assertEquals(75, game.getHandContributionsSnapshot().get("p3"));
-            assertEquals(40, game.getLastFullRaise());
-            assertEquals(20, game.getPreviousBetsSnapshot().get("p2"));
-            assertEquals(List.of("p1", "p2", "p3"), game.getHandSeatOrderSnapshot());
-            assertTrue(game.getActedPlayerIdsSnapshot().contains("p2"));
+            assertEquals(3, game.toSnapshot().remainingDeck().size());
+            assertEquals(75, game.toSnapshot().handContributions().get("p3"));
+            assertEquals(40, game.toSnapshot().lastFullRaise());
+            assertEquals(20, game.toSnapshot().previousBets().get("p2"));
+            assertEquals(List.of("p1", "p2", "p3"), game.toSnapshot().handSeatOrder());
+            assertTrue(game.toSnapshot().actedPlayerIds().contains("p2"));
             assertEquals(9000L, game.getScheduledTaskDeadline(ScheduledGameTask.CLEANUP));
             assertEquals(2L, game.getTimerVersion(ScheduledGameTask.CLEANUP));
 
@@ -656,13 +656,13 @@ class GameRestoreBuilderTest {
             assertEquals(3, game.getPlayers().size(), "players was affected by post-build mutation");
             assertEquals(3, game.getActivePlayers().size(), "activePlayers was affected by post-build mutation");
             assertEquals(2, game.getCommunityCards().size(), "communityCards was affected by post-build mutation");
-            assertEquals(3, game.getRemainingDeckSnapshot().size(), "remainingDeck was affected by post-build mutation");
-            assertEquals(2, game.getHandContributionsSnapshot().size(), "handContributions was affected by post-build mutation");
-            assertEquals(2, game.getPreviousBetsSnapshot().size(), "previousBets was affected by post-build mutation");
-            assertEquals(3, game.getHandSeatOrderSnapshot().size(), "handSeatOrder was affected by post-build mutation");
-            assertEquals(2, game.getActedPlayerIdsSnapshot().size(), "actedPlayersInRound was affected by post-build mutation");
-            assertEquals(2, game.getScheduledTaskDeadlinesSnapshot().size(), "scheduledTaskDeadlines was affected by post-build mutation");
-            assertEquals(2, game.getTimerVersionsSnapshot().size(), "timerVersions was affected by post-build mutation");
+            assertEquals(3, game.toSnapshot().remainingDeck().size(), "remainingDeck was affected by post-build mutation");
+            assertEquals(2, game.toSnapshot().handContributions().size(), "handContributions was affected by post-build mutation");
+            assertEquals(2, game.toSnapshot().previousBets().size(), "previousBets was affected by post-build mutation");
+            assertEquals(3, game.toSnapshot().handSeatOrder().size(), "handSeatOrder was affected by post-build mutation");
+            assertEquals(2, game.toSnapshot().actedPlayerIds().size(), "actedPlayersInRound was affected by post-build mutation");
+            assertEquals(2, game.toSnapshot().scheduledTaskDeadlines().size(), "scheduledTaskDeadlines was affected by post-build mutation");
+            assertEquals(2, game.toSnapshot().timerVersions().size(), "timerVersions was affected by post-build mutation");
         }
 
         @Test
@@ -799,7 +799,7 @@ class GameRestoreBuilderTest {
                     .bigBlind(0)
                     .build();
             assertEquals(0, gameZero.getPot());
-            assertEquals(0, gameZero.getCarryOverPot());
+            assertEquals(0, gameZero.toSnapshot().carryOverPot());
             assertEquals(0, gameZero.getSmallBlind());
             assertEquals(0, gameZero.getBigBlind());
 
@@ -810,7 +810,7 @@ class GameRestoreBuilderTest {
                     .bigBlind(2_000_000)
                     .build();
             assertEquals(Integer.MAX_VALUE, gameMax.getPot());
-            assertEquals(Integer.MAX_VALUE, gameMax.getCarryOverPot());
+            assertEquals(Integer.MAX_VALUE, gameMax.toSnapshot().carryOverPot());
             assertEquals(1_000_000, gameMax.getSmallBlind());
             assertEquals(2_000_000, gameMax.getBigBlind());
         }
@@ -822,7 +822,7 @@ class GameRestoreBuilderTest {
             Game emptyDeckGame = defaultBuilder()
                     .remainingDeck(List.of())
                     .build();
-            assertTrue(emptyDeckGame.getRemainingDeckSnapshot().isEmpty());
+            assertTrue(emptyDeckGame.toSnapshot().remainingDeck().isEmpty());
             // Attempting to deal card from empty deck must throw IllegalStateException
             assertThrows(IllegalStateException.class, emptyDeckGame::dealTurn);
 
@@ -836,11 +836,11 @@ class GameRestoreBuilderTest {
                             new Card(Rank.FOUR, Suit.CLUBS)))
                     .build();
 
-            assertEquals(1, singleCardGame.getRemainingDeckSnapshot().size());
+            assertEquals(1, singleCardGame.toSnapshot().remainingDeck().size());
             singleCardGame.dealTurn();
             assertEquals(4, singleCardGame.getCommunityCards().size());
             assertEquals(singleCard, singleCardGame.getCommunityCards().get(3));
-            assertTrue(singleCardGame.getRemainingDeckSnapshot().isEmpty());
+            assertTrue(singleCardGame.toSnapshot().remainingDeck().isEmpty());
 
             // Second deal must fail
             assertThrows(IllegalStateException.class, singleCardGame::dealRiver);
@@ -940,13 +940,13 @@ class GameRestoreBuilderTest {
                     .players(List.of(p1, p2))
                     .handSeatOrder(null)
                     .build();
-            assertEquals(List.of("p1", "p2"), gameWithNull.getHandSeatOrderSnapshot());
+            assertEquals(List.of("p1", "p2"), gameWithNull.toSnapshot().handSeatOrder());
 
             Game gameWithEmpty = defaultBuilder()
                     .players(List.of(p1, p2))
                     .handSeatOrder(List.of())
                     .build();
-            assertEquals(List.of("p1", "p2"), gameWithEmpty.getHandSeatOrderSnapshot());
+            assertEquals(List.of("p1", "p2"), gameWithEmpty.toSnapshot().handSeatOrder());
         }
 
         @Test
@@ -1036,7 +1036,7 @@ class GameRestoreBuilderTest {
                 assertEquals(activeCount, game.getActivePlayers().size());
                 assertEquals(commCount, game.getCommunityCards().size());
                 assertEquals(pot, game.getPot());
-                assertEquals(carryOver, game.getCarryOverPot());
+                assertEquals(carryOver, game.toSnapshot().carryOverPot());
                 assertEquals(sb, game.getSmallBlind());
                 assertEquals(bb, game.getBigBlind());
                 assertEquals(revision, game.getStateRevision());

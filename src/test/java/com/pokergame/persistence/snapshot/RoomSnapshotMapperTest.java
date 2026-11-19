@@ -111,8 +111,8 @@ class RoomSnapshotMapperTest {
         game.dealFlop();
         recovered.game().dealFlop();
         assertEquals(game.getCommunityCards(), recovered.game().getCommunityCards());
-        assertEquals(game.getCarryOverPot(), recovered.game().getCarryOverPot());
-        assertEquals(game.getHandSeatOrderSnapshot(), recovered.game().getHandSeatOrderSnapshot());
+        assertEquals(game.toSnapshot().carryOverPot(), recovered.game().toSnapshot().carryOverPot());
+        assertEquals(game.toSnapshot().handSeatOrder(), recovered.game().toSnapshot().handSeatOrder());
     }
 
     @ParameterizedTest
@@ -169,10 +169,10 @@ class RoomSnapshotMapperTest {
 
         byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, game));
         Game restored = mapper.deserialize(snapshot).game();
-        assertEquals(3, restored.getCarryOverPot());
+        assertEquals(3, restored.toSnapshot().carryOverPot());
         assertEquals(game.getLastSettlementResult(), restored.getLastSettlementResult());
-        assertEquals(10, restored.getLastFullRaise());
-        assertEquals(List.of("a", "b"), restored.getHandSeatOrderSnapshot());
+        assertEquals(10, restored.toSnapshot().lastFullRaise());
+        assertEquals(List.of("a", "b"), restored.toSnapshot().handSeatOrder());
         assertTrue(restored.isFinalPotSettled());
         assertEquals(7, restored.getHandNumber());
         assertEquals(ReadyGateState.CLOSED, restored.getReadyGateState());
@@ -465,7 +465,7 @@ class RoomSnapshotMapperTest {
                     restored.getPlayers().stream().map(Player::getChips).toList());
             assertEquals(2000, restored.getPot() + restored.getPlayers().stream().mapToInt(Player::getChips).sum());
             assertEquals(game.getStateRevision(), restored.getStateRevision());
-            assertEquals(game.getRemainingDeckSnapshot(), restored.getRemainingDeckSnapshot());
+            assertEquals(game.toSnapshot().remainingDeck(), restored.toSnapshot().remainingDeck());
         }
     }
 
@@ -999,9 +999,9 @@ class RoomSnapshotMapperTest {
             assertEquals(3, restored.getPlayers().size());
             assertEquals(3, restored.getActivePlayers().size());
             assertEquals(game.getCurrentPlayer().getPlayerId(), restored.getCurrentPlayer().getPlayerId());
-            assertEquals(game.getRemainingDeckSnapshot().size(), restored.getRemainingDeckSnapshot().size());
-            assertEquals(game.getHandSeatOrderSnapshot(), restored.getHandSeatOrderSnapshot());
-            assertEquals(game.getDealerPlayerId(), restored.getDealerPlayerId());
+            assertEquals(game.toSnapshot().remainingDeck().size(), restored.toSnapshot().remainingDeck().size());
+            assertEquals(game.toSnapshot().handSeatOrder(), restored.toSnapshot().handSeatOrder());
+            assertEquals(game.toSnapshot().dealerPlayerId(), restored.toSnapshot().dealerPlayerId());
 
             // Verify hole cards match
             for (int i = 0; i < 3; i++) {
@@ -1048,7 +1048,7 @@ class RoomSnapshotMapperTest {
             assertEquals(GamePhase.FLOP, restored.getCurrentPhase());
             assertEquals(3, restored.getCommunityCards().size());
             assertEquals(game.getCommunityCards(), restored.getCommunityCards());
-            assertEquals(game.getRemainingDeckSnapshot().size(), restored.getRemainingDeckSnapshot().size());
+            assertEquals(game.toSnapshot().remainingDeck().size(), restored.toSnapshot().remainingDeck().size());
 
             // Advance to Turn on restored instance
             restored.dealTurn();
@@ -1372,16 +1372,16 @@ class RoomSnapshotMapperTest {
 
             assertEquals(42L, game.getStateRevision());
             assertEquals(5L, game.getHandNumber());
-            assertEquals(deadlines, game.getScheduledTaskDeadlinesSnapshot());
-            assertEquals(timerVersions, game.getTimerVersionsSnapshot());
+            assertEquals(deadlines, game.toSnapshot().scheduledTaskDeadlines());
+            assertEquals(timerVersions, game.toSnapshot().timerVersions());
 
             byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
             Game restored = snapshotMapper.deserialize(bytes).game();
 
             assertEquals(42L, restored.getStateRevision());
             assertEquals(5L, restored.getHandNumber());
-            assertEquals(deadlines, restored.getScheduledTaskDeadlinesSnapshot());
-            assertEquals(timerVersions, restored.getTimerVersionsSnapshot());
+            assertEquals(deadlines, restored.toSnapshot().scheduledTaskDeadlines());
+            assertEquals(timerVersions, restored.toSnapshot().timerVersions());
         }
     }
 

@@ -166,7 +166,7 @@ class HandProgressionServiceTest {
                 assertEquals(1L, game.getHandNumber());
 
                 // Paused for disconnected survivor -> ignored
-                game.markPausedForDisconnectedSurvivor();
+                game.pauseForDisconnectedSurvivor(List.of());
                 assertFalse(progression.startNewHand(GAME_ID));
                 game.clearPausedForDisconnectedSurvivor();
 

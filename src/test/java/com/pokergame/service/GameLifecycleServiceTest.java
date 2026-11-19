@@ -415,7 +415,7 @@ class GameLifecycleServiceTest {
             int playerCount = callHand.getActivePlayers().size();
             int currentDealerIndex = -1;
             for (int i = 0; i < playerCount; i++) {
-                if (callHand.getActivePlayers().get(i).getPlayerId().equals(callHand.getDealerPlayerId())) {
+                if (callHand.getActivePlayers().get(i).getPlayerId().equals(callHand.toSnapshot().dealerPlayerId())) {
                     currentDealerIndex = i;
                     break;
                 }
@@ -852,7 +852,7 @@ class GameLifecycleServiceTest {
                     .orElseThrow();
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of(nonCurrent.getName())));
             // Subsequent outcome or progression advances/invalidates timer version
-            game.invalidateProgressionTasks();
+            game.clearScheduledTask(ScheduledGameTask.AUTO_ADVANCE);
             clearInvocations(gameStateService);
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.executeScheduledTask(

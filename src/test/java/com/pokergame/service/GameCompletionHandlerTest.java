@@ -153,7 +153,7 @@ class GameCompletionHandlerTest {
             game.dealFlop();
             game.dealTurn();
             game.dealRiver();
-            game.markPausedForDisconnectedSurvivor();
+            game.pauseForDisconnectedSurvivor(List.of());
             clearInvocations(messagingTemplate, taskScheduler);
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {

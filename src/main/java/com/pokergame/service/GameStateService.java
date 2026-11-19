@@ -568,7 +568,7 @@ public class GameStateService {
     }
 
     private String computeClaimWinPlayerName(Game game) {
-        return game.disconnectWinClaimant()
+        return game.findClaimWinPlayer()
                 .map(Player::getName)
                 .orElse(null);
     }
