@@ -70,6 +70,8 @@ WebSocket identity allows multiple browser tabs per player; disconnect tracking 
 
 Use [WebSocketConfig](../../src/main/java/com/pokergame/config/WebSocketConfig.java) and controllers as exact mapping references; the simple broker serves `/room`, `/game`, and `/user/queue` prefixes. Public DTOs carry chips, players, board cards, turn/phase/pot state, and optional showdown/readiness/disconnect/claim-win metadata; private state carries player ID and hole cards. Keep optional/null payload fields compatible with frontend decoders.
 
+Public snapshots also carry `handNumber` and `stateRevision`: `GameStateService` increments `stateRevision` on each public broadcast (resetting it to `1` in `Game.beginHand()`), and `RoomSnapshot` saves it so clients can drop slower REST `/state` responses or out-of-order WebSocket messages—even across a server restart.
+
 ### Response Envelope Convention
 
 The command/query split documented in [CODING_STANDARDS.md](../../CODING_STANDARDS.md#response-envelope) matches `../frontend-poker/src/services/api.ts`, which unwraps `message`/`data` on command responses and decodes `GET` queries (notably `getReview`) as bare top-level DTOs. Do not change a query envelope without coordinating the frontend decoder.

@@ -57,7 +57,7 @@ A timed background action (`AUTO_ADVANCE`, `READY_OPEN`, `NEW_HAND`, `DISCONNECT
 The per-task counter on `Game` incremented whenever a `ScheduledGameTask` is scheduled or cancelled so stale timer callbacks are ignored.
 
 **stateRevision**:
-A counter (`1, 2, 3...`) that goes up every time the public game state changes, allowing clients to tell which update is newest and ignore out-of-order messages.
+A counter (`1, 2, 3...`) that resets to `1` at the start of each new hand (`handNumber`) and goes up every time a public game broadcast is sent. Clients compare `(handNumber, stateRevision)` so slow REST responses or out-of-order WebSocket messages never overwrite newer table state.
 
 **disconnectGracePeriodMs (disconnect deadline)**:
 The grace window (120 seconds by default) and resulting absolute deadline after a player's last WebSocket session disconnects during which their seat, chips, and cards are held before automatic fold and removal.
