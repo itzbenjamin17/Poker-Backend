@@ -46,9 +46,8 @@ public class HandEvaluator {
         List<Card> bestHand = null;
         HandRank bestRank = HandRank.HIGH_CARD;
 
-        for (List<Card> combination : generateCombinations(allCards, HAND_SIZE)) {
-            List<Card> sortedCombination = new ArrayList<>(combination);
-            sortedCombination.sort(Comparator.comparing(Card::getValue));
+        for (List<Card> combination : generateFiveCardCombinations(allCards)) {
+            List<Card> sortedCombination = sortedByValue(combination);
             HandRank rank = evaluateHand(sortedCombination);
             if (bestHand == null || rank.beats(bestRank)
                     || (rank == bestRank && compareSameRank(sortedCombination, bestHand, rank) > 0)) {
@@ -61,27 +60,26 @@ public class HandEvaluator {
     }
 
     /**
-     * Compares two 5-card hands that both make the same hand rank.
+     * Breaks a tie between two 5-card hands sharing the same {@link HandRank}.
      *
-     * <p>
-     * Each hand is turned into a list of card values, most important first, and the first value
-     * that differs decides the winner. Groups of cards that share a value count first: a bigger
-     * group comes before a smaller one, and a higher value comes before a lower one. So a full
-     * house lists its three of a kind and then its pair, and two pair lists the higher pair, the
-     * lower pair and then the extra card. Straights are the exception: only the top card counts,
-     * and in the ace-low straight (A-2-3-4-5) that top card is the five. Royal flushes and NO_HAND always tie.
-     *
-     * @param first  one 5-card hand
-     * @param second another 5-card hand with the same rank
-     * @param rank   the hand rank both hands share
-     * @return a positive number if {@code first} wins, a negative number if {@code second} wins,
-     *         or {@code 0} if the hands tie
-     * @throws IllegalStateException if either hand does not have exactly 5 cards
+     * @param first  first 5-card hand
+     * @param second second 5-card hand
+     * @param rank   hand rank both hands share
+     * @return positive if {@code first} wins, negative if {@code second} wins, or {@code 0} on a tie
+     * @throws IllegalStateException if either hand does not have 5 cards or does not match {@code rank}
      */
     public int compareSameRank(List<Card> first, List<Card> second, HandRank rank) {
         if (first.size() != HAND_SIZE || second.size() != HAND_SIZE) {
             throw new IllegalStateException("Hands being compared must have exactly " + HAND_SIZE
                     + " cards, got " + first.size() + " and " + second.size());
+        }
+        if (rank != HandRank.NO_HAND) {
+            HandRank firstRank = evaluateHand(sortedByValue(first));
+            HandRank secondRank = evaluateHand(sortedByValue(second));
+            if (firstRank != rank || secondRank != rank) {
+                throw new IllegalStateException("Hands being compared must both have rank " + rank
+                        + ", got " + firstRank + " and " + secondRank);
+            }
         }
         return switch (rank) {
             case ROYAL_FLUSH, NO_HAND -> 0;
@@ -117,22 +115,28 @@ public class HandEvaluator {
 
     // Card values ordered most important first: larger groups first, higher values first within a group.
     private List<Integer> tiebreakValues(List<Card> hand) {
-        return rankCounts(hand).entrySet().stream()
-                .sorted(Comparator.<Map.Entry<Rank, Long>, Long>comparing(Map.Entry::getValue)
-                        .thenComparing(entry -> entry.getKey().getValue())
-                        .reversed())
-                .map(entry -> entry.getKey().getValue())
+        return rankCounts(hand).entrySet().stream() // gives the list of pairs (Rank, count)
+                .sorted(Comparator.<Map.Entry<Rank, Long>, Long>comparing(Map.Entry::getValue) // sorts by count
+                        .thenComparing(entry -> entry.getKey().getValue()) // then sorts by rank
+                        .reversed()) // biggest group first, then highest rank within group
+                .map(entry -> entry.getKey().getValue()) // drops the counts and keeps only the ranks
                 .toList();
     }
 
     private int compareValues(List<Integer> first, List<Integer> second) {
-        for (int i = 0; i < Math.min(first.size(), second.size()); i++) {
+        for (int i = 0; i < first.size(); i++) {
             int difference = Integer.compare(first.get(i), second.get(i));
             if (difference != 0) {
                 return difference;
             }
         }
-        return Integer.compare(first.size(), second.size());
+        return 0;
+    }
+
+    private static List<Card> sortedByValue(List<Card> cards) {
+        List<Card> sorted = new ArrayList<>(cards);
+        sorted.sort(Comparator.comparingInt(Card::getValue));
+        return sorted;
     }
 
     // Top card of a straight; ace counts as 5 in A-2-3-4-5.
@@ -145,26 +149,20 @@ public class HandEvaluator {
         return straight.stream().mapToInt(Card::getValue).max().orElseThrow();
     }
 
-    private List<List<Card>> generateCombinations(List<Card> cards, int numOfCards) {
+    private List<List<Card>> generateFiveCardCombinations(List<Card> cards) {
         List<List<Card>> results = new ArrayList<>();
-        if (cards.size() < numOfCards) {
-            return results;
-        }
-
-        generateCombinationsHelper(cards, numOfCards, 0, new ArrayList<>(), results);
+        generateCombinationsHelper(cards, 0, new ArrayList<>(), results);
         return results;
     }
-
-    private void generateCombinationsHelper(List<Card> cards, int numOfCards, int startIndex,
-            List<Card> currentCombination, List<List<Card>> results) {
-        if (currentCombination.size() == numOfCards) {
+    private void generateCombinationsHelper(
+            List<Card> cards, int startIndex, List<Card> currentCombination, List<List<Card>> results) {
+        if (currentCombination.size() == HAND_SIZE) {
             results.add(new ArrayList<>(currentCombination));
             return;
         }
-
         for (int i = startIndex; i < cards.size(); i++) {
             currentCombination.add(cards.get(i));
-            generateCombinationsHelper(cards, numOfCards, i + 1, currentCombination, results);
+            generateCombinationsHelper(cards, i + 1, currentCombination, results);
             currentCombination.removeLast();
         }
     }

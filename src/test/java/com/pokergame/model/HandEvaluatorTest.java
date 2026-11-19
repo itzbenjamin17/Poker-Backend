@@ -57,11 +57,11 @@ class HandEvaluatorTest {
         @Test
         void highCardComparisonHandlesTiesAndKickersInEitherInputOrder() {
                 List<Card> aceHigh = List.of(card(Rank.ACE, Suit.SPADES), card(Rank.JACK, Suit.SPADES),
-                                card(Rank.NINE, Suit.SPADES), card(Rank.SEVEN, Suit.SPADES), card(Rank.FOUR, Suit.SPADES));
+                                card(Rank.NINE, Suit.SPADES), card(Rank.SEVEN, Suit.SPADES), card(Rank.FOUR, Suit.DIAMONDS));
                 List<Card> sameRanksOtherSuits = List.of(card(Rank.ACE, Suit.HEARTS), card(Rank.JACK, Suit.HEARTS),
-                                card(Rank.NINE, Suit.HEARTS), card(Rank.SEVEN, Suit.HEARTS), card(Rank.FOUR, Suit.HEARTS));
+                                card(Rank.NINE, Suit.HEARTS), card(Rank.SEVEN, Suit.HEARTS), card(Rank.FOUR, Suit.CLUBS));
                 List<Card> lowerKicker = List.of(card(Rank.ACE, Suit.CLUBS), card(Rank.JACK, Suit.CLUBS),
-                                card(Rank.NINE, Suit.CLUBS), card(Rank.SEVEN, Suit.CLUBS), card(Rank.THREE, Suit.CLUBS));
+                                card(Rank.NINE, Suit.CLUBS), card(Rank.SEVEN, Suit.CLUBS), card(Rank.THREE, Suit.DIAMONDS));
                 List<Card> mutableDescending = new ArrayList<>(aceHigh);
                 List<Card> before = List.copyOf(mutableDescending);
 
@@ -1270,6 +1270,17 @@ class HandEvaluatorTest {
                                 () -> service.compareSameRank(List.of(), five, HandRank.HIGH_CARD));
                 assertThrows(IllegalStateException.class,
                                 () -> service.compareSameRank(five, cards("2S 5H 7D 9C"), HandRank.HIGH_CARD));
+        }
+
+        @Test
+        @DisplayName("Comparing hands whose actual rank differs from the supplied rank throws")
+        void compareSameRankRejectsMismatchedRank() {
+                List<Card> highCard = cards("2S 5H 7D 9C KS");
+                List<Card> onePair = cards("2S 2H 7D 9C KS");
+                assertThrows(IllegalStateException.class,
+                                () -> service.compareSameRank(highCard, onePair, HandRank.HIGH_CARD));
+                assertThrows(IllegalStateException.class,
+                                () -> service.compareSameRank(onePair, highCard, HandRank.HIGH_CARD));
         }
 
         @Test
