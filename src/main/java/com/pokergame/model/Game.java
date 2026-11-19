@@ -112,53 +112,53 @@ public class Game {
      * @throws IllegalStateException if {@code gameId}, {@code maxPlayers}, or {@code players} are invalid,
      *                               an active player ID is unknown, or the snapshot has no deck
      */
-    Game(GameRestoreBuilder builder) {
+    private Game(GameRestoreBuilder builder) {
         validateRestoreBuilder(builder);
 
-        this.gameId = builder.getGameId();
-        this.players = new ArrayList<>(builder.getPlayers());
-        this.maxPlayers = builder.getMaxPlayers();
+        this.gameId = builder.gameId;
+        this.players = new ArrayList<>(builder.players);
+        this.maxPlayers = builder.maxPlayers;
         this.activePlayers = restoreActivePlayers(builder, this.players);
         this.deck = restoreDeck(builder);
-        this.communityCards = builder.getCommunityCards() != null
-                ? new ArrayList<>(builder.getCommunityCards())
+        this.communityCards = builder.communityCards != null
+                ? new ArrayList<>(builder.communityCards)
                 : new ArrayList<>();
-        this.pot = builder.getPot();
-        this.carryOverPot = builder.getCarryOverPot();
-        this.currentPhase = builder.getCurrentPhase();
-        this.gameOver = builder.isGameOver();
-        this.smallBlind = builder.getSmallBlind();
-        this.bigBlind = builder.getBigBlind();
-        this.handContributions = builder.getHandContributions() != null
-                ? new HashMap<>(builder.getHandContributions())
+        this.pot = builder.pot;
+        this.carryOverPot = builder.carryOverPot;
+        this.currentPhase = builder.currentPhase;
+        this.gameOver = builder.gameOver;
+        this.smallBlind = builder.smallBlind;
+        this.bigBlind = builder.bigBlind;
+        this.handContributions = builder.handContributions != null
+                ? new HashMap<>(builder.handContributions)
                 : new HashMap<>();
-        this.lastHandPayout = builder.getLastHandPayout();
-        this.finalPotSettled = builder.isFinalPotSettled();
-        this.pausedForDisconnectedSurvivor = builder.isPausedForDisconnectedSurvivor();
-        this.handNumber = builder.getHandNumber();
-        this.stateRevision = builder.getStateRevision();
-        this.gameEndResult = builder.getGameEndResult();
+        this.lastHandPayout = builder.lastHandPayout;
+        this.finalPotSettled = builder.finalPotSettled;
+        this.pausedForDisconnectedSurvivor = builder.pausedForDisconnectedSurvivor;
+        this.handNumber = builder.handNumber;
+        this.stateRevision = builder.stateRevision;
+        this.gameEndResult = builder.gameEndResult;
 
         this.seating = new TableSeating(
-                builder.getHandSeatOrder(),
-                builder.getDealerPlayerId(),
-                builder.getSmallBlindPlayerId(),
-                builder.getBigBlindPlayerId(),
-                builder.getCurrentPlayerId(),
+                builder.handSeatOrder,
+                builder.dealerPlayerId,
+                builder.smallBlindPlayerId,
+                builder.bigBlindPlayerId,
+                builder.currentPlayerId,
                 this.players);
         this.bettingRound = new BettingRound(
-                builder.getCurrentHighestBet(),
-                builder.isAllPlayersHadInitialTurn(),
-                builder.getActedPlayersInRound(),
-                builder.getLastFullRaise(),
-                builder.getPreviousBets());
+                builder.currentHighestBet,
+                builder.allPlayersHadInitialTurn,
+                builder.actedPlayersInRound,
+                builder.lastFullRaise,
+                builder.previousBets);
         this.readyGate = new ReadyGate(
                 this.players,
-                builder.getReadyGateState(),
-                builder.getReadyCountdownDeadlineEpochMs());
+                builder.readyGateState,
+                builder.readyCountdownDeadlineEpochMs);
         this.scheduling = new GameScheduling(
-                builder.getScheduledTimes(),
-                builder.getTimerVersions());
+                builder.scheduledTimes,
+                builder.timerVersions);
     }
 
     /**
@@ -592,38 +592,6 @@ public class Game {
                 seating.getCurrentPlayerId());
     }
 
-    public void setGameEndResult(GameEndResponse gameEndResult) {
-        this.gameEndResult = gameEndResult;
-    }
-
-    public String getGameId() {
-        return gameId;
-    }
-
-    public int getMaxPlayers() {
-        return maxPlayers;
-    }
-
-    public int getSmallBlind() {
-        return smallBlind;
-    }
-
-    public int getBigBlind() {
-        return bigBlind;
-    }
-
-    public List<Player> getPlayers() {
-        return players;
-    }
-
-    public List<Player> getActivePlayers() {
-        return activePlayers;
-    }
-
-    public Player getCurrentPlayer() {
-        return seating.getCurrentPlayer(activePlayers);
-    }
-
     /**
      * Finds a seated player by exact display name.
      *
@@ -632,14 +600,6 @@ public class Game {
      */
     public Player findPlayerByName(String playerName) {
         return findPlayerByName(players, playerName);
-    }
-
-    public List<Card> getCommunityCards() {
-        return communityCards;
-    }
-
-    public int getPot() {
-        return pot;
     }
 
     /**
@@ -659,14 +619,6 @@ public class Game {
      */
     public int getUncalledAmount() {
         return PotCalculator.getUncalledAmount(potInputs());
-    }
-
-    public GamePhase getCurrentPhase() {
-        return currentPhase;
-    }
-
-    public int getCurrentHighestBet() {
-        return bettingRound.getCurrentHighestBet();
     }
 
     /**
@@ -690,14 +642,6 @@ public class Game {
                 player, players, activePlayers, seating, currentPhase, bigBlind);
     }
 
-    public HandPayout getLastHandPayout() {
-        return lastHandPayout;
-    }
-
-    public boolean isHandSettled() {
-        return lastHandPayout != null;
-    }
-
     /**
      * Returns whether the current or most recent hand settled a contested showdown with evaluated
      * hands rather than an uncontested fold win or void hand.
@@ -708,34 +652,6 @@ public class Game {
         return lastHandPayout != null && lastHandPayout.wentToShowdown();
     }
 
-    public String getSmallBlindPlayerId() {
-        return seating.getSmallBlindPlayerId(activePlayers);
-    }
-
-    public String getBigBlindPlayerId() {
-        return seating.getBigBlindPlayerId(activePlayers);
-    }
-
-    public long getHandNumber() {
-        return handNumber;
-    }
-
-    public ReadyGateState getReadyGateState() {
-        return readyGate.getState();
-    }
-
-    public boolean isReadyCountdownActive() {
-        return readyGate.isCountdownActive();
-    }
-
-    public Long getReadyCountdownDeadlineEpochMs() {
-        return readyGate.getCountdownDeadlineEpochMs();
-    }
-
-    public int getReadyEligibleCount() {
-        return readyGate.getReadyEligibleCount();
-    }
-
     /**
      * Returns whether at least two eligible players exist and all eligible players are marked ready.
      *
@@ -743,26 +659,6 @@ public class Game {
      */
     public boolean areAllEligiblePlayersReady() {
         return readyGate.areAllEligiblePlayersReady();
-    }
-
-    public Long getScheduledTaskTime(ScheduledGameTask task) {
-        return scheduling.getScheduledTime(task);
-    }
-
-    public boolean isAutoAdvancing() {
-        return scheduling.getScheduledTime(ScheduledGameTask.AUTO_ADVANCE) != null;
-    }
-
-    public long getTimerVersion(ScheduledGameTask task) {
-        return scheduling.getTimerVersion(task);
-    }
-
-    public boolean isCleanupExpired(long nowEpochMs) {
-        return scheduling.isCleanupExpired(nowEpochMs);
-    }
-
-    public long getStateRevision() {
-        return stateRevision;
     }
 
     /**
@@ -847,34 +743,6 @@ public class Game {
                 .filter(player -> !player.isOut() && player.getChips() > 0)
                 .count();
         return playersWithChips <= 1;
-    }
-
-    public boolean isGameOver() {
-        return gameOver;
-    }
-
-    public boolean isFinalPotSettled() {
-        return finalPotSettled;
-    }
-
-    public boolean isPausedForDisconnectedSurvivor() {
-        return pausedForDisconnectedSurvivor;
-    }
-
-    public boolean isMatchConcluded() {
-        return !pausedForDisconnectedSurvivor && (gameOver || (isHandSettled() && isGameDecided()));
-    }
-
-    public boolean isHandInProgress() {
-        return currentPhase != GamePhase.SHOWDOWN || !isHandSettled();
-    }
-
-    public GameEndResponse getGameEndResult() {
-        return gameEndResult;
-    }
-
-    public boolean isAbandoned() {
-        return gameEndResult != null && gameEndResult.abandoned();
     }
 
     /**
@@ -1018,14 +886,14 @@ public class Game {
     }
 
     private static void validateRestoreBuilder(GameRestoreBuilder builder) {
-        if (builder.getGameId() == null || builder.getGameId().trim().isEmpty()) {
+        if (builder.gameId == null || builder.gameId.trim().isEmpty()) {
             throw new IllegalStateException("Game ID cannot be null or empty");
         }
-        List<Player> builderPlayers = builder.getPlayers();
+        List<Player> builderPlayers = builder.players;
         if (builderPlayers == null || builderPlayers.stream().anyMatch(Objects::isNull)) {
             throw new IllegalStateException("Invalid players list. Please try again.");
         }
-        int restoredMaxPlayers = builder.getMaxPlayers();
+        int restoredMaxPlayers = builder.maxPlayers;
         if (restoredMaxPlayers < Room.MIN_PLAYERS || restoredMaxPlayers > Room.MAX_PLAYERS) {
             throw new IllegalStateException(
                     "Max players must be between " + Room.MIN_PLAYERS + " and " + Room.MAX_PLAYERS + ".");
@@ -1037,7 +905,7 @@ public class Game {
         tablePlayers.forEach(player -> playersById.put(player.getPlayerId(), player));
 
         List<Player> restoredActive = new ArrayList<>();
-        List<String> activeIds = builder.getActivePlayerIds();
+        List<String> activeIds = builder.activePlayerIds;
         if (activeIds != null) {
             for (String playerId : activeIds) {
                 Player player = playersById.get(playerId);
@@ -1051,11 +919,143 @@ public class Game {
     }
 
     private static Deck restoreDeck(GameRestoreBuilder builder) {
-        List<Card> remainingDeck = builder.getRemainingDeck();
+        List<Card> remainingDeck = builder.remainingDeck;
         if (remainingDeck == null) {
-            throw new IllegalStateException("Saved game " + builder.getGameId() + " has no deck");
+            throw new IllegalStateException("Saved game " + builder.gameId + " has no deck");
         }
         return Deck.restore(remainingDeck);
+    }
+
+    public String getGameId() {
+        return gameId;
+    }
+
+    public int getMaxPlayers() {
+        return maxPlayers;
+    }
+
+    public int getSmallBlind() {
+        return smallBlind;
+    }
+
+    public int getBigBlind() {
+        return bigBlind;
+    }
+
+    public List<Player> getPlayers() {
+        return players;
+    }
+
+    public List<Player> getActivePlayers() {
+        return activePlayers;
+    }
+
+    public Player getCurrentPlayer() {
+        return seating.getCurrentPlayer(activePlayers);
+    }
+
+    public List<Card> getCommunityCards() {
+        return communityCards;
+    }
+
+    public int getPot() {
+        return pot;
+    }
+
+    public GamePhase getCurrentPhase() {
+        return currentPhase;
+    }
+
+    public int getCurrentHighestBet() {
+        return bettingRound.getCurrentHighestBet();
+    }
+
+    public HandPayout getLastHandPayout() {
+        return lastHandPayout;
+    }
+
+    public boolean isHandSettled() {
+        return lastHandPayout != null;
+    }
+
+    public String getSmallBlindPlayerId() {
+        return seating.getSmallBlindPlayerId(activePlayers);
+    }
+
+    public String getBigBlindPlayerId() {
+        return seating.getBigBlindPlayerId(activePlayers);
+    }
+
+    public long getHandNumber() {
+        return handNumber;
+    }
+
+    public ReadyGateState getReadyGateState() {
+        return readyGate.getState();
+    }
+
+    public boolean isReadyCountdownActive() {
+        return readyGate.isCountdownActive();
+    }
+
+    public Long getReadyCountdownDeadlineEpochMs() {
+        return readyGate.getCountdownDeadlineEpochMs();
+    }
+
+    public int getReadyEligibleCount() {
+        return readyGate.getReadyEligibleCount();
+    }
+
+    public Long getScheduledTaskTime(ScheduledGameTask task) {
+        return scheduling.getScheduledTime(task);
+    }
+
+    public boolean isAutoAdvancing() {
+        return scheduling.getScheduledTime(ScheduledGameTask.AUTO_ADVANCE) != null;
+    }
+
+    public long getTimerVersion(ScheduledGameTask task) {
+        return scheduling.getTimerVersion(task);
+    }
+
+    public boolean isCleanupExpired(long nowEpochMs) {
+        return scheduling.isCleanupExpired(nowEpochMs);
+    }
+
+    public long getStateRevision() {
+        return stateRevision;
+    }
+
+    public boolean isGameOver() {
+        return gameOver;
+    }
+
+    public boolean isFinalPotSettled() {
+        return finalPotSettled;
+    }
+
+    public boolean isPausedForDisconnectedSurvivor() {
+        return pausedForDisconnectedSurvivor;
+    }
+
+    public boolean isMatchConcluded() {
+        return !pausedForDisconnectedSurvivor && (gameOver || (isHandSettled() && isGameDecided()));
+    }
+
+    public boolean isHandInProgress() {
+        return currentPhase != GamePhase.SHOWDOWN || !isHandSettled();
+    }
+
+    public GameEndResponse getGameEndResult() {
+        return gameEndResult;
+    }
+
+    public void setGameEndResult(GameEndResponse gameEndResult) {
+        this.gameEndResult = gameEndResult;
+    }
+
+    public boolean isAbandoned() {
+        return gameEndResult != null && gameEndResult.abandoned();
     }
 
     /**
@@ -1095,6 +1095,217 @@ public class Game {
             timerVersions = Map.copyOf(timerVersions);
             previousBets = Map.copyOf(previousBets);
             handSeatOrder = List.copyOf(handSeatOrder);
+        }
+    }
+
+    /**
+     * Builder for reconstructing a {@link Game} instance from saved snapshot state.
+     */
+    public static class GameRestoreBuilder {
+        private String gameId;
+        private int maxPlayers = Room.MAX_PLAYERS;
+        private List<Player> players;
+        private List<String> activePlayerIds;
+        private List<Card> remainingDeck;
+        private List<Card> communityCards;
+        private int pot;
+        private String currentPlayerId;
+        private int currentHighestBet;
+        private int carryOverPot;
+        private GamePhase currentPhase;
+        private boolean gameOver;
+        private int smallBlind;
+        private int bigBlind;
+        private Map<String, Integer> handContributions;
+        private HandPayout lastHandPayout;
+        private int lastFullRaise;
+        private Map<String, Integer> previousBets = new HashMap<>();
+        private List<String> handSeatOrder = new ArrayList<>();
+        private String dealerPlayerId;
+        private String smallBlindPlayerId;
+        private String bigBlindPlayerId;
+        private boolean finalPotSettled;
+        private boolean pausedForDisconnectedSurvivor;
+        private Long readyCountdownDeadlineEpochMs;
+        private ReadyGateState readyGateState = ReadyGateState.CLOSED;
+        private long handNumber;
+        private long stateRevision;
+        private GameEndResponse gameEndResult;
+        private boolean allPlayersHadInitialTurn;
+        private Set<String> actedPlayersInRound;
+        private Map<ScheduledGameTask, Long> scheduledTimes;
+        private Map<ScheduledGameTask, Long> timerVersions;
+
+        private GameRestoreBuilder() {
+        }
+
+        public GameRestoreBuilder gameId(String gameId) {
+            this.gameId = gameId;
+            return this;
+        }
+
+        public GameRestoreBuilder maxPlayers(int maxPlayers) {
+            this.maxPlayers = maxPlayers;
+            return this;
+        }
+
+        public GameRestoreBuilder players(List<Player> players) {
+            this.players = players;
+            return this;
+        }
+
+        public GameRestoreBuilder activePlayerIds(List<String> activePlayerIds) {
+            this.activePlayerIds = activePlayerIds;
+            return this;
+        }
+
+        public GameRestoreBuilder remainingDeck(List<Card> remainingDeck) {
+            this.remainingDeck = remainingDeck;
+            return this;
+        }
+
+        public GameRestoreBuilder communityCards(List<Card> communityCards) {
+            this.communityCards = communityCards;
+            return this;
+        }
+
+        public GameRestoreBuilder pot(int pot) {
+            this.pot = pot;
+            return this;
+        }
+
+        public GameRestoreBuilder currentPlayerId(String currentPlayerId) {
+            this.currentPlayerId = currentPlayerId;
+            return this;
+        }
+
+        public GameRestoreBuilder currentHighestBet(int currentHighestBet) {
+            this.currentHighestBet = currentHighestBet;
+            return this;
+        }
+
+        public GameRestoreBuilder carryOverPot(int amount) {
+            this.carryOverPot = amount;
+            return this;
+        }
+
+        public GameRestoreBuilder currentPhase(GamePhase currentPhase) {
+            this.currentPhase = currentPhase;
+            return this;
+        }
+
+        public GameRestoreBuilder gameOver(boolean gameOver) {
+            this.gameOver = gameOver;
+            return this;
+        }
+
+        public GameRestoreBuilder smallBlind(int smallBlind) {
+            this.smallBlind = smallBlind;
+            return this;
+        }
+
+        public GameRestoreBuilder bigBlind(int bigBlind) {
+            this.bigBlind = bigBlind;
+            return this;
+        }
+
+        public GameRestoreBuilder handContributions(Map<String, Integer> handContributions) {
+            this.handContributions = handContributions;
+            return this;
+        }
+
+        public GameRestoreBuilder lastHandPayout(HandPayout result) {
+            this.lastHandPayout = result;
+            return this;
+        }
+
+        public GameRestoreBuilder lastFullRaise(int value) {
+            this.lastFullRaise = value;
+            return this;
+        }
+
+        public GameRestoreBuilder previousBets(Map<String, Integer> value) {
+            this.previousBets = value;
+            return this;
+        }
+
+        public GameRestoreBuilder handSeatOrder(List<String> value) {
+            this.handSeatOrder = value;
+            return this;
+        }
+
+        public GameRestoreBuilder dealerPlayerId(String value) {
+            this.dealerPlayerId = value;
+            return this;
+        }
+
+        public GameRestoreBuilder smallBlindPlayerId(String value) {
+            this.smallBlindPlayerId = value;
+            return this;
+        }
+
+        public GameRestoreBuilder bigBlindPlayerId(String value) {
+            this.bigBlindPlayerId = value;
+            return this;
+        }
+
+        public GameRestoreBuilder finalPotSettled(boolean value) {
+            this.finalPotSettled = value;
+            return this;
+        }
+
+        public GameRestoreBuilder pausedForDisconnectedSurvivor(boolean value) {
+            this.pausedForDisconnectedSurvivor = value;
+            return this;
+        }
+
+        public GameRestoreBuilder readyCountdownDeadlineEpochMs(Long readyCountdownDeadlineEpochMs) {
+            this.readyCountdownDeadlineEpochMs = readyCountdownDeadlineEpochMs;
+            return this;
+        }
+
+        public GameRestoreBuilder readyGateState(ReadyGateState value) {
+            this.readyGateState = value;
+            return this;
+        }
+
+        public GameRestoreBuilder handNumber(long value) {
+            this.handNumber = value;
+            return this;
+        }
+
+        public GameRestoreBuilder stateRevision(long value) {
+            this.stateRevision = value;
+            return this;
+        }
+
+        public GameRestoreBuilder gameEndResult(GameEndResponse value) {
+            this.gameEndResult = value;
+            return this;
+        }
+
+        public GameRestoreBuilder allPlayersHadInitialTurn(boolean allPlayersHadInitialTurn) {
+            this.allPlayersHadInitialTurn = allPlayersHadInitialTurn;
+            return this;
+        }
+
+        public GameRestoreBuilder actedPlayersInRound(Set<String> actedPlayersInRound) {
+            this.actedPlayersInRound = actedPlayersInRound;
+            return this;
+        }
+
+        public GameRestoreBuilder scheduledTimes(Map<ScheduledGameTask, Long> scheduledTimes) {
+            this.scheduledTimes = scheduledTimes;
+            return this;
+        }
+
+        public GameRestoreBuilder timerVersions(Map<ScheduledGameTask, Long> value) {
+            this.timerVersions = value;
+            return this;
+        }
+
+        public Game build() {
+            return new Game(this);
         }
     }
 }

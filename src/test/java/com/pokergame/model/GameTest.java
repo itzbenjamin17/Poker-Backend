@@ -23,7 +23,11 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -2674,6 +2678,364 @@ class GameTest {
                     .remainingDeck(List.of())
                     .build();
             assertThrows(IllegalStateException.class, () -> emptyGame.resolveWinner(bob));
+        }
+    }
+
+    @Nested
+    @DisplayName("Snapshot restore builder")
+    class SnapshotRestoreTests {
+
+        private static final String RESTORE_GAME_ID = "restore-test-game";
+
+        private static Player restorePlayer(String id, String name, int chips) {
+            return Player.restoreBuilder()
+                    .playerId(id)
+                    .name(name)
+                    .chips(chips)
+                    .currentBet(0)
+                    .holeCards(List.of())
+                    .bestHand(List.of())
+                    .handRank(HandRank.NO_HAND)
+                    .hasFolded(false)
+                    .allIn(false)
+                    .out(false)
+                    .disconnected(false)
+                    .readyForNextHand(false)
+                    .build();
+        }
+
+        private static Game.GameRestoreBuilder validRestoreBuilder() {
+            Player p1 = restorePlayer("p1", "Alice", 1000);
+            Player p2 = restorePlayer("p2", "Bob", 1000);
+            return Game.restoreBuilder()
+                    .gameId(RESTORE_GAME_ID)
+                    .players(List.of(p1, p2))
+                    .activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(List.of())
+                    .communityCards(List.of())
+                    .pot(0)
+                    .currentPlayerId("p1")
+                    .currentHighestBet(0)
+                    .carryOverPot(0)
+                    .currentPhase(GamePhase.PRE_FLOP)
+                    .gameOver(false)
+                    .smallBlind(5)
+                    .bigBlind(10)
+                    .handContributions(Map.of())
+                    .lastHandPayout(null)
+                    .lastFullRaise(0)
+                    .previousBets(Map.of())
+                    .handSeatOrder(List.of())
+                    .dealerPlayerId("p1")
+                    .smallBlindPlayerId("p1")
+                    .bigBlindPlayerId("p2")
+                    .finalPotSettled(false)
+                    .pausedForDisconnectedSurvivor(false)
+                    .readyCountdownDeadlineEpochMs(null)
+                    .readyGateState(ReadyGateState.CLOSED)
+                    .handNumber(1L)
+                    .stateRevision(1L)
+                    .gameEndResult(null)
+                    .allPlayersHadInitialTurn(false)
+                    .actedPlayersInRound(Set.of())
+                    .scheduledTimes(Map.of())
+                    .timerVersions(Map.of());
+        }
+
+        @Test
+        @DisplayName("Restores full snapshot state and respects whether showdown settlement already ran")
+        void restoresFullSnapshotAndShowdownSettlementState() {
+            Player p1 = restorePlayer("p1", "Alice", 1000);
+            p1.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+            Player p2 = restorePlayer("p2", "Bob", 800);
+            p2.setHoleCards(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.CLUBS)));
+            Player p3 = restorePlayer("p3", "Charlie", 600);
+            List<Card> deckCards = List.of(
+                    new Card(Rank.TWO, Suit.CLUBS),
+                    new Card(Rank.THREE, Suit.DIAMONDS),
+                    new Card(Rank.FOUR, Suit.HEARTS));
+            List<Card> community = List.of(
+                    new Card(Rank.TEN, Suit.SPADES),
+                    new Card(Rank.JACK, Suit.SPADES),
+                    new Card(Rank.QUEEN, Suit.SPADES));
+            Map<String, Integer> contributions = Map.of("p1", 200, "p2", 250);
+            HandPayout payout = new HandPayout(Map.of("p1", 450), Map.of(), Set.of("p1"), 0, true);
+            Map<String, Integer> previousBets = Map.of("p1", 100, "p2", 100);
+            List<String> seatOrder = List.of("p2", "p3", "p1");
+            Set<String> actedPlayers = Set.of("p1", "p2");
+            Map<ScheduledGameTask, Long> scheduledTimes = Map.of(
+                    ScheduledGameTask.AUTO_ADVANCE, 1700000005000L,
+                    ScheduledGameTask.CLEANUP, 1700000060000L);
+            Map<ScheduledGameTask, Long> timerVersions = Map.of(
+                    ScheduledGameTask.AUTO_ADVANCE, 3L,
+                    ScheduledGameTask.CLEANUP, 1L);
+            GameEndResponse terminalResult = new GameEndResponse(
+                    "GAME_END", RESTORE_GAME_ID, "Alice", 1450, false, "Alice won", null);
+
+            Game settledGame = Game.restoreBuilder()
+                    .gameId(RESTORE_GAME_ID)
+                    .players(List.of(p1, p2, p3))
+                    .activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(deckCards)
+                    .communityCards(community)
+                    .pot(475)
+                    .currentPlayerId("p1")
+                    .currentHighestBet(100)
+                    .carryOverPot(25)
+                    .currentPhase(GamePhase.FLOP)
+                    .gameOver(false)
+                    .smallBlind(15)
+                    .bigBlind(30)
+                    .handContributions(contributions)
+                    .lastHandPayout(payout)
+                    .lastFullRaise(70)
+                    .previousBets(previousBets)
+                    .handSeatOrder(seatOrder)
+                    .dealerPlayerId("p2")
+                    .smallBlindPlayerId("p3")
+                    .bigBlindPlayerId("p1")
+                    .finalPotSettled(true)
+                    .pausedForDisconnectedSurvivor(true)
+                    .readyCountdownDeadlineEpochMs(1700000000000L)
+                    .readyGateState(ReadyGateState.COUNTING_DOWN)
+                    .handNumber(7L)
+                    .stateRevision(88L)
+                    .gameEndResult(terminalResult)
+                    .allPlayersHadInitialTurn(true)
+                    .actedPlayersInRound(actedPlayers)
+                    .scheduledTimes(scheduledTimes)
+                    .timerVersions(timerVersions)
+                    .build();
+
+            Game.Snapshot snapshot = settledGame.toSnapshot();
+            assertEquals(deckCards, snapshot.remainingDeck());
+            assertEquals(25, snapshot.carryOverPot());
+            assertEquals(contributions, snapshot.handContributions());
+            assertTrue(snapshot.allPlayersHadInitialTurn());
+            assertEquals(actedPlayers, snapshot.actedPlayerIds());
+            assertEquals(scheduledTimes, snapshot.scheduledTimes());
+            assertEquals(timerVersions, snapshot.timerVersions());
+            assertEquals(70, snapshot.lastFullRaise());
+            assertEquals(previousBets, snapshot.previousBets());
+            assertEquals(seatOrder, snapshot.handSeatOrder());
+            assertEquals("p2", snapshot.dealerPlayerId());
+            assertEquals("p1", snapshot.currentPlayerId());
+            assertEquals(payout, settledGame.getLastHandPayout());
+            assertTrue(settledGame.isFinalPotSettled());
+            assertTrue(settledGame.isPausedForDisconnectedSurvivor());
+            assertEquals(7L, settledGame.getHandNumber());
+            assertEquals(88L, settledGame.getStateRevision());
+            assertEquals(terminalResult, settledGame.getGameEndResult());
+            assertEquals(3L, settledGame.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
+
+            // Settled hand stays idempotent on showdown
+            settledGame.conductShowdown();
+            assertEquals(1000, p1.getChips());
+            assertEquals(800, p2.getChips());
+
+            // Unsettled restored hand evaluates and awards the pot at showdown
+            Player u1 = restorePlayer("p1", "Alice", 1000);
+            u1.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+            Player u2 = restorePlayer("p2", "Bob", 800);
+            u2.setHoleCards(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.CLUBS)));
+            Game unsettledGame = Game.restoreBuilder()
+                    .gameId(RESTORE_GAME_ID)
+                    .players(List.of(u1, u2))
+                    .activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(List.of())
+                    .communityCards(community)
+                    .pot(200)
+                    .currentPlayerId("p1")
+                    .currentHighestBet(100)
+                    .currentPhase(GamePhase.FLOP)
+                    .smallBlind(15)
+                    .bigBlind(30)
+                    .handContributions(Map.of("p1", 100, "p2", 100))
+                    .dealerPlayerId("p2")
+                    .smallBlindPlayerId("p2")
+                    .bigBlindPlayerId("p1")
+                    .allPlayersHadInitialTurn(true)
+                    .actedPlayersInRound(Set.of())
+                    .scheduledTimes(Map.of())
+                    .build();
+
+            unsettledGame.conductShowdown();
+            assertEquals(Set.of("p1"), unsettledGame.getLastHandPayout().winnerIds());
+            assertEquals(1200, u1.getChips());
+            assertEquals(HandRank.ROYAL_FLUSH, u1.getHandRank());
+        }
+
+        @Test
+        @DisplayName("Rejects corrupt snapshot inputs instead of silently inventing defaults")
+        void rejectsCorruptSnapshotInputs() {
+            for (String invalidId : Arrays.asList(null, "", "   ", "\t\n")) {
+                IllegalStateException ex = assertThrows(IllegalStateException.class,
+                        () -> validRestoreBuilder().gameId(invalidId).build());
+                assertEquals("Game ID cannot be null or empty", ex.getMessage());
+            }
+
+            List<Player> playersWithNull = new ArrayList<>();
+            playersWithNull.add(restorePlayer("p1", "Alice", 1000));
+            playersWithNull.add(null);
+            IllegalStateException nullElementEx = assertThrows(IllegalStateException.class,
+                    () -> validRestoreBuilder().players(playersWithNull).activePlayerIds(List.of("p1")).build());
+            assertEquals("Invalid players list. Please try again.", nullElementEx.getMessage());
+
+            for (int invalidMax : new int[]{1, 11}) {
+                IllegalStateException maxEx = assertThrows(IllegalStateException.class,
+                        () -> validRestoreBuilder().maxPlayers(invalidMax).build());
+                assertEquals("Max players must be between 2 and 10.", maxEx.getMessage());
+            }
+
+            IllegalStateException unknownActiveEx = assertThrows(IllegalStateException.class,
+                    () -> validRestoreBuilder().activePlayerIds(List.of("p1", "unknown-player")).build());
+            assertEquals("Snapshot references an unknown active player", unknownActiveEx.getMessage());
+
+            List<String> activeWithNull = new ArrayList<>();
+            activeWithNull.add("p1");
+            activeWithNull.add(null);
+            assertThrows(IllegalStateException.class,
+                    () -> validRestoreBuilder().activePlayerIds(activeWithNull).build());
+
+            // Null remainingDeck must fail rather than inventing a fresh 52-card deck
+            assertThrows(IllegalStateException.class,
+                    () -> validRestoreBuilder().remainingDeck(null).build());
+            assertThrows(NullPointerException.class,
+                    () -> validRestoreBuilder().readyGateState(null).build());
+        }
+
+        @Test
+        @DisplayName("Preserves restored deck draw sequence and fails cleanly when exhausted")
+        void preservesRestoredDeckDrawOrderAndEmptyGuards() {
+            Card card1 = new Card(Rank.TWO, Suit.CLUBS);
+            Card card2 = new Card(Rank.THREE, Suit.DIAMONDS);
+            Card card3 = new Card(Rank.ACE, Suit.SPADES);
+            Game game = validRestoreBuilder()
+                    .currentPhase(GamePhase.FLOP)
+                    .communityCards(List.of(
+                            new Card(Rank.TEN, Suit.HEARTS),
+                            new Card(Rank.JACK, Suit.HEARTS),
+                            new Card(Rank.QUEEN, Suit.HEARTS)))
+                    .remainingDeck(List.of(card1, card2, card3))
+                    .build();
+
+            game.dealTurn();
+            assertEquals(4, game.getCommunityCards().size());
+            assertEquals(card3, game.getCommunityCards().get(3));
+            assertEquals(List.of(card1, card2), game.toSnapshot().remainingDeck());
+
+            Game oneCardGame = validRestoreBuilder()
+                    .communityCards(List.of(
+                            new Card(Rank.TWO, Suit.CLUBS),
+                            new Card(Rank.THREE, Suit.CLUBS),
+                            new Card(Rank.FOUR, Suit.CLUBS)))
+                    .remainingDeck(List.of(new Card(Rank.SEVEN, Suit.DIAMONDS)))
+                    .build();
+            oneCardGame.dealTurn();
+            assertTrue(oneCardGame.toSnapshot().remainingDeck().isEmpty());
+            assertThrows(IllegalStateException.class, oneCardGame::dealRiver);
+        }
+
+        @Test
+        @DisplayName("Isolates restored collections from caller mutations before and after build")
+        void isolatesCollectionsBeforeAndAfterBuild() {
+            Player p1 = restorePlayer("p1", "Alice", 1000);
+            Player p2 = restorePlayer("p2", "Bob", 1000);
+            Player p3 = restorePlayer("p3", "Charlie", 1000);
+
+            List<Player> mutablePlayers = new ArrayList<>(List.of(p1, p2));
+            List<String> mutableActiveIds = new ArrayList<>(List.of("p1", "p2"));
+            List<Card> mutableCommunity = new ArrayList<>(List.of(new Card(Rank.ACE, Suit.SPADES)));
+            List<Card> mutableDeck = new ArrayList<>(List.of(new Card(Rank.TWO, Suit.HEARTS)));
+            Map<String, Integer> mutableContribs = new HashMap<>(Map.of("p1", 50));
+            Map<String, Integer> mutableWagers = new HashMap<>(Map.of("p1", 20));
+            List<String> mutableSeatOrder = new ArrayList<>(List.of("p1", "p2"));
+            Set<String> mutableActed = new HashSet<>(Set.of("p1"));
+            Map<ScheduledGameTask, Long> mutableDeadlines = new EnumMap<>(ScheduledGameTask.class);
+            mutableDeadlines.put(ScheduledGameTask.AUTO_ADVANCE, 5000L);
+            Map<ScheduledGameTask, Long> mutableVersions = new EnumMap<>(ScheduledGameTask.class);
+            mutableVersions.put(ScheduledGameTask.AUTO_ADVANCE, 1L);
+
+            Game.GameRestoreBuilder builder = validRestoreBuilder()
+                    .players(mutablePlayers)
+                    .activePlayerIds(mutableActiveIds)
+                    .communityCards(mutableCommunity)
+                    .remainingDeck(mutableDeck)
+                    .handContributions(mutableContribs)
+                    .previousBets(mutableWagers)
+                    .handSeatOrder(mutableSeatOrder)
+                    .actedPlayersInRound(mutableActed)
+                    .scheduledTimes(mutableDeadlines)
+                    .timerVersions(mutableVersions);
+
+            // Mutations before build() are captured
+            mutablePlayers.add(p3);
+            mutableActiveIds.add("p3");
+            mutableCommunity.add(new Card(Rank.KING, Suit.CLUBS));
+            mutableDeck.add(new Card(Rank.FOUR, Suit.SPADES));
+            mutableContribs.put("p3", 75);
+            mutableWagers.put("p2", 20);
+            mutableSeatOrder.add("p3");
+            mutableActed.add("p2");
+            mutableDeadlines.put(ScheduledGameTask.CLEANUP, 9000L);
+            mutableVersions.put(ScheduledGameTask.CLEANUP, 2L);
+
+            Game game = builder.build();
+
+            // Mutations after build() are isolated
+            mutablePlayers.clear();
+            mutableActiveIds.clear();
+            mutableCommunity.clear();
+            mutableDeck.clear();
+            mutableContribs.clear();
+            mutableWagers.clear();
+            mutableSeatOrder.clear();
+            mutableActed.clear();
+            mutableDeadlines.clear();
+            mutableVersions.clear();
+
+            assertEquals(3, game.getPlayers().size());
+            assertEquals(3, game.getActivePlayers().size());
+            assertEquals(2, game.getCommunityCards().size());
+            assertEquals(2, game.toSnapshot().remainingDeck().size());
+            assertEquals(2, game.toSnapshot().handContributions().size());
+            assertEquals(2, game.toSnapshot().previousBets().size());
+            assertEquals(3, game.toSnapshot().handSeatOrder().size());
+            assertEquals(2, game.toSnapshot().actedPlayerIds().size());
+            assertEquals(2, game.toSnapshot().scheduledTimes().size());
+            assertEquals(2, game.toSnapshot().timerVersions().size());
+        }
+
+        @Test
+        @DisplayName("Applies safe fallbacks for seat order, timer versions, and current player")
+        void appliesSafeFallbacksForSeatOrderTimerVersionsAndCurrentPlayer() {
+            Player p1 = restorePlayer("p1", "Alice", 1000);
+            Player p2 = restorePlayer("p2", "Bob", 1000);
+            Player p3 = restorePlayer("p3", "Charlie", 1000);
+
+            Game defaultOrderAndTimers = validRestoreBuilder()
+                    .players(List.of(p1, p2, p3))
+                    .activePlayerIds(List.of("p3", "p1"))
+                    .handSeatOrder(null)
+                    .scheduledTimes(Map.of(ScheduledGameTask.CLEANUP, 99999L))
+                    .timerVersions(null)
+                    .currentPlayerId("missing")
+                    .build();
+
+            assertEquals(List.of("p1", "p2", "p3"), defaultOrderAndTimers.toSnapshot().handSeatOrder());
+            assertEquals(List.of("p3", "p1"),
+                    defaultOrderAndTimers.getActivePlayers().stream().map(Player::getPlayerId).toList());
+            assertEquals(0L, defaultOrderAndTimers.getTimerVersion(ScheduledGameTask.CLEANUP));
+            assertTrue(defaultOrderAndTimers.toSnapshot().timerVersions().isEmpty());
+            assertNotNull(defaultOrderAndTimers.getCurrentPlayer());
+
+            Game emptyActive = validRestoreBuilder()
+                    .players(List.of(p1, p2))
+                    .activePlayerIds(List.of())
+                    .gameOver(true)
+                    .build();
+            IllegalStateException ex = assertThrows(IllegalStateException.class, emptyActive::getCurrentPlayer);
+            assertEquals("No active players available", ex.getMessage());
         }
     }
 }
