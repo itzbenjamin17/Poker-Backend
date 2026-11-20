@@ -4,7 +4,7 @@ import com.pokergame.enums.HandRank;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
 import com.pokergame.model.PotCalculator.PotAllocation;
-import com.pokergame.model.PotCalculator.PotComputationResult;
+import com.pokergame.model.PotCalculator.PotAllocations;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -112,7 +112,7 @@ class ShowdownResolverTest {
     void distribute_SingleWinner_TakesWholePot() {
         Player a = player("a", 0, HandRank.FLUSH);
         Player b = player("b", 0, HandRank.ONE_PAIR);
-        PotComputationResult computation = new PotComputationResult(
+        PotAllocations computation = new PotAllocations(
                 List.of(new PotAllocation(200, List.of(a, b))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
@@ -130,7 +130,7 @@ class ShowdownResolverTest {
     void distribute_OddChipSplit_AwardsOddChipsClockwiseFromDealer() {
         Player a = player("a", 0, HandRank.FLUSH);
         Player b = player("b", 0, HandRank.FLUSH);
-        PotComputationResult computation = new PotComputationResult(
+        PotAllocations computation = new PotAllocations(
                 List.of(new PotAllocation(101, List.of(a, b))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
@@ -148,7 +148,7 @@ class ShowdownResolverTest {
         Player a = player("a", 0, HandRank.STRAIGHT);
         Player b = player("b", 0, HandRank.STRAIGHT);
         Player c = player("c", 0, HandRank.STRAIGHT);
-        PotComputationResult computation = new PotComputationResult(
+        PotAllocations computation = new PotAllocations(
                 List.of(new PotAllocation(101, List.of(a, b, c))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
@@ -167,7 +167,7 @@ class ShowdownResolverTest {
         Player a = player("a", 0, HandRank.FLUSH);
         Player b = player("b", 0, HandRank.FLUSH);
         Player c = player("c", 0, HandRank.FLUSH);
-        PotComputationResult computation = new PotComputationResult(
+        PotAllocations computation = new PotAllocations(
                 List.of(new PotAllocation(101, List.of(a, b, c))), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
@@ -184,7 +184,7 @@ class ShowdownResolverTest {
         Player a = player("a", 0, HandRank.FLUSH);
         Player folded = Player.restoreBuilder().name("f").playerId("f").holeCards(List.of()).bestHand(List.of()).chips(0).hasFolded(true).handRank(HandRank.NO_HAND).build();
         Player out = Player.restoreBuilder().name("o").playerId("o").holeCards(List.of()).bestHand(List.of()).chips(0).out(true).handRank(HandRank.NO_HAND).build();
-        PotComputationResult computation = new PotComputationResult(
+        PotAllocations computation = new PotAllocations(
                 List.of(new PotAllocation(100, List.of(a))), Map.of("a", 40, "f", 30, "o", 20, "missing", 10), 100);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
@@ -198,7 +198,7 @@ class ShowdownResolverTest {
 
     @Test
     void distribute_AllocationWithNoEligiblePlayers_GoesToRemainder() {
-        PotComputationResult computation = new PotComputationResult(
+        PotAllocations computation = new PotAllocations(
                 List.of(new PotAllocation(75, List.of())), Map.of(), 0);
 
         ShowdownResolver.Distribution d = ShowdownResolver.distribute(
@@ -244,7 +244,7 @@ class ShowdownResolverTest {
         Player a = player("a", 0, HandRank.FLUSH);
         Player b = player("b", 0, HandRank.FLUSH);
         Player c = player("c", 0, HandRank.FLUSH);
-        var pots = new PotComputationResult(List.of(
+        var pots = new PotAllocations(List.of(
                 new PotAllocation(91, List.of(a, b, c)),
                 new PotAllocation(40, List.of(b, c))), Map.of("c", 12), 12);
 

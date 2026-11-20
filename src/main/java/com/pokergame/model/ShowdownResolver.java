@@ -1,7 +1,7 @@
 package com.pokergame.model;
 
 import com.pokergame.model.PotCalculator.PotAllocation;
-import com.pokergame.model.PotCalculator.PotComputationResult;
+import com.pokergame.model.PotCalculator.PotAllocations;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -66,7 +66,7 @@ final class ShowdownResolver {
      * @return the distribution result
      */
     static Distribution distribute(String gameId,
-            PotComputationResult computation, List<Player> players,
+            PotAllocations computation, List<Player> players,
             List<String> handSeatOrder, String dealerPlayerId, boolean wentToShowdown) {
         List<PotAllocation> allocations = computation.allocations();
         Map<String, Player> playersById = players.stream()

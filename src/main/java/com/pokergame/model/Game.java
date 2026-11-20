@@ -11,7 +11,7 @@ import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.model.PotCalculator.PotComputationResult;
+import com.pokergame.model.PotCalculator.PotAllocations;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -290,7 +290,7 @@ public class Game {
 
         this.pot += player.doAction(appliedDecision.action(), validated.amount());
 
-        PotCalculator.trackContribution(handContributions, player, this.pot - potBeforeDecision, gameId);
+        PotCalculator.trackContribution(handContributions, player, this.pot - potBeforeDecision);
         bettingRound.recordAppliedDecision(player, bigBlind, highestBetBeforeDecision);
 
         return advanceTurnOrPhase(validated.playerActionNotice(), true);
@@ -806,7 +806,7 @@ public class Game {
     private PotCalculator.PotInputs potInputs() {
         return new PotCalculator.PotInputs(
                 pot, carryOverPot, handContributions, activePlayers, players,
-                lastHandPayout, bettingRound.getCurrentHighestBet(), gameId);
+                lastHandPayout != null, bettingRound.getCurrentHighestBet(), gameId);
     }
 
     private Player resolveChipWinner() {
@@ -833,7 +833,7 @@ public class Game {
         } else {
             this.pot += player.doAction(PlayerAction.BET, blindAmount);
         }
-        PotCalculator.trackContribution(handContributions, player, player.getCurrentBet() - betBefore, gameId);
+        PotCalculator.trackContribution(handContributions, player, player.getCurrentBet() - betBefore);
     }
 
     private TurnOutcome advanceTurnOrPhase(String playerActionNotice, boolean moveToNextPlayer) {
@@ -871,7 +871,7 @@ public class Game {
     }
 
     private void distributeSidePotsAtShowdown(List<Player> showdownPlayers, boolean wentToShowdown) {
-        PotComputationResult computation = PotCalculator.computePotAllocationsAndUncalled(
+        PotAllocations computation = PotCalculator.allocatePots(
                 pot, carryOverPot, handContributions, activePlayers, players, showdownPlayers, gameId);
         ShowdownResolver.Distribution distribution =
                 ShowdownResolver.distribute(gameId, computation, players,
