@@ -9,7 +9,6 @@ import com.pokergame.model.HandPayout;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.PersistenceException;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
@@ -202,11 +201,10 @@ public final class RoomSnapshotMapper {
      */
     Room restoreRoom(RoomSnapshot.RoomState state) {
         // Room membership is authoritative; the host must be one of the members.
-        Map<String, LocalDateTime> joinTimes = state.playersWithJoinTime() == null
-                ? Map.of() : state.playersWithJoinTime();
-        String hostName = state.hostName() != null && joinTimes.containsKey(state.hostName())
+        List<String> players = state.players() == null ? List.of() : state.players();
+        String hostName = state.hostName() != null && players.contains(state.hostName())
                 ? state.hostName()
-                : joinTimes.keySet().stream().findFirst().orElse(state.hostName());
+                : players.stream().findFirst().orElse(state.hostName());
         return Room.restoreBuilder()
                 .roomId(state.roomId())
                 .roomName(state.roomName())
@@ -217,7 +215,7 @@ public final class RoomSnapshotMapper {
                 .buyIn(state.buyIn())
                 .passwordHash(state.password())
                 .createdAt(state.createdAt())
-                .playersWithJoinTime(joinTimes)
+                .players(players)
                 .playerMembershipIds(state.playerMembershipIds())
                 .gameStarted(state.gameStarted())
                 .inactivityDeadlineEpochMs(state.inactivityDeadlineEpochMs())
@@ -228,7 +226,7 @@ public final class RoomSnapshotMapper {
         return new RoomSnapshot.RoomState(
                 room.getRoomId(), room.getRoomName(), room.getHostName(), room.getMaxPlayers(), room.getSmallBlind(),
                 room.getBigBlind(), room.getBuyIn(), room.getPasswordHash(), room.getCreatedAt(),
-                room.getPlayersWithJoinTimeSnapshot(), room.getPlayerMembershipIdsSnapshot(), room.isGameStarted(),
+                room.getPlayers(), room.getPlayerMembershipIdsSnapshot(), room.isGameStarted(),
                 room.getInactivityDeadlineEpochMs());
     }
 

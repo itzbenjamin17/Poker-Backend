@@ -306,7 +306,7 @@ class RoomControllerIT {
         room.addPlayer(playerName);
         when(roomService.getRoom(roomId)).thenReturn(room);
 
-        PlayerJoinInfo pInfo = new PlayerJoinInfo(playerName, true, "2026-05-17T12:00:00");
+        PlayerJoinInfo pInfo = new PlayerJoinInfo(playerName, true);
         RoomDataResponse roomData = new RoomDataResponse(roomId, "Room1", 6, 1000, 10, 20, LocalDateTime.now(), playerName, List.of(pInfo), 1, true, false);
         when(roomService.getRoomData(roomId)).thenReturn(roomData);
 

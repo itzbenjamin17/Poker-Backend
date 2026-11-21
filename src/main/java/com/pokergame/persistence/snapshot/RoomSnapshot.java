@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -29,7 +30,7 @@ import java.util.Set;
 public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
 
     /**
-     * Details about the room itself (the lobby) that we need to restore, like passwords and who joined when.
+     * Details about the room itself (the lobby) that we need to restore, like passwords and member join order.
      *
      * @param roomId             the unique ID for the room
      * @param roomName           the name of the room players see
@@ -39,17 +40,23 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
      * @param bigBlind           the room's big blind amount
      * @param buyIn              how many chips players start with
      * @param password           the room's password
-     * @param createdAt          when the room was created
-     * @param playersWithJoinTime when each player joined
-     * @param gameStarted        true if they have started playing
+     * @param createdAt           when the room was created
+     * @param players             players in the room in join order
+     * @param playerMembershipIds session membership IDs keyed by player name
+     * @param gameStarted         true if they have started playing
+     * @param inactivityDeadlineEpochMs lobby or game inactivity deadline in epoch ms, or {@code null}
      */
     public record RoomState(String roomId, String roomName, String hostName, int maxPlayers, int smallBlind,
             int bigBlind, int buyIn, String password, LocalDateTime createdAt,
-            Map<String, LocalDateTime> playersWithJoinTime, Map<String, String> playerMembershipIds,
+            List<String> players, Map<String, String> playerMembershipIds,
             boolean gameStarted,
             Long inactivityDeadlineEpochMs) {
         @JsonCreator
         public RoomState {
+            if (players != null && players.stream().anyMatch(Objects::isNull)) {
+                throw new IllegalArgumentException("players must not contain null elements");
+            }
+            players = players == null ? List.of() : List.copyOf(players);
             playerMembershipIds = playerMembershipIds == null
                     ? Map.of()
                     : Collections.unmodifiableMap(new LinkedHashMap<>(playerMembershipIds));

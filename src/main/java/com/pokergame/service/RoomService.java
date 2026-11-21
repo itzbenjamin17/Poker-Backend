@@ -321,15 +321,9 @@ public class RoomService {
 
         String currentHost = room.getHostName();
         List<PlayerJoinInfo> playerObjects = room.getPlayers().stream()
-                .map(playerName -> {
-                    String joinedAtStr = requireNonNull(
-                            room.getJoinedAt(playerName),
-                            "joinedAt must not be null for member " + playerName).toString();
-                    return new PlayerJoinInfo(
-                            playerName,
-                            currentHost != null && currentHost.equals(playerName),
-                            joinedAtStr);
-                })
+                .map(playerName -> new PlayerJoinInfo(
+                        playerName,
+                        currentHost != null && currentHost.equals(playerName)))
                 .toList();
 
         return new RoomDataResponse(
@@ -490,7 +484,7 @@ public class RoomService {
 
     private String registerMember(Room room, String playerName, long now) {
         String roomId = room.getRoomId();
-        String membershipId = room.addPlayer(playerName, clock);
+        String membershipId = room.addPlayer(playerName);
         long firstConnectDeadline = now + timings.disconnectGracePeriodMs();
         room.setAbsenceDeadline(playerName, firstConnectDeadline);
         PostSaveActions.runAfterSave(() -> eventPublisher.publishEvent(

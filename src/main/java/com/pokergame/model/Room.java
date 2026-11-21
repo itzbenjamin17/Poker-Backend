@@ -1,18 +1,19 @@
 package com.pokergame.model;
 
-import com.pokergame.exception.BadRequestException;
-import org.springframework.security.crypto.password.PasswordEncoder;
+import static java.util.Objects.requireNonNull;
 
+import com.pokergame.exception.BadRequestException;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 /**
  * Represents a poker game room/lobby where players can join and play together.
@@ -45,30 +46,20 @@ public class Room {
     private final String passwordHash;
     private final LocalDateTime createdAt;
 
+    // Mutable state below requires the room lock once the room is registered/live.
+
     private String hostName;
-    /*
-     * Join-order and arrival timestamps for players in this room.
-     * Guarded by the room lock after publication.
-     */
-    private final LinkedHashMap<String, LocalDateTime> playersWithJoinTime;
-    /*
-     * Session membership identities created per addPlayer and preserved across WAL snapshots.
-     * Reads and writes require the room lock after publication.
-     */
+    // Players in join order (saved in WAL snapshots).
+    private final Set<String> players;
+    // Per-join session IDs used to validate JWTs (saved in WAL snapshots).
     private final Map<String, String> playerMembershipIds = new LinkedHashMap<>();
-    /*
-     * Process-local absence deadlines for players awaiting first connection or reconnect grace.
-     * Guarded by the room lock after publication. Excluded from WAL serialization.
-     */
-    private final Map<String, Long> playerAbsenceDeadlines = new LinkedHashMap<>();
-    /*
-     * Process-local active socket presence bounded by room membership.
-     * Guarded by the room lock after publication. Excluded from WAL serialization.
-     */
-    private final Set<String> connectedPlayers = new HashSet<>();
     private boolean isGameStarted;
-    private boolean isFinished;
     private Long inactivityDeadlineEpochMs;
+
+    // Live server state (rebuilt on restart, not saved to WAL).
+    private boolean isFinished;
+    private final Map<String, Long> playerAbsenceDeadlines = new LinkedHashMap<>();
+    private final Set<String> connectedPlayers = new HashSet<>();
 
     /**
      * Creates a new poker room with the specified configuration using the system default clock.
@@ -105,51 +96,8 @@ public class Room {
      */
     public Room(String roomId, String roomName, String hostName, int maxPlayers,
             int smallBlind, int bigBlind, int buyIn, String passwordHash, Clock clock) {
-        this(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn, passwordHash,
-                LocalDateTime.now(Objects.requireNonNull(clock, "clock must not be null")));
-    }
-
-    /**
-     * Package-private constructor used to restore persisted Room instances with their
-     * original creation timestamp.
-     *
-     * @param roomId       unique identifier of the room
-     * @param roomName     display name of the room
-     * @param hostName     name of the creator / initial host
-     * @param maxPlayers   maximum capacity of the room
-     * @param smallBlind   small blind amount
-     * @param bigBlind     big blind amount
-     * @param buyIn        buy-in amount
-     * @param passwordHash encoded password hash for private rooms, or {@code null}/blank for public rooms
-     * @param createdAt    persisted creation timestamp
-     * @throws IllegalStateException if any configuration invariant fails
-     */
-    Room(String roomId, String roomName, String hostName, int maxPlayers,
-            int smallBlind, int bigBlind, int buyIn, String passwordHash, LocalDateTime createdAt) {
-        Objects.requireNonNull(createdAt, "createdAt must not be null");
-        if (roomId == null || roomId.trim().isEmpty()) {
-            throw new IllegalStateException("Room ID cannot be null or empty.");
-        }
-        if (roomName == null || roomName.trim().isEmpty()) {
-            throw new IllegalStateException("Room name cannot be null or empty.");
-        }
-        if (hostName == null || hostName.trim().isEmpty()) {
-            throw new IllegalStateException("Host name cannot be null or empty.");
-        }
-        if (maxPlayers < MIN_PLAYERS || maxPlayers > MAX_PLAYERS) {
-            throw new IllegalStateException(
-                    "Max players must be between " + MIN_PLAYERS + " and " + MAX_PLAYERS + ".");
-        }
-        if (smallBlind < MIN_SMALL_BLIND) {
-            throw new IllegalStateException("Small blind must be at least " + MIN_SMALL_BLIND + ".");
-        }
-        if (bigBlind < (long) BIG_BLIND_MULTIPLE * smallBlind) {
-            throw new IllegalStateException("Big blind must be at least twice the small blind.");
-        }
-        if (buyIn < bigBlind) {
-            throw new IllegalStateException(
-                    "Buy-in must be at least the big blind amount.");
-        }
+        requireNonNull(clock, "clock must not be null");
+        validateConfig(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn);
 
         this.roomId = roomId;
         this.roomName = roomName;
@@ -158,9 +106,47 @@ public class Room {
         this.smallBlind = smallBlind;
         this.bigBlind = bigBlind;
         this.buyIn = buyIn;
-        this.passwordHash = (passwordHash == null || passwordHash.trim().isEmpty()) ? null : passwordHash;
-        this.playersWithJoinTime = new LinkedHashMap<>();
-        this.createdAt = createdAt;
+        this.passwordHash = normalizePasswordHash(passwordHash);
+        this.players = new LinkedHashSet<>();
+        this.createdAt = LocalDateTime.now(clock);
+    }
+
+    private Room(RoomRestoreBuilder builder) {
+        requireNonNull(builder.createdAt, "createdAt must not be null");
+        validateConfig(
+                builder.roomId,
+                builder.roomName,
+                builder.hostName,
+                builder.maxPlayers,
+                builder.smallBlind,
+                builder.bigBlind,
+                builder.buyIn);
+        validateRestoredPlayers(builder.players, builder.maxPlayers);
+
+        this.roomId = builder.roomId;
+        this.roomName = builder.roomName;
+        this.hostName = builder.hostName;
+        this.maxPlayers = builder.maxPlayers;
+        this.smallBlind = builder.smallBlind;
+        this.bigBlind = builder.bigBlind;
+        this.buyIn = builder.buyIn;
+        this.passwordHash = normalizePasswordHash(builder.passwordHash);
+        this.createdAt = builder.createdAt;
+        this.players = new LinkedHashSet<>();
+        if (builder.players != null) {
+            this.players.addAll(builder.players);
+            for (String playerName : this.players) {
+                String persistedId = builder.playerMembershipIds != null
+                        ? builder.playerMembershipIds.get(playerName)
+                        : null;
+                String membershipId = (persistedId != null && !persistedId.isBlank())
+                        ? persistedId
+                        : UUID.randomUUID().toString();
+                this.playerMembershipIds.put(playerName, membershipId);
+            }
+        }
+        this.isGameStarted = builder.gameStarted;
+        this.inactivityDeadlineEpochMs = builder.inactivityDeadlineEpochMs;
     }
 
     /**
@@ -174,12 +160,11 @@ public class Room {
     }
 
     public boolean isFull() {
-        return playersWithJoinTime.size() >= maxPlayers;
+        return players.size() >= maxPlayers;
     }
 
     /**
-     * Adds a player to the room using the system default clock if they are not already present
-     * and the room has capacity.
+     * Adds a player to the room if they are not already present and the room has capacity.
      *
      * @param playerName the name of the player to add
      * @return the session-bound membership ID for the added player
@@ -187,29 +172,14 @@ public class Room {
      * @throws IllegalStateException if the room is full
      */
     public String addPlayer(String playerName) {
-        return addPlayer(playerName, Clock.systemDefaultZone());
-    }
-
-    /**
-     * Adds a player to the room if they are not already present and the room has capacity,
-     * recording their join timestamp from {@code clock}.
-     *
-     * @param playerName the name of the player to add
-     * @param clock      clock used to record the player's join timestamp
-     * @return the session-bound membership ID for the added player
-     * @throws BadRequestException   if the player is already in the room
-     * @throws IllegalStateException if the room is full
-     */
-    public String addPlayer(String playerName, Clock clock) {
-        Objects.requireNonNull(clock, "clock must not be null");
-        if (playersWithJoinTime.containsKey(playerName)) {
+        if (players.contains(playerName)) {
             throw new BadRequestException(
                     String.format("Cannot add %s to room as they are already in the room", playerName));
         }
         if (isFull()) {
             throw new IllegalStateException("Room is full");
         }
-        playersWithJoinTime.put(playerName, LocalDateTime.now(clock));
+        players.add(playerName);
         String membershipId = UUID.randomUUID().toString();
         playerMembershipIds.put(playerName, membershipId);
         return membershipId;
@@ -222,22 +192,18 @@ public class Room {
      * @throws BadRequestException if the player is not currently in the room
      */
     public void removePlayer(String playerName) {
-        if (!playersWithJoinTime.containsKey(playerName)) {
+        if (!players.contains(playerName)) {
             throw new BadRequestException(
                     String.format("Cannot remove %s from room as they are not already in the room", playerName));
         }
-        playersWithJoinTime.remove(playerName);
+        players.remove(playerName);
         playerMembershipIds.remove(playerName);
         playerAbsenceDeadlines.remove(playerName);
         connectedPlayers.remove(playerName);
     }
 
     public boolean hasPlayer(String playerName) {
-        return playersWithJoinTime.containsKey(playerName);
-    }
-
-    public LocalDateTime getJoinedAt(String playerName) {
-        return playersWithJoinTime.get(playerName);
+        return players.contains(playerName);
     }
 
     public boolean hasPassword() {
@@ -253,7 +219,7 @@ public class Room {
      * @return {@code true} if password matches or room is public, {@code false} otherwise
      */
     public boolean checkPassword(String rawPassword, PasswordEncoder passwordEncoder) {
-        Objects.requireNonNull(passwordEncoder, "passwordEncoder must not be null");
+        requireNonNull(passwordEncoder, "passwordEncoder must not be null");
         if (!hasPassword()) {
             return true;
         }
@@ -266,16 +232,8 @@ public class Room {
     @Override
     public String toString() {
         String protectedPass = hasPassword() ? "[PROTECTED]" : "none";
-        return roomName + " (" + roomId + ")" + " by " + hostName + " with " + playersWithJoinTime.size()
+        return roomName + " (" + roomId + ")" + " by " + hostName + " with " + players.size()
                 + " players [password=" + protectedPass + "]";
-    }
-
-    public Long getInactivityDeadlineEpochMs() {
-        return inactivityDeadlineEpochMs;
-    }
-
-    public void setInactivityDeadlineEpochMs(Long deadlineEpochMs) {
-        inactivityDeadlineEpochMs = deadlineEpochMs;
     }
 
     /**
@@ -310,18 +268,6 @@ public class Room {
         return deadline != null && deadline == expectedDeadlineMs;
     }
 
-    public String getRoomId() {
-        return roomId;
-    }
-
-    public String getRoomName() {
-        return roomName;
-    }
-
-    public String getHostName() {
-        return hostName;
-    }
-
     /**
      * Updates the current host for the room after host transfer.
      *
@@ -334,43 +280,8 @@ public class Room {
         this.hostName = hostName;
     }
 
-    public List<String> getPlayers() {
-        return new ArrayList<>(playersWithJoinTime.keySet());
-    }
-
-    public int getMaxPlayers() {
-        return maxPlayers;
-    }
-
-    public int getSmallBlind() {
-        return smallBlind;
-    }
-
-    public int getBigBlind() {
-        return bigBlind;
-    }
-
-    public int getBuyIn() {
-        return buyIn;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
     /**
-     * Captures join order and timestamps without exposing the live map guarded by the room lock
-     * to persistence serialization.
-     *
-     * @return independent ordered player-to-join-time snapshot
-     */
-    public Map<String, LocalDateTime> getPlayersWithJoinTimeSnapshot() {
-        return new LinkedHashMap<>(playersWithJoinTime);
-    }
-
-    /**
-     * Captures player membership IDs without exposing the live map guarded by the room lock
-     * to persistence serialization.
+     * Captures player membership IDs without exposing the live map to persistence serialization.
      *
      * @return independent ordered player-to-membership-ID snapshot
      */
@@ -394,6 +305,135 @@ public class Room {
             throw new IllegalArgumentException("membershipId must not be blank");
         }
         playerMembershipIds.put(playerName, membershipId);
+    }
+
+    /**
+     * Sets or clears the live server absence deadline epoch ms for a player.
+     *
+     * @param playerName      the name of the player
+     * @param deadlineEpochMs the absence deadline epoch ms, or null to clear
+     */
+    public void setAbsenceDeadline(String playerName, Long deadlineEpochMs) {
+        if (deadlineEpochMs == null) {
+            playerAbsenceDeadlines.remove(playerName);
+        } else {
+            playerAbsenceDeadlines.put(playerName, deadlineEpochMs);
+        }
+    }
+
+    /**
+     * Updates the live server connection status for a player in this room.
+     * Confirming connected clears any pending absence deadline.
+     *
+     * @param playerName the name of the player
+     * @param connected  true if connected, false if disconnected/absent
+     */
+    public void setPlayerConnected(String playerName, boolean connected) {
+        if (connected) {
+            connectedPlayers.add(playerName);
+            playerAbsenceDeadlines.remove(playerName);
+        } else {
+            connectedPlayers.remove(playerName);
+        }
+    }
+
+    private static void validateConfig(
+            String roomId,
+            String roomName,
+            String hostName,
+            int maxPlayers,
+            int smallBlind,
+            int bigBlind,
+            int buyIn) {
+        if (roomId == null || roomId.trim().isEmpty()) {
+            throw new IllegalStateException("Room ID cannot be null or empty.");
+        }
+        if (roomName == null || roomName.trim().isEmpty()) {
+            throw new IllegalStateException("Room name cannot be null or empty.");
+        }
+        if (hostName == null || hostName.trim().isEmpty()) {
+            throw new IllegalStateException("Host name cannot be null or empty.");
+        }
+        if (maxPlayers < MIN_PLAYERS || maxPlayers > MAX_PLAYERS) {
+            throw new IllegalStateException(
+                    "Max players must be between " + MIN_PLAYERS + " and " + MAX_PLAYERS + ".");
+        }
+        if (smallBlind < MIN_SMALL_BLIND) {
+            throw new IllegalStateException("Small blind must be at least " + MIN_SMALL_BLIND + ".");
+        }
+        if (bigBlind < (long) BIG_BLIND_MULTIPLE * smallBlind) {
+            throw new IllegalStateException("Big blind must be at least twice the small blind.");
+        }
+        if (buyIn < bigBlind) {
+            throw new IllegalStateException("Buy-in must be at least the big blind amount.");
+        }
+    }
+
+    private static void validateRestoredPlayers(List<String> players, int maxPlayers) {
+        if (players == null) {
+            return;
+        }
+        if (players.size() > maxPlayers) {
+            throw new IllegalStateException(
+                    "Restored players count exceeds maxPlayers: " + players.size() + " > " + maxPlayers);
+        }
+        Set<String> seenPlayers = new HashSet<>();
+        for (String playerName : players) {
+            if (playerName == null || playerName.isBlank()) {
+                throw new IllegalStateException("Restored players cannot contain null or blank names.");
+            }
+            if (!seenPlayers.add(playerName)) {
+                throw new IllegalStateException("Duplicate restored player: " + playerName);
+            }
+        }
+    }
+
+    private static String normalizePasswordHash(String passwordHash) {
+        return (passwordHash == null || passwordHash.trim().isEmpty()) ? null : passwordHash;
+    }
+
+    public Long getInactivityDeadlineEpochMs() {
+        return inactivityDeadlineEpochMs;
+    }
+
+    public void setInactivityDeadlineEpochMs(Long deadlineEpochMs) {
+        inactivityDeadlineEpochMs = deadlineEpochMs;
+    }
+
+    public String getRoomId() {
+        return roomId;
+    }
+
+    public String getRoomName() {
+        return roomName;
+    }
+
+    public String getHostName() {
+        return hostName;
+    }
+
+    public List<String> getPlayers() {
+        return new ArrayList<>(players);
+    }
+
+    public int getMaxPlayers() {
+        return maxPlayers;
+    }
+
+    public int getSmallBlind() {
+        return smallBlind;
+    }
+
+    public int getBigBlind() {
+        return bigBlind;
+    }
+
+    public int getBuyIn() {
+        return buyIn;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
     }
 
     public String getPasswordHash() {
@@ -424,38 +464,8 @@ public class Room {
         return playerAbsenceDeadlines.get(playerName);
     }
 
-    /**
-     * Sets or clears the process-local absence deadline epoch ms for a player.
-     *
-     * @param playerName the name of the player
-     * @param deadlineEpochMs the absence deadline epoch ms, or null to clear
-     */
-    public void setAbsenceDeadline(String playerName, Long deadlineEpochMs) {
-        if (deadlineEpochMs == null) {
-            playerAbsenceDeadlines.remove(playerName);
-        } else {
-            playerAbsenceDeadlines.put(playerName, deadlineEpochMs);
-        }
-    }
-
     public boolean isPlayerConnected(String playerName) {
         return connectedPlayers.contains(playerName);
-    }
-
-    /**
-     * Updates the process-local connection status for a player in this room.
-     * Confirming connected clears any pending absence deadline.
-     *
-     * @param playerName the name of the player
-     * @param connected true if connected, false if disconnected/absent
-     */
-    public void setPlayerConnected(String playerName, boolean connected) {
-        if (connected) {
-            connectedPlayers.add(playerName);
-            playerAbsenceDeadlines.remove(playerName);
-        } else {
-            connectedPlayers.remove(playerName);
-        }
     }
 
     /**
@@ -471,7 +481,7 @@ public class Room {
         private int buyIn;
         private String passwordHash;
         private LocalDateTime createdAt;
-        private Map<String, LocalDateTime> playersWithJoinTime;
+        private List<String> players;
         private Map<String, String> playerMembershipIds;
         private boolean gameStarted;
         private Long inactivityDeadlineEpochMs;
@@ -521,8 +531,8 @@ public class Room {
             return this;
         }
 
-        public RoomRestoreBuilder playersWithJoinTime(Map<String, LocalDateTime> playersWithJoinTime) {
-            this.playersWithJoinTime = playersWithJoinTime;
+        public RoomRestoreBuilder players(List<String> players) {
+            this.players = players;
             return this;
         }
 
@@ -542,25 +552,7 @@ public class Room {
         }
 
         public Room build() {
-            Room room = new Room(roomId, roomName, hostName, maxPlayers, smallBlind, bigBlind, buyIn,
-                    passwordHash, createdAt);
-            if (playersWithJoinTime != null) {
-                if (playersWithJoinTime.size() > maxPlayers) {
-                    throw new IllegalStateException(
-                            "Restored players count exceeds maxPlayers: " + playersWithJoinTime.size() + " > " + maxPlayers);
-                }
-                room.playersWithJoinTime.putAll(new LinkedHashMap<>(playersWithJoinTime));
-                for (String playerName : room.playersWithJoinTime.keySet()) {
-                    String persistedId = playerMembershipIds != null ? playerMembershipIds.get(playerName) : null;
-                    String membershipId = (persistedId != null && !persistedId.isBlank())
-                            ? persistedId
-                            : UUID.randomUUID().toString();
-                    room.playerMembershipIds.put(playerName, membershipId);
-                }
-            }
-            room.isGameStarted = gameStarted;
-            room.inactivityDeadlineEpochMs = inactivityDeadlineEpochMs;
-            return room;
+            return new Room(this);
         }
     }
 }

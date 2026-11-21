@@ -10,7 +10,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.util.LinkedHashMap;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -554,11 +554,7 @@ class RoomTest {
     @Test
     void testRestoreBuilder() {
         LocalDateTime createdAt = LocalDateTime.now().minusHours(2);
-        LocalDateTime player1JoinTime = LocalDateTime.now().minusMinutes(30);
-        LocalDateTime player2JoinTime = LocalDateTime.now().minusMinutes(15);
-        Map<String, LocalDateTime> playersWithJoinTime = new LinkedHashMap<>();
-        playersWithJoinTime.put("Alice", player1JoinTime);
-        playersWithJoinTime.put("Bob", player2JoinTime);
+        List<String> players = List.of("Alice", "Bob");
 
         String encodedPassword = passwordEncoder.encode("secret-pass");
         Room restoredRoom = Room.restoreBuilder()
@@ -571,7 +567,7 @@ class RoomTest {
                 .buyIn(2500)
                 .passwordHash(encodedPassword)
                 .createdAt(createdAt)
-                .playersWithJoinTime(playersWithJoinTime)
+                .players(players)
                 .gameStarted(true)
                 .build();
 
@@ -587,10 +583,7 @@ class RoomTest {
         assertTrue(restoredRoom.hasPassword());
         assertTrue(restoredRoom.checkPassword("secret-pass", passwordEncoder));
         assertEquals(createdAt, restoredRoom.getCreatedAt());
-        assertEquals(playersWithJoinTime, restoredRoom.getPlayersWithJoinTimeSnapshot());
         assertEquals(List.of("Alice", "Bob"), restoredRoom.getPlayers());
-        assertEquals(player1JoinTime, restoredRoom.getJoinedAt("Alice"));
-        assertEquals(player2JoinTime, restoredRoom.getJoinedAt("Bob"));
         assertTrue(restoredRoom.isGameStarted());
     }
 
@@ -614,10 +607,6 @@ class RoomTest {
     @Test
     @DisplayName("Restored room assigns fresh runtime membership IDs to all restored players")
     void restoredRoom_AssignsFreshRuntimeMembershipIds() {
-        Map<String, LocalDateTime> joinTimes = new LinkedHashMap<>();
-        joinTimes.put("Alice", LocalDateTime.now().minusMinutes(5));
-        joinTimes.put("Bob", LocalDateTime.now().minusMinutes(3));
-
         Room restored = Room.restoreBuilder()
                 .roomId("restored-1")
                 .roomName("Restored Room")
@@ -627,7 +616,7 @@ class RoomTest {
                 .bigBlind(20)
                 .buyIn(1000)
                 .createdAt(LocalDateTime.now().minusMinutes(10))
-                .playersWithJoinTime(joinTimes)
+                .players(List.of("Alice", "Bob"))
                 .build();
 
         String aliceId = restored.getMembershipId("Alice");
@@ -796,11 +785,6 @@ class RoomTest {
     @Test
     @DisplayName("restoreBuilder rejects snapshot if player count exceeds maxPlayers")
     void restoreBuilder_ExceedingMaxPlayers_ThrowsIllegalStateException() {
-        Map<String, LocalDateTime> joinTimes = new LinkedHashMap<>();
-        joinTimes.put("P1", LocalDateTime.now());
-        joinTimes.put("P2", LocalDateTime.now());
-        joinTimes.put("P3", LocalDateTime.now());
-
         assertThrows(IllegalStateException.class, () -> Room.restoreBuilder()
                 .roomId("overflow-room")
                 .roomName("Overflow Room")
@@ -810,7 +794,7 @@ class RoomTest {
                 .bigBlind(20)
                 .buyIn(1000)
                 .createdAt(LocalDateTime.now())
-                .playersWithJoinTime(joinTimes)
+                .players(List.of("P1", "P2", "P3"))
                 .build());
     }
 
@@ -904,20 +888,39 @@ class RoomTest {
     }
 
     @Test
-    @DisplayName("Room constructor and addPlayer use the injected Clock for timestamps")
-    void clockOverloads_RecordTimestampsFromInjectedClock() {
+    @DisplayName("Room constructor uses the injected Clock for createdAt")
+    void clockOverload_RecordsCreatedAtFromInjectedClock() {
         ZoneId zone = ZoneId.of("UTC");
         Clock createdClock = Clock.fixed(Instant.parse("2026-01-15T10:00:00Z"), zone);
-        Clock joinClock = Clock.fixed(Instant.parse("2026-01-15T10:05:30Z"), zone);
 
         Room clockedRoom = new Room("clock-room", "Clock Room", "Host", 6, 10, 20, 1000, null, createdClock);
         assertEquals(LocalDateTime.of(2026, 1, 15, 10, 0, 0), clockedRoom.getCreatedAt());
 
-        clockedRoom.addPlayer("Alice", joinClock);
-        assertEquals(LocalDateTime.of(2026, 1, 15, 10, 5, 30), clockedRoom.getJoinedAt("Alice"));
-
         assertThrows(NullPointerException.class,
                 () -> new Room("clock-room", "Clock Room", "Host", 6, 10, 20, 1000, null, (Clock) null));
-        assertThrows(NullPointerException.class, () -> clockedRoom.addPlayer("Bob", null));
+    }
+
+    @Test
+    @DisplayName("restoreBuilder rejects duplicate, null, or blank player names")
+    void restoreBuilder_RejectsInvalidPlayerNames() {
+        LocalDateTime createdAt = LocalDateTime.now();
+
+        assertThrows(IllegalStateException.class, () -> Room.restoreBuilder()
+                .roomId("dup-room").roomName("Dup Room").hostName("Alice")
+                .maxPlayers(4).smallBlind(10).bigBlind(20).buyIn(1000).createdAt(createdAt)
+                .players(List.of("Alice", "Alice"))
+                .build());
+
+        assertThrows(IllegalStateException.class, () -> Room.restoreBuilder()
+                .roomId("null-player-room").roomName("Null Player Room").hostName("Alice")
+                .maxPlayers(4).smallBlind(10).bigBlind(20).buyIn(1000).createdAt(createdAt)
+                .players(Arrays.asList("Alice", null))
+                .build());
+
+        assertThrows(IllegalStateException.class, () -> Room.restoreBuilder()
+                .roomId("blank-player-room").roomName("Blank Player Room").hostName("Alice")
+                .maxPlayers(4).smallBlind(10).bigBlind(20).buyIn(1000).createdAt(createdAt)
+                .players(List.of("Alice", "   "))
+                .build());
     }
 }

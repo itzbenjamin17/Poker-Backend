@@ -343,9 +343,6 @@ class RoomSnapshotMapperTest {
         assertFalse(recovered.room().hasPlayer("Bob"), "A retained OUT roster row must not recreate Room membership");
         assertFalse(recovered.room().hasPlayer("DepartedHost"), "A departed original host must not recreate Room membership");
         assertTrue(recovered.room().hasPlayer("BustedSpectator"), "Busted spectators who stayed remain Room members");
-        assertNotNull(recovered.room().getJoinedAt("Alice"), "Alice must have join record");
-        assertNull(recovered.room().getJoinedAt("Bob"));
-        assertNotNull(recovered.room().getJoinedAt("BustedSpectator"));
         assertEquals("Alice", recovered.room().getHostName(), "Current host remains an actual Room member");
     }
 
@@ -366,6 +363,18 @@ class RoomSnapshotMapperTest {
         RoomSnapshotMapper mapper = newMapper();
         ObjectNode snapshot = validTerminalSnapshotTree();
         ((ObjectNode) snapshot.get("room")).remove("inactivityDeadlineEpochMs");
+
+        PersistenceException ex = assertThrows(
+                PersistenceException.class,
+                () -> mapper.deserialize(JSON.writeValueAsBytes(snapshot)));
+        assertEquals("Cannot decode aggregate snapshot", ex.getMessage());
+    }
+
+    @Test
+    void deserializeRejectsNullRoomPlayerElement() {
+        RoomSnapshotMapper mapper = newMapper();
+        ObjectNode snapshot = validTerminalSnapshotTree();
+        ((ObjectNode) snapshot.get("room")).putArray("players").add("Alice").addNull();
 
         PersistenceException ex = assertThrows(
                 PersistenceException.class,
@@ -777,7 +786,7 @@ class RoomSnapshotMapperTest {
     private static RoomSnapshot.RoomState roomState(String roomId, int maxPlayers, int smallBlind,
             int bigBlind, int buyIn) {
         return new RoomSnapshot.RoomState(roomId, "Room", "Host", maxPlayers, smallBlind, bigBlind, buyIn,
-                null, LocalDateTime.of(2024, 1, 1, 12, 0), Map.of(), Map.of(), false, null);
+                null, LocalDateTime.of(2024, 1, 1, 12, 0), List.of(), Map.of(), false, null);
     }
 
     private static RoomSnapshot lobbyImage(RoomSnapshot.RoomState room) {
@@ -844,26 +853,18 @@ class RoomSnapshotMapperTest {
         }
     }
 
-    private static Map<String, LocalDateTime> joinTimes(String... members) {
-        Map<String, LocalDateTime> joined = new LinkedHashMap<>();
-        for (String member : members) {
-            joined.put(member, LocalDateTime.of(2024, 1, 1, 12, 0));
-        }
-        return joined;
-    }
-
     static Stream<Arguments> hostReconciliations() {
         return Stream.of(
-                Arguments.of("the host is in the room", "Bob", joinTimes("Alice", "Bob"), "Bob"),
-                Arguments.of("the host left, first member is used", "Zed", joinTimes("Carol", "Alice"), "Carol"),
-                Arguments.of("no host, first member is used", null, joinTimes("Carol", "Dave"), "Carol"),
-                Arguments.of("empty room keeps the stored host", "Yan", joinTimes(), "Yan"));
+                Arguments.of("the host is in the room", "Bob", List.of("Alice", "Bob"), "Bob"),
+                Arguments.of("the host left, first member is used", "Zed", List.of("Carol", "Alice"), "Carol"),
+                Arguments.of("no host, first member is used", null, List.of("Carol", "Dave"), "Carol"),
+                Arguments.of("empty room keeps the stored host", "Yan", List.of(), "Yan"));
     }
 
     @ParameterizedTest(name = "[{index}] {0}")
     @MethodSource("hostReconciliations")
     @DisplayName("restoreStateImage reconciles the host against actual room membership")
-    void restoreStateImage_HostReconciliation_FallsBackThroughMembership(String name, String hostName, Map<String, LocalDateTime> members, String expectedHost) {
+    void restoreStateImage_HostReconciliation_FallsBackThroughMembership(String name, String hostName, List<String> members, String expectedHost) {
         RoomSnapshot.RoomState room = new RoomSnapshot.RoomState("r", "Room", hostName, 6, 5, 10,
                 100, null, LocalDateTime.of(2024, 1, 1, 12, 0), members, Map.of(), false, null);
         RoomSnapshot image = new RoomSnapshot(false, room, null);
@@ -908,20 +909,20 @@ class RoomSnapshotMapperTest {
     }
 
     @Test
-    @DisplayName("restoreRoom restores a state without join times, and capture keeps the host")
-    void restoreRoom_MissingJoinTimes_AreHandled() {
+    @DisplayName("restoreRoom restores a state without players, and capture keeps the host")
+    void restoreRoom_MissingPlayers_AreHandled() {
         RoomSnapshotMapper mapper = newMapper();
 
         Room restored = mapper.restoreRoom(new RoomSnapshot.RoomState("r", "Room", "Host", 6, 5, 10, 100,
                 null, LocalDateTime.of(2024, 1, 1, 12, 0), null, Map.of(), false, null));
         assertEquals("r", restored.getRoomId());
-        assertTrue(restored.getPlayersWithJoinTimeSnapshot().isEmpty());
+        assertTrue(restored.getPlayers().isEmpty());
 
         Room live = new Room("live", "Live", "Host", 4, 5, 10, 100, null);
         live.addPlayer("Host");
         RoomSnapshot.RoomState captured = mapper.captureStateImage(live, null).room();
         assertEquals("live", captured.roomId());
-        assertEquals(List.of("Host"), List.copyOf(captured.playersWithJoinTime().keySet()));
+        assertEquals(List.of("Host"), captured.players());
     }
 
     @Nested

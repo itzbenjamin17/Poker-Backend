@@ -414,7 +414,7 @@ class DurableMutationAspectTest {
             assertTrue(roomCoordinator.isHeldByCurrentThread("room-capture"),
                     "Room state must be read under the room coordination boundary");
             return inv.callRealMethod();
-        }).when(room).getPlayersWithJoinTimeSnapshot();
+        }).when(room).getPlayers();
 
         doAnswer(inv -> {
             assertTrue(roomCoordinator.isHeldByCurrentThread("room-capture"),
