@@ -5,6 +5,7 @@ import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.RejectedAction;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.exception.ActionFeedbackException;
+import com.pokergame.exception.PokerException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameStateService;
@@ -23,9 +24,12 @@ import java.util.Map;
 import tools.jackson.databind.ObjectMapper;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.ValidationException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
 import org.springframework.validation.BindException;
 import org.springframework.validation.method.MethodValidationException;
 
@@ -56,6 +60,11 @@ import org.springframework.validation.method.MethodValidationException;
 @ControllerAdvice
 public class WebSocketExceptionHandler {
     private static final Logger logger = LoggerFactory.getLogger(WebSocketExceptionHandler.class);
+    private static final String READINESS_FALLBACK_MESSAGE = "Could not update readiness. Please try again.";
+    private static final String REQUEST_FALLBACK_MESSAGE = "Request failed. Please try again.";
+    private static final String INVALID_FORMAT_FALLBACK_MESSAGE =
+            "Invalid action request format. Please try again with a valid amount.";
+    private static final int MAX_NOTIFICATION_LENGTH = 80;
 
     private final GameStateService gameStateService;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -94,13 +103,14 @@ public class WebSocketExceptionHandler {
             RejectedAction readinessAction = destination.endsWith("/ready") ? RejectedAction.READY
                     : RejectedAction.UNREADY;
             gameStateService.sendActionError(playerPrincipal, "ACTION_REJECTED", readinessAction,
-                    technicalMessage(exception));
+                    userFriendlyMessage(exception, READINESS_FALLBACK_MESSAGE, false));
             return;
         }
 
         if (destination == null || !destination.endsWith("/action")) {
             gameStateService.sendPrivatePlayerNotification(playerPrincipal,
-                    technicalMessage(exception), ResponseMessage.PLAYER_NOTIFICATION);
+                    userFriendlyMessage(exception, REQUEST_FALLBACK_MESSAGE, true),
+                    ResponseMessage.PLAYER_NOTIFICATION);
             return;
         }
 
@@ -108,52 +118,34 @@ public class WebSocketExceptionHandler {
         if (action == null) {
             logger.warn("Cannot publish ACTION_ERROR without a supported rejected action");
             gameStateService.sendPrivatePlayerNotification(playerPrincipal,
-                    technicalMessage(exception), ResponseMessage.PLAYER_NOTIFICATION);
+                    userFriendlyMessage(exception, REQUEST_FALLBACK_MESSAGE, true),
+                    ResponseMessage.PLAYER_NOTIFICATION);
             return;
         }
 
-        ActionFeedbackException actionFeedback = null;
-        ResourceNotFoundException resourceNotFound = null;
-        boolean validationOrConversion = false;
-        String validationMessage = null;
-
-        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
-        Throwable cause = exception;
-        while (cause != null && visited.add(cause)) {
-            if (actionFeedback == null && cause instanceof ActionFeedbackException afe
-                    && afe.actionErrorCode() != null) {
-                actionFeedback = afe;
-            }
-            if (resourceNotFound == null && cause instanceof ResourceNotFoundException rnfe) {
-                resourceNotFound = rnfe;
-            }
-            if (isValidationOrConversionFailure(cause)) {
-                validationOrConversion = true;
-                if (validationMessage == null) {
-                    validationMessage = extractValidationMessage(cause);
-                }
-            }
-            cause = cause.getCause();
+        List<Throwable> causes = causeChain(exception);
+        ActionFeedbackException feedback = findCause(causes, ActionFeedbackException.class,
+                e -> e.actionErrorCode() != null);
+        if (feedback != null) {
+            String displayMessage = firstNonBlank(feedback.actionErrorMessage(), feedback.getMessage(),
+                    "Action unavailable");
+            gameStateService.sendActionError(playerPrincipal, feedback.actionErrorCode(),
+                    RejectedAction.from(action), displayMessage);
+            return;
         }
-
-        String code = "ACTION_REJECTED";
-        String displayMessage = "Action unavailable";
-
-        if (actionFeedback != null) {
-            code = actionFeedback.actionErrorCode();
-            displayMessage = actionFeedback.actionErrorMessage() != null ? actionFeedback.actionErrorMessage()
-                    : actionFeedback.getMessage();
-        } else if (resourceNotFound != null) {
-            code = "GAME_NOT_FOUND";
-            displayMessage = "Game unavailable";
-        } else if (validationOrConversion) {
-            code = "INVALID_ACTION_FORMAT";
-            displayMessage = (validationMessage != null && !validationMessage.isBlank())
-                    ? validationMessage
-                    : "Enter a valid action amount";
+        if (findCause(causes, ResourceNotFoundException.class) != null) {
+            gameStateService.sendActionError(playerPrincipal, "GAME_NOT_FOUND",
+                    RejectedAction.from(action), "Game unavailable");
+            return;
         }
-
-        gameStateService.sendActionError(playerPrincipal, code, RejectedAction.from(action), displayMessage);
+        if (causes.stream().anyMatch(this::isValidationOrConversionFailure)) {
+            String displayMessage = firstNonBlank(findValidationMessage(causes), "Enter a valid action amount");
+            gameStateService.sendActionError(playerPrincipal, "INVALID_ACTION_FORMAT",
+                    RejectedAction.from(action), displayMessage);
+            return;
+        }
+        gameStateService.sendActionError(playerPrincipal, "ACTION_REJECTED",
+                RejectedAction.from(action), "Action unavailable");
     }
 
     private boolean isValidationOrConversionFailure(Throwable throwable) {
@@ -212,14 +204,77 @@ public class WebSocketExceptionHandler {
         }
     }
 
-    private String technicalMessage(Exception exception) {
-        String message = exception.getMessage();
-        if (exception instanceof MessageConversionException ||
-                (message != null && message.contains("Cannot deserialize"))) {
-            message = "Invalid action request format. Please try again with a valid amount.";
+    private String userFriendlyMessage(Exception exception, String fallbackMessage, boolean allowFormatFallback) {
+        List<Throwable> causes = causeChain(exception);
+        PokerException domainError = findCause(causes, PokerException.class);
+        if (domainError != null) {
+            String text = domainError instanceof ActionFeedbackException feedback
+                    ? firstNonBlank(feedback.actionErrorMessage(), feedback.getMessage())
+                    : firstNonBlank(domainError.getMessage());
+            return text != null ? truncateNotification(text) : fallbackMessage;
         }
-        if (message == null || message.isBlank())
-            message = "Request failed";
-        return message.length() > 80 ? message.substring(0, 77) + "..." : message;
+        if (allowFormatFallback && isFormatFailure(causes)) {
+            String text = firstNonBlank(findValidationMessage(causes), INVALID_FORMAT_FALLBACK_MESSAGE);
+            return truncateNotification(text);
+        }
+        return fallbackMessage;
+    }
+
+    private static List<Throwable> causeChain(Throwable root) {
+        List<Throwable> causes = new ArrayList<>();
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Throwable cause = root; cause != null && visited.add(cause); cause = cause.getCause()) {
+            causes.add(cause);
+        }
+        return causes;
+    }
+
+    private static <T extends Throwable> T findCause(List<Throwable> causes, Class<T> type) {
+        return findCause(causes, type, ignored -> true);
+    }
+
+    private static <T extends Throwable> T findCause(
+            List<Throwable> causes, Class<T> type, Predicate<T> predicate) {
+        for (Throwable cause : causes) {
+            if (type.isInstance(cause)) {
+                T match = type.cast(cause);
+                if (predicate.test(match)) {
+                    return match;
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean isFormatFailure(List<Throwable> causes) {
+        return causes.stream().anyMatch(cause -> isValidationOrConversionFailure(cause)
+                || (cause.getMessage() != null && cause.getMessage().contains("Cannot deserialize")));
+    }
+
+    private String findValidationMessage(List<Throwable> causes) {
+        for (Throwable cause : causes) {
+            if (isValidationOrConversionFailure(cause)) {
+                String extracted = extractValidationMessage(cause);
+                if (extracted != null && !extracted.isBlank()) {
+                    return extracted;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String firstNonBlank(String... candidates) {
+        for (String candidate : candidates) {
+            if (candidate != null && !candidate.isBlank()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static String truncateNotification(String message) {
+        return message.length() > MAX_NOTIFICATION_LENGTH
+                ? message.substring(0, MAX_NOTIFICATION_LENGTH - 3) + "..."
+                : message;
     }
 }

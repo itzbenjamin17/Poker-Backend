@@ -113,8 +113,7 @@ public class ControllerExceptionHandler {
     }
 
     /**
-     * Maps general security failures to HTTP 403 while preserving the exception's
-     * client-facing message.
+     * Maps general security failures to HTTP 403 with a generic client-facing message.
      *
      * @param ex security failure
      * @return structured forbidden response
@@ -122,11 +121,12 @@ public class ControllerExceptionHandler {
     @ExceptionHandler(SecurityException.class)
     public ResponseEntity<ErrorResponse> handleSecurityException(SecurityException ex) {
         logger.warn("Security exception: {}", ex.getMessage());
-        return errorResponse(HttpStatus.FORBIDDEN, ex.getMessage());
+        return errorResponse(HttpStatus.FORBIDDEN, "Access denied");
     }
 
     /**
-     * Maps invalid arguments raised outside the domain hierarchy to HTTP 400.
+     * Maps invalid arguments raised outside the domain hierarchy to HTTP 400 with a
+     * generic client-facing message.
      *
      * @param ex invalid-argument failure
      * @return structured bad-request response
@@ -134,7 +134,7 @@ public class ControllerExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ErrorResponse> handleIllegalArgumentException(IllegalArgumentException ex) {
         logger.warn("Illegal argument: {}", ex.getMessage());
-        return errorResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
+        return errorResponse(HttpStatus.BAD_REQUEST, "Invalid request");
     }
 
     /**

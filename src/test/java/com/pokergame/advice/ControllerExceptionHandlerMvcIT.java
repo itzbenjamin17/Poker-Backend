@@ -85,13 +85,15 @@ class ControllerExceptionHandlerMvcIT {
     }
 
     @Test
-    @DisplayName("SecurityException maps to 403 with its message")
+    @DisplayName("SecurityException maps to 403 with a generic message and hides internal detail")
     void securityException_Returns403() throws Exception {
         mockMvc.perform(get("/probe/security"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403))
                 .andExpect(jsonPath("$.error").value("Forbidden"))
-                .andExpect(jsonPath("$.message").value("Not allowed here"));
+                .andExpect(jsonPath("$.message").value("Access denied"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("internal policy"))));
     }
 
     @Test
@@ -105,13 +107,15 @@ class ControllerExceptionHandlerMvcIT {
     }
 
     @Test
-    @DisplayName("IllegalArgumentException maps to 400 with its message and does not fall through to 500")
+    @DisplayName("IllegalArgumentException maps to 400 with a generic message and hides internal detail")
     void illegalArgument_Returns400() throws Exception {
         mockMvc.perform(get("/probe/illegal-argument"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400))
                 .andExpect(jsonPath("$.error").value("Bad Request"))
-                .andExpect(jsonPath("$.message").value("Bad argument"));
+                .andExpect(jsonPath("$.message").value("Invalid request"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("delayMs"))));
     }
 
     @Test
@@ -187,7 +191,7 @@ class ControllerExceptionHandlerMvcIT {
 
         @GetMapping("/probe/security")
         void security() {
-            throw new SecurityException("Not allowed here");
+            throw new SecurityException("internal policy failure");
         }
 
         @GetMapping("/probe/unauthorised")
@@ -197,7 +201,7 @@ class ControllerExceptionHandlerMvcIT {
 
         @GetMapping("/probe/illegal-argument")
         void illegalArgument() {
-            throw new IllegalArgumentException("Bad argument");
+            throw new IllegalArgumentException("delayMs must be >= 0: -5");
         }
 
         @GetMapping("/probe/requires-param")

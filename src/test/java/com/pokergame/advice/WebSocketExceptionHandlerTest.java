@@ -7,6 +7,7 @@ import com.pokergame.dto.response.ActionErrorResponse;
 import com.pokergame.dto.response.PlayerNotificationResponse;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
+import com.pokergame.persistence.PersistenceException;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.RoomService;
@@ -129,7 +130,8 @@ class WebSocketExceptionHandlerTest {
                 .setHeader("simpDestination", "/app/" + gameId + "/action").build();
         handler.handleMessageException(new RuntimeException("malformed"), principal, frame);
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "malformed", playerName, gameId));
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
+                        "Request failed. Please try again.", playerName, gameId));
     }
 
     /** Ordinary transient readiness errors remain structured and retryable. */
@@ -595,30 +597,31 @@ class WebSocketExceptionHandlerTest {
     void unrecoverableActionPayloadIsReportedAsNotification(Object payload) {
         handler.handleMessageException(new RuntimeException("boom"), principal, frame(payload, "action"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "boom", playerName, gameId));
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
+                        "Request failed. Please try again.", playerName, gameId));
         verify(messagingTemplate, Mockito.times(1)).convertAndSendToUser(ArgumentMatchers.anyString(),
                 ArgumentMatchers.anyString(), ArgumentMatchers.any(Object.class));
     }
 
-    /** Missing or blank exception messages are replaced with a default. */
+    /** Missing or blank domain exception messages are replaced with a default. */
     @ParameterizedTest
     @ValueSource(strings = {"", "   "})
     @DisplayName("Blank exception message is replaced with a default")
     void blankExceptionMessageIsReplacedWithDefault(String message) {
-        handler.handleMessageException(new RuntimeException(message), principal, frame("{}", "other"));
+        handler.handleMessageException(new BadRequestException(message), principal, frame("{}", "other"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "Request failed", playerName,
-                        gameId));
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
+                        "Request failed. Please try again.", playerName, gameId));
     }
 
-    /** A null exception message is replaced with a default. */
+    /** A null domain exception message is replaced with a default. */
     @Test
     @DisplayName("Null exception message is replaced with a default")
     void nullExceptionMessageIsReplacedWithDefault() {
-        handler.handleMessageException(new RuntimeException((String) null), principal, frame("{}", "other"));
+        handler.handleMessageException(new BadRequestException((String) null), principal, frame("{}", "other"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "Request failed", playerName,
-                        gameId));
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
+                        "Request failed. Please try again.", playerName, gameId));
     }
 
     /** A frame without a destination is treated as a non-action frame. */
@@ -628,26 +631,27 @@ class WebSocketExceptionHandlerTest {
         Message<String> noDestination = MessageBuilder.withPayload("{}").build();
         handler.handleMessageException(new RuntimeException("boom"), principal, noDestination);
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "boom", playerName, gameId));
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
+                        "Request failed. Please try again.", playerName, gameId));
     }
 
-    /** Messages longer than 80 characters are cut to 77 characters plus an ellipsis. */
+    /** Domain messages longer than 80 characters are cut to 77 characters plus an ellipsis. */
     @Test
     @DisplayName("Message longer than 80 characters is truncated with an ellipsis")
     void messageLongerThanEightyCharactersIsTruncated() {
         String longMessage = "x".repeat(81);
-        handler.handleMessageException(new RuntimeException(longMessage), principal, frame("{}", "other"));
+        handler.handleMessageException(new BadRequestException(longMessage), principal, frame("{}", "other"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "x".repeat(77) + "...",
                         playerName, gameId));
     }
 
-    /** A message of exactly 80 characters is delivered unchanged. */
+    /** A domain message of exactly 80 characters is delivered unchanged. */
     @Test
     @DisplayName("Message of exactly 80 characters is not truncated")
     void messageOfExactlyEightyCharactersIsNotTruncated() {
         String message = "y".repeat(80);
-        handler.handleMessageException(new RuntimeException(message), principal, frame("{}", "other"));
+        handler.handleMessageException(new BadRequestException(message), principal, frame("{}", "other"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, message, playerName, gameId));
     }
@@ -671,9 +675,68 @@ class WebSocketExceptionHandlerTest {
     @ValueSource(strings = {"ready", "unready"})
     @DisplayName("Readiness rejection truncates long messages and keeps the requested action")
     void readinessRejectionTruncatesLongMessages(String suffix) {
-        handler.handleMessageException(new RuntimeException("z".repeat(100)), principal, frame("{}", suffix));
+        handler.handleMessageException(new UnauthorisedActionException("z".repeat(100)), principal, frame("{}", suffix));
         RejectedAction expected = suffix.equals("ready") ? RejectedAction.READY : RejectedAction.UNREADY;
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 new ActionErrorResponse("ACTION_REJECTED", expected, "z".repeat(77) + "..."));
+    }
+
+    /** Unexpected internal failures on /ready and /unready use friendly readiness fallback text. */
+    @ParameterizedTest
+    @ValueSource(strings = {"ready", "unready"})
+    @DisplayName("Unexpected readiness failure uses friendly fallback without leaking internal detail")
+    void unexpectedReadinessFailureUsesFriendlyFallbackMessage(String suffix) {
+        handler.handleMessageException(
+                new IllegalStateException("Current thread does not hold room lock for room: game-123"),
+                principal, frame("{}", suffix));
+        RejectedAction expected = suffix.equals("ready") ? RejectedAction.READY : RejectedAction.UNREADY;
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new ActionErrorResponse("ACTION_REJECTED", expected,
+                        "Could not update readiness. Please try again."));
+    }
+
+    /** Unexpected internal failures on other STOMP paths use friendly request fallback text. */
+    @Test
+    @DisplayName("Unexpected non-action failure uses friendly fallback without leaking internal detail")
+    void unexpectedNonActionFailureUsesFriendlyFallbackMessage() {
+        handler.handleMessageException(
+                new IllegalStateException("Nested durable mutations cannot cross room boundaries"),
+                principal, frame("{}", "other"));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
+                        "Request failed. Please try again.", playerName, gameId));
+    }
+
+    /** Domain errors and nested domain causes keep friendly copy on non-action and readiness frames. */
+    @Test
+    @DisplayName("Domain and nested domain errors preserve friendly messages on non-action and readiness paths")
+    void domainAndNestedDomainErrorsPreserveFriendlyMessages() {
+        handler.handleMessageException(
+                new BadRequestException("Action not allowed right now"),
+                principal, frame("{\"action\":\"PUSH\"}", "action"));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
+                        "Action not allowed right now", playerName, gameId));
+
+        RuntimeException wrapped = new RuntimeException("internal wrapper",
+                new UnauthorisedActionException("Ready countdown is not active."));
+        handler.handleMessageException(wrapped, principal, frame("{}", "ready"));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new ActionErrorResponse("ACTION_REJECTED", RejectedAction.READY,
+                        "Ready countdown is not active."));
+    }
+
+    /** Persistence or deserialization text on readiness does not show action-amount copy or leak internals. */
+    @ParameterizedTest
+    @ValueSource(strings = {"ready", "unready"})
+    @DisplayName("PersistenceException on readiness uses readiness fallback instead of action-format copy")
+    void persistenceExceptionOnReadinessUsesReadinessFallback(String suffix) {
+        handler.handleMessageException(
+                new PersistenceException("Cannot deserialize WAL snapshot"),
+                principal, frame("{}", suffix));
+        RejectedAction expected = suffix.equals("ready") ? RejectedAction.READY : RejectedAction.UNREADY;
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                new ActionErrorResponse("ACTION_REJECTED", expected,
+                        "Could not update readiness. Please try again."));
     }
 }
