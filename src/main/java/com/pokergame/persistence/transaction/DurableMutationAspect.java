@@ -28,13 +28,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 
 /**
- * Automatically saves the poker game to disk after certain methods finish running.
- * <p>
- * If one saved method calls another, it groups them into a single save operation at
- * the end. It also makes sure we only modify one room at a time, preventing corrupted saves.
- * Storage failures retain the accepted in-memory state and its queued effects for a later save retry.
- * Without a storage bean, the same room locks serialize operations without snapshot or disk work.
- * </p>
+ * Intercepts {@link DurableMutation} methods to lock each room, roll back on failure,
+ * save the updated {@code RoomSnapshot} to the WAL, and run queued {@link PostSaveActions}.
+ * Nested calls for the same room share one save, failed disk writes retry in the background,
+ * and disabling storage keeps room locking active.
  */
 @Aspect
 public final class DurableMutationAspect {
@@ -71,14 +68,12 @@ public final class DurableMutationAspect {
     }
 
     /**
-     * Serializes the method with other operations on the room. When storage is configured,
-     * saves accepted state and releases effects even if persistence is temporarily unavailable.
-     * Without storage, executes under the same lease without snapshots or transaction buffering.
-     * The room is the one named by the method's {@link RoomId} or {@link GameId} parameter.
+     * Runs the intercepted method under the room lock identified by {@link RoomId} or
+     * {@link GameId}, saving to the WAL and firing {@link PostSaveActions} when storage is enabled.
      *
      * @param joinPoint the intercepted method
-     * @return the result of the method
-     * @throws Throwable if the domain mutation itself fails
+     * @return the method's return value
+     * @throws Throwable if the intercepted method throws
      */
     @Around("@annotation(com.pokergame.persistence.transaction.DurableMutation)")
     public Object persist(ProceedingJoinPoint joinPoint) throws Throwable {
@@ -249,25 +244,24 @@ public final class DurableMutationAspect {
         return new RollbackState(image, Map.copyOf(connections));
     }
 
-    /*
-     * Restores the independent pre-mutation RAM image after a rejection. Disk may lag
-     * accepted gameplay, so WAL bytes are never a safe rollback source.
-     */
+    // Rolls back using the in-memory pre-change snapshot (never the WAL on disk, which may
+    // be behind live gameplay during a disk outage).
     private void rollbackOrEvictAggregate(String roomId, RollbackState beforeMutation, boolean prepareFailed, boolean prepared) {
         roomCoordinator.assertHeldByCurrentThread(roomId);
         try {
             if (beforeMutation != null && beforeMutation.image() != null) {
-                RecoveredRoom aggregate = snapshotMapper.restoreSnapshot(beforeMutation.image());
-                // The one place connection flags are carried over: they are process-local, not in the image.
+                RecoveredRoom restored = snapshotMapper.restoreSnapshot(beforeMutation.image());
+                // Copy live WebSocket connection flags back onto the restored room (they are not stored in RoomSnapshot).
                 beforeMutation.connections().forEach((player, state) -> {
-                    aggregate.room().setPlayerConnected(player, state.connected());
-                    aggregate.room().setAbsenceDeadline(player, state.absenceDeadline());
+                    restored.room().setPlayerConnected(player, state.connected());
+                    restored.room().setAbsenceDeadline(player, state.absenceDeadline());
                 });
-                aggregates.replace(new RoomAggregate(aggregate.room(), aggregate.game()));
+                aggregates.replace(new RoomAggregate(restored.room(), restored.game()));
                 if (prepareFailed) queuePrepareRecoverySaveIfNeeded(roomId);
             } else {
-                // A captured absence is itself accepted state: retain its pending tombstone.
-                // Only an unavailable preimage makes a retry unsafe after rejection.
+                // If we failed to capture a pre-change backup (beforeMutation == null), cancel any pending
+                // retry save so we never persist broken state. If the room genuinely didn't exist before
+                // (beforeMutation.image() == null), keep any pending deletion tombstone so the old WAL still deletes.
                 if (beforeMutation == null) pendingSaves.remove(roomId);
                 evictAggregate(roomId);
             }
