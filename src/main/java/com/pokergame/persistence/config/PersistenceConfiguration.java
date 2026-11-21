@@ -23,28 +23,20 @@ import org.springframework.context.annotation.EnableAspectJAutoProxy;
 import org.springframework.core.Ordered;
 
 /**
- * Wires up the save/restore system for the poker game.
+ * Spring configuration for per-room mutation locking and encrypted disk persistence.
  * <p>
- * When persistence is enabled it creates the encryption keys, the encrypted save store and the startup
- * recovery, so active poker games can be saved to disk and restored if the server crashes. Storage and
- * recovery are conditional; the room serialization aspect stays active in memory-only mode for membership safety.
+ * {@link DurableMutationAspect} is always active so concurrent operations on the same room
+ * run one at a time under {@link RoomCoordinator}, even when disk persistence is disabled.
  * </p>
  * <p>
- * While saved games are being reloaded, the server is kept from serving players in three ways, because each
- * one covers a different caller:
+ * When {@code poker.persistence.enabled=true}, this also wires up the encryption keyring,
+ * encrypted WAL store, startup recovery, health indicator, and {@link RecoveryTrafficGate}
+ * (which returns 503 to regular requests until saved rooms have finished loading).
  * </p>
- * <ul>
- *   <li>readiness events: {@link PersistenceRecovery} publishes "refusing traffic" while it runs and
- *       "accepting traffic" when it finishes, which tells orchestrators such as Kubernetes when to route requests;</li>
- *   <li>the {@link RecoveryTrafficGate} filter: the web server is already listening during recovery, so the
- *       filter turns away requests that arrive anyway;</li>
- *   <li>the {@link PersistenceHealthIndicator}: the health endpoint reports DOWN until recovery has finished,
- *       for monitoring that does not look at readiness events.</li>
- * </ul>
  */
 @Configuration
 @EnableConfigurationProperties(PersistenceProperties.class)
-@EnableAspectJAutoProxy(proxyTargetClass = true, exposeProxy = true)
+@EnableAspectJAutoProxy(proxyTargetClass = true)
 public class PersistenceConfiguration {
     private static final Logger logger = LoggerFactory.getLogger(PersistenceConfiguration.class);
 
@@ -98,14 +90,15 @@ public class PersistenceConfiguration {
     }
 
     /**
-     * Serializes room operations in every mode and saves accepted mutations when persistence is enabled.
-     * Authentication checks and their reads/mutations use the same room lease even without a WAL.
+     * Locks each {@code @DurableMutation} call per room and saves accepted changes when disk
+     * persistence is enabled. Stays active with persistence disabled so concurrent operations
+     * on the same room still execute one at a time.
      *
-     * @param store           the encrypted save store, absent when persistence is disabled
-     * @param snapshotMapper  converts live game data to and from a saveable format
-     * @param aggregates      the live rooms and games
+     * @param store           the encrypted save store, or absent when disk persistence is disabled
+     * @param snapshotMapper  converts live room and game data to and from the saved format
+     * @param aggregates      reads, replaces, and removes live rooms and games
      * @param roomCoordinator the per-room lock shared with the rest of the application
-     * @return the aspect that saves each accepted change
+     * @return the aspect that locks and (when enabled) persists room mutations
      */
     @Bean
     DurableMutationAspect durableMutationAspect(ObjectProvider<EncryptedWalStore> store,

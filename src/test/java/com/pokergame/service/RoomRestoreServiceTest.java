@@ -8,8 +8,6 @@ import static org.mockito.Mockito.*;
 
 import com.pokergame.config.GameTimingProperties;
 import com.pokergame.config.WebSocketEventListener;
-import com.pokergame.enums.GamePhase;
-import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
@@ -68,6 +66,7 @@ class RoomRestoreServiceTest {
     private ActiveGameRegistry activeGames;
     private GameTimerRegistry timerRegistry;
     private GameTaskScheduler scheduler;
+    private RecoveredRoomTimerService timerService;
     private RoomRestoreService roomRestoreService;
 
     @BeforeEach
@@ -83,18 +82,23 @@ class RoomRestoreServiceTest {
         scheduler = new GameTaskScheduler(activeGames, timerRegistry, roomService, roomCoordinator, clock, TestTimings.DEFAULT_GAME, lifecycleProvider);
 
         GameTimingProperties timings = TestTimings.game(30_000L, 0L, READY_COUNTDOWN_MS);
-        roomRestoreService = new RoomRestoreService(
+        timerService = new RecoveredRoomTimerService(
                 roomService,
-                gameLifecycleService,
-                roomAggregates,
-                gameStateService,
                 activeGames,
+                gameStateService,
                 scheduler,
                 webSocketEventListener,
                 roomCoordinator,
                 clock,
                 timings,
                 TestTimings.room(DISCONNECT_GRACE_MS));
+        roomRestoreService = new RoomRestoreService(
+                roomService,
+                gameLifecycleService,
+                roomAggregates,
+                timerService,
+                roomCoordinator,
+                clock);
 
         lenient().when(taskScheduler.schedule(any(Runnable.class), any(Instant.class)))
                 .thenAnswer(_ -> mock(ScheduledFuture.class));
@@ -275,13 +279,20 @@ class RoomRestoreServiceTest {
     void restoreEvictsPartiallyRegisteredAggregatesWhenResumeTimersThrows() {
         Room room = createRoom(ROOM_ID, "Alice", "Bob");
         Game game = createGame(ROOM_ID, "Alice", "Bob");
-        RoomRestoreService spyService = spy(roomRestoreService);
+        RecoveredRoomTimerService spyTimerService = spy(timerService);
         doThrow(new IllegalStateException("Timer resume failure"))
-                .when(spyService).resumeRecoveredTimers(ROOM_ID);
+                .when(spyTimerService).resumeRecoveredTimers(ROOM_ID);
+        RoomRestoreService restoreServiceWithSpyTimers = new RoomRestoreService(
+                roomService,
+                gameLifecycleService,
+                roomAggregates,
+                spyTimerService,
+                roomCoordinator,
+                clock);
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
                 withRoomLock(ROOM_ID,
-                        () -> spyService.restore(new RecoveredRoom(room, game, false))));
+                        () -> restoreServiceWithSpyTimers.restore(new RecoveredRoom(room, game, false))));
 
         assertEquals("Timer resume failure", ex.getMessage());
         verify(roomAggregates).install(room, game);
@@ -324,71 +335,5 @@ class RoomRestoreServiceTest {
         verify(roomService).scheduleLobbyInactivity(ROOM_ID, futureDeadline);
         verify(webSocketEventListener).cancelRoomPendingDisconnects(ROOM_ID);
         verify(roomAggregates).remove(ROOM_ID);
-    }
-
-    @Test
-    void resumeRecoveredTimersReschedulesMissingReadyTimeoutWithoutBroadcast() {
-        @SuppressWarnings("unchecked")
-        ScheduledFuture<Object> readyFuture = mock(ScheduledFuture.class);
-        doReturn(readyFuture).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
-
-        Game game = createGame(ROOM_ID, "Alice", "Bob");
-        game.dealFlop();
-        game.dealTurn();
-        game.dealRiver();
-        game.conductShowdown();
-        game.openOrWaitReadyGate(BASE_EPOCH_MS + READY_COUNTDOWN_MS);
-        game.clearScheduledTask(ScheduledGameTask.READY_TIMEOUT);
-
-        withRoomLock(ROOM_ID, () -> {
-            activeGames.replace(game);
-            roomRestoreService.resumeRecoveredTimers(ROOM_ID);
-
-            assertEquals(BASE_EPOCH_MS + READY_COUNTDOWN_MS,
-                    game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
-            verify(gameStateService, never()).broadcastGameState(any());
-            verify(taskScheduler).schedule(
-                    any(Runnable.class), eq(Instant.ofEpochMilli(BASE_EPOCH_MS + READY_COUNTDOWN_MS)));
-
-            timerRegistry.cancelAllForGame(ROOM_ID, false);
-            verify(readyFuture).cancel(false);
-        });
-    }
-
-    @Test
-    void resumeRecoveredTimersRepairsMissingCountdownDeadlineBroadcastsAndSchedulesTimer() {
-        @SuppressWarnings("unchecked")
-        ScheduledFuture<Object> readyFuture = mock(ScheduledFuture.class);
-        doReturn(readyFuture).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
-
-        Player alice = new Player("Alice", "p1", 1000);
-        Player bob = new Player("Bob", "p2", 1000);
-        Game game = Game.restoreBuilder()
-                .gameId(ROOM_ID)
-                .players(List.of(alice, bob))
-                .activePlayerIds(List.of("p1", "p2"))
-                .remainingDeck(List.of())
-                .smallBlind(10)
-                .bigBlind(20)
-                .currentPhase(GamePhase.SHOWDOWN)
-                .readyGateState(ReadyGateState.COUNTING_DOWN)
-                .readyCountdownDeadlineEpochMs(null)
-                .build();
-
-        withRoomLock(ROOM_ID, () -> {
-            activeGames.replace(game);
-            roomRestoreService.resumeRecoveredTimers(ROOM_ID);
-
-            long expectedDeadline = BASE_EPOCH_MS + READY_COUNTDOWN_MS;
-            assertEquals(expectedDeadline, game.getReadyCountdownDeadlineEpochMs());
-            assertEquals(expectedDeadline,
-                    game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
-            verify(gameStateService).broadcastGameState(game);
-            verify(taskScheduler).schedule(
-                    any(Runnable.class), eq(Instant.ofEpochMilli(expectedDeadline)));
-
-            timerRegistry.cancelAllForGame(ROOM_ID, false);
-            verify(readyFuture).cancel(false);
-        });
     }
 }

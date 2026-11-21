@@ -2,32 +2,20 @@ package com.pokergame.service;
 
 import static java.util.Objects.requireNonNull;
 
-import com.pokergame.config.GameTimingProperties;
-import com.pokergame.config.RoomTimingProperties;
-import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.model.Game;
-import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.RecoveryDecision;
 import com.pokergame.persistence.RoomRecoveryHandler;
 import com.pokergame.persistence.snapshot.RecoveredRoom;
-import com.pokergame.persistence.transaction.DurableMutation;
-import com.pokergame.persistence.transaction.GameId;
-import com.pokergame.persistence.transaction.PostSaveActions;
-import com.pokergame.service.GameTaskScheduler.ScheduledTimer;
-import com.pokergame.util.MdcUtils;
-import com.pokergame.util.MdcUtils.MdcScope;
 import com.pokergame.util.RoomCoordinator;
 import java.time.Clock;
-import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.aop.framework.AopContext;
 import org.springframework.stereotype.Service;
 
 /**
  * Applies domain restart rules to recovered rooms and games, including expiry checks,
- * inactivity abandonment, disconnect grace scheduling, and timer resumption.
+ * inactivity abandonment, and post-restart timer setup delegation.
  */
 @Service
 public class RoomRestoreService implements RoomRecoveryHandler {
@@ -35,44 +23,29 @@ public class RoomRestoreService implements RoomRecoveryHandler {
     private final RoomService roomService;
     private final GameLifecycleService gameLifecycleService;
     private final RoomAggregateStore roomAggregates;
-    private final GameStateService gameStateService;
-    private final ActiveGameRegistry activeGames;
-    private final GameTaskScheduler taskScheduler;
-    private final WebSocketEventListener webSocketEventListener;
+    private final RecoveredRoomTimerService timerService;
     private final RoomCoordinator roomCoordinator;
     private final Clock clock;
-    private final GameTimingProperties timings;
-    private final RoomTimingProperties roomTimings;
 
     public RoomRestoreService(
             RoomService roomService,
             GameLifecycleService gameLifecycleService,
             RoomAggregateStore roomAggregates,
-            GameStateService gameStateService,
-            ActiveGameRegistry activeGames,
-            GameTaskScheduler taskScheduler,
-            WebSocketEventListener webSocketEventListener,
+            RecoveredRoomTimerService timerService,
             RoomCoordinator roomCoordinator,
-            Clock clock,
-            GameTimingProperties timings,
-            RoomTimingProperties roomTimings) {
+            Clock clock) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.roomAggregates = roomAggregates;
-        this.gameStateService = gameStateService;
-        this.activeGames = activeGames;
-        this.taskScheduler = taskScheduler;
-        this.webSocketEventListener = webSocketEventListener;
+        this.timerService = timerService;
         this.roomCoordinator = roomCoordinator;
         this.clock = clock;
-        this.timings = timings;
-        this.roomTimings = roomTimings;
     }
 
     /**
      * Applies domain restart rules to a single recovered room while the caller holds its room lock.
      *
-     * @param recovered the deserialized room, host, and optional game snapshot
+     * @param recovered the deserialized room and optional game snapshot
      * @return {@link RecoveryDecision#KEEP} when the room remains registered, or
      *         {@link RecoveryDecision#DISCARD} when its WAL should be deleted
      */
@@ -111,33 +84,12 @@ public class RoomRestoreService implements RoomRecoveryHandler {
             }
         }
 
-        long freshDeadline = now + roomTimings.disconnectGracePeriodMs();
         try {
             roomAggregates.install(room, game);
+            timerService.scheduleInactivityTimer(room, game);
+            timerService.scheduleDisconnectGrace(room, game, now);
             if (game != null) {
-                if (!game.isGameOver() && room.getInactivityDeadlineEpochMs() != null) {
-                    taskScheduler.scheduleGameInactivity(roomId, room.getInactivityDeadlineEpochMs());
-                }
-            } else if (room.getInactivityDeadlineEpochMs() != null) {
-                roomService.scheduleLobbyInactivity(roomId, room.getInactivityDeadlineEpochMs());
-            }
-
-            for (String playerName : room.getPlayers()) {
-                Player gamePlayer = findGamePlayer(game, playerName);
-                long storedDeadline = gamePlayer == null || gamePlayer.getDisconnectDeadlineEpochMs() == null
-                        ? 0L
-                        : gamePlayer.getDisconnectDeadlineEpochMs();
-                long deadline = Math.max(freshDeadline, storedDeadline);
-                if (gamePlayer != null) {
-                    gamePlayer.setDisconnected(true);
-                    gamePlayer.setReadyForNextHand(false);
-                    gamePlayer.setDisconnectDeadlineEpochMs(deadline);
-                }
-                webSocketEventListener.scheduleRecoveredDisconnect(roomId, playerName, deadline);
-            }
-
-            if (game != null) {
-                self().resumeRecoveredTimers(roomId);
+                timerService.resumeRecoveredTimers(roomId);
             }
         } catch (RuntimeException e) {
             evictPartialRestore(roomId);
@@ -146,48 +98,8 @@ public class RoomRestoreService implements RoomRecoveryHandler {
         return RecoveryDecision.KEEP;
     }
 
-    /**
-     * Repairs ready-gate timers after startup recovery and schedules all pending timers after save.
-     *
-     * @param gameId the unique ID of the recovered game
-     */
-    @DurableMutation
-    public void resumeRecoveredTimers(@GameId String gameId) {
-        Game game = activeGames.get(gameId);
-        if (game == null) {
-            return;
-        }
-        try (MdcScope _ = MdcUtils.withRoomId(gameId)) {
-            boolean normalized = game.repairRecoveredReadyGate(clock.millis() + timings.readyCountdownMs());
-            List<ScheduledTimer> timers = GameTaskScheduler.listActiveTimers(game);
-            PostSaveActions.runAfterSave(() -> timers.forEach(taskScheduler::registerTimer));
-            if (normalized) {
-                gameStateService.broadcastGameState(game);
-            }
-            logger.info("Resumed {} recovered timers for game {}", timers.size(), gameId);
-        }
-    }
-
-    private RoomRestoreService self() {
-        try {
-            return (RoomRestoreService) AopContext.currentProxy();
-        } catch (IllegalStateException e) {
-            return this;
-        }
-    }
-
     private void evictPartialRestore(String roomId) {
-        webSocketEventListener.cancelRoomPendingDisconnects(roomId);
+        timerService.cancelPendingDisconnects(roomId);
         roomAggregates.remove(roomId);
-    }
-
-    private static Player findGamePlayer(Game game, String playerName) {
-        if (game == null || game.getPlayers() == null) {
-            return null;
-        }
-        return game.getPlayers().stream()
-                .filter(player -> player != null && playerName.equals(player.getName()))
-                .findFirst()
-                .orElse(null);
     }
 }
