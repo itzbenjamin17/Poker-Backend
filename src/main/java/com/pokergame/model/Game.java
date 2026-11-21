@@ -863,7 +863,7 @@ public class Game {
 
     private void resetBetsForRound() {
         bettingRound.resetForNewRound(activePlayers);
-        seating.moveToFirstPostFlopActor(activePlayers);
+        seating.moveToFirstPostFlopPlayer(activePlayers);
     }
 
     private boolean isHandOver() {

@@ -264,39 +264,39 @@ class TableSeatingTest {
         }
 
         @Test
-        void moveToFirstPostFlopActor_SelectsClockwiseAfterDealerAnchorEvenIfDealerOrSbDeparted() {
+        void moveToFirstPostFlopPlayer_SelectsClockwiseAfterDealerAnchorEvenIfDealerOrSbDeparted() {
             List<Player> all = createPlayerList(4);
             all.get(1).doAction(PlayerAction.FOLD, 0);
             all.get(2).doAction(PlayerAction.ALL_IN, 0);
 
             TableSeating standard = new TableSeating(
                     seatOrderOf(all), "p0", "p1", "p2", "p3", all);
-            standard.moveToFirstPostFlopActor(all);
+            standard.moveToFirstPostFlopPlayer(all);
             assertEquals("p3", standard.getCurrentPlayerId());
 
             List<Player> dealerDepartedActive = List.of(all.get(1), all.get(2), all.get(3));
-            standard.moveToFirstPostFlopActor(dealerDepartedActive);
+            standard.moveToFirstPostFlopPlayer(dealerDepartedActive);
             assertEquals("p3", standard.getCurrentPlayerId());
             assertEquals("p3", standard.getCurrentPlayer(dealerDepartedActive).getPlayerId());
 
             List<Player> disjointOrderActive = createPlayerList(2);
             TableSeating disjoint = new TableSeating(
                     List.of("x1", "x2", "x3"), "missing", null, null, "p1", disjointOrderActive);
-            disjoint.moveToFirstPostFlopActor(disjointOrderActive);
+            disjoint.moveToFirstPostFlopPlayer(disjointOrderActive);
             assertEquals("p0", disjoint.getCurrentPlayerId());
 
-            disjoint.moveToFirstPostFlopActor(List.of());
+            disjoint.moveToFirstPostFlopPlayer(List.of());
             assertNull(disjoint.getCurrentPlayerId());
         }
 
         @Test
-        void moveToFirstPostFlopActor_FallbackPrefersFirstActionableOverGetFirst() {
+        void moveToFirstPostFlopPlayer_FallbackPrefersFirstActionableOverGetFirst() {
             List<Player> active = createPlayerList(3);
             active.get(0).doAction(PlayerAction.FOLD, 0);
             TableSeating disjoint = new TableSeating(
                     List.of("x1", "x2"), "missing", null, null, "p0", active);
 
-            disjoint.moveToFirstPostFlopActor(active);
+            disjoint.moveToFirstPostFlopPlayer(active);
             assertEquals("p1", disjoint.getCurrentPlayerId());
         }
     }

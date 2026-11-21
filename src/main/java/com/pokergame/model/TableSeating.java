@@ -8,6 +8,8 @@ import java.util.List;
  */
 final class TableSeating {
 
+    // Original seat order for the hand; kept separate from activePlayers (which shrinks as
+    // players bust or leave) so clockwise button, blind, and turn rotation stay accurate.
     private final List<String> handSeatOrder;
     private String dealerPlayerId;
     private String smallBlindPlayerId;
@@ -32,7 +34,7 @@ final class TableSeating {
         this.dealerPlayerId = activePlayers.getFirst().getPlayerId();
         this.smallBlindPlayerId = null;
         this.bigBlindPlayerId = null;
-        this.currentPlayerId = firstPreFlopActorId(activePlayers, 0);
+        this.currentPlayerId = firstPreFlopPlayerId(activePlayers, 0);
     }
 
     /**
@@ -62,7 +64,7 @@ final class TableSeating {
     }
 
     /**
-     * Advances the dealer button and first pre-flop actor clockwise for the next hand.
+     * Advances the dealer button and first pre-flop player clockwise for the next hand.
      *
      * @param activePlayers active players seated for the next hand
      */
@@ -71,23 +73,12 @@ final class TableSeating {
             return;
         }
 
-        int anchorIndex = dealerPlayerId != null ? handSeatOrder.indexOf(dealerPlayerId) : -1;
-        int nextDealerIndex = 0;
-        String nextDealerId = activePlayers.getFirst().getPlayerId();
+        List<Player> clockwise = activePlayersClockwiseAfter(activePlayers, dealerPlayerId);
+        Player nextDealer = clockwise.isEmpty() ? activePlayers.getFirst() : clockwise.getFirst();
+        int nextDealerIndex = indexOfActivePlayer(activePlayers, nextDealer.getPlayerId());
 
-        int seatCount = handSeatOrder.size();
-        for (int offset = 1; offset <= seatCount; offset++) {
-            String candidateId = handSeatOrder.get(Math.floorMod(anchorIndex + offset, seatCount));
-            int activeIndex = indexOfActivePlayer(activePlayers, candidateId);
-            if (activeIndex >= 0) {
-                nextDealerIndex = activeIndex;
-                nextDealerId = candidateId;
-                break;
-            }
-        }
-
-        dealerPlayerId = nextDealerId;
-        currentPlayerId = firstPreFlopActorId(activePlayers, nextDealerIndex);
+        dealerPlayerId = nextDealer.getPlayerId();
+        currentPlayerId = firstPreFlopPlayerId(activePlayers, nextDealerIndex);
         smallBlindPlayerId = null;
         bigBlindPlayerId = null;
     }
@@ -108,30 +99,20 @@ final class TableSeating {
     }
 
     /**
-     * Moves the turn pointer to the first actionable player clockwise after the dealer for post-flop streets.
+     * Moves the turn pointer to the first player who can act clockwise after the dealer for post-flop streets.
      *
      * @param activePlayers active players in the current hand
      */
-    void moveToFirstPostFlopActor(List<Player> activePlayers) {
+    void moveToFirstPostFlopPlayer(List<Player> activePlayers) {
         if (activePlayers.isEmpty()) {
             currentPlayerId = null;
             return;
         }
-        int anchorIndex = dealerPlayerId != null ? handSeatOrder.indexOf(dealerPlayerId) : -1;
-        int seatCount = handSeatOrder.size();
-        for (int offset = 1; offset <= seatCount; offset++) {
-            String candidateId = handSeatOrder.get(Math.floorMod(anchorIndex + offset, seatCount));
-            int activeIndex = indexOfActivePlayer(activePlayers, candidateId);
-            if (activeIndex < 0) {
-                continue;
-            }
-            Player candidate = activePlayers.get(activeIndex);
-            if (candidate.canAct()) {
-                currentPlayerId = candidate.getPlayerId();
-                return;
-            }
-        }
-        currentPlayerId = firstActionableOrFirstId(activePlayers);
+        currentPlayerId = activePlayersClockwiseAfter(activePlayers, dealerPlayerId).stream()
+                .filter(Player::canAct)
+                .map(Player::getPlayerId)
+                .findFirst()
+                .orElseGet(() -> firstPlayerWhoCanActOrFirstId(activePlayers));
     }
 
     /**
@@ -148,11 +129,11 @@ final class TableSeating {
             currentPlayerId = null;
             return;
         }
-        // Preserve the current actor's turn when another seat departs and the current actor remains active.
+        // Preserve the current player's turn when another seat departs and the current player remains active.
         if (!removedPlayerId.equals(currentPlayerId) && indexOfActivePlayer(activePlayers, currentPlayerId) >= 0) {
             return;
         }
-        currentPlayerId = findNextActorAfterDeparture(activePlayers, removedPlayerId);
+        currentPlayerId = findNextPlayerAfterDeparture(activePlayers, removedPlayerId);
     }
 
     /**
@@ -168,8 +149,8 @@ final class TableSeating {
         int currentIndex = indexOfActivePlayer(activePlayers, currentPlayerId);
         if (currentIndex < 0) {
             currentPlayerId = (currentPlayerId != null && handSeatOrder.contains(currentPlayerId))
-                    ? findNextActorAfterDeparture(activePlayers, currentPlayerId)
-                    : firstActionableOrFirstId(activePlayers);
+                    ? findNextPlayerAfterDeparture(activePlayers, currentPlayerId)
+                    : firstPlayerWhoCanActOrFirstId(activePlayers);
             return;
         }
         int nextIndex = findNextActionableIndex(activePlayers, currentIndex);
@@ -217,18 +198,6 @@ final class TableSeating {
         return deriveBlindPlayerId(activePlayers, true);
     }
 
-    List<String> getHandSeatOrderSnapshot() {
-        return List.copyOf(handSeatOrder);
-    }
-
-    String getDealerPlayerId() {
-        return dealerPlayerId;
-    }
-
-    String getCurrentPlayerId() {
-        return currentPlayerId;
-    }
-
     private String deriveBlindPlayerId(List<Player> activePlayers, boolean bigBlind) {
         if (activePlayers.isEmpty()) {
             return null;
@@ -252,51 +221,39 @@ final class TableSeating {
 
     private String deriveClockwiseBlindFromSeatOrder(
             List<Player> activePlayers, String anchorPlayerId, boolean bigBlind) {
-        int anchorIndex = handSeatOrder.indexOf(anchorPlayerId);
-        int seatCount = handSeatOrder.size();
-        String firstActive = null;
-        for (int offset = 1; offset <= seatCount; offset++) {
-            String candidateId = handSeatOrder.get(Math.floorMod(anchorIndex + offset, seatCount));
-            if (indexOfActivePlayer(activePlayers, candidateId) < 0) {
-                continue;
-            }
-            if (firstActive == null) {
-                firstActive = candidateId;
-                if (!bigBlind) {
-                    return candidateId;
-                }
-            } else if (!candidateId.equals(firstActive)) {
-                return candidateId;
-            }
-        }
-        return null;
+        List<Player> clockwise = activePlayersClockwiseAfter(activePlayers, anchorPlayerId);
+        int targetIndex = bigBlind ? 1 : 0;
+        return targetIndex < clockwise.size() ? clockwise.get(targetIndex).getPlayerId() : null;
     }
 
-    private String findNextActorAfterDeparture(List<Player> activePlayers, String departedPlayerId) {
-        int anchorIndex = handSeatOrder.indexOf(departedPlayerId);
+    private String findNextPlayerAfterDeparture(List<Player> activePlayers, String departedPlayerId) {
+        List<Player> clockwise = activePlayersClockwiseAfter(activePlayers, departedPlayerId);
+        return clockwise.stream()
+                .filter(Player::canAct)
+                .map(Player::getPlayerId)
+                .findFirst()
+                .or(() -> clockwise.stream().map(Player::getPlayerId).findFirst())
+                .orElseGet(() -> firstPlayerWhoCanActOrFirstId(activePlayers));
+    }
+
+    private List<Player> activePlayersClockwiseAfter(List<Player> activePlayers, String anchorPlayerId) {
         int seatCount = handSeatOrder.size();
-        String firstActiveFallback = null;
+        if (seatCount == 0 || activePlayers.isEmpty()) {
+            return List.of();
+        }
+        int anchorIndex = anchorPlayerId != null ? handSeatOrder.indexOf(anchorPlayerId) : -1;
+        List<Player> clockwise = new ArrayList<>(activePlayers.size());
         for (int offset = 1; offset <= seatCount; offset++) {
             String candidateId = handSeatOrder.get(Math.floorMod(anchorIndex + offset, seatCount));
             int activeIndex = indexOfActivePlayer(activePlayers, candidateId);
-            if (activeIndex < 0) {
-                continue;
-            }
-            Player candidate = activePlayers.get(activeIndex);
-            if (candidate.canAct()) {
-                return candidate.getPlayerId();
-            }
-            if (firstActiveFallback == null) {
-                firstActiveFallback = candidate.getPlayerId();
+            if (activeIndex >= 0) {
+                clockwise.add(activePlayers.get(activeIndex));
             }
         }
-        if (firstActiveFallback != null) {
-            return firstActiveFallback;
-        }
-        return firstActionableOrFirstId(activePlayers);
+        return clockwise;
     }
 
-    private static String firstPreFlopActorId(List<Player> activePlayers, int dealerIndex) {
+    private static String firstPreFlopPlayerId(List<Player> activePlayers, int dealerIndex) {
         int tableSize = activePlayers.size();
         if (tableSize == 1) {
             return activePlayers.getFirst().getPlayerId();
@@ -308,7 +265,7 @@ final class TableSeating {
         return activePlayers.get((dealerIndex + 3) % tableSize).getPlayerId();
     }
 
-    private static String firstActionableOrFirstId(List<Player> activePlayers) {
+    private static String firstPlayerWhoCanActOrFirstId(List<Player> activePlayers) {
         return activePlayers.stream()
                 .filter(Player::canAct)
                 .map(Player::getPlayerId)
@@ -340,5 +297,17 @@ final class TableSeating {
         } while (!activePlayers.get(next).canAct()
                 && next != originalPosition);
         return next;
+    }
+
+    List<String> getHandSeatOrderSnapshot() {
+        return List.copyOf(handSeatOrder);
+    }
+
+    String getDealerPlayerId() {
+        return dealerPlayerId;
+    }
+
+    String getCurrentPlayerId() {
+        return currentPlayerId;
     }
 }
