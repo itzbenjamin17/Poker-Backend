@@ -8,11 +8,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Queues side effects (such as WebSocket broadcasts and timer scheduling) for a room change so
- * they run only after the state change succeeds and its persistence attempt completes.
+ * Holds broadcasts and timer registrations in a per-thread queue during a {@link DurableMutation}
+ * so they only run after the room change succeeds and finishes saving to the WAL.
  * <p>
- * Nested changes for the same room share one thread-local queue. If the change fails before
- * completion, queued actions are discarded without running.
+ * Nested calls for the same room share one queue. If the change throws an error, the queue is
+ * discarded so half-finished state is never broadcast.
  * </p>
  */
 public final class PostSaveActions {
@@ -23,13 +23,15 @@ public final class PostSaveActions {
     }
 
     /**
-     * Queues an action to run after the active room change succeeds and finishes saving.
-     * If persistence falls back to memory-only mode after the change was accepted, queued actions
-     * still run once. If no room save is active on the current thread (for example, with
-     * persistence disabled), the action runs immediately, and any {@link RuntimeException} it
-     * throws is caught and logged instead of failing the caller.
+     * Queues {@code action} to run after the current {@link DurableMutation} finishes saving
+     * (including if disk saving falls back to memory-only mode). If no save is active on this thread
+     * (for example, when persistence is disabled), {@code action} runs immediately.
+     * <p>
+     * Any {@link RuntimeException} thrown by {@code action} is caught and logged instead of failing
+     * the caller.
+     * </p>
      *
-     * @param action the side effect to run after saving completes
+     * @param action the broadcast, event, or timer registration to run after saving
      */
     public static void runAfterSave(Runnable action) {
         requireNonNull(action, "action must not be null");
@@ -42,18 +44,18 @@ public final class PostSaveActions {
     }
 
     /**
-     * Starts tracking post-save actions for a room change on the current thread.
+     * Opens a new post-save queue on the current thread for {@code roomId}.
      *
-     * @param roomId the ID of the room being modified
+     * @param roomId the room being modified
      */
     static void begin(String roomId) {
         CURRENT.set(new Context(roomId, new ArrayList<>()));
     }
 
     /**
-     * Returns the room ID currently being saved on this thread, if any.
+     * Returns the room ID of the active post-save queue on this thread, or {@code null} if none.
      *
-     * @return the active room ID, or {@code null} when no save is active
+     * @return the active room ID, or {@code null}
      */
     static String currentRoomId() {
         Context context = CURRENT.get();
@@ -61,9 +63,8 @@ public final class PostSaveActions {
     }
 
     /**
-     * Runs all queued actions independently after the save attempt finishes, even if saving fell
-     * back to memory-only mode. A failure in one action is logged and does not stop remaining
-     * actions from running.
+     * Clears the current thread's queue and runs each queued action in order.
+     * A failure in one action is logged and does not prevent the remaining actions from running.
      */
     static void executeAll() {
         Context context = CURRENT.get();
@@ -76,7 +77,7 @@ public final class PostSaveActions {
     }
 
     /**
-     * Discards all queued actions for the current thread when the room change fails.
+     * Discards the current thread's queue without running any queued actions.
      */
     static void clear() {
         CURRENT.remove();
