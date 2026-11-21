@@ -21,9 +21,9 @@ import org.springframework.core.annotation.Order;
 /**
  * Reloads all saved poker games and rooms back into memory when the server starts up.
  * <p>
- * We load everything all at once before letting players connect. If we only loaded
- * games when players asked for them, a player looking at the lobby might think
- * an ongoing game had disappeared just because it hadn't been loaded yet.
+ * We load everything up front before opening the server to player traffic. If we only loaded
+ * games on demand, players looking at the lobby might think an active game had disappeared,
+ * and background timers for ongoing rooms would not resume until someone reconnected.
  * </p>
  */
 @Order(Ordered.HIGHEST_PRECEDENCE)
@@ -39,14 +39,13 @@ public final class PersistenceRecovery implements ApplicationRunner {
     private volatile boolean complete;
 
     /**
-     * Sets up the startup recovery runner with WAL storage, snapshot decoding, domain
-     * restoration handler, readiness publication context, and room lock coordinator.
+     * Creates the startup recovery runner.
      *
-     * @param store              where the encrypted game data is saved on disk
-     * @param mapper             converts raw bytes back into game and room objects
-     * @param recoveryHandler    applies domain restart rules to each recovered room
-     * @param applicationContext tells the application when it's safe to start taking requests
-     * @param roomCoordinator    coordinator managing per-room concurrency
+     * @param store              reads, deletes, and quarantines encrypted room save files on disk
+     * @param mapper             converts raw saved bytes back into Room and Game objects
+     * @param recoveryHandler    applies restart rules (expiry checks, timers, disconnect grace) to each room
+     * @param applicationContext publishes server readiness events so traffic waits until recovery finishes
+     * @param roomCoordinator    locks each room while it is being restored or cleaned up
      */
     public PersistenceRecovery(
             EncryptedWalStore store,
@@ -62,13 +61,13 @@ public final class PersistenceRecovery implements ApplicationRunner {
     }
 
     /**
-     * Loads all saved game data, cleans up deleted rooms, and delegates domain restart
-     * restoration before letting any players connect.
+     * Loads every saved room from disk, removes files for deleted or expired rooms, and restores
+     * active rooms and timers before opening the server to player traffic.
      *
      * @param args application startup arguments
-     * @throws PersistenceException if store-level WAL enumeration or I/O fails; per-room
-     *                              corrupted or unreadable WAL files are quarantined
-     *                              ({@code <roomId>.wal.corrupted}) so remaining rooms can recover
+     * @throws PersistenceException if the save folder cannot be read or a required decryption key is
+     *                              missing; individual corrupted or unreadable room files are
+     *                              quarantined ({@code <roomId>.wal.corrupted}) so other rooms still recover
      */
     @Override
     public void run(ApplicationArguments args) {
@@ -94,9 +93,9 @@ public final class PersistenceRecovery implements ApplicationRunner {
 
         for (Map.Entry<String, byte[]> entry : images.entrySet()) {
             String roomId = entry.getKey();
-            RecoveredRoom aggregate;
+            RecoveredRoom recoveredRoom;
             try {
-                aggregate = mapper.deserialize(entry.getValue());
+                recoveredRoom = mapper.deserialize(entry.getValue());
             } catch (Exception e) {
                 logger.error("Failed to recover room {}; quarantining corrupted WAL", roomId, e);
                 try (LockLease _ = roomCoordinator.acquire(roomId)) {
@@ -105,7 +104,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
                 continue;
             }
 
-            if (aggregate.deleted()) {
+            if (recoveredRoom.deleted()) {
                 try (LockLease _ = roomCoordinator.acquire(roomId)) {
                     if (tryDeleteWal(roomId, "tombstone")) {
                         logger.info("Deleted tombstone room {}", roomId);
@@ -115,7 +114,7 @@ public final class PersistenceRecovery implements ApplicationRunner {
                 continue;
             }
 
-            if (aggregate.room() == null || !roomId.equals(aggregate.room().getRoomId())) {
+            if (recoveredRoom.room() == null || !roomId.equals(recoveredRoom.room().getRoomId())) {
                 logger.error("Snapshot room identity does not match WAL file identity for room {}", roomId);
                 try (LockLease _ = roomCoordinator.acquire(roomId)) {
                     store.quarantine(roomId, "Snapshot room identity does not match WAL file identity");
@@ -123,24 +122,24 @@ public final class PersistenceRecovery implements ApplicationRunner {
                 continue;
             }
 
-            recoveredRooms.add(aggregate);
+            recoveredRooms.add(recoveredRoom);
         }
 
-        for (RecoveredRoom aggregate : recoveredRooms) {
-            String roomId = aggregate.room().getRoomId();
+        for (RecoveredRoom recoveredRoom : recoveredRooms) {
+            String roomId = recoveredRoom.room().getRoomId();
             try (LockLease _ = roomCoordinator.acquire(roomId)) {
                 try {
-                    RecoveryDecision decision = recoveryHandler.restore(aggregate);
+                    RecoveryDecision decision = recoveryHandler.restore(recoveredRoom);
                     if (decision == RecoveryDecision.DISCARD) {
                         if (tryDeleteWal(roomId, "discarded by recovery handler")) {
                             roomsDeleted++;
                         }
                     } else if (decision == RecoveryDecision.KEEP) {
                         roomsRestored++;
-                        if (aggregate.game() != null) {
+                        if (recoveredRoom.game() != null) {
                             gamesRestored++;
                         }
-                        logger.debug("Recovered room: roomId={}, hasGame={}", roomId, aggregate.game() != null);
+                        logger.debug("Recovered room: roomId={}, hasGame={}", roomId, recoveredRoom.game() != null);
                     } else {
                         throw new IllegalStateException("Unexpected recovery decision: " + decision);
                     }
