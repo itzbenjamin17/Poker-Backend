@@ -98,7 +98,7 @@ class RoomSnapshotMapperTest {
 
         RoomSnapshotMapper mapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
-        RecoveredRoom recovered = mapper.deserialize(mapper.serialize(mapper.captureStateImage(room, game)));
+        RecoveredRoom recovered = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, game)));
 
         assertEquals(room.getRoomName(), recovered.room().getRoomName());
         assertEquals(room.getHostName(), recovered.room().getHostName());
@@ -117,7 +117,7 @@ class RoomSnapshotMapperTest {
 
     @ParameterizedTest
     @MethodSource("inactivityDeadlines")
-    void restoreStateImagePreservesTheAcceptedInactivityDeadline(Long deadline) {
+    void restoreSnapshotPreservesTheAcceptedInactivityDeadline(Long deadline) {
         Room room = new Room("room-1", "Night Game", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
         room.addPlayer("Bob");
@@ -128,7 +128,7 @@ class RoomSnapshotMapperTest {
                 new Player("Bob", "bob-id", 1000)), 6, 5, 10);
         RoomSnapshotMapper mapper = newMapper();
 
-        RecoveredRoom restored = mapper.restoreStateImage(mapper.captureStateImage(room, game));
+        RecoveredRoom restored = mapper.restoreSnapshot(mapper.captureSnapshot(room, game));
 
         assertEquals(room.getRoomId(), restored.room().getRoomId());
         assertEquals(deadline, restored.room().getInactivityDeadlineEpochMs());
@@ -167,7 +167,7 @@ class RoomSnapshotMapperTest {
         RoomSnapshotMapper mapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
-        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, game));
+        byte[] snapshot = mapper.serialize(mapper.captureSnapshot(room, game));
         Game restored = mapper.deserialize(snapshot).game();
         assertEquals(3, restored.toSnapshot().carryOverPot());
         assertEquals(game.getLastHandPayout(), restored.getLastHandPayout());
@@ -251,7 +251,7 @@ class RoomSnapshotMapperTest {
         RoomSnapshotMapper mapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
-        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, game));
+        byte[] snapshot = mapper.serialize(mapper.captureSnapshot(room, game));
         String json = new String(snapshot, StandardCharsets.UTF_8);
         assertFalse(json.contains("schemaVersion"));
         assertTrue(json.contains("\"gameEndResult\""));
@@ -298,7 +298,7 @@ class RoomSnapshotMapperTest {
         RoomSnapshotMapper mapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
-        Game restored = mapper.deserialize(mapper.serialize(mapper.captureStateImage(room, game))).game();
+        Game restored = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, game))).game();
         Player initialA = restored.getPlayers().getFirst();
         assertEquals(150, restored.getMinimumRaiseAmount(initialA));
         assertFalse(restored.getLegalActionsFor(initialA).contains(PlayerAction.RAISE));
@@ -307,7 +307,7 @@ class RoomSnapshotMapperTest {
         Player restoredShort = restored.getPlayers().get(3);
         restored.processPlayerDecision(restoredShort, new PlayerDecision(PlayerAction.ALL_IN, 0, "s2"));
         restored.processPlayerDecision(restored.getPlayers().get(1), new PlayerDecision(PlayerAction.CALL, 0, "b"));
-        Game reopened = mapper.deserialize(mapper.serialize(mapper.captureStateImage(room, restored))).game();
+        Game reopened = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, restored))).game();
         Player reopenedA = reopened.getPlayers().getFirst();
         assertEquals(200, reopened.getMinimumRaiseAmount(reopenedA));
         assertTrue(reopened.getLegalActionsFor(reopenedA).contains(PlayerAction.RAISE));
@@ -333,7 +333,7 @@ class RoomSnapshotMapperTest {
 
         RoomSnapshotMapper mapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
-        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, game));
+        byte[] snapshot = mapper.serialize(mapper.captureSnapshot(room, game));
 
         RecoveredRoom recovered = mapper.deserialize(snapshot);
         assertNotNull(recovered.room());
@@ -388,7 +388,7 @@ class RoomSnapshotMapperTest {
         room.addPlayer("Alice");
         RoomSnapshotMapper mapper = newMapper();
 
-        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, null));
+        byte[] snapshot = mapper.serialize(mapper.captureSnapshot(room, null));
         String json = new String(snapshot, StandardCharsets.UTF_8);
         assertTrue(json.contains("\"inactivityDeadlineEpochMs\":null"));
         assertFalse(json.contains("schemaVersion"));
@@ -407,8 +407,8 @@ class RoomSnapshotMapperTest {
     }
 
     @Test
-    @DisplayName("captureStateImage copies state into an immutable snapshot detached from live mutations")
-    void captureStateImage_DetachesSnapshotFromLiveMutation() {
+    @DisplayName("captureSnapshot copies state into an immutable snapshot detached from live mutations")
+    void captureSnapshot_DetachesSnapshotFromLiveMutation() {
         RoomSnapshotMapper mapper = new RoomSnapshotMapper(
                 JsonMapper.builder().findAndAddModules().build());
 
@@ -421,7 +421,7 @@ class RoomSnapshotMapperTest {
         Game game = new Game("room-order", List.of(p1, p2), 6, 10, 20);
 
         // Capture and serialize state image before mutating live game
-        RoomSnapshot stateImage = mapper.captureStateImage(room, game);
+        RoomSnapshot stateImage = mapper.captureSnapshot(room, game);
         assertNotNull(stateImage);
         assertNotNull(stateImage.room());
         assertNotNull(stateImage.game());
@@ -459,7 +459,7 @@ class RoomSnapshotMapperTest {
                 alice.doAction(PlayerAction.BET, 10);
                 capture = executor.submit(() -> {
                     try (LockLease _ = coordinator.acquire(roomId)) {
-                        return mapper.serialize(mapper.captureStateImage(room, game));
+                        return mapper.serialize(mapper.captureSnapshot(room, game));
                     }
                 });
                 Awaitility.await().until(() -> coordinator.lockReservationCount(roomId) >= 2);
@@ -506,7 +506,7 @@ class RoomSnapshotMapperTest {
                 PASSWORD_ENCODER.encode(rawSecret));
         room.addPlayer("Host");
 
-        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, null));
+        byte[] snapshot = mapper.serialize(mapper.captureSnapshot(room, null));
         String json = new String(snapshot, StandardCharsets.UTF_8);
 
         // Security check: raw password MUST NOT appear anywhere in the snapshot JSON
@@ -537,7 +537,7 @@ class RoomSnapshotMapperTest {
         Room publicRoom = new Room("pub-room", "Public Room", "Host", 4, 10, 20, 500, null);
         publicRoom.addPlayer("Host");
 
-        byte[] snapshot = mapper.serialize(mapper.captureStateImage(publicRoom, null));
+        byte[] snapshot = mapper.serialize(mapper.captureSnapshot(publicRoom, null));
         RecoveredRoom recovered = mapper.deserialize(snapshot);
 
         assertNotNull(recovered.room());
@@ -558,7 +558,7 @@ class RoomSnapshotMapperTest {
         String aliceMemId = room.addPlayer("Alice");
         String bobMemId = room.addPlayer("Bob");
 
-        byte[] snapshot = mapper.serialize(mapper.captureStateImage(room, null));
+        byte[] snapshot = mapper.serialize(mapper.captureSnapshot(room, null));
         RecoveredRoom recovered = mapper.deserialize(snapshot);
 
         assertNotNull(recovered.room());
@@ -577,7 +577,7 @@ class RoomSnapshotMapperTest {
 
     /**
      * Classpath location of the hand-written terminal snapshot fixture. The fixture is an
-     * independent oracle (ADR-0001): it is NOT produced by {@link RoomSnapshotMapper#captureStateImage}, so a
+     * independent oracle (ADR-0001): it is NOT produced by {@link RoomSnapshotMapper#captureSnapshot}, so a
      * symmetric field rename in the writer and reader cannot silently keep the shape check green.
      */
     private static final String TERMINAL_FIXTURE = "/persistence/schema4-terminal-snapshot.json";
@@ -599,7 +599,7 @@ class RoomSnapshotMapperTest {
      */
     @Test
     @DisplayName("The mapper's serialized output carries the same field names as the independent fixture")
-    void captureStateImage_FieldNames_MatchIndependentFixture() {
+    void captureSnapshot_FieldNames_MatchIndependentFixture() {
         Room room = new Room(TERMINAL_ROOM_ID, "Final Table", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
         room.addPlayer("Bob");
@@ -647,7 +647,7 @@ class RoomSnapshotMapperTest {
                 .gameEndResult(terminalResult).build();
 
         ObjectNode serialized = JSON.valueToTree(
-                new RoomSnapshotMapper(JSON).captureStateImage(room, game));
+                new RoomSnapshotMapper(JSON).captureSnapshot(room, game));
 
         assertEquals(fieldNameShape(validTerminalSnapshotTree()), fieldNameShape(serialized),
                 "Mapper writer field names drifted from the independent terminal-snapshot fixture");
@@ -741,7 +741,7 @@ class RoomSnapshotMapperTest {
         game.setGameEndResult(result);
         RoomSnapshotMapper mapper = new RoomSnapshotMapper(JSON);
 
-        GameEndResponse restored = mapper.deserialize(mapper.serialize(mapper.captureStateImage(room, game)))
+        GameEndResponse restored = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, game)))
                 .game().getGameEndResult();
 
         assertEquals(result, restored);
@@ -816,22 +816,22 @@ class RoomSnapshotMapperTest {
 
     @ParameterizedTest(name = "[{index}] {0}")
     @MethodSource("invalidImages")
-    @DisplayName("restoreStateImage rejects an invalid image with the specific message")
-    void restoreStateImage_InvalidImage_IsRejectedWithSpecificMessage(String name, RoomSnapshot image,
+    @DisplayName("restoreSnapshot rejects an invalid image with the specific message")
+    void restoreSnapshot_InvalidImage_IsRejectedWithSpecificMessage(String name, RoomSnapshot image,
             String expectedMessage) {
         PersistenceException ex = assertThrows(PersistenceException.class,
-                () -> newMapper().restoreStateImage(image));
+                () -> newMapper().restoreSnapshot(image));
 
         assertEquals(expectedMessage, ex.getMessage(), name);
     }
 
     @Test
-    @DisplayName("restoreStateImage accepts the boundary room parameters")
-    void restoreStateImage_BoundaryRoomParameters_AreAccepted() {
+    @DisplayName("restoreSnapshot accepts the boundary room parameters")
+    void restoreSnapshot_BoundaryRoomParameters_AreAccepted() {
         RoomSnapshotMapper mapper = newMapper();
 
-        Room minimal = mapper.restoreStateImage(lobbyImage(roomState("r", 2, 1, 2, 2))).room();
-        Room maximal = mapper.restoreStateImage(lobbyImage(roomState("r", 10, 5, 10, 10))).room();
+        Room minimal = mapper.restoreSnapshot(lobbyImage(roomState("r", 2, 1, 2, 2))).room();
+        Room maximal = mapper.restoreSnapshot(lobbyImage(roomState("r", 10, 5, 10, 10))).room();
 
         assertEquals(2, minimal.getMaxPlayers());
         assertEquals(10, maximal.getMaxPlayers());
@@ -839,10 +839,10 @@ class RoomSnapshotMapperTest {
 
     @Test
     @DisplayName("A deleted image restores to a deleted marker without room or game, even from a tombstone")
-    void restoreStateImage_DeletedImage_ReturnsDeletedMarker() {
+    void restoreSnapshot_DeletedImage_ReturnsDeletedMarker() {
         RoomSnapshotMapper mapper = newMapper();
 
-        RecoveredRoom fromImage = mapper.restoreStateImage(
+        RecoveredRoom fromImage = mapper.restoreSnapshot(
                 new RoomSnapshot(true, null, null));
         RecoveredRoom fromTombstone = mapper.deserialize(mapper.serializeDeletion("gone-room"));
 
@@ -863,13 +863,13 @@ class RoomSnapshotMapperTest {
 
     @ParameterizedTest(name = "[{index}] {0}")
     @MethodSource("hostReconciliations")
-    @DisplayName("restoreStateImage reconciles the host against actual room membership")
-    void restoreStateImage_HostReconciliation_FallsBackThroughMembership(String name, String hostName, List<String> members, String expectedHost) {
+    @DisplayName("restoreSnapshot reconciles the host against actual room membership")
+    void restoreSnapshot_HostReconciliation_FallsBackThroughMembership(String name, String hostName, List<String> members, String expectedHost) {
         RoomSnapshot.RoomState room = new RoomSnapshot.RoomState("r", "Room", hostName, 6, 5, 10,
                 100, null, LocalDateTime.of(2024, 1, 1, 12, 0), members, Map.of(), false, null);
         RoomSnapshot image = new RoomSnapshot(false, room, null);
 
-        RecoveredRoom recovered = newMapper().restoreStateImage(image);
+        RecoveredRoom recovered = newMapper().restoreSnapshot(image);
 
         assertEquals(expectedHost, recovered.room().getHostName(), name);
         assertFalse(recovered.deleted());
@@ -877,10 +877,10 @@ class RoomSnapshotMapperTest {
     }
 
     @Test
-    @DisplayName("captureStateImage rejects a null room with a PersistenceException")
-    void captureStateImage_NullRoom_IsRejected() {
+    @DisplayName("captureSnapshot rejects a null room with a PersistenceException")
+    void captureSnapshot_NullRoom_IsRejected() {
         PersistenceException ex = assertThrows(PersistenceException.class,
-                () -> newMapper().captureStateImage(null, null));
+                () -> newMapper().captureSnapshot(null, null));
 
         assertEquals("Room cannot be null for aggregate state capture", ex.getMessage());
     }
@@ -893,7 +893,7 @@ class RoomSnapshotMapperTest {
         PersistenceException nullImage = assertThrows(PersistenceException.class,
                 () -> mapper.serialize((RoomSnapshot) null));
         PersistenceException nullRoom = assertThrows(PersistenceException.class,
-                () -> mapper.serialize(mapper.captureStateImage(null, null)));
+                () -> mapper.serialize(mapper.captureSnapshot(null, null)));
 
         assertEquals("State image cannot be null for serialization", nullImage.getMessage());
         assertEquals("Room cannot be null for aggregate state capture", nullRoom.getMessage());
@@ -920,7 +920,7 @@ class RoomSnapshotMapperTest {
 
         Room live = new Room("live", "Live", "Host", 4, 5, 10, 100, null);
         live.addPlayer("Host");
-        RoomSnapshot.RoomState captured = mapper.captureStateImage(live, null).room();
+        RoomSnapshot.RoomState captured = mapper.captureSnapshot(live, null).room();
         assertEquals("live", captured.roomId());
         assertEquals(List.of("Host"), captured.players());
     }
@@ -975,7 +975,7 @@ class RoomSnapshotMapperTest {
             assertEquals(20, game.getCurrentHighestBet());
 
             // Snapshot via mapper
-            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
+            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
 
             // Store into real encrypted WAL
             RoomCoordinator coordinator = new RoomCoordinator();
@@ -1032,7 +1032,7 @@ class RoomSnapshotMapperTest {
             assertEquals(GamePhase.FLOP, game.getCurrentPhase());
             assertEquals(3, game.getCommunityCards().size());
 
-            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
+            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
 
             // WAL round-trip
             RoomCoordinator coordinator = new RoomCoordinator();
@@ -1075,7 +1075,7 @@ class RoomSnapshotMapperTest {
             assertEquals(GamePhase.TURN, game.getCurrentPhase());
             assertEquals(4, game.getCommunityCards().size());
 
-            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
+            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
 
             // WAL round-trip
             RoomCoordinator coordinator = new RoomCoordinator();
@@ -1118,7 +1118,7 @@ class RoomSnapshotMapperTest {
             assertEquals(GamePhase.RIVER, game.getCurrentPhase());
             assertEquals(5, game.getCommunityCards().size());
 
-            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
+            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
 
             // WAL round-trip
             RoomCoordinator coordinator = new RoomCoordinator();
@@ -1162,7 +1162,7 @@ class RoomSnapshotMapperTest {
             assertNotNull(game.getLastHandPayout());
             HandPayout originalSettlement = game.getLastHandPayout();
 
-            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
+            byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
 
             // WAL round-trip
             RoomCoordinator coordinator = new RoomCoordinator();
@@ -1209,7 +1209,7 @@ class RoomSnapshotMapperTest {
             assertTrue(contested.wasContestedShowdown());
 
             Game restoredContested = snapshotMapper.deserialize(
-                    snapshotMapper.serialize(snapshotMapper.captureStateImage(contestedRoom, contested))).game();
+                    snapshotMapper.serialize(snapshotMapper.captureSnapshot(contestedRoom, contested))).game();
 
             assertTrue(restoredContested.isHandSettled());
             assertTrue(restoredContested.wasContestedShowdown());
@@ -1228,7 +1228,7 @@ class RoomSnapshotMapperTest {
             assertFalse(foldWin.wasContestedShowdown());
 
             Game restoredFoldWin = snapshotMapper.deserialize(
-                    snapshotMapper.serialize(snapshotMapper.captureStateImage(foldRoom, foldWin))).game();
+                    snapshotMapper.serialize(snapshotMapper.captureSnapshot(foldRoom, foldWin))).game();
 
             assertTrue(restoredFoldWin.isHandSettled());
             assertFalse(restoredFoldWin.wasContestedShowdown());
@@ -1264,7 +1264,7 @@ class RoomSnapshotMapperTest {
             assertTrue(game.isReadyCountdownActive());
             assertEquals(deadline, game.getReadyCountdownDeadlineEpochMs());
 
-            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
+            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
             Game restored = snapshotMapper.deserialize(bytes).game();
 
             assertEquals(ReadyGateState.COUNTING_DOWN, restored.getReadyGateState());
@@ -1297,7 +1297,7 @@ class RoomSnapshotMapperTest {
             assertFalse(game.isReadyCountdownActive());
             assertNull(game.getReadyCountdownDeadlineEpochMs());
 
-            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
+            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
             Game restored = snapshotMapper.deserialize(bytes).game();
 
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, restored.getReadyGateState());
@@ -1329,7 +1329,7 @@ class RoomSnapshotMapperTest {
             assertEquals(ReadyGateState.CLOSED, game.getReadyGateState());
             assertFalse(game.isReadyCountdownActive());
 
-            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
+            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
             Game restored = snapshotMapper.deserialize(bytes).game();
 
             assertEquals(ReadyGateState.CLOSED, restored.getReadyGateState());
@@ -1376,7 +1376,7 @@ class RoomSnapshotMapperTest {
             assertEquals(deadlines, game.toSnapshot().scheduledTimes());
             assertEquals(timerVersions, game.toSnapshot().timerVersions());
 
-            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
+            byte[] bytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
             Game restored = snapshotMapper.deserialize(bytes).game();
 
             assertEquals(42L, restored.getStateRevision());
@@ -1460,8 +1460,8 @@ class RoomSnapshotMapperTest {
                 
                 .build();
 
-        RoomSnapshot beforeImage = mapper.captureStateImage(room, game);
-        byte[] beforeBytes = mapper.serialize(mapper.captureStateImage(room, game));
+        RoomSnapshot beforeImage = mapper.captureSnapshot(room, game);
+        byte[] beforeBytes = mapper.serialize(mapper.captureSnapshot(room, game));
 
         for (int i = 0; i < 3; i++) {
             assertEquals("p2", game.getCurrentPlayer().getPlayerId());
@@ -1469,8 +1469,8 @@ class RoomSnapshotMapperTest {
             assertEquals("p3", game.getBigBlindPlayerId());
         }
 
-        RoomSnapshot afterImage = mapper.captureStateImage(room, game);
-        byte[] afterBytes = mapper.serialize(mapper.captureStateImage(room, game));
+        RoomSnapshot afterImage = mapper.captureSnapshot(room, game);
+        byte[] afterBytes = mapper.serialize(mapper.captureSnapshot(room, game));
 
         assertEquals(beforeImage, afterImage);
         assertArrayEquals(beforeBytes, afterBytes);

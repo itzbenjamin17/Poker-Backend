@@ -668,11 +668,11 @@ class PlayerDepartureHandlerTest {
 
             RoomSnapshotMapper mapper = new RoomSnapshotMapper(
                     JsonMapper.builder().findAndAddModules().build());
-            Game restored = mapper.deserialize(mapper.serialize(mapper.captureStateImage(testRoom, game))).game();
+            Game restored = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(testRoom, game))).game();
             assertTrue(restored.isPausedForDisconnectedSurvivor());
             assertTrue(restored.getPlayers().stream()
                     .anyMatch(player -> player.getName().equals(departing.getName()) && player.isOut()));
-            assertFalse(mapper.deserialize(mapper.serialize(mapper.captureStateImage(testRoom, game)))
+            assertFalse(mapper.deserialize(mapper.serialize(mapper.captureSnapshot(testRoom, game)))
                     .room().hasPlayer(departing.getName()));
             withRoomLock(ROOM_ID, () -> activeGames.replace(restored));
             Player restoredSurvivor = findGamePlayer(restored, survivor.getName());

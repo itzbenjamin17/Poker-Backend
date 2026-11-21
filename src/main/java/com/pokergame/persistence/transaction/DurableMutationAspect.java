@@ -199,8 +199,8 @@ public final class DurableMutationAspect {
         RoomAggregate aggregate = aggregates.find(roomId);
         if (aggregate == null) return new PendingSave(snapshotMapper.serializeDeletion(roomId), true);
         // Keep capture and serialization within the stable room coordination boundary.
-        RoomSnapshot stateImage = snapshotMapper.captureStateImage(aggregate.room(), aggregate.game());
-        return new PendingSave(snapshotMapper.serialize(stateImage), false);
+        RoomSnapshot snapshot = snapshotMapper.captureSnapshot(aggregate.room(), aggregate.game());
+        return new PendingSave(snapshotMapper.serialize(snapshot), false);
     }
 
     private void saveState(String roomId, PendingSave pending, WalTransaction transaction) {
@@ -241,7 +241,7 @@ public final class DurableMutationAspect {
         RoomAggregate aggregate = aggregates.find(roomId);
         if (aggregate == null) return new RollbackState(null, Map.of());
         Room room = aggregate.room();
-        RoomSnapshot image = snapshotMapper.captureStateImage(room, aggregate.game());
+        RoomSnapshot image = snapshotMapper.captureSnapshot(room, aggregate.game());
         Map<String, ConnectionState> connections = new HashMap<>();
         for (String player : room.getPlayers()) {
             connections.put(player, new ConnectionState(room.isPlayerConnected(player), room.getAbsenceDeadline(player)));
@@ -257,7 +257,7 @@ public final class DurableMutationAspect {
         roomCoordinator.assertHeldByCurrentThread(roomId);
         try {
             if (beforeMutation != null && beforeMutation.image() != null) {
-                RecoveredRoom aggregate = snapshotMapper.restoreStateImage(beforeMutation.image());
+                RecoveredRoom aggregate = snapshotMapper.restoreSnapshot(beforeMutation.image());
                 // The one place connection flags are carried over: they are process-local, not in the image.
                 beforeMutation.connections().forEach((player, state) -> {
                     aggregate.room().setPlayerConnected(player, state.connected());

@@ -194,7 +194,7 @@ class PersistenceRecoveryTest {
             Game activeGame = room == active ? game : null;
             withRoomLock(coordinator, room.getRoomId(), () -> {
                 realStore.commit(realStore.prepare(room.getRoomId()),
-                        realMapper.serialize(realMapper.captureStateImage(room, activeGame)));
+                        realMapper.serialize(realMapper.captureSnapshot(room, activeGame)));
                 return null;
             });
         }
@@ -241,11 +241,11 @@ class PersistenceRecoveryTest {
         Room unknownKeyRoom = roomForRecovery("unknown-key-room", "Bob");
         withRoomLock(coordinator, validRoom.getRoomId(), () -> {
             realStore.commit(realStore.prepare(validRoom.getRoomId()),
-                    realMapper.serialize(realMapper.captureStateImage(validRoom, null)));
+                    realMapper.serialize(realMapper.captureSnapshot(validRoom, null)));
             return null;
         });
 
-        byte[] baseSnapshot = realMapper.serialize(realMapper.captureStateImage(unknownKeyRoom, null));
+        byte[] baseSnapshot = realMapper.serialize(realMapper.captureSnapshot(unknownKeyRoom, null));
         ObjectNode tree = (ObjectNode) jsonMapper.readTree(baseSnapshot);
         tree.put("staleFieldFromOlderBuild", "unexpected");
         withRoomLock(coordinator, unknownKeyRoom.getRoomId(), () -> {
@@ -280,11 +280,11 @@ class PersistenceRecoveryTest {
         Room missingKeyRoom = roomForRecovery("missing-key-room", "Bob");
         withRoomLock(coordinator, validRoom.getRoomId(), () -> {
             realStore.commit(realStore.prepare(validRoom.getRoomId()),
-                    realMapper.serialize(realMapper.captureStateImage(validRoom, null)));
+                    realMapper.serialize(realMapper.captureSnapshot(validRoom, null)));
             return null;
         });
 
-        byte[] baseSnapshot = realMapper.serialize(realMapper.captureStateImage(missingKeyRoom, null));
+        byte[] baseSnapshot = realMapper.serialize(realMapper.captureSnapshot(missingKeyRoom, null));
         ObjectNode tree = (ObjectNode) jsonMapper.readTree(baseSnapshot);
         tree.remove("game");
         withRoomLock(coordinator, missingKeyRoom.getRoomId(), () -> {
@@ -459,12 +459,12 @@ class PersistenceRecoveryTest {
 
         withRoomLock(coordinator, validRoom.getRoomId(), () -> {
             realStore.commit(realStore.prepare(validRoom.getRoomId()),
-                    realMapper.serialize(realMapper.captureStateImage(validRoom, null)));
+                    realMapper.serialize(realMapper.captureSnapshot(validRoom, null)));
             return null;
         });
         withRoomLock(coordinator, expiredLobby.getRoomId(), () -> {
             realStore.commit(realStore.prepare(expiredLobby.getRoomId()),
-                    realMapper.serialize(realMapper.captureStateImage(expiredLobby, null)));
+                    realMapper.serialize(realMapper.captureSnapshot(expiredLobby, null)));
             return null;
         });
         withRoomLock(coordinator, "tombstone-room", () -> {

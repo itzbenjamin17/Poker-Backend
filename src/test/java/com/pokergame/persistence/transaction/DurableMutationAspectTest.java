@@ -95,7 +95,7 @@ class DurableMutationAspectTest {
         properties = new PersistenceProperties(false, Path.of("data", "poker-wal"), null, Map.of(), 1000, 16L * 1024 * 1024, 5000);
         roomCoordinator = new RoomCoordinator();
         RoomSnapshot mockImage = Mockito.mock(RoomSnapshot.class);
-        Mockito.lenient().when(snapshotMapper.captureStateImage(any(), any())).thenReturn(mockImage);
+        Mockito.lenient().when(snapshotMapper.captureSnapshot(any(), any())).thenReturn(mockImage);
         Mockito.lenient().when(snapshotMapper.serialize(any(RoomSnapshot.class))).thenReturn(new byte[]{1, 2, 3});
     }
 
@@ -431,7 +431,7 @@ class DurableMutationAspectTest {
         ProceedingJoinPoint joinPoint = mutationPoint("room-capture", () -> "done");
         aspect.persist(joinPoint);
 
-        verify(realMapper, times(2)).captureStateImage(room, game);
+        verify(realMapper, times(2)).captureSnapshot(room, game);
         verify(realMapper).serialize(any(RoomSnapshot.class));
     }
 
@@ -481,7 +481,7 @@ class DurableMutationAspectTest {
             return null;
         });
 
-        when(snapshotMapper.restoreStateImage(any(RoomSnapshot.class)))
+        when(snapshotMapper.restoreSnapshot(any(RoomSnapshot.class)))
                 .thenReturn(new RecoveredRoom(originalRoom, originalGame, false));
 
         lenient().when(aggregates.find(roomId)).thenReturn(new RoomAggregate(originalRoom, originalGame));
@@ -578,9 +578,9 @@ class DurableMutationAspectTest {
 
         byte[] acceptedBytes = new byte[]{50, 51, 52};
         RoomSnapshot capturedImage = mock(RoomSnapshot.class);
-        when(snapshotMapper.captureStateImage(any(), any())).thenReturn(capturedImage);
+        when(snapshotMapper.captureSnapshot(any(), any())).thenReturn(capturedImage);
         when(snapshotMapper.serialize(capturedImage)).thenReturn(acceptedBytes);
-        when(snapshotMapper.restoreStateImage(capturedImage)).thenReturn(new RecoveredRoom(room, game, false));
+        when(snapshotMapper.restoreSnapshot(capturedImage)).thenReturn(new RecoveredRoom(room, game, false));
 
         // First mutation: domain succeeds, but storage fails (saving pendingSave with acceptedBytes)
         storageOutage.set(true);
@@ -663,7 +663,7 @@ class DurableMutationAspectTest {
         lobbyRoom.addPlayer("Alice");
         RecoveredRoom lobbyAggregate = new RecoveredRoom(lobbyRoom, null, false);
         when(aggregates.find(roomId)).thenReturn(new RoomAggregate(lobbyRoom, null));
-        when(snapshotMapper.restoreStateImage(any(RoomSnapshot.class))).thenReturn(lobbyAggregate);
+        when(snapshotMapper.restoreSnapshot(any(RoomSnapshot.class))).thenReturn(lobbyAggregate);
 
         ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
             throw new RuntimeException("Lobby mutation failure");

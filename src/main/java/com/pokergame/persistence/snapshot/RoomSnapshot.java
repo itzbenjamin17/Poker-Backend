@@ -19,8 +19,8 @@ import java.util.Set;
 /**
  * A clean, simple snapshot of a poker room and its game.
  * <p>
- * This class exists so that if we change how the live Game or Room works in the future,
- * older saved games won't automatically break. We only save plain data here.
+ * This class keeps internal refactors to the live Room and Game decoupled from the saved WAL
+ * format by storing only plain data.
  * </p>
  *
  * @param deleted       true if this room was deleted

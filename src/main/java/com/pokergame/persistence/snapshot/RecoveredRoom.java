@@ -5,7 +5,7 @@ import com.pokergame.model.Room;
 
 /**
  * A simple container holding the fully restored Room and Game objects
- * after they have been loaded from the database during startup.
+ * after they have been loaded from the WAL during startup.
  *
  * @param room    the restored room, or null if this was just a marker saying the room was deleted
  * @param game    the restored game, or null if the room hasn't started playing yet

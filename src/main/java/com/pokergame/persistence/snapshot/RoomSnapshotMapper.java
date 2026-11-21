@@ -22,7 +22,7 @@ import tools.jackson.databind.ObjectMapper;
  * <p>
  * We map every field manually instead of using automatic serialization. This ensures that internal
  * code details—like thread locks, timers, or service dependencies—never accidentally get saved
- * into the database files.
+ * into the WAL save files.
  * </p>
  */
 @Component
@@ -43,15 +43,14 @@ public final class RoomSnapshotMapper {
     }
 
     /**
-     * Captures an immutable room snapshot while the caller owns the room lock.
-     * All live domain fields, players, and cards are converted into independent immutable records.
-     * No JSON serialization or I/O is performed during capture.
+     * Copies the live room and optional game into an immutable {@link RoomSnapshot} while the
+     * caller holds the room lock, without performing any JSON conversion or disk I/O.
      *
-     * @param room the room aggregate
-     * @param game the game aggregate, or null if room is a lobby
-     * @return independent immutable room snapshot
+     * @param room the live room
+     * @param game the live game, or {@code null} if the room is still a lobby
+     * @return an immutable copy of the room and game
      */
-    public RoomSnapshot captureStateImage(Room room, Game game) {
+    public RoomSnapshot captureSnapshot(Room room, Game game) {
         if (room == null) {
             throw new PersistenceException("Room cannot be null for aggregate state capture");
         }
@@ -59,18 +58,17 @@ public final class RoomSnapshotMapper {
     }
 
     /**
-     * Serializes an already-captured immutable room snapshot to JSON bytes.
-     * The caller retains the established persistence ordering boundary.
+     * Encodes an already-captured {@link RoomSnapshot} into JSON bytes for saving to the WAL.
      *
-     * @param image the room snapshot to serialize
-     * @return the serialized bytes
-     * @throws PersistenceException if JSON serialization fails
+     * @param snapshot the room snapshot to encode
+     * @return the JSON bytes
+     * @throws PersistenceException if JSON encoding fails
      */
-    public byte[] serialize(RoomSnapshot image) {
-        if (image == null) {
+    public byte[] serialize(RoomSnapshot snapshot) {
+        if (snapshot == null) {
             throw new PersistenceException("State image cannot be null for serialization");
         }
-        return write(image);
+        return write(snapshot);
     }
 
     /**
@@ -96,30 +94,31 @@ public final class RoomSnapshotMapper {
      */
     public RecoveredRoom deserialize(byte[] bytes) {
         try {
-            RoomSnapshot image = objectMapper.readValue(bytes, RoomSnapshot.class);
-            return restoreStateImage(image);
+            RoomSnapshot snapshot = objectMapper.readValue(bytes, RoomSnapshot.class);
+            return restoreSnapshot(snapshot);
         } catch (JacksonException | IllegalArgumentException e) {
             throw new PersistenceException("Cannot decode aggregate snapshot", e);
         }
     }
 
     /**
-     * Reconstructs independent aggregates from an immutable image without JSON or disk access.
-     * Used for live rollback so a serialization outage cannot discard accepted gameplay.
+     * Rebuilds fresh {@link Room} and {@link Game} objects from an in-memory {@link RoomSnapshot},
+     * without touching JSON or disk. Used for rolling back a failed change in memory even if
+     * disk saving or JSON encoding is unavailable.
      *
-     * @param image captured aggregate data
-     * @return independently reconstructed room and game
-     * @throws PersistenceException if the image is invalid or null
+     * @param snapshot the captured room snapshot
+     * @return the rebuilt room and optional game (or a deleted marker)
+     * @throws PersistenceException if the snapshot is null or invalid
      */
-    public RecoveredRoom restoreStateImage(RoomSnapshot image) {
-        if (image == null) {
+    public RecoveredRoom restoreSnapshot(RoomSnapshot snapshot) {
+        if (snapshot == null) {
             throw new PersistenceException("Unsupported in-memory aggregate image");
         }
         // If this snapshot marks a deleted room, just return a deleted result
-        if (image.deleted()) {
+        if (snapshot.deleted()) {
             return new RecoveredRoom(null, null, true);
         }
-        RoomSnapshot.RoomState state = image.room();
+        RoomSnapshot.RoomState state = snapshot.room();
         if (state == null || state.roomId() == null || state.roomId().trim().isEmpty()) {
             throw new PersistenceException("Missing required room state in aggregate snapshot");
         }
@@ -132,17 +131,17 @@ public final class RoomSnapshotMapper {
 
         // If there was an active game, rebuild and strictly validate it
         Game game = null;
-        if (image.game() != null) {
-            if (image.game().gameId() == null || !image.game().gameId().equals(state.roomId())) {
+        if (snapshot.game() != null) {
+            if (snapshot.game().gameId() == null || !snapshot.game().gameId().equals(state.roomId())) {
                 throw new PersistenceException("Game identity does not match room identity in snapshot");
             }
-            if (image.game().pot() < 0) {
+            if (snapshot.game().pot() < 0) {
                 throw new PersistenceException("Invalid negative pot in snapshot");
             }
-            if (image.game().readyGateState() == null) {
+            if (snapshot.game().readyGateState() == null) {
                 throw new PersistenceException("Missing readyGateState in snapshot");
             }
-            game = restoreGame(image.game(), state.maxPlayers());
+            game = restoreGame(snapshot.game(), state.maxPlayers());
         }
 
         return new RecoveredRoom(restoreRoom(state), game, false);
@@ -230,9 +229,9 @@ public final class RoomSnapshotMapper {
                 room.getInactivityDeadlineEpochMs());
     }
 
-    private byte[] write(RoomSnapshot image) {
+    private byte[] write(RoomSnapshot snapshot) {
         try {
-            return objectMapper.writeValueAsBytes(image);
+            return objectMapper.writeValueAsBytes(snapshot);
         } catch (JacksonException e) {
             throw new PersistenceException("Cannot encode aggregate snapshot", e);
         }

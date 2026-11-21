@@ -669,7 +669,7 @@ class PersistenceCoordinationIT {
             game.markGameOver();
             game.scheduleTask(ScheduledGameTask.CLEANUP, pastCleanupDeadline);
             Room room = roomService.getRoom(roomId);
-            byte[] image = snapshotMapper.serialize(snapshotMapper.captureStateImage(room, game));
+            byte[] image = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
             walStore.checkpoint(roomId, image);
             roomAggregates.remove(roomId);
             return null;
