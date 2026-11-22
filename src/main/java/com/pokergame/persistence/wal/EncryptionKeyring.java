@@ -1,24 +1,29 @@
 package com.pokergame.persistence.wal;
 
+import com.pokergame.persistence.PersistenceException;
+
 import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
+import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import com.pokergame.persistence.config.PersistenceException;
 
 /**
- * Holds the encryption keys for the save files. 
- * We keep old keys around so we can still read older save files, but use a new key for any new saves.
+ * Holds named AES-256 encryption keys for WAL records.
+ * New saves encrypt with the current key while older keys remain available to decrypt prior saves.
  */
 public final class EncryptionKeyring {
+    private static final int AES_256_KEY_BYTES = 32;
+
     private final String currentKeyId;
     private final Map<String, SecretKey> keys;
 
     /**
-     * Creates a new keyring and checks that all keys are valid AES-256 keys.
-     * We do this at startup so we don't accidentally start the server with broken keys.
+     * Validates that {@code currentKeyId} exists and every key in {@code keys} is a 256-bit key.
      *
-     * @param currentKeyId the ID of the key to use for new saves
-     * @param keys         all the old and new keys we have, by their IDs
-     * @throws PersistenceException if a key is missing or not the right length
+     * @param currentKeyId ID of the key used to encrypt new saves
+     * @param keys         all available keys by ID
+     * @throws PersistenceException if {@code currentKeyId} is blank, missing, or any key is not 256-bit
      */
     public EncryptionKeyring(String currentKeyId, Map<String, SecretKey> keys) {
         if (currentKeyId == null || currentKeyId.isBlank()) {
@@ -26,46 +31,64 @@ public final class EncryptionKeyring {
         }
         this.keys = Map.copyOf(keys);
         this.currentKeyId = currentKeyId;
-        SecretKey current = key(currentKeyId);
-        if (current.getEncoded() == null || current.getEncoded().length != 32) {
-            throw new PersistenceException("Persistence keys must be 256-bit AES keys");
-        }
+        key(currentKeyId);
         for (Map.Entry<String, SecretKey> entry : this.keys.entrySet()) {
-            if (entry.getValue().getEncoded() == null || entry.getValue().getEncoded().length != 32) {
+            byte[] encoded = entry.getValue().getEncoded();
+            if (encoded == null || encoded.length != AES_256_KEY_BYTES) {
                 throw new PersistenceException("Persistence key " + entry.getKey() + " is not 256-bit");
             }
         }
     }
 
     /**
-     * Gets the ID of the newest key. We save this ID in the file so we know which key to use to read it later.
+     * Builds a keyring from Base64-encoded AES-256 keys (for example, from application configuration).
      *
-     * @return the ID of the newest key
+     * @param currentKeyId ID of the key used to encrypt new saves
+     * @param base64Keys   Base64-encoded keys by ID
+     * @return validated keyring
+     * @throws PersistenceException if any key is invalid Base64, not 256-bit, or {@code currentKeyId} is missing
+     */
+    public static EncryptionKeyring fromBase64(String currentKeyId, Map<String, String> base64Keys) {
+        Map<String, SecretKey> keys = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : base64Keys.entrySet()) {
+            try {
+                keys.put(entry.getKey(), new SecretKeySpec(Base64.getDecoder().decode(entry.getValue()), "AES"));
+            } catch (IllegalArgumentException e) {
+                throw new PersistenceException("Persistence key " + entry.getKey() + " is not valid Base64", e);
+            }
+        }
+        return new EncryptionKeyring(currentKeyId, keys);
+    }
+
+    /**
+     * Returns the ID of the key used for new saves (stored with each record for later decryption).
+     *
+     * @return current key ID
      */
     public String currentKeyId() {
         return currentKeyId;
     }
 
     /**
-     * Gets the key we should use right now to encrypt any new game saves.
+     * Returns the key used to encrypt new saves.
      *
-     * @return the current encryption key
+     * @return current encryption key
      */
     public SecretKey currentKey() {
         return key(currentKeyId);
     }
 
     /**
-     * Looks up a specific key by its ID. If we don't have the key, we fail safely instead of trying to guess.
+     * Returns the key for {@code keyId}.
      *
-     * @param keyId the ID of the key we need
-     * @return the matching key
-     * @throws PersistenceException if we don't have a key with that ID
+     * @param keyId key ID to look up
+     * @return matching key
+     * @throws MissingPersistenceKeyException if no key exists for {@code keyId}
      */
     public SecretKey key(String keyId) {
         SecretKey key = keys.get(keyId);
         if (key == null) {
-            throw new PersistenceException("Required persistence key is unavailable: " + keyId);
+            throw new MissingPersistenceKeyException(keyId);
         }
         return key;
     }

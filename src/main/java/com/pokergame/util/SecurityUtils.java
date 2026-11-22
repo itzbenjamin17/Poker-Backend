@@ -2,10 +2,9 @@ package com.pokergame.util;
 
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.security.PlayerPrincipal;
-import org.springframework.security.core.Authentication;
 import jakarta.servlet.http.HttpServletRequest;
-
 import java.security.Principal;
+import org.springframework.security.core.Authentication;
 
 /**
  * Utility class for extracting player principals from security contexts.
@@ -62,7 +61,11 @@ public final class SecurityUtils {
         if (trustProxy) {
             String xfHeader = request.getHeader("X-Forwarded-For");
             if (xfHeader != null && !xfHeader.isBlank()) {
-                return xfHeader.split(",")[0].trim();
+                int commaIndex = xfHeader.indexOf(',');
+                String firstIp = (commaIndex >= 0 ? xfHeader.substring(0, commaIndex) : xfHeader).trim();
+                if (!firstIp.isEmpty()) {
+                    return firstIp;
+                }
             }
         }
         return request.getRemoteAddr();

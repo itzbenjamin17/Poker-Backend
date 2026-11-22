@@ -1,21 +1,29 @@
 package com.pokergame.config;
 
+import com.pokergame.security.EndpointRateLimitFilter;
 import com.pokergame.security.JwtAuthenticationFilter;
 import com.pokergame.security.PayloadSizeFilter;
-import com.pokergame.security.EndpointRateLimitFilter;
+import jakarta.servlet.http.HttpServletResponse;
+import java.util.List;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.preauth.AbstractPreAuthenticatedProcessingFilter;
+import org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter;
+import org.springframework.security.web.session.DisableEncodeUrlFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-
-import java.util.List;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Security configuration for stateless JWT authentication.
@@ -30,6 +38,7 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final PayloadSizeFilter payloadSizeFilter;
     private final EndpointRateLimitFilter endpointRateLimitFilter;
+    private final ObjectMapper objectMapper;
 
     /**
      * Creates the security configuration with the filters that protect HTTP traffic.
@@ -37,24 +46,26 @@ public class SecurityConfig {
      * @param jwtAuthenticationFilter authenticates bearer tokens
      * @param payloadSizeFilter rejects oversized request bodies
      * @param endpointRateLimitFilter throttles sensitive public endpoints
+     * @param objectMapper serializes error responses
      */
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
-                          com.pokergame.security.PayloadSizeFilter payloadSizeFilter,
-                          com.pokergame.security.EndpointRateLimitFilter endpointRateLimitFilter) {
+                          PayloadSizeFilter payloadSizeFilter,
+                          EndpointRateLimitFilter endpointRateLimitFilter,
+                          ObjectMapper objectMapper) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.payloadSizeFilter = payloadSizeFilter;
         this.endpointRateLimitFilter = endpointRateLimitFilter;
+        this.objectMapper = objectMapper;
     }
 
     /**
-     * Provide a dummy UserDetailsService to suppress default password generation.
-     * Authenticated state is managed entirely via JWT principal.
+     * Exposes a BCrypt password encoder for hashing and constant-time matching of sensitive secrets.
+     *
+     * @return BCryptPasswordEncoder instance
      */
     @Bean
-    public org.springframework.security.core.userdetails.UserDetailsService userDetailsService() {
-        return username -> {
-            throw new org.springframework.security.core.userdetails.UsernameNotFoundException("Not used");
-        };
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
     }
 
     /**
@@ -78,10 +89,20 @@ public class SecurityConfig {
                 // Stateless session - no cookies, no session
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
+                // Configure authentication entry point for unauthenticated requests
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint((request, response, authException) -> {
+                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+                            response.getWriter().write(objectMapper.writeValueAsString(
+                                    ProblemDetail.forStatusAndDetail(
+                                            HttpStatus.UNAUTHORIZED, "Session expired or invalid token")));
+                        }))
+
                 // Authorisation rules
                 .authorizeHttpRequests(auth -> auth
                     // Docker healthcheck must be public so the container can report healthy
-                    .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                    .requestMatchers("/actuator/health").permitAll()
 
                         // Public endpoints - where tokens are ISSUED (no token required)
                         .requestMatchers("/api/room/create", "/api/room/join").permitAll()
@@ -97,10 +118,10 @@ public class SecurityConfig {
                 .httpBasic(basic -> basic.disable())
 
                 // Reject oversized payloads first (before any other processing or token consumption)
-                .addFilterBefore(payloadSizeFilter, org.springframework.security.web.session.DisableEncodeUrlFilter.class)
+                .addFilterBefore(payloadSizeFilter, DisableEncodeUrlFilter.class)
 
                 // Enforce rate limits next
-                .addFilterBefore(endpointRateLimitFilter, org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter.class)
+                .addFilterBefore(endpointRateLimitFilter, WebAsyncManagerIntegrationFilter.class)
 
                 // Add our JWT filter before Spring's pre-auth filter (since we use
                 // PreAuthenticatedAuthenticationToken)
@@ -120,9 +141,6 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        // Allows cookies, authorisation headers to be sent in CORS requests
-        config.setAllowCredentials(true);
-
         config.setAllowedOriginPatterns(allowedOrigins);
 
         config.setAllowedMethods(List.of("GET", "POST", "OPTIONS"));

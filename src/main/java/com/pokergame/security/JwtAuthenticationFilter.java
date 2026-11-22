@@ -1,21 +1,24 @@
 package com.pokergame.security;
 
+import com.pokergame.util.MdcKeys;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.Collections;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import com.pokergame.util.MdcKeys;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
-
-import java.io.IOException;
-import java.util.Collections;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Filter that extracts JWT from the Authorisation header and sets up Spring
@@ -28,14 +31,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final Logger logger = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
 
     private final JwtService jwtService;
+    private final ObjectMapper objectMapper;
 
     /**
-     * Creates the request filter with the service used to validate bearer tokens.
+     * Creates the request filter with the service used to validate bearer tokens and object mapper.
      *
      * @param jwtService token validator and principal extractor
+     * @param objectMapper object mapper for JSON response writing
      */
-    public JwtAuthenticationFilter(JwtService jwtService) {
+    public JwtAuthenticationFilter(JwtService jwtService, ObjectMapper objectMapper) {
         this.jwtService = jwtService;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -74,8 +80,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             } else {
                 logger.warn("Rejecting request with invalid or expired JWT");
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.setContentType("application/json");
-                response.getWriter().write("{\"message\": \"Session expired or invalid token\"}");
+                response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+                response.getWriter().write(objectMapper.writeValueAsString(
+                        ProblemDetail.forStatusAndDetail(
+                                HttpStatus.UNAUTHORIZED, "Session expired or invalid token")));
                 return;
             }
         }

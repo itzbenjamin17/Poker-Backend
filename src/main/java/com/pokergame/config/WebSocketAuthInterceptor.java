@@ -1,11 +1,17 @@
 package com.pokergame.config;
 
+import com.pokergame.model.Room;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.util.RoomCoordinator;
+import com.pokergame.service.RoomService;
+import com.pokergame.util.LockLease;
 import com.pokergame.util.MdcKeys;
+import com.pokergame.util.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.MessagingException;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
@@ -13,12 +19,19 @@ import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Component;
+
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.security.Principal;
+import java.util.Map;
 
 /**
  * Intercepts STOMP messages to authenticate and authorize WebSocket actions.
  * - On CONNECT: extracts and validates the JWT to set a PlayerPrincipal.
  * - On SUBSCRIBE: ensures players only subscribe to their allowed topics.
+ * - On SEND: validates destination prefix and ensures players only publish to their allowed room destinations.
  */
 @SuppressWarnings("NullableProblems")
 @Component
@@ -26,14 +39,25 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
     private static final Logger logger = LoggerFactory.getLogger(WebSocketAuthInterceptor.class);
 
     private final JwtService jwtService;
+    private final RoomCoordinator roomCoordinator;
+    private final RoomService roomService;
 
     /**
-     * Creates an interceptor backed by the application's JWT service.
+     * Creates an interceptor backed by the application's JWT service, room lock coordinator,
+     * and room service. The room service is injected lazily because it depends on messaging
+     * infrastructure configured with this interceptor.
      *
-     * @param jwtService token validator and principal extractor
+     * @param jwtService      token validator and principal extractor
+     * @param roomCoordinator coordinator managing room locks
+     * @param roomService     room service for active membership validation
      */
-    public WebSocketAuthInterceptor(JwtService jwtService) {
+    public WebSocketAuthInterceptor(
+            JwtService jwtService,
+            RoomCoordinator roomCoordinator,
+            @Lazy RoomService roomService) {
         this.jwtService = jwtService;
+        this.roomCoordinator = roomCoordinator;
+        this.roomService = roomService;
     }
 
     /**
@@ -65,6 +89,8 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
             handleConnect(accessor);
         } else if (StompCommand.SUBSCRIBE.equals(command)) {
             handleSubscribe(accessor);
+        } else if (StompCommand.SEND.equals(command)) {
+            handleSend(accessor);
         }
 
         return message;
@@ -77,12 +103,88 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         MDC.remove(MdcKeys.SESSION_ID);
     }
 
-    /**
-     * Validates the connection bearer token and attaches its player principal.
-     *
-     * @param accessor mutable headers for the CONNECT frame
-     * @throws MessagingException if the authorization token is missing or invalid
-     */
+    private void handleSend(StompHeaderAccessor accessor) {
+        String destination = accessor.getDestination();
+        if (destination == null || !destination.startsWith("/app/")) {
+            logger.warn("Blocked SEND to unauthorized destination: {}", destination);
+            throw new AccessDeniedException("Access denied: SEND destination must start with /app/");
+        }
+
+        String sub = destination.length() > 5 ? destination.substring(5).replaceAll("^/+", "") : "";
+        if (sub.isBlank()) {
+            logger.warn("Blocked SEND to blank application destination: {}", destination);
+            throw new AccessDeniedException("Access denied: SEND destination must start with /app/");
+        }
+
+        PlayerPrincipal principal = resolvePlayerPrincipal(accessor);
+        if (principal == null) {
+            logger.warn("Forbidden unauthenticated SEND attempt to destination {}", destination);
+            throw new AccessDeniedException("User not authorized for this room destination");
+        }
+
+        String destinationRoomId = extractRoomIdFromSendDestination(destination);
+        if (destinationRoomId != null) {
+            if (!isRoomAuthorized(principal, destinationRoomId)) {
+                String callerRoom = principal.roomId() != null ? principal.roomId() : "unauthenticated";
+                logger.warn("Forbidden SEND attempt: player in room {} tried to send to room destination {}", callerRoom, destination);
+                throw new AccessDeniedException("User not authorized for this room destination");
+            }
+        }
+
+        validateMembership(principal);
+    }
+
+    private PlayerPrincipal resolvePlayerPrincipal(StompHeaderAccessor accessor) {
+        PlayerPrincipal principal = SecurityUtils.getPlayerOrNull(accessor.getUser());
+        if (principal != null) {
+            return principal;
+        }
+        Map<String, Object> sessionAttributes = accessor.getSessionAttributes();
+        if (sessionAttributes != null) {
+            Object userAttr = sessionAttributes.get("user");
+            if (userAttr instanceof Principal p) {
+                principal = SecurityUtils.getPlayerOrNull(p);
+                if (principal != null) {
+                    return principal;
+                }
+            } else if (userAttr instanceof PlayerPrincipal pp) {
+                return pp;
+            }
+            Object playerAttr = sessionAttributes.get("playerPrincipal");
+            if (playerAttr instanceof PlayerPrincipal pp) {
+                return pp;
+            }
+        }
+        return null;
+    }
+
+    private boolean isRoomAuthorized(PlayerPrincipal principal, String destinationRoomId) {
+        if (principal == null || principal.roomId() == null) {
+            return false;
+        }
+        if (principal.roomId().equals(destinationRoomId)) {
+            return true;
+        }
+        try {
+            String decoded = URLDecoder.decode(destinationRoomId, StandardCharsets.UTF_8);
+            return principal.roomId().equals(decoded);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String extractRoomIdFromSendDestination(String destination) {
+        if (destination == null || !destination.startsWith("/app/")) {
+            return null;
+        }
+        String sub = destination.substring(5).replaceAll("^/+", "");
+        String[] parts = sub.split("/+");
+        if (parts.length >= 2 && !parts[0].isBlank()) {
+            return parts[0];
+        }
+        return null;
+    }
+
     private void handleConnect(StompHeaderAccessor accessor) {
         String authHeader = accessor.getFirstNativeHeader("Authorization");
 
@@ -91,6 +193,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
             if (jwtService.isTokenValid(token)) {
                 PlayerPrincipal principal = jwtService.extractPrincipal(token);
+                validateMembership(principal);
                 accessor.setUser(principal);
                 MDC.put(MdcKeys.ROOM_ID, principal.roomId());
                 MDC.put(MdcKeys.PLAYER_NAME, principal.playerName());
@@ -105,17 +208,12 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         }
     }
 
-    /**
-     * Restricts room and game subscriptions to the principal's own room.
-     *
-     * @param accessor headers for the SUBSCRIBE frame
-     * @throws MessagingException if the subscription is unauthenticated or targets another room
-     */
     private void handleSubscribe(StompHeaderAccessor accessor) {
         PlayerPrincipal principal = (PlayerPrincipal) accessor.getUser();
         if (principal == null) {
             throw new MessagingException("Unauthorized: No principal found for subscription");
         }
+        validateMembership(principal);
 
         String destination = accessor.getDestination();
         if (destination == null) return;
@@ -126,10 +224,27 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         if (destination.startsWith("/room/") || destination.startsWith("/game/")) {
             String resourceId = destination.substring(destination.lastIndexOf("/") + 1);
 
-
             if (!principal.roomId().equals(resourceId)) {
                 logger.warn("Player {} tried to subscribe to unauthorized destination {}", principal.playerName(), destination);
                 throw new MessagingException("Forbidden: You are not authorized to subscribe to this destination.");
+            }
+        }
+    }
+
+    private void validateMembership(PlayerPrincipal principal) {
+        if (principal == null || principal.roomId() == null
+                || principal.membershipId() == null || principal.membershipId().isBlank()) {
+            throw new AccessDeniedException("Token membership is stale or invalid.");
+        }
+        try (LockLease _ = roomCoordinator.acquire(principal.roomId())) {
+            Room room = roomService.getRoom(principal.roomId());
+            if (room != null) {
+                if (!room.hasPlayer(principal.playerName())
+                        || !principal.membershipId().equals(room.getMembershipId(principal.playerName()))) {
+                    logger.warn("Rejecting STOMP frame: stale or invalid membership for player {} in room {}",
+                            principal.playerName(), principal.roomId());
+                    throw new AccessDeniedException("Token membership is stale or invalid.");
+                }
             }
         }
     }

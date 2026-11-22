@@ -45,7 +45,7 @@ public class AsyncConfiguration {
         executor.setWaitForTasksToCompleteOnShutdown(true);
 
         // Maximum seconds to wait for tasks during shutdown
-        executor.setAwaitTerminationSeconds(120);
+        executor.setAwaitTerminationSeconds(15);
 
         // Propagate the logging context from the submitting thread to async task threads
         executor.setTaskDecorator(new MdcTaskDecorator());

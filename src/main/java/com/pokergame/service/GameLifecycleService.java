@@ -1,7 +1,9 @@
 package com.pokergame.service;
 
-import com.pokergame.dto.response.ApiResponse;
-import com.pokergame.enums.ResponseMessage;
+import static java.util.Objects.requireNonNull;
+
+import com.pokergame.config.GameTimingProperties;
+import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -10,978 +12,370 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.DurableMutation;
-import com.pokergame.persistence.transaction.DurableTransactionContext;
+import com.pokergame.persistence.transaction.GameId;
+import com.pokergame.persistence.transaction.RoomId;
+import com.pokergame.util.RoomCoordinator;
+import java.time.Clock;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.pokergame.util.MdcUtils;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.scheduling.TaskScheduler;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
-import org.springframework.scheduling.annotation.Async;
-
-import java.time.Instant;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledFuture;
-import java.util.stream.Collectors;
 
 /**
- * Service class responsible for game lifecycle management.
- * Handles game creation, starting new hands, and game termination.
+ * Coordinates game creation, player departures, scheduled timers, and public game
+ * lifecycle queries under entry-point and durable-mutation room lock boundaries.
  */
 @Service
 public class GameLifecycleService {
-
     private static final Logger logger = LoggerFactory.getLogger(GameLifecycleService.class);
-    public static final long FINAL_SHOWDOWN_DISPLAY_DELAY_MS = 6000;
-    private static final long AUTO_ADVANCE_STEP_DELAY_MS = 4000;
-
-    @Value("${poker.game-end.display-delay-ms:20000}")
-    private long gameEndDisplayDelayMs = 20000;
-
-    @Value("${poker.round-end.display-delay-ms:0}")
-    private long roundEndDisplayDelayMs;
-
-    @Value("${poker.ready-countdown-ms:30000}")
-    private long configuredReadyCountdownMs;
-
     private final RoomService roomService;
+    private final ActiveGameRegistry activeGames;
+    private final GameTimerRegistry timerRegistry;
+    private final GameTaskScheduler taskScheduler;
+    private final GameCompletionHandler completionHandler;
+    private final GameReadinessCoordinator readinessCoordinator;
+    private final PlayerDepartureHandler departureHandler;
+    private final RoomCoordinator roomCoordinator;
+    private final Clock clock;
+    private final GameTimingProperties timings;
 
-    private final HandEvaluatorService handEvaluator;
-
-    private final GameStateService gameStateService;
-
-    private final SimpMessagingTemplate messagingTemplate;
-
-
-    private final TaskScheduler taskScheduler;
-    private GameLifecycleService self;
-
-    /**
-     * Creates the lifecycle service with the scheduler that owns runtime timers.
-     * Scheduled intent itself lives on {@link Game} so timers can be rebuilt after a
-     * restart.
-     *
-     * @param roomService          authoritative room service
-     * @param handEvaluatorService hand evaluator attached to new and restored games
-     * @param gameStateService     client state publisher
-     * @param messagingTemplate    direct messaging collaborator
-     * @param taskScheduler        runtime timer scheduler
-     */
-    GameLifecycleService(RoomService roomService,
-            HandEvaluatorService handEvaluatorService,
-            GameStateService gameStateService,
-            SimpMessagingTemplate messagingTemplate,
-            @Qualifier("taskScheduler") TaskScheduler taskScheduler) {
+    GameLifecycleService(
+            RoomService roomService,
+            ActiveGameRegistry activeGames,
+            GameTimerRegistry timerRegistry,
+            GameTaskScheduler taskScheduler,
+            GameCompletionHandler completionHandler,
+            GameReadinessCoordinator readinessCoordinator,
+            PlayerDepartureHandler departureHandler,
+            RoomCoordinator roomCoordinator,
+            Clock clock,
+            GameTimingProperties timings) {
         this.roomService = roomService;
-        this.handEvaluator = handEvaluatorService;
-        this.gameStateService = gameStateService;
-        this.messagingTemplate = messagingTemplate;
+        this.activeGames = activeGames;
+        this.timerRegistry = timerRegistry;
         this.taskScheduler = taskScheduler;
+        this.completionHandler = completionHandler;
+        this.readinessCoordinator = readinessCoordinator;
+        this.departureHandler = departureHandler;
+        this.roomCoordinator = roomCoordinator;
+        this.clock = clock;
+        this.timings = timings;
     }
 
     /**
-     * We inject a proxy of this exact same service into itself to solve Spring's "self-invocation" problem.
-     * <p>
-     * When background timers (like the turn timer) expire, they need to call methods in this class
-     * and trigger a save. If we used `this.method()`, it would bypass the {@link DurableMutation}
-     * autosave trigger. By using `self.method()`, we ensure the game is properly saved.
-     * </p>
+     * Removes one or more players from a room and its active game, transferring host ownership or
+     * settling forfeits as needed.
      *
-     * @param self the Spring proxy of this service
+     * @param roomId      the unique ID of the room/game
+     * @param playerNames names of players leaving or timing out
      */
-    @Autowired
-    void setSelf(@Lazy GameLifecycleService self) {
-        this.self = self;
+    @DurableMutation
+    public void removePlayers(@RoomId String roomId, Collection<String> playerNames) {
+        if (roomId.trim().isEmpty() || playerNames == null || playerNames.isEmpty()) {
+            return;
+        }
+        departureHandler.removePlayers(roomId, playerNames);
     }
 
-    private final Map<String, Game> activeGames = new ConcurrentHashMap<>();
-    private final Map<String, ScheduledFuture<?>> readyCountdownTimeouts = new ConcurrentHashMap<>();
-
     /**
-     * Creates and initialises an actual poker game from an existing room.
-     * Requires at least 2 players in the room to start. Converts room players
-     * to game players with buy-in chips and starts the first hand.
+     * Creates and starts a new poker game from an existing lobby room, converts all room members
+     * into players with buy-in chips, broadcasts the game start, and deals the first hand.
      *
-     * @param roomId the unique identifier of the room to convert to a game
-     * @return the game ID (same as room ID) of the newly created game
-     * @throws UnauthorisedActionException if the room has fewer than 2 players
-     * @throws ResourceNotFoundException   if the room is not found
-     *
+     * @param roomId the unique ID of the room to start
+     * @return the newly created game ID (same as {@code roomId})
+     * @throws ResourceNotFoundException   if the room does not exist
+     * @throws BadRequestException         if the lobby expired or the game already started
+     * @throws UnauthorisedActionException if fewer than 2 players are in the room
      */
-    @DurableMutation(roomId = "#roomId")
-    public String createGameFromRoom(String roomId) {
+    @DurableMutation
+    public String createGameFromRoom(@RoomId String roomId) {
+        requireNonNull(roomId, "roomId must not be null");
         Room room = roomService.getRoom(roomId);
         if (room == null) {
             logger.warn("Game creation failed: room not found for id {}", roomId);
             throw new ResourceNotFoundException("Room not found");
         }
-
-        synchronized (room) {
-            if (activeGames.containsKey(roomId) || room.isGameStarted()) {
-                logger.warn("Game creation failed: game already exists for room {}", roomId);
-                throw new BadRequestException("Game has already started for this room.");
-            }
-
-            if (room.getPlayers().size() < 2) {
-                logger.warn("Game creation failed: not enough players in room {} (count: {})", roomId,
-                        room.getPlayers().size());
-                throw new UnauthorisedActionException(
-                        "Need at least 2 players to start game. Please wait for more players to join.");
-            }
-
-            // Create the actual poker game
-            List<String> playerNames = new ArrayList<>(room.getPlayers());
-            List<Player> players = playerNames.stream()
-                    .map(name -> new Player(name, UUID.randomUUID().toString(), room.getBuyIn()))
-                    .collect(Collectors.toList());
-
-            Game game = new Game(roomId, players, room.getSmallBlind(), room.getBigBlind(), handEvaluator);
-            activeGames.put(roomId, game);
-
-            // Broadcast to all players in the room that the game has started
-            Map<String, Object> gameStartMessage = new ConcurrentHashMap<>();
-            gameStartMessage.put("gameId", roomId);
-            gameStartMessage.put("message", "Game started! Redirecting to game...");
-
-            DurableTransactionContext.afterCommit(() -> messagingTemplate.convertAndSend("/room/" + roomId,
-                    new ApiResponse<>(ResponseMessage.GAME_STARTED.getMessage(), gameStartMessage)));
-
-            room.setGameStarted(true);
+        if (roomService.isLobbyExpired(room)) {
+            logger.warn("Game creation failed: lobby {} has expired due to inactivity", roomId);
+            throw new BadRequestException("Room has expired due to inactivity.");
+        }
+        if (activeGames.contains(roomId) || room.isGameStarted()) {
+            logger.warn("Game creation failed: game already exists for room {}", roomId);
+            throw new BadRequestException("Game has already started for this room.");
+        }
+        if (room.getPlayers().size() < Room.MIN_PLAYERS) {
+            logger.warn("Game creation failed: not enough players in room {} (count: {})",
+                    roomId, room.getPlayers().size());
+            throw new UnauthorisedActionException(
+                    "Need at least 2 players to start game. Please wait for more players to join.");
         }
 
+        List<String> playerNames = new ArrayList<>(room.getPlayers());
+        List<Player> players = new ArrayList<>();
+        for (String name : playerNames) {
+            Player player = new Player(name, UUID.randomUUID().toString(), room.getBuyIn());
+            Long absenceDeadline = room.getAbsenceDeadline(name);
+            boolean connected = room.isPlayerConnected(name);
+            if (!connected && absenceDeadline != null) {
+                player.setDisconnected(true);
+                player.setDisconnectDeadlineEpochMs(absenceDeadline);
+            }
+            players.add(player);
+        }
+
+        Game game = new Game(
+                roomId, players, room.getMaxPlayers(), room.getSmallBlind(), room.getBigBlind());
+        activeGames.register(game);
+
+        room.setGameStarted(true);
+        roomService.cancelLobbyInactivity(roomId);
+        room.extendGameInactivityDeadline(clock.millis(), timings.gameInactivityAllowanceMs());
+        taskScheduler.scheduleGameInactivity(roomId, room.getInactivityDeadlineEpochMs());
+        roomService.broadcastGameStarted(roomId);
+
         logger.info("Game created and started for room: {} with {} players", roomId, room.getPlayers().size());
-
-        startNewHand(roomId);
-
+        readinessCoordinator.startNewHandAndOpenReadyGateIfNeeded(roomId);
         return roomId;
     }
 
     /**
-     * Starts a new hand of poker for the specified game.
-     * Resets game state, deals cards, posts blinds, and broadcasts initial state.
+     * Abandons the game due to inactivity only if {@code expectedDeadlineEpochMs} still matches
+     * the room's current deadline and has expired.
      *
-     * @param gameId The unique identifier of the game
+     * @param gameId                  the unique ID of the game
+     * @param expectedDeadlineEpochMs the inactivity deadline captured when the timer was scheduled
      */
-    @DurableMutation(roomId = "#gameId")
-    public void startNewHand(String gameId) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            logger.warn("Cannot start new hand - game {} not found", gameId);
+    @DurableMutation
+    public void abandonGameIfInactive(@GameId String gameId, Long expectedDeadlineEpochMs) {
+        if (expectedDeadlineEpochMs == null) {
             return;
         }
-        logger.info("Starting new hand for game: {}", gameId);
-        synchronized (game) {
-            ScheduledFuture<?> existingTimeout = readyCountdownTimeouts.remove(gameId);
-            if (existingTimeout != null) {
-                existingTimeout.cancel(false);
-            }
-            game.closeReadyCountdown();
-
-            // Reset determines game completion before cards are dealt so the final
-            // winner state remains visible during the configured display window.
-            boolean gameEnded = game.resetForNewHand();
-            if (gameEnded) {
-                logger.warn("Game {} became over after reset", gameId);
-                handleGameEnd(gameId, false);
-                return;
-            }
-
-            game.dealHoleCards();
-            game.postBlinds();
-            gameStateService.broadcastGameState(gameId, game);
-        }
-
-        logger.info("New hand started successfully for game: {} | Current player: {} | Phase: {} | Pot: {}",
-                gameId, game.getCurrentPlayer().getName(), game.getCurrentPhase(), game.getPot());
+        completionHandler.abandonGameIfInactive(gameId, expectedDeadlineEpochMs);
     }
 
     /**
-     * Applies one authoritative auto-advance mutation for an all-in hand.
-     * Every deck, phase, payout, and player mutation enters through this public
-     * service seam so each step receives its own committed state image.
+     * Terminates an active game immediately due to inactivity, broadcasts the abandonment summary,
+     * and schedules cleanup.
      *
-     * @param gameId game to advance
-     * @return {@code true} when the step completed showdown, otherwise false
+     * @param gameId the unique ID of the game
      */
-    @DurableMutation(roomId = "#gameId")
-    public boolean advanceAutoAdvanceStep(String gameId) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            return true;
-        }
-
-        synchronized (game) {
-            return switch (game.getCurrentPhase()) {
-                case PRE_FLOP -> {
-                    game.dealFlop();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing flop...");
-                    yield false;
-                }
-                case FLOP -> {
-                    game.dealTurn();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing turn...");
-                    yield false;
-                }
-                case TURN -> {
-                    game.dealRiver();
-                    gameStateService.broadcastGameStateWithAutoAdvance(gameId, game, "Dealing river...");
-                    yield false;
-                }
-                case RIVER -> {
-                    int potBeforeDistribution = game.getPot();
-                    List<Player> winners = game.conductShowdown();
-                    int winningsPerPlayer = winners.isEmpty() ? 0 : potBeforeDistribution / winners.size();
-                    gameStateService.broadcastShowdownResults(gameId, game, winners, winningsPerPlayer);
-                    gameStateService.broadcastAutoAdvanceComplete(gameId, game);
-                    yield true;
-                }
-                case SHOWDOWN -> {
-                    logger.warn("Auto-advance step invoked for game {} already in SHOWDOWN - skipping duplicate distribution", gameId);
-                    yield true;
-                }
-            };
-        }
+    @DurableMutation
+    public void abandonGameDueToInactivity(@GameId String gameId) {
+        completionHandler.abandonGameDueToInactivity(gameId);
     }
 
     /**
-     * Removes a player from an active game. If the last player leaves or only
-     * one player remains, the game ends and associated resources are cleaned up.
-     * If the leaving player is the current player, advances to the next player.
+     * Returns the live game for {@code gameId} when the calling thread holds its room lock.
      *
-     * @param gameId     the unique identifier of the game
-     * @param playerName the name of the player leaving the game
-     * @throws BadRequestException       if game or player not found
-     * @throws ResourceNotFoundException if the game is not found
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void leaveGame(String gameId, String playerName) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            logger.warn("Remove player failed: game not found for id {} (player: {})", gameId, playerName);
-            throw new ResourceNotFoundException("Game not found");
-        }
-
-        // Keep leave flow serialized with player actions to avoid transient stale-seat
-        // reads while another thread mutates turn state.
-        synchronized (game) {
-            // Room may already be destroyed (e.g. host left via room flow).
-            // In that case, clean up the game without attempting room-backed broadcasts.
-            if (roomService.getRoom(gameId) == null) {
-                logger.info(
-                        "Room {} not found while removing player {} from game {}. Cleaning up game without broadcast.",
-                        gameId,
-                        playerName,
-                        gameId);
-                activeGames.remove(gameId);
-                return;
-            }
-
-            // Find and remove the player from the game
-            Player playerToRemove = game.getPlayers().stream()
-                    .filter(p -> p.getName().equals(playerName))
-                    .findFirst()
-                    .orElse(null);
-
-            if (playerToRemove == null) {
-                logger.warn("Remove player failed: player '{}' not found in game {}", playerName, gameId);
-                throw new BadRequestException("Player not found in game");
-            }
-
-            // Check if the leaving player was the current player.
-            boolean wasCurrentPlayer = !game.getActivePlayers().isEmpty()
-                    && game.getCurrentPlayer().equals(playerToRemove);
-
-            // Remove player and reconcile turn index to prevent stale current-player
-            // pointer.
-            game.removePlayerFromGame(playerToRemove);
-
-            logger.info("Player {} left game {} | Remaining players: {}",
-                    playerName, gameId, game.getPlayers().size());
-
-            // Check if no players left in the game or no connected active players remain
-            boolean anyConnectedNonOutPlayer = game.getPlayers().stream()
-                    .anyMatch(p -> !p.getIsOut() && !p.getIsDisconnected());
-            if (game.getPlayers().isEmpty() || !anyConnectedNonOutPlayer) {
-                logger.info("No connected active players remaining in game {}, destroying game and room", gameId);
-
-                // Clean up game and room data
-                activeGames.remove(gameId);
-                roomService.destroyRoom(gameId);
-            } else {
-                logger.info("Game {} continues with {} players", gameId, game.getPlayers().size());
-
-                // If only one player remains, end the game immediately
-                if (game.getPlayers().size() == 1) {
-                    logger.info("Only one player remaining in game {}, ending game", gameId);
-                    boolean isForfeit = game.getCurrentPhase() != com.pokergame.enums.GamePhase.SHOWDOWN;
-                    handleGameEnd(gameId, isForfeit);
-                    return;
-                }
-
-                // If the leaving player was the current player, advance to the next player
-                if (wasCurrentPlayer && !game.getActivePlayers().isEmpty()) {
-                    game.nextPlayer();
-                }
-
-                if (roomService.getRoom(gameId) == null) {
-                    logger.info("Room {} was destroyed during leave flow. Cleaning up active game state.", gameId);
-                    activeGames.remove(gameId);
-                    return;
-                }
-
-                gameStateService.broadcastGameState(gameId, game);
-            }
-
-            if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
-                completeReadyCountdownAndStartNextHand(gameId, game);
-            }
-        }
-    }
-
-    /**
-     * Handles the end of a game when all players except one have been eliminated.
-     * Broadcasts the game end event to all participants and cleans up game
-     * resources.
-     *
-     * @param gameId    the unique identifier of the game
-     * @param isForfeit true if the game ended due to a player leaving/disconnecting
-     */
-    public void handleGameEnd(String gameId, boolean isForfeit) {
-        Game game = getGame(gameId);
-        if (game == null)
-            return;
-
-        Player winner;
-        synchronized (game) {
-            // Find the winner by chip count, not seat order (activePlayers still
-            // contains the busted player at this point since conductShowdown() does
-            // not run cleanupAfterHand())
-            winner = game.resolveGameWinner();
-
-            if (winner == null) {
-                winner = game.getPlayers().stream()
-                        .filter(p -> !p.getIsOut() && !p.getIsDisconnected())
-                        .findFirst()
-                        .orElse(game.getPlayers().stream().findFirst().orElse(null));
-            }
-
-            game.markGameOver();
-            game.closeReadyCountdown();
-        }
-
-        if (winner == null) {
-            logger.warn("Cannot broadcast game end for {} - no winner could be determined", gameId);
-            return;
-        }
-
-        gameStateService.broadcastGameEnd(gameId, game, winner, isForfeit);
-
-        // Wait a few seconds for players to see the result, then destroy the room and
-        // game, on a different thread
-        scheduleGameCleanup(gameId, gameEndDisplayDelayMs);
-    }
-
-    /**
-     * Cleans up the finished game so it no longer uses resources
-     *
-     * @param gameId id of the game that is now done
-     */
-
-    @Async("gameExecutor")
-    @DurableMutation(roomId = "#gameId")
-    public void performGameCleanup(String gameId) {
-        activeGames.remove(gameId);
-        roomService.destroyRoom(gameId);
-        logger.info("Game {} and associated room cleaned up", gameId);
-    }
-
-    /**
-     * Retrieves a game by its unique identifier.
-     *
-     * @param gameId the unique identifier of the game to retrieve
-     * @return the Game object if found, null otherwise
+     * @param gameId the unique ID of the game
+     * @return the live game, or {@code null} if none exists
      */
     public Game getGame(String gameId) {
         return activeGames.get(gameId);
     }
 
     /**
-     * Registers an already rehydrated game without executing normal creation logic,
-     * which would start a replacement hand.
+     * Executes a scheduled game timer if the game still expects that run time, hand number, and
+     * timer version.
      *
-     * @param game exact game restored from a committed state image
+     * @param gameId               the unique ID of the game
+     * @param task                 the timer type that fired
+     * @param expectedRunAtEpochMs the captured execution epoch time in milliseconds
+     * @param expectedHandNumber   the hand number active when the timer was scheduled
+     * @param expectedTimerVersion the timer version active when the timer was scheduled
      */
-    public void restoreGame(Game game) {
-        activeGames.put(game.getGameId(), game);
-    }
-
-    /**
-     * Rebuilds runtime futures from absolute persisted deadlines. Overdue work is
-     * scheduled immediately and remains safe because callbacks verify the expected
-     * deadline before mutating state.
-     *
-     * @param gameId recovered game whose runtime work must resume
-     */
-    public void resumeRecoveredTimers(String gameId) {
-        Game game = getGame(gameId);
-        if (game == null) {
+    @DurableMutation
+    public void executeScheduledTask(
+            @GameId String gameId,
+            ScheduledGameTask task,
+            long expectedRunAtEpochMs,
+            long expectedHandNumber,
+            long expectedTimerVersion) {
+        if (task == null) {
             return;
         }
-        MdcUtils.runWithRoomId(gameId, () -> {
-            int rebuiltCount = 0;
-            for (Map.Entry<ScheduledGameTask, Long> task : game.getScheduledTaskDeadlinesSnapshot().entrySet()) {
-                scheduleRuntimeTask(gameId, task.getKey(), task.getValue());
-                rebuiltCount++;
-            }
-            if (game.isReadyCountdownActive()) {
-                Long deadline = game.getReadyCountdownDeadlineEpochMs();
-                long remaining = deadline == null ? 0 : Math.max(0, deadline - System.currentTimeMillis());
-                ScheduledFuture<?> future = taskScheduler.schedule(
-                        () -> mutationProxy().handleReadyCountdownTimeout(gameId, deadline == null ? 0 : deadline),
-                        Instant.now().plusMillis(remaining));
-                if (future != null) {
-                    readyCountdownTimeouts.put(gameId, future);
-                    rebuiltCount++;
-                }
-            }
-            logger.info("Resumed {} recovered timers for game {}", rebuiltCount, gameId);
-        });
-    }
-
-    /**
-     * Persists the next-hand deadline in the same room transaction that requested
-     * it, preventing a crash from leaving a completed countdown with no next hand.
-     *
-     * @param gameId  game awaiting a new hand
-     * @param delayMs delay before execution
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void scheduleNewHand(String gameId, long delayMs) {
-        persistScheduledTask(gameId, ScheduledGameTask.NEW_HAND, System.currentTimeMillis() + Math.max(0, delayMs));
-    }
-
-    /**
-     * Persists the post-showdown display delay. An immediate opening stays in the
-     * current durable transaction so no scheduler handoff is needed.
-     *
-     * @param gameId  game entering its ready gate
-     * @param delayMs display delay before the gate opens
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void scheduleReadyCountdownOpen(String gameId, long delayMs) {
-        if (delayMs <= 0) {
-            startReadyCountdown(gameId, configuredReadyCountdownMs);
+        Game game = activeGames.get(gameId);
+        if (!taskScheduler.claimTimer(game, task, expectedRunAtEpochMs, expectedHandNumber, expectedTimerVersion)) {
             return;
         }
-        persistScheduledTask(gameId, ScheduledGameTask.READY_OPEN, System.currentTimeMillis() + delayMs);
-    }
-
-    /**
-     * Persists terminal cleanup intent before returning the game-end mutation, so a
-     * restart cannot leave a permanently finished room in memory.
-     *
-     * @param gameId  finished game
-     * @param delayMs client display delay before deletion
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void scheduleGameCleanup(String gameId, long delayMs) {
-        persistScheduledTask(gameId, ScheduledGameTask.CLEANUP, System.currentTimeMillis() + Math.max(0, delayMs));
-    }
-
-    /**
-     * Persists the final game-end deadline before notifying clients of victory,
-     * allowing a review window of the final board before the game-over overlay.
-     *
-     * @param gameId  game whose tournament has concluded
-     * @param delayMs client review delay before game-over broadcast
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void scheduleGameEnd(String gameId, long delayMs) {
-        persistScheduledTask(gameId, ScheduledGameTask.GAME_END, System.currentTimeMillis() + Math.max(0, delayMs));
-    }
-
-    /**
-     * Persists the first all-in progression deadline before clients observe the
-     * auto-advance state.
-     *
-     * @param gameId game requiring automatic board progression
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void scheduleAutoAdvance(String gameId) {
-        persistScheduledTask(gameId, ScheduledGameTask.AUTO_ADVANCE,
-                System.currentTimeMillis() + AUTO_ADVANCE_STEP_DELAY_MS);
-    }
-
-    /**
-     * Executes delayed work only when its deadline still matches persisted intent.
-     * The deadline acts as a generation token, making cancelled or duplicated timer
-     * callbacks harmless.
-     *
-     * @param gameId          game owning the work
-     * @param task            delayed work type
-     * @param expectedDeadline deadline captured by this timer callback
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void executeScheduledTask(String gameId, ScheduledGameTask task, long expectedDeadline) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            logger.debug("Cannot execute task {}: game not found for gameId={}", task, gameId);
-            return;
-        }
-        synchronized (game) {
-            Long currentDeadline = game.getScheduledTaskDeadline(task);
-            if (currentDeadline == null || currentDeadline != expectedDeadline) {
-                logger.debug("Ignoring stale task {} for game {} expected={} current={}", task, gameId, expectedDeadline, currentDeadline);
-                return;
-            }
-            game.clearScheduledTask(task);
-            logger.debug("Executing task {} for game {}", task, gameId);
-            switch (task) {
-                case NEW_HAND -> startNewHand(gameId);
-                case READY_OPEN -> startReadyCountdown(gameId, configuredReadyCountdownMs);
-                case CLEANUP -> performGameCleanup(gameId);
-                case GAME_END -> handleGameEnd(gameId, false);
-                case AUTO_ADVANCE -> {
-                    boolean complete = advanceAutoAdvanceStep(gameId);
-                    if (complete) {
-                        if (game.isTournamentOver()) {
-                            scheduleGameEnd(gameId, FINAL_SHOWDOWN_DISPLAY_DELAY_MS);
-                        } else if (roundEndDisplayDelayMs <= 0) {
-                            startReadyCountdown(gameId, configuredReadyCountdownMs);
-                        } else {
-                            persistScheduledTask(gameId, ScheduledGameTask.READY_OPEN,
-                                    System.currentTimeMillis() + roundEndDisplayDelayMs);
-                        }
-                    } else {
-                        persistScheduledTask(gameId, ScheduledGameTask.AUTO_ADVANCE,
-                                System.currentTimeMillis() + AUTO_ADVANCE_STEP_DELAY_MS);
-                    }
-                }
-            }
+        switch (task) {
+            case TURN_TIMEOUT -> departureHandler.handleTurnTimeout(game);
+            case AUTO_ADVANCE -> readinessCoordinator.applyAutoAdvanceTimeoutAndOpenReadyGateIfNeeded(game);
+            case READY_TIMEOUT -> readinessCoordinator.handleReadyTimeout(game, expectedRunAtEpochMs);
+            case NEW_HAND -> readinessCoordinator.startNewHandAndOpenReadyGateIfNeeded(gameId);
+            case READY_OPEN -> readinessCoordinator.openReadyGate(game);
+            case GAME_END -> completionHandler.handleGameEnd(gameId);
+            case CLEANUP -> completionHandler.deleteGameAndRoom(gameId);
         }
     }
 
     /**
-     * Records scheduler intent as aggregate state first, then submits the runtime
-     * future only after the surrounding WAL commit succeeds.
+     * Cancels scheduled runtime timers for {@code gameId}, optionally preserving the cleanup timer.
      *
-     * @param gameId  game owning the work
-     * @param task    delayed work type
-     * @param deadline absolute execution deadline
+     * @param gameId      the unique ID of the game
+     * @param keepCleanup {@code true} to keep {@link ScheduledGameTask#CLEANUP} scheduled
      */
-    private void persistScheduledTask(String gameId, ScheduledGameTask task, long deadline) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            return;
-        }
-        synchronized (game) {
-            game.scheduleTask(task, deadline);
-        }
-        DurableTransactionContext.afterCommit(() -> scheduleRuntimeTask(gameId, task, deadline));
+    public void cancelTimers(String gameId, boolean keepCleanup) {
+        timerRegistry.cancelAllForGame(gameId, keepCleanup);
     }
 
     /**
-     * Converts an absolute deadline to a process-local future. Keeping this step
-     * separate lets startup recovery rebuild the same runtime mechanism.
+     * Returns whether an unexpired game currently exists for {@code gameId}.
+     * Caller must hold the room lock.
      *
-     * @param gameId  game owning the work
-     * @param task    delayed work type
-     * @param deadline absolute execution deadline
-     */
-    private void scheduleRuntimeTask(String gameId, ScheduledGameTask task, long deadline) {
-        long delay = Math.max(0, deadline - System.currentTimeMillis());
-        logger.debug("Scheduling runtime task {} for game {} with delayMs={} deadline={}", task, gameId, delay, deadline);
-        taskScheduler.schedule(() -> mutationProxy().executeScheduledTask(gameId, task, deadline),
-                Instant.now().plusMillis(delay));
-    }
-
-    /**
-     * Checks if a game with the specified ID exists in the active games.
-     *
-     * @param gameId the unique identifier of the game to check
-     * @return true if the game exists in active games, false otherwise
+     * @param gameId the unique ID of the game
+     * @return {@code true} if a live or uncleaned game exists
      */
     public boolean gameExists(String gameId) {
-        return activeGames.containsKey(gameId);
+        roomCoordinator.assertHeldByCurrentThread(gameId);
+        Game game = activeGames.get(gameId);
+        return game != null && !completionHandler.isGameExpired(game);
     }
 
     /**
-     * Checks whether a player currently exists in an active game.
+     * Returns whether {@code playerName} is currently seated (not eliminated) in {@code gameId}.
+     * Caller must hold the room lock.
      *
-     * @param gameId     the unique identifier of the game
+     * @param gameId     the unique ID of the game
      * @param playerName the player name to check
-     * @return true if the player exists in the game, false otherwise
+     * @return {@code true} if the player is present and not out
      */
     public boolean playerExistsInGame(String gameId, String playerName) {
-        Game game = getGame(gameId);
+        if (gameId == null || playerName == null) {
+            return false;
+        }
+        roomCoordinator.assertHeldByCurrentThread(gameId);
+        Game game = activeGames.get(gameId);
         if (game == null) {
             return false;
         }
-
         return game.getPlayers().stream()
-                .anyMatch(player -> player.getName().equals(playerName));
+                .anyMatch(player -> playerName.equals(player.getName()) && !player.isOut());
     }
 
     /**
-     * Marks an active player as disconnected and broadcasts updated game state.
-     * Disconnected players stay in the game seat while reconnect grace is active.
+     * Verifies that {@code membershipId} matches the active session membership for
+     * {@code playerName} in {@code gameId}.
+     * Caller must hold the room lock.
      *
-     * @param gameId                    the game identifier
-     * @param playerName                the disconnected player name
-     * @param disconnectDeadlineEpochMs disconnect grace expiry timestamp (UTC epoch
-     *                                  ms)
+     * @param gameId       the unique ID of the room/game
+     * @param playerName   the authenticated player name
+     * @param membershipId the membership ID claimed by the request token
+     * @throws AccessDeniedException     if membership claims are blank or do not match the room
+     * @throws ResourceNotFoundException if the room does not exist
      */
-    @DurableMutation(roomId = "#gameId")
-    public void markPlayerDisconnected(String gameId, String playerName, long disconnectDeadlineEpochMs) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            logger.debug("Cannot mark player disconnected: game not found for gameId={}", gameId);
+    public void validatePlayerMembership(String gameId, String playerName, String membershipId) {
+        if (membershipId == null || membershipId.isBlank()
+                || playerName == null || playerName.isBlank()
+                || gameId == null) {
+            throw new AccessDeniedException("Token membership is stale or invalid.");
+        }
+        roomCoordinator.assertHeldByCurrentThread(gameId);
+        Room room = roomService.getRoom(gameId);
+        if (room == null) {
+            throw new ResourceNotFoundException("Room not found");
+        }
+        String activeMembershipId = room.getMembershipId(playerName);
+        if (activeMembershipId == null || !activeMembershipId.equals(membershipId)) {
+            logger.warn("Rejecting request: stale or mismatched membership for player {} in game {} "
+                    + "(token: {}, active: {})", playerName, gameId, membershipId, activeMembershipId);
+            throw new AccessDeniedException("Token membership is stale or invalid.");
+        }
+    }
+
+    /**
+     * Marks a player as disconnected in the active game with a reconnect grace deadline.
+     *
+     * @param gameId                    the unique ID of the game
+     * @param playerName                the disconnected player's name
+     * @param disconnectDeadlineEpochMs reconnect grace deadline epoch time in milliseconds
+     */
+    @DurableMutation
+    public void markPlayerDisconnected(@GameId String gameId, String playerName, long disconnectDeadlineEpochMs) {
+        departureHandler.markPlayerDisconnected(gameId, playerName, disconnectDeadlineEpochMs);
+    }
+
+    /**
+     * Marks a reconnecting player as connected across room and game state and resumes pending
+     * forfeit/ready handling if needed.
+     *
+     * @param gameId     the unique ID of the game
+     * @param playerName the reconnecting player's name
+     */
+    @DurableMutation
+    public void markPlayerReconnected(@GameId String gameId, String playerName) {
+        departureHandler.markPlayerReconnected(gameId, playerName);
+    }
+
+    /**
+     * Marks an eligible player ready for the next hand and starts the next hand if all eligible
+     * players are now ready.
+     *
+     * @param gameId     the unique ID of the game
+     * @param playerName the player marking ready
+     */
+    @DurableMutation
+    public void markPlayerReadyForNextHand(@GameId String gameId, String playerName) {
+        readinessCoordinator.markPlayerReadyForNextHand(gameId, playerName);
+    }
+
+    /**
+     * Removes a player's ready status while the between-hand ready countdown is open.
+     *
+     * @param gameId     the unique ID of the game
+     * @param playerName the player unmarking ready
+     */
+    @DurableMutation
+    public void unmarkPlayerReadyForNextHand(@GameId String gameId, String playerName) {
+        readinessCoordinator.unmarkPlayerReadyForNextHand(gameId, playerName);
+    }
+
+    /**
+     * Claims an immediate win when all other contenders are disconnected, or returns the saved
+     * final summary if the game already finished.
+     *
+     * @param gameId     the unique ID of the game
+     * @param playerName the claiming player's name
+     * @return the final {@link PublicGameStateResponse}
+     */
+    @DurableMutation
+    public PublicGameStateResponse claimWin(@GameId String gameId, String playerName) {
+        return departureHandler.claimWin(gameId, playerName);
+    }
+
+    /**
+     * Returns the saved final summary of a finished game for {@code playerName}.
+     * Caller must hold the room lock.
+     *
+     * @param gameId     the unique ID of the game
+     * @param playerName the requesting player's name
+     * @return the final {@link PublicGameStateResponse}
+     */
+    public PublicGameStateResponse getGameReview(String gameId, String playerName) {
+        roomCoordinator.assertHeldByCurrentThread(gameId);
+        return completionHandler.getGameReview(gameId, playerName);
+    }
+
+    /**
+     * Removes a player whose reconnect grace period expired when both membership ID and grace
+     * deadline match the scheduled expiration.
+     *
+     * @param gameId                  the unique ID of the game
+     * @param playerName              the disconnected player's name
+     * @param expectedMembershipId    the membership ID active when grace expiration was scheduled
+     * @param expectedDeadlineEpochMs the expected reconnect deadline epoch time in milliseconds
+     */
+    @DurableMutation
+    public void removeDisconnectedPlayer(
+            @GameId String gameId, String playerName, String expectedMembershipId, long expectedDeadlineEpochMs) {
+        if (playerName == null || expectedMembershipId == null) {
             return;
         }
-
-        synchronized (game) {
-            Player player = game.getPlayers().stream()
-                    .filter(p -> p.getName().equals(playerName))
-                    .findFirst()
-                    .orElse(null);
-
-            if (player == null) {
-                logger.debug("Cannot mark player disconnected: player {} not found in game {}", playerName, gameId);
-                return;
-            }
-            if (player.getIsDisconnected()) {
-                logger.debug("Player {} already disconnected in game {}", playerName, gameId);
-                return;
-            }
-
-            player.setDisconnected(true);
-            player.setDisconnectDeadlineEpochMs(disconnectDeadlineEpochMs);
-            logger.info("Player {} marked disconnected in game {} with deadlineEpochMs={}", playerName, gameId, disconnectDeadlineEpochMs);
-
-            if (roomService.getRoom(gameId) != null) {
-                gameStateService.broadcastGameState(gameId, game);
-            }
-
-            if (game.isReadyCountdownActive() && game.areAllReadyEligiblePlayersReady()) {
-                completeReadyCountdownAndStartNextHand(gameId, game);
-            }
-        }
-    }
-
-    /**
-     * Clears disconnect flag for a player that reconnects within grace period.
-     *
-     * @param gameId     the game identifier
-     * @param playerName the reconnecting player name
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void markPlayerReconnected(String gameId, String playerName) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            logger.debug("Cannot mark player reconnected: game not found for gameId={}", gameId);
-            return;
-        }
-
-        synchronized (game) {
-            if (game.isGameOver()) {
-                logger.debug("Skipping reconnect for player {} because game {} is already over", playerName, gameId);
-                return;
-            }
-            Player player = game.getPlayers().stream()
-                    .filter(p -> p.getName().equals(playerName))
-                    .findFirst()
-                    .orElse(null);
-
-            if (player == null) {
-                logger.debug("Cannot mark player reconnected: player {} not found in game {}", playerName, gameId);
-                return;
-            }
-            if (!player.getIsDisconnected()) {
-                logger.debug("Player {} already connected in game {}", playerName, gameId);
-                return;
-            }
-
-            player.setDisconnected(false);
-            player.setDisconnectDeadlineEpochMs(null);
-            logger.info("Player {} marked reconnected in game {}", playerName, gameId);
-
-            if (roomService.getRoom(gameId) != null) {
-                gameStateService.broadcastGameState(gameId, game);
-            }
-        }
-    }
-
-    /**
-     * Opens a shared ready countdown after round end and schedules timeout
-     * auto-advance.
-     *
-     * @param gameId      game identifier
-     * @param countdownMs countdown duration in milliseconds
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void startReadyCountdown(String gameId, long countdownMs) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            return;
-        }
-
-        long deadlineEpochMs;
-        synchronized (game) {
-            if (game.getCurrentPhase() != com.pokergame.enums.GamePhase.SHOWDOWN) {
-                logger.debug("Skipping ready countdown for game {}: phase is {} (not SHOWDOWN)", gameId, game.getCurrentPhase());
-                return;
-            }
-
-            deadlineEpochMs = System.currentTimeMillis() + countdownMs;
-            game.openReadyCountdown(deadlineEpochMs);
-            logger.info("Opened ready countdown for game {} with deadlineEpochMs={}", gameId, deadlineEpochMs);
-            gameStateService.broadcastGameState(gameId, game);
-
-            if (game.areAllReadyEligiblePlayersReady()) {
-                completeReadyCountdownAndStartNextHand(gameId, game);
-                return;
-            }
-        }
-
-        ScheduledFuture<?> existingTimeout = readyCountdownTimeouts.remove(gameId);
-        if (existingTimeout != null) {
-            existingTimeout.cancel(false);
-        }
-
-        ScheduledFuture<?> timeoutFuture = taskScheduler.schedule(
-                () -> mutationProxy().handleReadyCountdownTimeout(gameId, deadlineEpochMs),
-                Instant.now().plusMillis(countdownMs));
-        if (timeoutFuture != null) {
-            readyCountdownTimeouts.put(gameId, timeoutFuture);
-        } else {
-            logger.warn("Ready countdown timeout was not scheduled for game {}", gameId);
-        }
-    }
-
-    /**
-     * Marks a player as ready during an active ready countdown gate.
-     *
-     * @param gameId     game identifier
-     * @param playerName player name from principal
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void markPlayerReadyForNextHand(String gameId, String playerName) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-
-        synchronized (game) {
-            if (!game.isReadyCountdownActive()) {
-                throw new UnauthorisedActionException("Ready countdown is not active.");
-            }
-
-            Player player = game.getPlayers().stream()
-                    .filter(p -> p.getName().equals(playerName))
-                    .findFirst()
-                    .orElseThrow(() -> new UnauthorisedActionException("You are no longer part of this game."));
-
-            if (player.getIsOut()) {
-                throw new UnauthorisedActionException("You are out of this game.");
-            }
-
-            if (player.getIsDisconnected()) {
-                throw new UnauthorisedActionException("Reconnect before marking ready.");
-            }
-
-            player.setReadyForNextHand(true);
-            logger.debug("Player {} marked ready for next hand in game {}", playerName, gameId);
-
-            if (game.areAllReadyEligiblePlayersReady()) {
-                completeReadyCountdownAndStartNextHand(gameId, game);
-            } else {
-                gameStateService.broadcastGameState(gameId, game);
-            }
-        }
-    }
-
-    /**
-     * Unmarks a player as ready during an active ready countdown gate.
-     *
-     * @param gameId     game identifier
-     * @param playerName player name from principal
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void unmarkPlayerReadyForNextHand(String gameId, String playerName) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-
-        synchronized (game) {
-            if (!game.isReadyCountdownActive()) {
-                throw new UnauthorisedActionException("Ready countdown is not active.");
-            }
-
-            Player player = game.getPlayers().stream()
-                    .filter(p -> p.getName().equals(playerName))
-                    .findFirst()
-                    .orElseThrow(() -> new UnauthorisedActionException("You are no longer part of this game."));
-
-            if (player.getIsOut()) {
-                throw new UnauthorisedActionException("You are out of this game.");
-            }
-
-            player.setReadyForNextHand(false);
-            logger.debug("Player {} unmarked ready for next hand in game {}", playerName, gameId);
-
-            gameStateService.broadcastGameState(gameId, game);
-        }
-    }
-
-    /**
-     * Closes a ready gate only for the deadline that created this callback. Without
-     * the comparison, a cancelled old timer could close a newly opened countdown.
-     *
-     * @param gameId                 game whose ready gate may expire
-     * @param expectedDeadlineEpochMs deadline captured when the timer was submitted
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void handleReadyCountdownTimeout(String gameId, long expectedDeadlineEpochMs) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            readyCountdownTimeouts.remove(gameId);
-            return;
-        }
-
-        synchronized (game) {
-            if (!game.isReadyCountdownActive()
-                    || !Objects.equals(game.getReadyCountdownDeadlineEpochMs(), expectedDeadlineEpochMs)) {
-                logger.debug("Ignoring stale ready countdown timeout for game {} expected={} current={}",
-                        gameId, expectedDeadlineEpochMs, game.getReadyCountdownDeadlineEpochMs());
-                return;
-            }
-
-            logger.info("Ready countdown timed out for game {}: forcing ready for eligible players", gameId);
-            game.forceReadyForEligiblePlayers();
-            completeReadyCountdownAndStartNextHand(gameId, game);
-        }
-    }
-
-    /**
-     * Cancels the process-local timeout before closing durable ready state and
-     * starting the hand, preventing a racing timeout from advancing twice.
-     *
-     * @param gameId game leaving the ready gate
-     * @param game   authoritative game state
-     */
-    private void completeReadyCountdownAndStartNextHand(String gameId, Game game) {
-        ScheduledFuture<?> existingTimeout = readyCountdownTimeouts.remove(gameId);
-        if (existingTimeout != null) {
-            existingTimeout.cancel(false);
-        }
-
-        game.closeReadyCountdown();
-        startNewHand(gameId);
-    }
-
-    /**
-     * Claims an immediate game win for a connected player when all other
-     * non-out players are disconnected.
-     *
-     * @param gameId     game identifier
-     * @param playerName claimant name
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void claimWin(String gameId, String playerName) {
-        Game game = getGame(gameId);
-        if (game == null) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-
-        List<String> disconnectedOpponents;
-        synchronized (game) {
-            if (!canPlayerClaimWin(game, playerName)) {
-                throw new UnauthorisedActionException("Cannot claim win right now.");
-            }
-
-            disconnectedOpponents = game.getPlayers().stream()
-                    .filter(player -> !player.getName().equals(playerName))
-                    .filter(player -> !player.getIsOut())
-                    .filter(Player::getIsDisconnected)
-                    .map(Player::getName)
-                    .toList();
-        }
-
-        for (String opponentName : disconnectedOpponents) {
-            if (roomService.getRoom(gameId) != null) {
-                roomService.leaveRoom(gameId, opponentName, false);
-            }
-            if (playerExistsInGame(gameId, opponentName)) {
-                leaveGame(gameId, opponentName);
-            }
-        }
-    }
-
-    /**
-     * Allows a claim only when one connected participant remains against at least one
-     * disconnected opponent. This prevents ordinary heads-up games or disconnected
-     * claimants from bypassing gameplay.
-     *
-     * @param game       game being evaluated
-     * @param playerName prospective claimant
-     * @return whether an immediate disconnect win is legal
-     */
-    private boolean canPlayerClaimWin(Game game, String playerName) {
-        List<Player> eligiblePlayers = game.getPlayers().stream()
-                .filter(player -> !player.getIsOut())
-                .toList();
-
-        if (eligiblePlayers.size() < 2) {
-            return false;
-        }
-
-        Player claimant = eligiblePlayers.stream()
-                .filter(player -> player.getName().equals(playerName))
-                .findFirst()
-                .orElse(null);
-
-        if (claimant == null || claimant.getIsDisconnected()) {
-            return false;
-        }
-
-        List<Player> others = eligiblePlayers.stream()
-                .filter(player -> !player.getName().equals(playerName))
-                .toList();
-
-        return !others.isEmpty() && others.stream().allMatch(Player::getIsDisconnected);
-    }
-
-    /**
-     * Removes a grace-expired player from room and game under one room transaction,
-     * avoiding a recoverable snapshot where only one registry was updated.
-     *
-     * @param gameId    room/game identity
-     * @param playerName player whose reconnect grace expired
-     */
-    @DurableMutation(roomId = "#gameId")
-    public void removeDisconnectedPlayer(String gameId, String playerName) {
-        boolean gameActive = gameExists(gameId);
-        if (roomService.getRoom(gameId) != null) {
-            roomService.leaveRoom(gameId, playerName, !gameActive);
-        }
-        if (gameActive && playerExistsInGame(gameId, playerName)) {
-            leaveGame(gameId, playerName);
-        }
-    }
-
-    /**
-     * Returns the Spring proxy for timer callbacks while preserving direct unit-test
-     * construction, where no proxy is available.
-     *
-     * @return proxied service in production, otherwise this instance
-     */
-    private GameLifecycleService mutationProxy() {
-        return self == null ? this : self;
+        departureHandler.removeDisconnectedPlayer(
+                gameId, playerName, expectedMembershipId, expectedDeadlineEpochMs);
     }
 }

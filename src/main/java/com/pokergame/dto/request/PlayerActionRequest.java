@@ -38,10 +38,10 @@ public record PlayerActionRequest(
             }
         }
 
-        // Amount should not be provided for non-betting actions
+        // Amount must be 0 for non-betting actions
         if ((action == PlayerAction.FOLD || action == PlayerAction.CHECK ||
                 action == PlayerAction.CALL || action == PlayerAction.ALL_IN)) {
-            if (amount != null && amount != 0) {
+            if (amount == null || amount != 0) {
                 throw new BadRequestException(
                         String.format("No amount is needed for %s actions", action),
                         "UNEXPECTED_AMOUNT", "No amount needed; yours: " + amount);

@@ -4,11 +4,12 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`docs/ai/PROJECT.md`** as the canonical project context.
-- **`GEMINI.md`** at the repo root for compatibility with older workflows.
+- **`GLOSSARY.md`** at the repo root for the canonical ubiquitous language (avoided jargon terms live in `CODING_STANDARDS.md` §Naming And Javadoc).
+- **`AGENTS.md`** and **`CODING_STANDARDS.md`** at the repo root for workflow rules and review standards.
+- **`docs/ai/PROJECT.md`** as the canonical system architecture and runtime invariants context.
+- **`docs/agents/roles.md`** for subagent role and model selection.
+- **`CLAUDE.md`** and **`GEMINI.md`** at the repo root as compatibility entry points.
 - **`docs/adr/`** — read ADRs that touch the area you're about to work in.
-
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The producer skill (`/grill-with-docs`) creates them lazily when terms or decisions actually get resolved.
 
 ## File structure
 
@@ -16,22 +17,36 @@ Single-context repo:
 
 ```
 /
+├── AGENTS.md
+├── CLAUDE.md
+├── CODING_STANDARDS.md
 ├── GEMINI.md
+├── GLOSSARY.md
 ├── docs/ai/PROJECT.md
+├── docs/agents/roles.md
 ├── docs/adr/
-│   ├── 0001-event-sourced-orders.md
-│   └── 0002-postgres-for-write-model.md
+│   ├── 0001-encrypted-state-image-wal-with-spring-aop.md
+│   ├── 0002-quarantine-corrupted-wal-during-startup-recovery.md
+│   ├── 0003-in-memory-aggregate-rollback-on-mutation-failure.md
+│   ├── 0004-stateless-jwt-session-membership-validation.md
+│   ├── 0005-authoritative-in-memory-domain-model-without-external-database.md
+│   ├── 0006-unified-room-and-game-identity-lifecycle.md
+│   ├── 0007-hierarchical-monitor-locking-order.md
+│   ├── 0008-epoch-deadline-lifecycle-scheduling.md
+│   ├── 0009-multi-session-disconnect-grace-period.md
+│   ├── 0010-room-lifecycle-notifications-via-application-events.md
+│   └── 0011-room-coordinator-single-boundary-concurrency.md
 └── src/
 ```
 
 ## Use the glossary's vocabulary
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `docs/ai/PROJECT.md`. Don't drift to synonyms the glossary explicitly avoids.
+When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md`. Avoid the banned jargon listed in `CODING_STANDARDS.md` §Naming And Javadoc.
 
-If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/grill-with-docs`).
+If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap to capture via `/domain-modeling`.
 
 ## Flag ADR conflicts
 
 If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
 
-> _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
+> _Contradicts ADR-0002 (quarantine corrupted wal during startup recovery) — but worth reopening because…_

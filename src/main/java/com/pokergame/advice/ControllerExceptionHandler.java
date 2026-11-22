@@ -1,33 +1,56 @@
 package com.pokergame.advice;
 
 import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.TooManyRequestsException;
 import com.pokergame.exception.UnauthorisedActionException;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.pokergame.dto.response.ErrorResponse;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
-import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
- * Exception handler for all exceptions in the application.
+ * Global REST exception handler mapping domain, security, and Spring Web exceptions
+ * to standardized RFC 9457 {@link ProblemDetail} payloads.
+ *
+ * <p>Logging Strategy:
+ * <ul>
+ *   <li>{@code WARN}: Domain rule breaches, validation failures, and authorization denials.</li>
+ *   <li>{@code DEBUG}: Protocol errors and scanner probes (e.g. static resource scans, unsupported methods).</li>
+ *   <li>{@code ERROR}: Unexpected internal server exceptions.</li>
+ * </ul>
+ *
+ * <p>Note: WebSocket/STOMP errors are handled separately by {@link WebSocketExceptionHandler}.
  */
-
 @ControllerAdvice
 public class ControllerExceptionHandler {
     private static final Logger logger = LoggerFactory.getLogger(ControllerExceptionHandler.class);
+
+    /**
+     * Maps domain request failures and poker rule violations to HTTP 400.
+     *
+     * @param ex invalid-request failure
+     * @return structured bad-request response
+     */
+    @ExceptionHandler(BadRequestException.class)
+    public ResponseEntity<ProblemDetail> handleBadRequestException(BadRequestException ex) {
+        logger.warn("Bad request: {}", ex.getMessage());
+        return errorResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
+    }
 
     /**
      * Maps missing resources to HTTP 404.
@@ -36,68 +59,21 @@ public class ControllerExceptionHandler {
      * @return structured not-found response
      */
     @ExceptionHandler(ResourceNotFoundException.class)
-    public ResponseEntity<ErrorResponse> handleNotFoundException(ResourceNotFoundException ex) {
+    public ResponseEntity<ProblemDetail> handleNotFoundException(ResourceNotFoundException ex) {
         logger.warn("Resource not found: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(HttpStatus.NOT_FOUND.value(), "Not Found", ex.getMessage());
-        // returns 404 Not Found
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+        return errorResponse(HttpStatus.NOT_FOUND, ex.getMessage());
     }
 
     /**
-     * Maps domain request failures to HTTP 400.
+     * Maps resource state conflicts to HTTP 409 (e.g. requesting review for an ongoing game).
      *
-     * @param ex invalid-request failure
-     * @return structured bad-request response
+     * @param ex conflict failure
+     * @return structured conflict response
      */
-    @ExceptionHandler(BadRequestException.class)
-    public ResponseEntity<ErrorResponse> handleBadRequestException(BadRequestException ex) {
-        logger.warn("Bad request: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", ex.getMessage());
-        // returns 400 Bad Request
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-    }
-
-    /**
-     * Maps invalid arguments raised outside the domain hierarchy to HTTP 400.
-     *
-     * @param ex invalid-argument failure
-     * @return structured bad-request response
-     */
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalArgumentException(IllegalArgumentException ex) {
-        logger.warn("Illegal argument: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", ex.getMessage());
-        // returns 400 Bad Request
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-    }
-
-    /**
-     * Maps forbidden poker actions to HTTP 403.
-     *
-     * @param ex authorization failure
-     * @return structured forbidden response
-     */
-    @ExceptionHandler(UnauthorisedActionException.class)
-    public ResponseEntity<ErrorResponse> handleUnauthorizedActionException(UnauthorisedActionException ex) {
-        logger.warn("Unauthorized action: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(HttpStatus.FORBIDDEN.value(), "Forbidden", ex.getMessage());
-        // returns 403 Forbidden
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
-    }
-
-    /**
-     * Maps general security failures to HTTP 403 while preserving the exception's
-     * client-facing message.
-     *
-     * @param ex security failure
-     * @return structured forbidden response
-     */
-    @ExceptionHandler(SecurityException.class)
-    public ResponseEntity<ErrorResponse> handleSecurityException(SecurityException ex) {
-        logger.warn("Security exception: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(HttpStatus.FORBIDDEN.value(), "Forbidden", ex.getMessage());
-        // returns 403 Forbidden
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ProblemDetail> handleConflictException(ConflictException ex) {
+        logger.warn("Conflict: {}", ex.getMessage());
+        return errorResponse(HttpStatus.CONFLICT, ex.getMessage());
     }
 
     /**
@@ -107,11 +83,66 @@ public class ControllerExceptionHandler {
      * @return structured too-many-requests response
      */
     @ExceptionHandler(TooManyRequestsException.class)
-    public ResponseEntity<ErrorResponse> handleTooManyRequestsException(TooManyRequestsException ex) {
+    public ResponseEntity<ProblemDetail> handleTooManyRequestsException(TooManyRequestsException ex) {
         logger.warn("Rate limit exceeded: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(HttpStatus.TOO_MANY_REQUESTS.value(), "Too Many Requests", ex.getMessage());
-        // returns 429 Too Many Requests
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(error);
+        ResponseEntity<ProblemDetail> response = errorResponse(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
+        if (ex.getRetryAfterSeconds() <= 0) {
+            return response;
+        }
+        return ResponseEntity.status(response.getStatusCode())
+                .header("Retry-After", Long.toString(ex.getRetryAfterSeconds()))
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(response.getBody());
+    }
+
+    /**
+     * Maps access-denied security failures (including stale or mismatched session tokens)
+     * to HTTP 401 Unauthorized.
+     *
+     * @param ex access-denied failure
+     * @return structured unauthorized response
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ProblemDetail> handleAccessDeniedException(AccessDeniedException ex) {
+        logger.warn("Access denied: {}", ex.getMessage());
+        return errorResponse(HttpStatus.UNAUTHORIZED, ex.getMessage());
+    }
+
+    /**
+     * Maps forbidden poker actions to HTTP 403.
+     *
+     * @param ex authorization failure
+     * @return structured forbidden response
+     */
+    @ExceptionHandler(UnauthorisedActionException.class)
+    public ResponseEntity<ProblemDetail> handleUnauthorizedActionException(UnauthorisedActionException ex) {
+        logger.warn("Unauthorized action: {}", ex.getMessage());
+        return errorResponse(HttpStatus.FORBIDDEN, ex.getMessage());
+    }
+
+    /**
+     * Maps general security failures to HTTP 403 with a generic client-facing message.
+     *
+     * @param ex security failure
+     * @return structured forbidden response
+     */
+    @ExceptionHandler(SecurityException.class)
+    public ResponseEntity<ProblemDetail> handleSecurityException(SecurityException ex) {
+        logger.warn("Security exception: {}", ex.getMessage());
+        return errorResponse(HttpStatus.FORBIDDEN, "Access denied");
+    }
+
+    /**
+     * Maps invalid arguments raised outside the domain hierarchy to HTTP 400 with a
+     * generic client-facing message.
+     *
+     * @param ex invalid-argument failure
+     * @return structured bad-request response
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ProblemDetail> handleIllegalArgumentException(IllegalArgumentException ex) {
+        logger.warn("Illegal argument: {}", ex.getMessage());
+        return errorResponse(HttpStatus.BAD_REQUEST, "Invalid request");
     }
 
     /**
@@ -121,16 +152,14 @@ public class ControllerExceptionHandler {
      * @return structured bad-request response
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorResponse> handleMethodArgumentNotValidException(MethodArgumentNotValidException ex) {
+    public ResponseEntity<ProblemDetail> handleMethodArgumentNotValidException(MethodArgumentNotValidException ex) {
         String message = ex.getBindingResult().getFieldErrors().stream()
                 .findFirst()
                 .map(DefaultMessageSourceResolvable::getDefaultMessage)
                 .orElse("Invalid request payload");
 
         logger.warn("Validation error: {}", message);
-        ErrorResponse error = new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", message);
-        // returns 400 Bad Request
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+        return errorResponse(HttpStatus.BAD_REQUEST, message);
     }
 
     /**
@@ -140,27 +169,9 @@ public class ControllerExceptionHandler {
      * @return structured bad-request response
      */
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<ErrorResponse> handleHttpMessageNotReadableException(HttpMessageNotReadableException ex) {
+    public ResponseEntity<ProblemDetail> handleHttpMessageNotReadableException(HttpMessageNotReadableException ex) {
         logger.warn("Malformed JSON request: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", "Malformed JSON request payload");
-        // returns 400 Bad Request
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-    }
-
-    /**
-     * Maps wrong HTTP method to HTTP 405.  Logged at DEBUG — scanners commonly
-     * try arbitrary methods against every discovered path.
-     *
-     * @param ex method-not-allowed failure
-     * @return structured method-not-allowed response
-     */
-    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
-    public ResponseEntity<ErrorResponse> handleMethodNotSupportedException(HttpRequestMethodNotSupportedException ex) {
-        logger.debug("Method not allowed: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(HttpStatus.METHOD_NOT_ALLOWED.value(), "Method Not Allowed",
-                "HTTP method not supported for this endpoint");
-        // returns 405 Method Not Allowed
-        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(error);
+        return errorResponse(HttpStatus.BAD_REQUEST, "Malformed JSON request payload");
     }
 
     /**
@@ -170,48 +181,51 @@ public class ControllerExceptionHandler {
      * @return structured bad-request response
      */
     @ExceptionHandler(MissingServletRequestParameterException.class)
-    public ResponseEntity<ErrorResponse> handleMissingServletRequestParameterException(MissingServletRequestParameterException ex) {
+    public ResponseEntity<ProblemDetail> handleMissingServletRequestParameterException(MissingServletRequestParameterException ex) {
         logger.warn("Missing request parameter: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request",
-                "Required parameter '" + ex.getParameterName() + "' is missing");
-        // returns 400 Bad Request
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+        return errorResponse(HttpStatus.BAD_REQUEST, "Required parameter '" + ex.getParameterName() + "' is missing");
     }
 
     /**
-     * Maps an unsupported request Content-Type to HTTP 415.
+     * Maps wrong HTTP method to HTTP 405. Logged at DEBUG to avoid polluting logs
+     * with scanner probes.
+     *
+     * @param ex method-not-allowed failure
+     * @return structured method-not-allowed response
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ProblemDetail> handleMethodNotSupportedException(HttpRequestMethodNotSupportedException ex) {
+        logger.debug("Method not allowed: {}", ex.getMessage());
+        return errorResponse(HttpStatus.METHOD_NOT_ALLOWED, "HTTP method not supported for this endpoint");
+    }
+
+    /**
+     * Maps an unsupported request Content-Type to HTTP 415. Logged at DEBUG.
      *
      * @param ex unsupported-media-type failure
      * @return structured unsupported-media-type response
      */
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
-    public ResponseEntity<ErrorResponse> handleMediaTypeNotSupportedException(HttpMediaTypeNotSupportedException ex) {
+    public ResponseEntity<ProblemDetail> handleMediaTypeNotSupportedException(HttpMediaTypeNotSupportedException ex) {
         logger.debug("Unsupported media type: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(HttpStatus.UNSUPPORTED_MEDIA_TYPE.value(), "Unsupported Media Type",
-                "Content-Type not supported");
-        // returns 415 Unsupported Media Type
-        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).body(error);
+        return errorResponse(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Content-Type not supported");
     }
 
     /**
-     * Maps an unacceptable Accept header to HTTP 406.
+     * Maps an unacceptable Accept header to HTTP 406 with an empty body. Logged at DEBUG.
      *
      * @param ex not-acceptable failure
-     * @return structured not-acceptable response
+     * @return 406 Not Acceptable with no body
      */
     @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
-    public ResponseEntity<ErrorResponse> handleMediaTypeNotAcceptableException(HttpMediaTypeNotAcceptableException ex) {
+    public ResponseEntity<Void> handleMediaTypeNotAcceptableException(HttpMediaTypeNotAcceptableException ex) {
         logger.debug("Not acceptable media type: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(HttpStatus.NOT_ACCEPTABLE.value(), "Not Acceptable",
-                "Requested media type is not supported");
-        // returns 406 Not Acceptable
-        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE).body(error);
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE).build();
     }
 
     /**
      * Handles requests for static resources that do not exist (e.g. automated
-     * vulnerability scanner probes).  Logged at DEBUG to avoid polluting ERROR
-     * logs with expected 404s.
+     * vulnerability scanner probes). Logged at DEBUG to avoid polluting logs.
      *
      * @param ex missing-static-resource failure raised by Spring MVC
      * @return 404 Not Found with no body
@@ -229,12 +243,14 @@ public class ControllerExceptionHandler {
      * @return structured internal-server-error response
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleException(Exception ex) {
+    public ResponseEntity<ProblemDetail> handleException(Exception ex) {
         logger.error("Unexpected error", ex);
-        ErrorResponse error = new ErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Internal Server Error",
-                "An unexpected error occurred");
-        // returns 500 Internal Server Error
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        return errorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred");
     }
 
+    private ResponseEntity<ProblemDetail> errorResponse(HttpStatus status, String message) {
+        return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(ProblemDetail.forStatusAndDetail(status, message));
+    }
 }

@@ -1,205 +1,156 @@
 package com.pokergame.persistence.config;
 
+import com.pokergame.persistence.PersistenceRecovery;
+import com.pokergame.persistence.RoomAggregates;
+import com.pokergame.persistence.RoomRecoveryHandler;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
+import com.pokergame.persistence.transaction.DurableMutationAspect;
+import com.pokergame.persistence.wal.EncryptedWalStore;
+import com.pokergame.persistence.wal.EncryptionKeyring;
+import com.pokergame.util.RoomCoordinator;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.health.contributor.Health;
-import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.health.contributor.HealthIndicator;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.EnableAspectJAutoProxy;
-import org.springframework.beans.factory.annotation.Value;
-
-import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
-import java.util.Base64;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.core.Ordered;
-import org.springframework.web.filter.OncePerRequestFilter;
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import java.io.IOException;
-import com.pokergame.persistence.wal.EncryptedWalStore;
-import com.pokergame.persistence.wal.EncryptionKeyring;
-import com.pokergame.persistence.transaction.DurableMutationAspect;
-import com.pokergame.persistence.snapshot.AggregateSnapshotMapper;
-import com.pokergame.persistence.PersistenceRecovery;
 
 /**
- * Sets up the save/restore system for the poker game.
+ * Spring configuration for per-room mutation locking and encrypted disk persistence.
  * <p>
- * Think of this class as the "master switchboard" for autosaving. When enabled,
- * it wires up all the necessary parts—like encryption keys, data storage, and 
- * recovery tools—so that active poker games can be safely saved to disk and
- * restored if the server crashes. All parts turn on or off together based on
- * a single setting.
+ * {@link DurableMutationAspect} is always active so concurrent operations on the same room
+ * run one at a time under {@link RoomCoordinator}, even when disk persistence is disabled.
+ * </p>
+ * <p>
+ * When {@code poker.persistence.enabled=true}, this also wires up the encryption keyring,
+ * encrypted WAL store, startup recovery, health indicator, and {@link RecoveryTrafficGate}
+ * (which returns 503 to regular requests until saved rooms have finished loading).
  * </p>
  */
 @Configuration
-@EnableAspectJAutoProxy
 @EnableConfigurationProperties(PersistenceProperties.class)
+@EnableAspectJAutoProxy(proxyTargetClass = true)
 public class PersistenceConfiguration {
     private static final Logger logger = LoggerFactory.getLogger(PersistenceConfiguration.class);
 
     private final PersistenceProperties properties;
 
+    /**
+     * Creates the configuration.
+     *
+     * @param properties the persistence settings
+     */
     public PersistenceConfiguration(PersistenceProperties properties) {
         this.properties = properties;
     }
 
+    /** Logs the persistence settings at startup (never the keys themselves). */
     @PostConstruct
     public void logStartupConfig() {
         logger.info("Persistence config: enabled={}, directory={}, compactAfterRecords={}, compactAfterBytes={}, keyCount={}, currentKeyId={}",
-                properties.isEnabled(),
-                properties.getDirectory(),
-                properties.getCompactAfterRecords(),
-                properties.getCompactAfterBytes(),
-                properties.getKeys() != null ? properties.getKeys().size() : 0,
-                properties.getCurrentKeyId());
+                properties.enabled(),
+                properties.directory(),
+                properties.compactAfterRecords(),
+                properties.compactAfterBytes(),
+                properties.keys().size(),
+                properties.currentKeyId());
     }
+
     /**
      * Loads and checks the encryption keys when the server starts.
      * We want to find out immediately if a key is broken, before any poker games begin.
      *
-     * @param properties configuration for the encryption keys
      * @return the set of keys ready to encrypt and decrypt data
-     * @throws PersistenceException if any key cannot be read
+     * @throws com.pokergame.persistence.PersistenceException if any key cannot be read
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
-    EncryptionKeyring persistenceKeyring(PersistenceProperties properties) {
-        Map<String, SecretKey> keys = new LinkedHashMap<>();
-        for (Map.Entry<String, String> entry : properties.getKeys().entrySet()) {
-            try {
-                // Decode each base64 key into a usable AES secret key
-                keys.put(entry.getKey(), new SecretKeySpec(Base64.getDecoder().decode(entry.getValue()), "AES"));
-            } catch (IllegalArgumentException e) {
-                // Fail loud and early so the app doesn't start with bad keys
-                throw new PersistenceException("Persistence key " + entry.getKey() + " is not valid Base64", e);
-            }
-        }
-        return new EncryptionKeyring(properties.getCurrentKeyId(), keys);
+    EncryptionKeyring persistenceKeyring() {
+        return EncryptionKeyring.fromBase64(properties.currentKeyId(), properties.keys());
     }
 
     /**
-     * Creates the main storage vault where all saved poker games will be kept securely.
+     * Creates the encrypted store where all saved poker games are kept.
      *
-     * @param properties settings like where to save the files on disk
-     * @param keyring    the keys used to lock and unlock the saved data
-     * @return the secure storage system
+     * @param keyring         the keys used to lock and unlock the saved data
+     * @param roomCoordinator the per-room lock shared with the rest of the application
+     * @return the encrypted save store
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
-    EncryptedWalStore encryptedWalStore(PersistenceProperties properties, EncryptionKeyring keyring) {
-        return new EncryptedWalStore(properties.getDirectory(), keyring);
+    EncryptedWalStore encryptedWalStore(EncryptionKeyring keyring, RoomCoordinator roomCoordinator) {
+        return new EncryptedWalStore(properties.directory(), keyring, roomCoordinator);
     }
 
     /**
-     * Sets up the "Autosave trigger" that automatically saves the game whenever players take actions.
-     * It works silently in the background, so the core poker logic doesn't even know it's being saved.
+     * Locks each {@code @DurableMutation} call per room and saves accepted changes when disk
+     * persistence is enabled. Stays active with persistence disabled so concurrent operations
+     * on the same room still execute one at a time.
      *
-     * @param store                the secure vault where data is written
-     * @param snapshotMapper       the tool used to convert active game data into a saveable format
-     * @param roomService          helps look up game rooms
-     * @param gameLifecycleService helps manage the state of active games
-     * @param properties           settings for when to clean up old save files
-     * @return the background autosaving mechanism
+     * @param store           the encrypted save store, or absent when disk persistence is disabled
+     * @param snapshotMapper  converts live room and game data to and from the saved format
+     * @param aggregates      reads, replaces, and removes live rooms and games
+     * @param roomCoordinator the per-room lock shared with the rest of the application
+     * @return the aspect that locks and (when enabled) persists room mutations
+     */
+    @Bean
+    DurableMutationAspect durableMutationAspect(ObjectProvider<EncryptedWalStore> store,
+            RoomSnapshotMapper snapshotMapper, RoomAggregates aggregates, RoomCoordinator roomCoordinator) {
+        return new DurableMutationAspect(store.getIfAvailable(), snapshotMapper, aggregates, properties,
+                roomCoordinator);
+    }
+
+    /**
+     * Reloads saved games back into memory when the server starts up.
+     *
+     * @param store              the encrypted save store
+     * @param mapper             converts saved data back into live games
+     * @param recoveryHandler    applies restart rules to each recovered room
+     * @param applicationContext used to publish the readiness events
+     * @param roomCoordinator    the per-room lock shared with the rest of the application
+     * @return the startup recovery
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
-    DurableMutationAspect durableMutationAspect(EncryptedWalStore store, AggregateSnapshotMapper snapshotMapper,
-            ObjectProvider<com.pokergame.service.RoomService> roomService,
-            ObjectProvider<com.pokergame.service.GameLifecycleService> gameLifecycleService,
-            PersistenceProperties properties) {
-        return new DurableMutationAspect(store, snapshotMapper, roomService, gameLifecycleService, properties);
+    PersistenceRecovery persistenceRecovery(EncryptedWalStore store, RoomSnapshotMapper mapper,
+            RoomRecoveryHandler recoveryHandler,
+            ApplicationContext applicationContext,
+            RoomCoordinator roomCoordinator) {
+        return new PersistenceRecovery(store, mapper, recoveryHandler, applicationContext, roomCoordinator);
     }
 
     /**
-     * Manages the process of reloading saved games back into memory when the server starts up.
+     * Reports degraded persistence separately from gameplay availability.
      *
-     * @param store                   the secure vault holding the saved games
-     * @param mapper                  the tool to convert saved data back into live games
-     * @param roomService             where reloaded rooms will be registered
-     * @param gameLifecycleService    where reloaded games will be registered
-     * @param webSocketEventListener  handles player connections after a reload
-     * @param applicationContext      tells the system when the server is fully ready
-     * @param disconnectGracePeriodMs extra time given to players to reconnect after a server restart
-     * @return the process that recovers games
-     */
-    @Bean
-    @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
-    PersistenceRecovery persistenceRecovery(EncryptedWalStore store, AggregateSnapshotMapper mapper,
-            com.pokergame.service.RoomService roomService,
-            com.pokergame.service.GameLifecycleService gameLifecycleService,
-            com.pokergame.config.WebSocketEventListener webSocketEventListener,
-            org.springframework.context.ApplicationContext applicationContext,
-            @Value("${poker.disconnect.grace-period-ms:120000}") long disconnectGracePeriodMs) {
-        return new PersistenceRecovery(store, mapper, roomService, gameLifecycleService, webSocketEventListener,
-                applicationContext, disconnectGracePeriodMs);
-    }
-
-    /**
-     * Reports on the health of the save system. If something is wrong, or if games
-     * are still loading, it tells the load balancer not to send players here.
-     *
-     * @param store    the secure vault
-     * @param recovery the process recovering games on startup
-     * @return a health check indicating if it's safe to play
+     * @param store    the encrypted save store
+     * @param recovery the startup recovery
+     * @return a health check showing whether recovery has finished and saving is working
      */
     @Bean("pokerPersistenceHealth")
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
     HealthIndicator pokerPersistenceHealth(EncryptedWalStore store, PersistenceRecovery recovery) {
-        return () -> {
-            // Only report "up" if storage is working fine and all games have finished reloading
-            Health.Builder builder = store.isHealthy() && recovery.isComplete() ? Health.up() : Health.down();
-            return builder.withDetail("recoveryComplete", recovery.isComplete())
-                    .withDetail("activeWalCount", store.walCount())
-                    .withDetail("lastStorageError", store.lastError() == null ? "none" : store.lastError())
-                    .build();
-        };
+        return new PersistenceHealthIndicator(store, recovery);
     }
 
     /**
-     * Acts like a bouncer at the door, blocking regular internet traffic until all
-     * games are fully reloaded. Health checks are allowed through.
+     * Registers the filter that blocks regular web traffic until all games are reloaded.
+     * It runs before every other filter.
      *
-     * @param recovery the process recovering games on startup
-     * @return a filter that controls early web traffic
+     * @param recovery the startup recovery
+     * @return the filter registration
      */
     @Bean
     @ConditionalOnProperty(name = "poker.persistence.enabled", havingValue = "true")
-    FilterRegistrationBean<OncePerRequestFilter> persistenceRecoveryTrafficGate(PersistenceRecovery recovery) {
-        OncePerRequestFilter filter = new OncePerRequestFilter() {
-            /**
-             * Blocks players from accessing the game if old games are still being restored.
-             * Health checks pass through so we know the server is alive.
-             *
-             * @param request     the incoming request
-             * @param response    what we send back to the user
-             * @param filterChain the rest of the web filters
-             * @throws ServletException if a web error occurs
-             * @throws IOException      if we can't write the response
-             */
-            @Override
-            protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
-                    FilterChain filterChain) throws ServletException, IOException {
-                // If recovery is still running, block everything except health checks
-                if (!recovery.isComplete() && !request.getRequestURI().startsWith("/actuator/health")) {
-                    response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Recovery is not complete");
-                    return;
-                }
-                // Allow the request to proceed normally
-                filterChain.doFilter(request, response);
-            }
-        };
-        FilterRegistrationBean<OncePerRequestFilter> registration = new FilterRegistrationBean<>(filter);
+    FilterRegistrationBean<RecoveryTrafficGate> persistenceRecoveryTrafficGate(PersistenceRecovery recovery) {
+        FilterRegistrationBean<RecoveryTrafficGate> registration =
+                new FilterRegistrationBean<>(new RecoveryTrafficGate(recovery));
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
         return registration;
     }

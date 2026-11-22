@@ -1,16 +1,19 @@
 package com.pokergame.security;
 
+import static java.util.Objects.requireNonNull;
+
+import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
-import jakarta.annotation.PostConstruct;
+import java.time.Clock;
+import java.util.Date;
+import java.util.UUID;
+import javax.crypto.SecretKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-
-import javax.crypto.SecretKey;
-import java.util.Date;
 
 /**
  * Service responsible for generating and validating JWT tokens for stateless
@@ -21,31 +24,36 @@ import java.util.Date;
 public class JwtService {
     private static final Logger logger = LoggerFactory.getLogger(JwtService.class);
 
-    @Value("${app.jwt.base64-secret}")
-    private String secretKeyString;
-
-    @Value("${jwt.expirationMillis:14400000}") // default 4h
-    private long expirationMillis;
-
-    private SecretKey secretKey;
+    private final SecretKey secretKey;
+    private final long expirationMillis;
+    private final Clock clock;
 
     /**
-     * Decodes and validates the configured signing key after dependency injection.
+     * Creates the JWT service and decodes the configured Base64 HMAC signing key.
      *
+     * @param secretKeyString  Base64-encoded HMAC secret (at least 512 bits)
+     * @param expirationMillis token validity duration in milliseconds
+     * @param clock            clock used for token issuance and expiry validation
      * @throws IllegalStateException if the key is absent, malformed, or too weak
      */
-    @PostConstruct
-    public void init() {
+    public JwtService(
+            @Value("${app.jwt.base64-secret}") String secretKeyString,
+            @Value("${jwt.expirationMillis:14400000}") long expirationMillis,
+            Clock clock) {
+        this.clock = requireNonNull(clock, "clock must not be null");
+        this.expirationMillis = expirationMillis;
         if (secretKeyString == null || secretKeyString.isBlank()) {
-            throw new IllegalStateException("JWT base64 secret key is missing. Please provide it via 'app.jwt.base64-secret' or the JWT_SECRET environment variable.");
+            throw new IllegalStateException(
+                    "JWT base64 secret key is missing. Please provide it via 'app.jwt.base64-secret' or the JWT_SECRET environment variable.");
         }
-
         try {
-            // Decode the Base64 string directly into a byte array
             byte[] keyBytes = Decoders.BASE64.decode(secretKeyString);
             this.secretKey = Keys.hmacShaKeyFor(keyBytes);
         } catch (Exception e) {
-            throw new IllegalStateException("JWT secret key parsing failed. Ensure it is a valid Base64 string and provides at least 512 bits of key material.", e);        }
+            throw new IllegalStateException(
+                    "JWT secret key parsing failed. Ensure it is a valid Base64 string and provides at least 512 bits of key material.",
+                    e);
+        }
     }
 
     /**
@@ -56,14 +64,30 @@ public class JwtService {
      * @return signed token with the configured expiry
      */
     public String generateToken(String playerName, String roomId) {
-        long now = System.currentTimeMillis();
-        return Jwts.builder()
+        return generateToken(playerName, roomId, UUID.randomUUID().toString());
+    }
+
+    /**
+     * Generates a signed JWT for the given player, room, and membership ID.
+     *
+     * @param playerName player identity stored as the token subject
+     * @param roomId room identity stored as a required claim
+     * @param membershipId unique membership identity stored as a claim
+     * @return signed token with the configured expiry
+     */
+    public String generateToken(String playerName, String roomId, String membershipId) {
+        long now = clock.millis();
+        var builder = Jwts.builder()
                 .subject(playerName)
                 .claim("roomId", roomId)
                 .issuedAt(new Date(now))
-                .expiration(new Date(now + expirationMillis))
-                .signWith(secretKey)
-                .compact();
+                .expiration(new Date(now + expirationMillis));
+
+        if (membershipId != null && !membershipId.isBlank()) {
+            builder.claim("membershipId", membershipId);
+        }
+
+        return builder.signWith(secretKey).compact();
     }
 
     /**
@@ -74,10 +98,12 @@ public class JwtService {
      */
     public boolean isTokenValid(String token) {
         try {
-            var claims = Jwts.parser().verifyWith(secretKey).build().parseSignedClaims(token).getPayload();
+            Claims claims = parseClaims(token);
             String subject = claims.getSubject();
             String roomId = claims.get("roomId", String.class);
-            return subject != null && !subject.isBlank() && roomId != null && !roomId.isBlank();
+            String membershipId = resolveMembershipId(claims);
+            return subject != null && !subject.isBlank() && roomId != null && !roomId.isBlank()
+                    && membershipId != null && !membershipId.isBlank();
         } catch (Exception e) {
             logger.debug("JWT validation failed: {}", e.getClass().getSimpleName());
             return false;
@@ -92,20 +118,51 @@ public class JwtService {
      * @throws IllegalArgumentException if required claims are missing
      */
     public PlayerPrincipal extractPrincipal(String token) {
-        var claims = Jwts.parser()
-                .verifyWith(secretKey)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
-        
+        Claims claims = parseClaims(token);
         String subject = claims.getSubject();
         String roomId = claims.get("roomId", String.class);
-        
+
         if (subject == null || subject.isBlank() || roomId == null || roomId.isBlank()) {
             throw new IllegalArgumentException("Token is missing required player or room identification claims.");
         }
-        
-        return new PlayerPrincipal(subject, roomId);
+
+        String membershipId = resolveMembershipId(claims);
+        if (membershipId == null || membershipId.isBlank()) {
+            throw new IllegalArgumentException("Token is missing required membership identification claim.");
+        }
+
+        return new PlayerPrincipal(subject, roomId, membershipId);
+    }
+
+    /**
+     * Alias for {@link #extractPrincipal(String)}.
+     *
+     * @param token encoded, valid JWT
+     * @return principal containing player, room, and membership identities
+     */
+    public PlayerPrincipal extractPlayerPrincipal(String token) {
+        return extractPrincipal(token);
+    }
+
+    /**
+     * Alias for {@link #extractPrincipal(String)}.
+     *
+     * @param token encoded, valid JWT
+     * @return principal containing player, room, and membership identities
+     */
+    public PlayerPrincipal parseToken(String token) {
+        return extractPrincipal(token);
+    }
+
+    /**
+     * Extracts the membership ID from a valid token.
+     *
+     * @param token encoded, valid JWT
+     * @return membership ID, or an empty string when absent
+     */
+    public String extractMembershipId(String token) {
+        String membershipId = resolveMembershipId(parseClaims(token));
+        return membershipId == null ? "" : membershipId;
     }
 
     /**
@@ -115,12 +172,25 @@ public class JwtService {
      * @return token subject, or an empty string when the subject is absent
      */
     public String extractPlayerName(String token) {
-        String subject = Jwts.parser()
+        String subject = parseClaims(token).getSubject();
+        return subject == null ? "" : subject;
+    }
+
+    private Claims parseClaims(String token) {
+        return Jwts.parser()
                 .verifyWith(secretKey)
+                .clock(() -> Date.from(clock.instant()))
                 .build()
                 .parseSignedClaims(token)
-                .getPayload()
-                .getSubject();
-        return subject == null ? "" : subject;
+                .getPayload();
+    }
+
+    // Reads the current membership claim, accepting the legacy "mid" claim when present.
+    private static String resolveMembershipId(Claims claims) {
+        String membershipId = claims.get("membershipId", String.class);
+        if (membershipId == null) {
+            membershipId = claims.get("mid", String.class);
+        }
+        return membershipId;
     }
 }

@@ -24,20 +24,10 @@ public enum Suit {
         this.symbol = symbol;
     }
 
-    /**
-     * Returns the human-readable suit name.
-     *
-     * @return display name
-     */
     public String getDisplayName() {
         return displayName;
     }
 
-    /**
-     * Returns the suit glyph.
-     *
-     * @return display symbol
-     */
     public String getSymbol() {
         return symbol;
     }

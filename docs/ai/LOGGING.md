@@ -45,7 +45,7 @@ The production VPS runs a Docker Compose deployment located at `~/poker-app`. Wa
     environment:
       LOG_FILE: /app/logs/poker.log
     volumes:
-      - poker-wal-data:/var/lib/poker/wal
+      - /opt/poker/wal:/var/lib/poker/wal
       - /opt/poker/logs:/app/logs
     logging:
       driver: json-file
@@ -112,9 +112,9 @@ logging.logback.rollingpolicy.clean-history-on-start=true
 ### Where MDC Is Populated and Cleaned
 1. **REST Requests (`JwtAuthenticationFilter`):** Extracted from verified JWT claims; populated on entry, cleared in `finally`.
 2. **WebSocket Inbound Messages (`WebSocketAuthInterceptor`):** Extracted from `PlayerPrincipal` during STOMP frame handling in `preSend`, cleaned up in `afterSendCompletion`.
-3. **STOMP Event Listeners (`WebSocketEventListener`):** Managed safely via `MdcUtils.runWithMdc(...)` for connection, disconnection, subscription, and unsubscription events.
+3. **STOMP Event Listeners (`WebSocketEventListener`):** Managed safely via `MdcUtils.withMdc(...)` for connection, disconnection, subscription, and unsubscription events.
 4. **Scheduled Async Tasks & Timers (`AsyncConfiguration`):** Propagated automatically to execution worker threads using `MdcTaskDecorator` configured on `ThreadPoolTaskScheduler` and `ThreadPoolTaskExecutor`, ensuring clean domain logic without manual boilerplate in `GameLifecycleService`.
-5. **Durable Transactions (`DurableMutationAspect`):** Sets `roomId` on mutation entry and cleans up in the outer `finally` block.
+5. **Durable Transactions (`DurableMutationAspect`):** Sets `roomId` on mutation entry, with or without a storage bean, and restores the previous value in the outer `finally` block.
 
 > [!IMPORTANT]
 > **Always clear MDC in a `finally` block.** Since threads in thread pools are reused, failing to clear MDC causes context leakage across unrelated requests.
@@ -241,7 +241,7 @@ Alternatively, periodic stats logging can be disabled in `WebSocketConfig` via `
   - Local development defaults to `LOG_FILE=./logs/poker.log` (automatically created, git-ignored).
   - Test suites run with `logging.file.name=` in `src/test/resources/application-test.properties` so tests do not pollute disk with log files.
 - **WAL Storage Alignment:**
-  `POKER_PERSISTENCE_DIRECTORY=/var/lib/poker/wal` in `.env` must match the Docker Compose volume mount (`poker-wal-data:/var/lib/poker/wal`).
+  `POKER_PERSISTENCE_DIRECTORY=/var/lib/poker/wal` in `.env` must match the Docker Compose volume mount (`/opt/poker/wal:/var/lib/poker/wal`).
   - Verify volume mounting with:
     ```bash
     docker inspect poker-backend --format '{{json .Mounts}}'

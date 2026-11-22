@@ -6,25 +6,19 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a method that changes a poker game's progress. It ensures that any updates made 
- * are safely saved to disk before they become visible to players.
+ * Locks a room, rolls back in-memory state if the method fails, and saves the updated
+ * {@code RoomSnapshot} to the WAL before running queued broadcasts and timers.
  * <p>
- * The room ID must be explicitly provided in the annotation. If we tried to automatically 
- * extract the room ID by inspecting the room's data, it could lead to bugs and race conditions 
- * when locking the room or recovering it after a crash.
+ * If disk saving fails, the change still succeeds in memory and a background retry saves
+ * a full checkpoint once storage recovers. When disk persistence is disabled, this annotation
+ * still acquires the room lock.
+ * </p>
+ * <p>
+ * Exactly one {@code String} parameter on the method must be marked with {@link RoomId} or
+ * {@link GameId} so the room lock can be acquired before touching any room state.
  * </p>
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface DurableMutation {
-    /**
-     * A Spring Expression (SpEL) string that tells the application how to find the room ID 
-     * from the method's parameters. 
-     * <p>
-     * For example, if your method takes a parameter named {@code roomId}, you would use:
-     * {@code @DurableMutation(roomId = "#roomId")}
-     *
-     * @return a SpEL expression that evaluates to the room ID
-     */
-    String roomId();
 }

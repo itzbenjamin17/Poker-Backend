@@ -1,16 +1,20 @@
 package com.pokergame.controller;
 
+import static java.util.Objects.requireNonNull;
+
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
+import com.pokergame.model.Game;
+import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.PlayerActionService;
-import com.pokergame.model.Game;
-import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.util.LockLease;
+import com.pokergame.util.RoomCoordinator;
+import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -18,12 +22,17 @@ import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 /**
- * REST controller for active poker game operations.
- * Manages player actions and game departures using WebSocket for real-time
- * updates.
+ * REST and STOMP controller for active poker game operations: gameplay actions,
+ * public and private state snapshots, disconnect win claims, and post-game review.
+ * Room departures live in {@link RoomController}.
+ * Secured operations hold the room lock from membership validation through completion.
  */
 @RestController
 @RequestMapping("/api/game")
@@ -36,19 +45,15 @@ public class GameController {
 
     private final PlayerActionService playerActionService;
 
-    /**
-     * Creates the game controller with its action, lifecycle, and projection services.
-     *
-     * @param playerActionService validates and applies player actions
-     * @param gameLifecycleService owns active games and lifecycle transitions
-     * @param gameStateService creates and publishes client state
-     */
-    public GameController(PlayerActionService playerActionService,
-            GameLifecycleService gameLifecycleService,
-            GameStateService gameStateService) {
+    private final RoomCoordinator roomCoordinator;
+
+    /** Creates the controller with the shared room coordination boundary. */
+    public GameController(PlayerActionService playerActionService, GameLifecycleService gameLifecycleService,
+            GameStateService gameStateService, RoomCoordinator roomCoordinator) {
         this.playerActionService = playerActionService;
         this.gameLifecycleService = gameLifecycleService;
         this.gameStateService = gameStateService;
+        this.roomCoordinator = requireNonNull(roomCoordinator);
     }
 
     /**
@@ -68,13 +73,13 @@ public class GameController {
         logger.debug("Player {} requested game state for {}", playerName, gameId);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
+
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
+            Game game = getAuthorisedGame(gameId, playerName);
+            return ResponseEntity.ok(gameStateService.getPublicGameStateSnapshot(game));
         }
-
-        Game game = getAuthorisedGame(gameId, playerName);
-
-        return ResponseEntity.ok(gameStateService.getPublicGameStateSnapshot(gameId, game));
     }
 
     /**
@@ -93,39 +98,13 @@ public class GameController {
         logger.debug("Player {} requested private state for {}", playerName, gameId);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
+
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
+            Game game = getAuthorisedGame(gameId, playerName);
+            return ResponseEntity.ok(gameStateService.getPrivatePlayerStateSnapshot(game, playerName));
         }
-
-        Game game = getAuthorisedGame(gameId, playerName);
-
-        return ResponseEntity.ok(gameStateService.getPrivatePlayerStateSnapshot(game, playerName));
-    }
-
-    /**
-     * Resolves a game only when it exists and still contains the requesting player.
-     *
-     * @param gameId requested game identifier
-     * @param playerName authenticated player name
-     * @return authorized active game
-     * @throws ResourceNotFoundException if the game does not exist
-     * @throws UnauthorisedActionException if the player is no longer in the game
-     */
-    private Game getAuthorisedGame(String gameId, String playerName) {
-        if (!gameLifecycleService.gameExists(gameId)) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-
-        if (!gameLifecycleService.playerExistsInGame(gameId, playerName)) {
-            throw new UnauthorisedActionException("You are no longer part of this game.");
-        }
-
-        Game game = gameLifecycleService.getGame(gameId);
-        if (game == null || game.isGameOver()) {
-            throw new ResourceNotFoundException("Game not found");
-        }
-
-        return game;
     }
 
     /**
@@ -139,18 +118,19 @@ public class GameController {
     @MessageMapping("/{gameId}/action")
     public void performAction(
             @DestinationVariable String gameId,
-            @Payload PlayerActionRequest actionRequest,
+            @Payload @Valid PlayerActionRequest actionRequest,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.info("Processing player action for game {} by {}: {}", gameId, playerName, actionRequest);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
-        }
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
-        playerActionService.processPlayerAction(gameId, actionRequest, playerName);
-        logger.debug("Player action processed successfully for game {}", gameId);
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
+            playerActionService.processPlayerAction(gameId, actionRequest, playerName);
+            logger.debug("Player action processed successfully for game {}", gameId);
+        }
     }
 
     /**
@@ -167,11 +147,12 @@ public class GameController {
         logger.info("Processing READY confirmation for game {} by {}", gameId, playerName);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
-        }
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
-        gameLifecycleService.markPlayerReadyForNextHand(gameId, playerName);
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
+            gameLifecycleService.markPlayerReadyForNextHand(gameId, playerName);
+        }
     }
 
     /**
@@ -188,37 +169,36 @@ public class GameController {
         logger.info("Processing UNREADY for game {} by {}", gameId, playerName);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
-        }
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
 
-        gameLifecycleService.unmarkPlayerReadyForNextHand(gameId, playerName);
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
+            gameLifecycleService.unmarkPlayerReadyForNextHand(gameId, playerName);
+        }
     }
 
     /**
-     * Removes a player from an active game. Hand is automatically folded if in a
-     * round.
+     * Fetches the frozen final game result for post-game review.
      * SECURED ENDPOINT - Requires JWT token.
      *
-     * @param gameId    game identifier
+     * @param gameId          game identifier
      * @param playerPrincipal authenticated player principal
-     * @return success confirmation
+     * @return direct completed {@link PublicGameStateResponse}
      */
-    @PostMapping("/{gameId}/leave")
-    public ResponseEntity<ApiResponse<Void>> leaveGame(
+    @GetMapping("/{gameId}/review")
+    public ResponseEntity<PublicGameStateResponse> getGameReview(
             @PathVariable String gameId,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
-        logger.info("Player {} requesting to leave game {}", playerName, gameId);
+        logger.debug("Player {} requested game review for {}", playerName, gameId);
 
-        // Security check: ensure the token is actually for THIS game
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
+        // Security check: ensure the token is actually for THIS game/room
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
+
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
+            return ResponseEntity.ok(gameLifecycleService.getGameReview(gameId, playerName));
         }
-
-        gameLifecycleService.leaveGame(gameId, playerName);
-        logger.info("Player {} successfully left game {}", playerName, gameId);
-        return ResponseEntity.ok(ApiResponse.success("Successfully left game"));
     }
 
     /**
@@ -228,22 +208,40 @@ public class GameController {
      *
      * @param gameId    game identifier
      * @param playerPrincipal authenticated player principal
-     * @return success confirmation
+     * @return completed {@link PublicGameStateResponse}
      */
     @PostMapping("/{gameId}/claim-win")
-    public ResponseEntity<ApiResponse<Void>> claimWin(
+    public ResponseEntity<PublicGameStateResponse> claimWin(
             @PathVariable String gameId,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
         logger.info("Player {} attempting to claim win in game {}", playerName, gameId);
 
         // Security check: ensure the token is actually for THIS game/room
-        if (!playerPrincipal.roomId().equals(gameId)) {
-            throw new UnauthorisedActionException("Token is not valid for this game.");
+        playerPrincipal.assertBoundTo(gameId, "Token is not valid for this game.");
+
+        try (LockLease _ = roomCoordinator.acquire(gameId)) {
+            gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
+            PublicGameStateResponse result = gameLifecycleService.claimWin(gameId, playerName);
+            logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
+            return ResponseEntity.ok(result);
+        }
+    }
+
+    private Game getAuthorisedGame(String gameId, String playerName) {
+        if (!gameLifecycleService.gameExists(gameId)) {
+            throw new ResourceNotFoundException("Game not found");
         }
 
-        gameLifecycleService.claimWin(gameId, playerName);
-        logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
-        return ResponseEntity.ok(ApiResponse.success("Win claimed successfully"));
+        if (!gameLifecycleService.playerExistsInGame(gameId, playerName)) {
+            throw new UnauthorisedActionException("You are no longer part of this game.");
+        }
+
+        Game game = gameLifecycleService.getGame(gameId);
+        if (game == null || game.isGameOver()) {
+            throw new ResourceNotFoundException("Game not found");
+        }
+
+        return game;
     }
 }

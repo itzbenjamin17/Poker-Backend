@@ -58,7 +58,15 @@ Desktop.ini
 /.scratch/
 
 ### Agent task artifacts ###
-.agents/tasks
+.agents/
+!.agents/
+.agents/*
+!.agents/agents/
+.agents/agents/*
+!.agents/agents/*.md
+node_modules/
+/docs/reviews/bug-audit/
+bug-audit/
 .codex/config.toml
 .codex/config.local.toml
 .codex/sessions/

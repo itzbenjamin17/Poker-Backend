@@ -1,25 +1,25 @@
 package com.pokergame.dto.response;
 
-import com.pokergame.dto.internal.PlayerJoinInfo;
-
-import java.time.LocalDateTime;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
 
 /**
- * Represents the data of a room.
- * 
- * @param roomId           The ID of the room.
- * @param roomName         The name of the room.
- * @param maxPlayers       The maximum number of players in the room.
- * @param buyIn            The buy-in amount for the room.
- * @param smallBlind       The small blind amount for the room.
- * @param bigBlind         The big blind amount for the room.
- * @param createdAt        The creation timestamp of the room.
- * @param hostName         The name of the host.
- * @param players          The list of players in the room.
- * @param currentPlayers   The current number of players in the room.
- * @param canStartGame     Whether the game can be started.
- * @param gameStarted      Whether the game has started.
+ * Public lobby snapshot returned by {@code GET /api/room/{roomId}} and broadcast on
+ * {@code /room/{roomId}} for all room lifecycle updates, including room closure.
+ *
+ * @param roomId                    unique room identifier
+ * @param roomName                  display name of the room
+ * @param maxPlayers                maximum player capacity
+ * @param buyIn                     starting chip stack per player
+ * @param smallBlind                small blind amount
+ * @param bigBlind                  big blind amount
+ * @param players                   seated lobby members and host flag
+ * @param canStartGame              whether the room meets start requirements
+ * @param gameStarted               whether the match has started
+ * @param inactivityDeadlineEpochMs lobby or game inactivity deadline in UTC epoch ms, or {@code null}
+ * @param serverTimeEpochMs         current server time in UTC epoch ms
+ * @param closedReason              non-null closure reason (e.g. {@code "HOST_LEFT"}, {@code "INACTIVITY"})
+ *                                  when the room has just closed; {@code null} while open
  */
 public record RoomDataResponse(
         String roomId,
@@ -28,10 +28,23 @@ public record RoomDataResponse(
         int buyIn,
         int smallBlind,
         int bigBlind,
-        LocalDateTime createdAt,
-        String hostName,
-        List<PlayerJoinInfo> players,
-        int currentPlayers,
+        List<RoomPlayer> players,
         boolean canStartGame,
-        boolean gameStarted
-) {}
+        boolean gameStarted,
+        Long inactivityDeadlineEpochMs,
+        Long serverTimeEpochMs,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String closedReason) {
+
+    public RoomDataResponse {
+        players = players == null ? List.of() : List.copyOf(players);
+    }
+
+    /**
+     * Member entry inside a {@link RoomDataResponse}.
+     *
+     * @param name   player display name
+     * @param isHost whether the player is currently the room host
+     */
+    public record RoomPlayer(String name, boolean isHost) {
+    }
+}

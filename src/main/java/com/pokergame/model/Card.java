@@ -5,14 +5,11 @@ import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
 import org.jspecify.annotations.NonNull;
 
+import java.util.Objects;
+
 /**
- * Represents a playing card with a suit and rank.
+ * Represents a playing card with a non-null rank and suit.
  * Cards are immutable once created.
- *
- * <p>
- * Type safety is enforced through the use of Suit and Rank enums,
- * eliminating the need for validation.
- * </p>
  *
  * @param rank card rank
  * @param suit card suit
@@ -25,8 +22,10 @@ public record Card(Rank rank, Suit suit) {
      * @param suit the suit of the card
      */
     public Card {
+        Objects.requireNonNull(rank, "rank must not be null");
+        Objects.requireNonNull(suit, "suit must not be null");
     }
-    
+
     /**
      * Serializes the card using the compact rank-and-suit wire format expected by
      * the frontend instead of exposing a JSON object.
@@ -35,44 +34,18 @@ public record Card(Rank rank, Suit suit) {
      */
     @JsonValue
     public String toJsonString() {
-        String r;
-        switch (rank) {
-            case JACK -> r = "J";
-            case QUEEN -> r = "Q";
-            case KING -> r = "K";
-            case ACE -> r = "A";
-            default -> r = String.valueOf(rank.getValue());
-        }
+        String r = switch (rank) {
+            case JACK -> "J";
+            case QUEEN -> "Q";
+            case KING -> "K";
+            case ACE -> "A";
+            default -> String.valueOf(rank.getValue());
+        };
         return r + suit.name().charAt(0);
     }
 
-    /**
-     * Returns the numeric value of this card.
-     *
-     * @return the card's numeric value (2-14)
-     */
     public int getValue() {
         return rank.getValue();
-    }
-
-    /**
-     * Returns the rank of this card.
-     *
-     * @return the card's rank
-     */
-    @Override
-    public Rank rank() {
-        return rank;
-    }
-
-    /**
-     * Returns the suit of this card.
-     *
-     * @return the card's suit
-     */
-    @Override
-    public Suit suit() {
-        return suit;
     }
 
     /**

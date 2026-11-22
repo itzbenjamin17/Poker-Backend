@@ -28,11 +28,6 @@ public enum HandRank {
         this.rank = rank;
     }
 
-    /**
-     * Returns this category's comparison strength.
-     *
-     * @return numeric rank
-     */
     public int getRank() {
         return rank;
     }

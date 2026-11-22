@@ -1,0 +1,215 @@
+package com.pokergame.persistence.snapshot;
+
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.HandRank;
+import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.Rank;
+import com.pokergame.enums.ReadyGateState;
+import com.pokergame.enums.ScheduledGameTask;
+import com.pokergame.enums.Suit;
+import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+
+/**
+ * A clean, simple snapshot of a poker room and its game.
+ * <p>
+ * This class keeps internal refactors to the live Room and Game decoupled from the saved WAL
+ * format by storing only plain data.
+ * </p>
+ *
+ * @param deleted       true if this room was deleted
+ * @param room          the saved room details, or {@code null} for a deletion record
+ * @param game          the saved game progress, or {@code null} if the game hasn't started
+ */
+public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
+
+    /**
+     * Details about the room itself (the lobby) that we need to restore, like passwords and member join order.
+     *
+     * @param roomId             the unique ID for the room
+     * @param roomName           the name of the room players see
+     * @param hostName           the room's current host
+     * @param maxPlayers         how many people can join
+     * @param smallBlind         the room's small blind amount
+     * @param bigBlind           the room's big blind amount
+     * @param buyIn              how many chips players start with
+     * @param password           the room's password
+     * @param createdAt           when the room was created
+     * @param players             players in the room in join order
+     * @param playerMembershipIds session membership IDs keyed by player name
+     * @param gameStarted         true if they have started playing
+     * @param inactivityDeadlineEpochMs lobby or game inactivity deadline in epoch ms, or {@code null}
+     */
+    public record RoomState(String roomId, String roomName, String hostName, int maxPlayers, int smallBlind,
+            int bigBlind, int buyIn, String password, LocalDateTime createdAt,
+            List<String> players, Map<String, String> playerMembershipIds,
+            boolean gameStarted,
+            Long inactivityDeadlineEpochMs) {
+        @JsonCreator
+        public RoomState {
+            if (players != null && players.stream().anyMatch(Objects::isNull)) {
+                throw new IllegalArgumentException("players must not contain null elements");
+            }
+            players = players == null ? List.of() : List.copyOf(players);
+            playerMembershipIds = playerMembershipIds == null
+                    ? Map.of()
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(playerMembershipIds));
+        }
+    }
+
+    /**
+     * Everything we need to pick up a hand of poker exactly where we left off.
+     *
+     * @param gameId                       the unique ID for the game
+     * @param players                      details about all the players
+     * @param activePlayerIds               who is still playing in this hand
+     * @param remainingDeck                 the cards still in the deck, in exact order
+     * @param communityCards                the cards on the table
+     * @param pot                           total chips in the pot right now
+     * @param currentHighestBet             the amount a player has to match to stay in
+     * @param currentPhase                  what part of the hand we're in (like the flop or river)
+     * @param gameOver                      true if the game is finished
+     * @param smallBlind                    the small blind amount
+     * @param bigBlind                      the big blind amount
+     * @param handContributions             how much each player put in (used to split side pots)
+     * @param readyCountdownDeadlineEpochMs when the wait for the next hand ends
+     * @param allPlayersHadInitialTurn      true if everyone got a chance to bet this round
+     * @param actedPlayerIds                who has already made a move this round
+     * @param scheduledTimes                when upcoming automatic actions are supposed to happen
+     * @param carryOverPot                  explicit chips carried from a completed prior hand
+     * @param lastFullRaise                 last full-raise increment in this round, or 0 if none yet
+     * @param previousBets                  each player's total bet in this round after their most recent turn
+     * @param handSeatOrder                 stable seats retained across departures during this hand
+     * @param dealerPlayerId                original dealer identity for correct clockwise position recovery
+     * @param smallBlindPlayerId            actual small blind payer identity, even if that player departed
+     * @param bigBlindPlayerId              actual big blind payer identity, even if that player departed
+     * @param currentPlayerId               player ID whose turn it is to act
+     * @param lastHandPayout                immutable pot winnings, refunds, winners, and remainder
+     * @param finalPotSettled               guards the final carry-over award against recovery-time repayout
+     * @param readyGateState                current ready-gate state machine phase
+     * @param handNumber                    authoritative completed-hand count
+     * @param timerVersions                 timer version tokens protecting asynchronous task executions
+     * @param pausedForDisconnectedSurvivor whether the game is paused awaiting a disconnected survivor, preserving out standings
+     * @param stateRevision                 monotonically increasing public state revision
+     * @param gameEndResult                 frozen immutable game result retained across post-game review
+     */
+    public record GameState(String gameId, List<PlayerState> players, List<String> activePlayerIds,
+            List<CardState> remainingDeck, List<CardState> communityCards, int pot, int currentHighestBet,
+            GamePhase currentPhase, boolean gameOver, int smallBlind, int bigBlind,
+            Map<String, Integer> handContributions,
+            Long readyCountdownDeadlineEpochMs, boolean allPlayersHadInitialTurn, Set<String> actedPlayerIds,
+            Map<ScheduledGameTask, Long> scheduledTimes, int carryOverPot,
+            int lastFullRaise, Map<String, Integer> previousBets,
+            List<String> handSeatOrder, String dealerPlayerId, String smallBlindPlayerId,
+            String bigBlindPlayerId, String currentPlayerId, HandPayoutState lastHandPayout,
+            boolean finalPotSettled, ReadyGateState readyGateState, long handNumber,
+            Map<ScheduledGameTask, Long> timerVersions, boolean pausedForDisconnectedSurvivor, long stateRevision,
+            FinalGameState gameEndResult) {
+    }
+
+    /** Plain persisted form of the immutable hand payout. */
+    public record HandPayoutState(Map<String, Integer> potWinnings, Map<String, Integer> refunds,
+            Set<String> winnerIds, int remainder, boolean wentToShowdown) { }
+
+    /** Plain persisted form of the immutable game-end summary on a completed {@link FinalGameState}. */
+    public record GameEndState(
+            String winner,
+            Integer winnerChips,
+            boolean isForfeit,
+            Boolean abandoned,
+            String reason,
+            List<String> forfeitedPlayers,
+            String message) {
+    }
+
+    /** Plain persisted form of the complete final game state projection. */
+    public record FinalGameState(
+            int maxPlayers,
+            int pot,
+            List<Integer> pots,
+            Integer uncalledAmount,
+            GamePhase phase,
+            int currentBet,
+            List<CardState> communityCards,
+            List<FinalPlayerState> players,
+            String currentPlayerName,
+            String currentPlayerId,
+            List<String> winners,
+            Integer winningsPerPlayer,
+            Boolean isAutoAdvancing,
+            String autoAdvanceMessage,
+            Boolean isReadyCountdownActive,
+            Long readyCountdownDeadlineEpochMs,
+            Boolean claimWinAvailable,
+            String claimWinPlayerName,
+            Boolean handSettled,
+            Integer carryOverAmount,
+            List<PlayerAction> legalActions,
+            Integer minimumBetAmount,
+            Integer minimumRaiseAmount,
+            long handNumber,
+            ReadyGateState readyGateState,
+            long serverTimeEpochMs,
+            long stateRevision,
+            GameEndState gameEnd) {
+    }
+
+    /** Plain persisted form of a player's public state in the game result projection. */
+    public record FinalPlayerState(
+            String id,
+            String name,
+            int chips,
+            int currentBet,
+            String status,
+            boolean isAllIn,
+            boolean isCurrentPlayer,
+            boolean hasFolded,
+            boolean isSmallBlind,
+            boolean isBigBlind,
+            boolean isDealer,
+            HandRank handRank,
+            List<CardState> bestHand,
+            Boolean isWinner,
+            Integer chipsWon,
+            List<CardState> holeCards,
+            Long disconnectDeadlineEpochMs,
+            Boolean isReadyForNextHand) {
+    }
+
+    /**
+     * Everything we need to know about a specific player during a hand.
+     *
+     * @param name                      the player's name
+     * @param playerId                  their unique ID
+     * @param holeCards                 their hidden cards
+     * @param bestHand                  their best 5-card hand (if evaluated)
+     * @param handRank                  the rank of their best hand
+     * @param chips                     how many chips they have left
+     * @param currentBet                how much they've bet in this round
+     * @param folded                    true if they folded
+     * @param allIn                     true if they pushed all their chips in
+     * @param out                       true if they lost all their chips and are out
+     * @param disconnected              true if they lost their connection
+     * @param disconnectDeadlineEpochMs when their time to reconnect runs out
+     * @param readyForNextHand          true if they are ready to start the next hand
+     */
+    public record PlayerState(String name, String playerId, List<CardState> holeCards, List<CardState> bestHand,
+            HandRank handRank, int chips, int currentBet, boolean folded, boolean allIn, boolean out,
+            boolean disconnected, Long disconnectDeadlineEpochMs, boolean readyForNextHand) {
+    }
+
+    /**
+     * A simple representation of a playing card for saving.
+     *
+     * @param rank the value of the card (like King or Two)
+     * @param suit the suit of the card (like Hearts or Spades)
+     */
+    public record CardState(Rank rank, Suit suit) {
+    }
+}

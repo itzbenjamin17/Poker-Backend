@@ -7,7 +7,9 @@ package com.pokergame.enums;
 public enum ScheduledGameTask {
     AUTO_ADVANCE,
     READY_OPEN,
+    READY_TIMEOUT,
     NEW_HAND,
     CLEANUP,
+    TURN_TIMEOUT,
     GAME_END
 }

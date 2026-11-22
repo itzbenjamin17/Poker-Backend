@@ -1,6 +1,7 @@
 package com.pokergame.config;
 
 import com.pokergame.security.RateLimitService;
+import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.util.LogThrottler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,7 +50,10 @@ public class WebSocketRateLimitInterceptor implements ChannelInterceptor {
         if (StompCommand.SEND.equals(accessor.getCommand())) {
             Principal user = accessor.getUser();
             if (user != null) {
-                String username = user.getName();
+                // Session cleanup and rate-limit buckets share the player/room key;
+                // the broker principal additionally includes the membership nonce.
+                String username = user instanceof PlayerPrincipal player
+                        ? player.playerName() + ":" + player.roomId() : user.getName();
                 if (!rateLimitService.tryConsumeWs(username)) {
                     logThrottler.throttle(username, () -> logger.warn(
                             "WebSocket rate limit exceeded for player: {}, destination: {}",

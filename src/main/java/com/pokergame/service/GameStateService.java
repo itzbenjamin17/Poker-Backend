@@ -1,664 +1,620 @@
 package com.pokergame.service;
 
-import com.pokergame.dto.response.GameEndResponse;
-import com.pokergame.dto.response.ActionErrorResponse;
+import static java.util.Objects.requireNonNull;
+
+import com.pokergame.dto.response.PlayerFeedbackResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
-import com.pokergame.dto.response.PublicPlayerState;
-import com.pokergame.dto.response.PlayerNotificationResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.enums.ForfeitReason;
+import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerStatus;
-import com.pokergame.enums.ResponseMessage;
-import com.pokergame.enums.PlayerAction;
-import com.pokergame.exception.BadRequestException;
+import com.pokergame.enums.ReadyGateState;
+import com.pokergame.enums.RejectedAction;
+import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.model.Card;
 import com.pokergame.model.Game;
+import com.pokergame.model.HandPayout;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.persistence.transaction.DurableTransactionContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-
+import com.pokergame.persistence.transaction.PostSaveActions;
+import com.pokergame.security.PlayerPrincipal;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.stereotype.Service;
 
 /**
- * Service class responsible for managing and broadcasting game state.
- * Handles all game state updates, notifications, and WebSocket broadcasts.
+ * Builds client-facing game snapshots (public table state, private hole-card state, showdown
+ * reveals, and final game-end summaries) and sends WebSocket updates after state changes save.
  */
 @Service
 public class GameStateService {
-
     private static final Logger logger = LoggerFactory.getLogger(GameStateService.class);
+    private static final String PRIVATE_QUEUE = "/queue/private";
 
-    private final SimpMessagingTemplate messagingTemplate;
+    /** Status-banner text shown to clients while an all-in hand auto-advances to showdown. */
+    static final String AUTO_ADVANCE_MESSAGE = "All in: dealing the remaining cards...";
 
     private final RoomService roomService;
+    private final SimpMessagingTemplate messagingTemplate;
+    private final Clock clock;
 
-    /**
-     * Creates the projection service with room authorization context and the STOMP
-     * publisher used after durable commits.
-     *
-     * @param roomService       room membership and host context
-     * @param messagingTemplate STOMP publisher
-     */
-    public GameStateService(RoomService roomService, SimpMessagingTemplate messagingTemplate) {
+    public GameStateService(
+            RoomService roomService,
+            SimpMessagingTemplate messagingTemplate,
+            Clock clock) {
         this.roomService = roomService;
         this.messagingTemplate = messagingTemplate;
+        this.clock = clock;
     }
 
     /**
-     * Builds the current public game-state snapshot for REST consumers.
+     * Builds the current public game-state snapshot for REST endpoints.
      *
-     * @param gameId game identifier
-     * @param game   active game instance
-     * @return public game-state DTO for the requested game
+     * @param game the active game instance
+     * @return public game-state response for the requested game
+     * @throws ResourceNotFoundException if the room for {@code game} does not exist
      */
-    public PublicGameStateResponse getPublicGameStateSnapshot(String gameId, Game game) {
-        synchronized (game) {
-            return buildPublicGameStateResponse(gameId, game);
-        }
+    public PublicGameStateResponse getPublicGameStateSnapshot(Game game) {
+        requireNonNull(game, "game must not be null");
+        Room room = requireRoom(game.getGameId());
+        return buildLiveGameState(game, room.getInactivityDeadlineEpochMs());
     }
 
     /**
-     * Builds the private game-state snapshot for a specific player.
+     * Builds the private game-state snapshot containing only {@code playerName}'s hole cards.
      *
-     * @param game       active game instance
-     * @param playerName authenticated player name
+     * @param game       the active game instance
+     * @param playerName the authenticated player's name
      * @return private state containing the player's hole cards
+     * @throws ResourceNotFoundException if the player is not in {@code game}
      */
     public PrivatePlayerState getPrivatePlayerStateSnapshot(Game game, String playerName) {
-        synchronized (game) {
-            Player player = game.getPlayers().stream()
-                    .filter(p -> p.getName().equals(playerName))
-                    .findFirst()
-                    .orElseThrow(() -> new ResourceNotFoundException("Player not found in game"));
+        requireNonNull(game, "game must not be null");
+        requireNonNull(playerName, "playerName must not be null");
 
-            return buildPrivatePlayerState(player);
+        Player player = game.findPlayerByName(playerName);
+        if (player == null) {
+            throw new ResourceNotFoundException("Player not found in game");
         }
+
+        return buildPrivatePlayerState(game, player);
     }
 
     /**
-     * Broadcasts the current game state to all players in the game.
-     * Each player receives a personalised view showing only their own hole cards.
+     * Broadcasts the public table state to the game topic and each player's private hole cards
+     * to their private queue after save.
      *
-     * @param gameId the unique identifier of the game
-     * @param game   the Game object containing the current state
-     * @throws BadRequestException if the game is null
+     * @param game the active game instance
+     * @throws ResourceNotFoundException if the room for {@code game} does not exist
      */
-    public void broadcastGameState(String gameId, Game game) {
-        if (game == null) {
-            logger.warn("Cannot broadcast game state - game {} not found", gameId);
-            throw new BadRequestException("Trying to broadcast state for a non existent room: " + gameId);
-        }
+    public void broadcastGameState(Game game) {
+        requireNonNull(game, "game must not be null");
+        String gameId = game.getGameId();
 
         logger.debug("Broadcasting game state for game {}", gameId);
 
-        PublicGameStateResponse publicResponse;
-        Map<String, PrivatePlayerState> playerPrivateStates = new HashMap<>();
+        Room room = requireRoom(gameId);
 
-        synchronized (game) {
-            publicResponse = buildPublicGameStateResponse(gameId, game);
-            for (Player player : game.getPlayers()) {
-                playerPrivateStates.put(player.getName(), buildPrivatePlayerState(player));
-            }
+        game.incrementStateRevision();
+        PublicGameStateResponse publicResponse = buildLiveGameState(game, room.getInactivityDeadlineEpochMs());
+        Map<String, PrivatePlayerState> playerPrivateStates = new HashMap<>();
+        for (Player player : game.getPlayers()) {
+            playerPrivateStates.put(player.getName(), buildPrivatePlayerState(game, player));
         }
 
-        sendAfterCommit("/game/" + gameId, publicResponse);
+        sendAfterSave("/game/" + gameId, publicResponse);
 
-        // Sending a personalised game state to each player using secure user destinations
-        playerPrivateStates.forEach((playerName, privateState) -> {
-            // Principal name is playerName:roomId
-            String compositeName = playerName + ":" + gameId;
-            sendToUserAfterCommit(
-                    compositeName,
-                    "/queue/private",
-                    privateState);
-        });
+        playerPrivateStates.forEach((playerName, privateState) ->
+                sendToPlayerAfterSave(gameId, playerName, privateState));
     }
 
     /**
-     * Broadcasts showdown results with winner information to all players.
-     * Reveals hole cards, hand ranks, and best hands for winning players only.
+     * Broadcasts settled hand showdown results to all players after save, revealing winning hand
+     * ranks, awards, and hole cards for actual showdowns while clearing current-turn pointers.
      *
-     * @param gameId            the unique identifier of the game
-     * @param game              the Game object containing the current state
-     * @param winners           the list of Player objects who won the hand
-     * @param winningsPerPlayer the number of chips each winner receives
+     * @param game the settled game instance containing showdown results
+     * @throws IllegalStateException if the current hand has not been settled yet
      */
-    public void broadcastShowdownResults(String gameId, Game game, List<Player> winners, int winningsPerPlayer) {
-        if (game == null) {
-            logger.warn("Cannot broadcast showdown - game {} not found", gameId);
-            return;
+    public void broadcastShowdownResults(Game game) {
+        requireNonNull(game, "game must not be null");
+        String gameId = game.getGameId();
+
+        HandPayout payout = game.getLastHandPayout();
+        if (payout == null) {
+            throw new IllegalStateException("Cannot broadcast showdown results for unsettled game " + gameId);
         }
 
-        PublicGameStateResponse showdownResponse;
-        List<String> winnerNames;
+        game.incrementStateRevision();
 
-        synchronized (game) {
-            // Get room information
-            Room room = roomService.getRoom(gameId);
-            int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+        // The showdown view sets no current player, so clients do not briefly show Fold/Check
+        // controls before the next hand or game-end update arrives.
+        Set<String> winnerIds = payout.winnerIds();
+        Map<String, Integer> potWinnings = payout.potWinnings();
 
-            // Showdown means no one is waiting to act - reporting a stale "current
-            // player" pointer here previously made the client briefly think it was
-            // someone's turn (showing Fold/Check) between the showdown broadcast and
-            // the later GAME_END/next-hand broadcast, so these are intentionally null.
-            String currentPlayerName = null;
-            String currentPlayerId = null;
+        List<Player> winningPlayers = game.getPlayers().stream()
+                .filter(player -> winnerIds.contains(player.getPlayerId()))
+                .toList();
+        List<String> winnerNames = winningPlayers.stream().map(Player::getName).toList();
+        Integer equalWinnerAward = computeEqualWinnerAward(winnerIds, potWinnings);
 
-            // Get winner names
-            winnerNames = winners.stream().map(Player::getName).toList();
+        boolean isActualShowdown = game.wasContestedShowdown();
+        String smallBlindPlayerId = game.getSmallBlindPlayerId();
+        String bigBlindPlayerId = game.getBigBlindPlayerId();
+        String dealerPlayerId = game.getDealerPlayerId();
 
-            // Check if this is an actual showdown (i.e. not a win by fold)
-            boolean isActualShowdown = winners.stream()
-                    .anyMatch(w -> w.getHandRank() != null && w.getHandRank() != com.pokergame.enums.HandRank.NO_HAND);
-            String smallBlindPlayerId = game.getSmallBlindPlayerId();
-            String bigBlindPlayerId = game.getBigBlindPlayerId();
+        List<PublicGameStateResponse.PlayerState> playersList = game.getPlayers().stream().map(player -> {
+            boolean isWinner = winnerIds.contains(player.getPlayerId());
+            boolean isActive = player.isInHand();
+            return toPublicPlayerState(
+                    player,
+                    false,
+                    smallBlindPlayerId,
+                    bigBlindPlayerId,
+                    dealerPlayerId,
+                    isActive ? player.getHandRank() : null,
+                    isActive ? player.getBestHand() : List.of(),
+                    isWinner,
+                    potWinnings.getOrDefault(player.getPlayerId(), 0),
+                    (isActive && isActualShowdown) ? player.getHoleCards() : null);
+        }).toList();
 
-            // Convert players to PublicPlayerState DTOs with showdown information
-            List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
-                boolean isWinner = winners.contains(player);
-                boolean isActive = !player.getHasFolded() && !player.getIsOut();
-                String status = resolvePlayerStatus(player);
-                return new PublicPlayerState(
-                        player.getPlayerId(),
-                        player.getName(),
-                        player.getChips(),
-                        player.getCurrentBet(),
-                        status,
-                        player.getIsAllIn(),
-                        false, // isCurrentPlayer not relevant during showdown
-                        player.getHasFolded(),
-                        player.getPlayerId().equals(smallBlindPlayerId),
-                        player.getPlayerId().equals(bigBlindPlayerId),
-                        isActive ? player.getHandRank() : null,
-                        isActive ? player.getBestHand() : List.of(),
-                        isWinner,
-                        isWinner ? winningsPerPlayer : 0,
-                        (isActive && isActualShowdown) ? player.getHoleCards() : null,
-                        player.getDisconnectDeadlineEpochMs(),
-                        player.getIsReadyForNextHand());
-            }).toList();
+        PublicGameStateResponse showdownResponse = PublicGameStateBuilder.forGame(game, clock.millis())
+                .players(playersList)
+                .winners(winnerNames)
+                .winningsPerPlayer(equalWinnerAward)
+                .readyCountdown(game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs())
+                .handSettled(true)
+                .carryOverAmount(payout.remainder())
+                .build();
 
-            // Create PublicGameStateResponse DTO with showdown information
-            showdownResponse = new PublicGameStateResponse(
-                    maxPlayers,
-                    game.getPot(),
-                    game.getPotBreakdown(),
-                    game.getUncalledAmount(),
-                    game.getCurrentPhase(),
-                    game.getCurrentHighestBet(),
-                    game.getCommunityCards(),
-                    playersList,
-                    currentPlayerName,
-                    currentPlayerId,
-                    winnerNames,
-                    winningsPerPlayer,
-                    null,
-                    null,
-                    game.isReadyCountdownActive(),
-                    game.getReadyCountdownDeadlineEpochMs(),
-                    null,
-                    null);
-        }
-
-        // Broadcast showdown results to all players
-        sendAfterCommit("/game/" + gameId, showdownResponse);
+        sendAfterSave("/game/" + gameId, showdownResponse);
 
         logger.info("Broadcasted showdown results for game {} with {} winner(s): {}",
                 gameId, winnerNames.size(), winnerNames);
-        logger.debug("Showdown game state - winners: {}, winnerCount: {}, winnings per player: {}",
-                winnerNames, winnerNames.size(), winningsPerPlayer);
+        logger.debug("Showdown game state - winners: {}, winnerCount: {}, equalWinnerAward: {}",
+                winnerNames, winnerNames.size(), equalWinnerAward);
     }
 
     /**
-     * Broadcasts game state with auto-advance information when all players are
-     * all-in.
-     * Includes special flags and messages to notify clients of automatic
-     * progression.
+     * Broadcasts public game state flagged for all-in auto-advance with a status message.
      *
-     * @param gameId  the unique identifier of the game
-     * @param game    the Game object containing the current state
-     * @param message the message to display to players about auto-advance
-     *                status
+     * @param game    the active game instance
+     * @param message the status banner message to display while auto-advancing
      */
-    public void broadcastGameStateWithAutoAdvance(String gameId, Game game, String message) {
-        if (game == null) {
-            logger.warn("Cannot broadcast auto-advance state - game {} not found", gameId);
-            return;
-        }
+    public void broadcastGameStateWithAutoAdvance(Game game, String message) {
+        requireNonNull(game, "game must not be null");
+        String gameId = game.getGameId();
 
-        PublicGameStateResponse autoAdvanceResponse;
+        game.incrementStateRevision();
 
-        synchronized (game) {
-            // Get room information
-            Room room = roomService.getRoom(gameId);
-            int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+        String smallBlindPlayerId = game.getSmallBlindPlayerId();
+        String bigBlindPlayerId = game.getBigBlindPlayerId();
+        String dealerPlayerId = game.getDealerPlayerId();
 
-            // Get current player information
-            Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
-            if (currentPlayer != null) {
-                logger.debug("Auto-advance - current player: {} (ID: {})", currentPlayer.getName(),
-                        currentPlayer.getPlayerId());
-            } else {
-                logger.debug("Auto-advance - no active players found");
-            }
-            String currentPlayerName = currentPlayer != null ? currentPlayer.getName() : null;
-            String currentPlayerId = currentPlayer != null ? currentPlayer.getPlayerId() : null;
-            String smallBlindPlayerId = game.getSmallBlindPlayerId();
-            String bigBlindPlayerId = game.getBigBlindPlayerId();
-
-            // Convert players to PlayerState DTOs
-            List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
-                String status = resolvePlayerStatus(player);
-                boolean isCurrentPlayer = player.equals(currentPlayer);
-                return new PublicPlayerState(
-                        player.getPlayerId(),
-                        player.getName(),
-                        player.getChips(),
-                        player.getCurrentBet(),
-                        status,
-                        player.getIsAllIn(),
-                        isCurrentPlayer,
-                        player.getHasFolded(),
-                        player.getPlayerId().equals(smallBlindPlayerId),
-                        player.getPlayerId().equals(bigBlindPlayerId),
+        List<PublicGameStateResponse.PlayerState> playersList = game.getPlayers().stream()
+                .map(player -> toPublicPlayerState(
+                        player,
+                        false,
+                        smallBlindPlayerId,
+                        bigBlindPlayerId,
+                        dealerPlayerId,
                         player.getHandRank(),
                         List.of(),
                         null,
                         null,
-                        null,
-                        player.getDisconnectDeadlineEpochMs(),
-                        player.getIsReadyForNextHand());
-            }).toList();
+                        null))
+                .toList();
 
-            // Create PublicGameStateResponse DTO with auto-advance fields
-            autoAdvanceResponse = new PublicGameStateResponse(
-                    maxPlayers,
-                    game.getPot(),
-                    game.getPotBreakdown(),
-                    game.getUncalledAmount(),
-                    game.getCurrentPhase(),
-                    game.getCurrentHighestBet(),
-                    game.getCommunityCards(),
-                    playersList,
-                    currentPlayerName,
-                    currentPlayerId,
-                    null, // winners
-                    null, // winningsPerPlayer
-                    true,
-                    message,
-                    game.isReadyCountdownActive(),
-                    game.getReadyCountdownDeadlineEpochMs(),
-                    null,
-                    null);
-        }
+        PublicGameStateResponse autoAdvanceResponse = PublicGameStateBuilder.forGame(game, clock.millis())
+                .players(playersList)
+                .autoAdvance(true, message)
+                .readyCountdown(game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs())
+                .legalActions(List.of())
+                .build();
 
         logger.info("Broadcasting auto-advance state for game {}: {}", gameId, message);
-        sendAfterCommit("/game/" + gameId, autoAdvanceResponse);
+        sendAfterSave("/game/" + gameId, autoAdvanceResponse);
     }
 
     /**
-     * Broadcasts a notification that auto-advance to showdown is starting.
-     * Sent when no further betting actions are possible.
+     * Broadcasts an immediate notice that all-in auto-advance to showdown has begun.
      *
-     * @param gameId the unique identifier of the game
-     * @param game   the Game object containing the current state
+     * @param game the active game instance
      */
-    public void broadcastAutoAdvanceNotification(String gameId, Game game) {
-        if (game == null) {
-            logger.warn("Cannot broadcast auto-advance notification - game {} not found", gameId);
-            return;
+    public void broadcastAutoAdvanceNotification(Game game) {
+        requireNonNull(game, "game must not be null");
+
+        logger.info("Broadcasting immediate auto-advance state for game {}", game.getGameId());
+        broadcastGameStateWithAutoAdvance(game,
+                "No further betting actions are possible. Auto-advancing to showdown...");
+    }
+
+    /**
+     * Sends a private notification to the specified player's active WebSocket session after save.
+     *
+     * @param gameId     the unique ID of the game
+     * @param playerName the recipient player's name
+     * @param message    the notification message text
+     */
+    public void sendPrivatePlayerNotification(String gameId, String playerName, String message) {
+        sendToPlayerAfterSave(gameId, playerName, PlayerFeedbackResponse.notice(message));
+    }
+
+    /**
+     * Sends a private notification directly to the authenticated session in {@code origin},
+     * even if the display name has been claimed by a different session later.
+     *
+     * @param origin  the principal bound to the originating WebSocket session
+     * @param message the notification message text
+     */
+    public void sendPrivatePlayerNotification(PlayerPrincipal origin, String message) {
+        sendToPrincipalAfterSave(origin, PlayerFeedbackResponse.notice(message));
+    }
+
+    /**
+     * Sends a private action-error response for a rejected gameplay or readiness action.
+     *
+     * @param origin  the principal bound to the originating WebSocket session
+     * @param code    application error code
+     * @param action  the rejected action descriptor
+     * @param message explanation shown to the player
+     */
+    public void sendActionError(PlayerPrincipal origin, String code, RejectedAction action, String message) {
+        sendToPrincipalAfterSave(origin, PlayerFeedbackResponse.actionError(code, action, message));
+    }
+
+    /**
+     * Increments the game's state revision and builds the final game-end snapshot for a won game.
+     *
+     * @param game      the completed game instance
+     * @param winner    the winning player
+     * @param isForfeit {@code true} if the game ended by forfeit
+     * @return the completed {@link PublicGameStateResponse} with {@code gameEnd} populated
+     */
+    public PublicGameStateResponse advanceRevisionAndBuildGameEnd(Game game, Player winner, boolean isForfeit) {
+        requireNonNull(game, "game must not be null");
+        requireNonNull(winner, "winner must not be null");
+        game.incrementStateRevision();
+        return buildGameEndResponse(game, winner, isForfeit);
+    }
+
+    /**
+     * Increments the game's state revision and builds the final game-end snapshot for a game won because the
+     * other players forfeited, recording why and who forfeited so clients can explain the result.
+     *
+     * @param game             the completed game instance
+     * @param winner           the winning player
+     * @param reason           why the other players forfeited
+     * @param forfeitedPlayers names of the players who forfeited, in seat order
+     * @return the completed {@link PublicGameStateResponse} with {@code gameEnd} populated
+     */
+    public PublicGameStateResponse advanceRevisionAndBuildForfeitEnd(
+            Game game, Player winner, ForfeitReason reason, List<String> forfeitedPlayers) {
+        requireNonNull(game, "game must not be null");
+        requireNonNull(winner, "winner must not be null");
+        requireNonNull(reason, "reason must not be null");
+        requireNonNull(forfeitedPlayers, "forfeitedPlayers must not be null");
+        game.incrementStateRevision();
+        PublicGameStateResponse.GameEnd gameEnd = PublicGameStateResponse.GameEnd.wonByForfeit(
+                winner.getName(), winner.getChips(), reason, forfeitedPlayers, winnerMessage(winner));
+        return buildCompletedGameState(game, winner, gameEnd);
+    }
+
+    /**
+     * Increments the game's state revision and builds the final snapshot for a game closed due
+     * to inactivity.
+     *
+     * @param game the abandoned game instance
+     * @return the abandoned {@link PublicGameStateResponse} with {@code gameEnd} populated
+     */
+    public PublicGameStateResponse advanceRevisionAndBuildAbandonment(Game game) {
+        requireNonNull(game, "game must not be null");
+        game.incrementStateRevision();
+        return buildAbandonmentResponse(game);
+    }
+
+    /**
+     * Builds a read-only final game-end snapshot without mutating {@code game}'s state revision.
+     *
+     * @param game      the completed game instance
+     * @param winner    the winning player
+     * @param isForfeit {@code true} if the game ended by forfeit
+     * @return the completed {@link PublicGameStateResponse} with {@code gameEnd} populated
+     */
+    public PublicGameStateResponse buildGameEndResponse(Game game, Player winner, boolean isForfeit) {
+        requireNonNull(game, "game must not be null");
+        requireNonNull(winner, "winner must not be null");
+        PublicGameStateResponse.GameEnd gameEnd = PublicGameStateResponse.GameEnd.won(
+                winner.getName(), winner.getChips(), isForfeit, winnerMessage(winner));
+        return buildCompletedGameState(game, winner, gameEnd);
+    }
+
+    /**
+     * Builds a read-only inactivity abandonment snapshot without mutating {@code game}'s state revision.
+     *
+     * @param game the abandoned game instance
+     * @return the abandoned {@link PublicGameStateResponse} with {@code gameEnd} populated
+     */
+    public PublicGameStateResponse buildAbandonmentResponse(Game game) {
+        requireNonNull(game, "game must not be null");
+        PublicGameStateResponse.GameEnd gameEnd = PublicGameStateResponse.GameEnd.abandoned(
+                "INACTIVITY", "Game abandoned due to inactivity.");
+        return buildAbandonedGameState(game, gameEnd);
+    }
+
+    /**
+     * Sends a completed {@link PublicGameStateResponse} to the game topic after save.
+     *
+     * @param gameId   the unique ID of the game
+     * @param response the completed game-end snapshot, ignored if {@code null}
+     */
+    public void sendGameEnd(String gameId, PublicGameStateResponse response) {
+        requireNonNull(gameId, "gameId must not be null");
+        if (response != null) {
+            sendAfterSave("/game/" + gameId, response);
         }
-
-        logger.info(
-                "Broadcasting auto-advance notification for game {}: No further betting actions are possible, advancing to showdown",
-                gameId);
-
-        sendAfterCommit("/game/" + gameId,
-                new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_START,
-                        "No further betting actions are possible. Auto-advancing to showdown...", null, gameId));
     }
 
-    /**
-     * Broadcasts a notification that auto-advance has completed.
-     * Sent after all community cards have been dealt and showdown is ready.
-     *
-     * @param gameId the unique identifier of the game
-     * @param game   the Game object containing the current state
-     */
-    public void broadcastAutoAdvanceComplete(String gameId, Game game) {
-        if (game == null) {
-            logger.warn("Cannot broadcast auto-advance complete - game {} not found", gameId);
-            return;
-        }
+    private PublicGameStateResponse buildAbandonedGameState(Game game, PublicGameStateResponse.GameEnd gameEnd) {
+        String smallBlindPlayerId = game.getSmallBlindPlayerId();
+        String bigBlindPlayerId = game.getBigBlindPlayerId();
+        String dealerPlayerId = game.getDealerPlayerId();
 
-        logger.info("Broadcasting auto-advance complete for game {}: {}", gameId, game.getCommunityCards());
-        sendAfterCommit("/game/" + gameId,
-                new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_COMPLETE, "", null, gameId));
+        List<PublicGameStateResponse.PlayerState> playerStates = game.getPlayers().stream()
+                .map(player -> toPublicPlayerState(
+                        player,
+                        false,
+                        smallBlindPlayerId,
+                        bigBlindPlayerId,
+                        dealerPlayerId,
+                        null,
+                        List.of(),
+                        false,
+                        null,
+                        null))
+                .toList();
+
+        return PublicGameStateBuilder.forGame(game, clock.millis())
+                .players(playerStates)
+                .winners(List.of())
+                .autoAdvance(false, null)
+                .readyCountdown(false, null)
+                .claimWin(false, null)
+                .handSettled(game.isHandSettled())
+                .legalActions(List.of())
+                .readyGateState(ReadyGateState.CLOSED)
+                .gameEnd(gameEnd)
+                .build();
     }
 
-    /**
-     * Sends a notification message to a specific player.
-     * Used for action conversions and other player-specific alerts.
-     *
-     * @param gameId     the unique identifier of the game
-     * @param playerName the name of the player to notify
-     * @param message    the notification message content
-     */
-    public void sendPlayerNotification(String gameId, String playerName, String message) {
-        PlayerNotificationResponse notification = new PlayerNotificationResponse(
-                ResponseMessage.PLAYER_NOTIFICATION,
-                message,
-                playerName,
-                gameId);
-
-        sendAfterCommit("/game/" + gameId, notification);
+    private static String winnerMessage(Player winner) {
+        return winner.getName() + " wins the game with " + winner.getChips() + " chips!";
     }
 
-    /**
-     * Sends a private notification message to a specific player's private channel.
-     * Used for action errors or private-only feedback.
-     *
-     * @param gameId     the unique identifier of the game
-     * @param playerName the name of the player to notify
-     * @param message    the notification message content
-     * @param type       the type of notification (e.g. "ACTION_ERROR")
-     */
-    public void sendPrivatePlayerNotification(String gameId, String playerName, String message, ResponseMessage type) {
-        PlayerNotificationResponse notification = new PlayerNotificationResponse(
-                type,
-                message,
-                playerName,
-                gameId);
-
-        // Principal name is playerName:roomId
-        String compositeName = playerName + ":" + gameId;
-        
-        sendToUserAfterCommit(
-                compositeName,
-                "/queue/private",
-                notification);
-    }
-
-    /** Publishes a rejected action to its player's private WebSocket queue. */
-    public void sendActionError(String gameId, String playerName, String code, PlayerAction action, String message) {
-        sendToUserAfterCommit(playerName + ":" + gameId, "/queue/private",
-                new ActionErrorResponse(code, action, message));
-    }
-
-    /**
-     * Broadcasts a game end message when a winner is determined.
-     * Sent when only one player remains with chips. Carries a complete, revealed
-     * final-state snapshot so the client can freeze it for the post-game review
-     * screen, independent of subsequent server cleanup.
-     *
-     * @param gameId    the unique identifier of the game
-     * @param game      the Game object containing the final state
-     * @param winner    the Player object representing the game winner
-     * @param isForfeit true if the game ended due to a player leaving/disconnecting
-     */
-    public void broadcastGameEnd(String gameId, Game game, Player winner, boolean isForfeit) {
-        if (winner == null) {
-            logger.warn("Cannot broadcast game end for {} - winner is null", gameId);
-            return;
-        }
-
-        String message = "🏆 " + winner.getName() + " wins the game with " + winner.getChips() + " chips!";
-        PublicGameStateResponse finalState = null;
-
-        if (game != null) {
-            synchronized (game) {
-                finalState = buildFinalStateResponse(gameId, game, winner, !isForfeit);
-            }
-        }
-
-        GameEndResponse gameEndResponse = new GameEndResponse(
-                ResponseMessage.GAME_END.getMessage(),
-                gameId,
-                winner.getName(),
-                winner.getChips(),
-                isForfeit,
-                message,
-                finalState);
-
-        sendAfterCommit("/game/" + gameId, gameEndResponse);
-
-        logger.info("Game {} completed - Winner: {} with {} chips",
-                gameId, winner.getName(), winner.getChips());
-    }
-
-    /**
-     * Builds a revealed final-state projection for the game-end review screen. Unlike
-     * the live-game projection, this reveals hole cards, hand ranks, and best hands
-     * for all non-folded, non-out players when {@code revealHoleCards} is true, and
-     * marks the winner explicitly.
-     *
-     * @param gameId          the unique identifier of the game
-     * @param game            the Game object containing the final state
-     * @param winner          the winning player, or null if undetermined
-     * @param revealHoleCards true to reveal hole cards (showdown path); false to
-     *                        withhold them (forfeit path)
-     * @return a {@link PublicGameStateResponse} representing the frozen final state
-     */
-    private PublicGameStateResponse buildFinalStateResponse(String gameId, Game game, Player winner,
-            boolean revealHoleCards) {
-        Room room = roomService.getRoom(gameId);
-        int maxPlayers = room != null ? room.getMaxPlayers() : 0;
+    private PublicGameStateResponse buildCompletedGameState(
+            Game game, Player winner, PublicGameStateResponse.GameEnd gameEnd) {
+        boolean handSettled = game.isHandSettled();
+        boolean revealHoleCards = game.wasContestedShowdown();
 
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
+        String dealerPlayerId = game.getDealerPlayerId();
 
-        List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
-            boolean isWinner = winner != null && winner.equals(player);
-            boolean isActive = !player.getHasFolded() && !player.getIsOut();
-            String status = resolvePlayerStatus(player);
-            return new PublicPlayerState(
-                    player.getPlayerId(),
-                    player.getName(),
-                    player.getChips(),
-                    player.getCurrentBet(),
-                    status,
-                    player.getIsAllIn(),
+        List<PublicGameStateResponse.PlayerState> playerStates = game.getPlayers().stream().map(player -> {
+            boolean isWinner = winner.equals(player);
+            boolean isActive = player.isInHand();
+            return toPublicPlayerState(
+                    player,
                     false,
-                    player.getHasFolded(),
-                    player.getPlayerId().equals(smallBlindPlayerId),
-                    player.getPlayerId().equals(bigBlindPlayerId),
+                    smallBlindPlayerId,
+                    bigBlindPlayerId,
+                    dealerPlayerId,
                     isActive ? player.getHandRank() : null,
                     isActive ? player.getBestHand() : List.of(),
                     isWinner,
                     null,
-                    (revealHoleCards && isActive) ? player.getHoleCards() : null,
-                    player.getDisconnectDeadlineEpochMs(),
-                    player.getIsReadyForNextHand());
+                    (revealHoleCards && isActive) ? player.getHoleCards() : null);
         }).toList();
 
-        List<String> winnerNames = winner != null ? List.of(winner.getName()) : List.of();
+        List<String> winnerNames = List.of(winner.getName());
 
-        return new PublicGameStateResponse(
-                maxPlayers,
-                game.getPot(),
-                game.getPotBreakdown(),
-                game.getUncalledAmount(),
-                game.getCurrentPhase(),
-                game.getCurrentHighestBet(),
-                game.getCommunityCards(),
-                playersList,
-                null,
-                null,
-                winnerNames,
-                winner != null ? winner.getChips() : null,
-                false,
-                null,
-                game.isReadyCountdownActive(),
-                game.getReadyCountdownDeadlineEpochMs(),
-                null,
-                null);
+        return PublicGameStateBuilder.forGame(game, clock.millis())
+                .players(playerStates)
+                .winners(winnerNames)
+                .autoAdvance(false, null)
+                .readyCountdown(false, null)
+                .claimWin(false, null)
+                .handSettled(handSettled)
+                .legalActions(List.of())
+                .readyGateState(ReadyGateState.CLOSED)
+                .gameEnd(gameEnd)
+                .build();
     }
 
-    /**
-     * Builds a PublicGameStateResponse object to be shown to all players in a game.
-     *
-     * @param gameId the unique identifier of the game
-     * @param game   the Game object containing the current state
-     * @return a {@link PublicGameStateResponse}
-     * 
-     * @throws ResourceNotFoundException if the room is not found
-     */
-    private PublicGameStateResponse buildPublicGameStateResponse(String gameId, Game game) {
+    private Room requireRoom(String gameId) {
         Room room = roomService.getRoom(gameId);
         if (room == null) {
             logger.warn("Game state build failed: room not found for gameId {}", gameId);
             throw new ResourceNotFoundException("Room not found");
         }
-        List<PublicPlayerState> playerStateList = new ArrayList<>();
-        Player currentPlayer = game.getActivePlayers().isEmpty() ? null : game.getCurrentPlayer();
+        return room;
+    }
+
+    private PublicGameStateResponse buildLiveGameState(Game game, Long inactivityDeadlineEpochMs) {
+        boolean autoAdvancing = game.isAutoAdvancing();
+        HandPayout lastPayout = game.getLastHandPayout();
+        boolean inShowdownOrCountdown = game.getCurrentPhase() == GamePhase.SHOWDOWN || game.isReadyCountdownActive();
+        boolean handSettled = game.isHandSettled();
+        Set<String> settledWinnerIds = handSettled ? lastPayout.winnerIds() : Set.of();
+        Map<String, Integer> settledAwards = handSettled ? lastPayout.potWinnings() : Map.of();
+        boolean revealHoleCards = game.wasContestedShowdown();
+
+        Player currentPlayer = !inShowdownOrCountdown && !autoAdvancing && !handSettled && !game.getActivePlayers().isEmpty()
+                ? game.getCurrentPlayer()
+                : null;
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
+        String dealerPlayerId = game.getDealerPlayerId();
         if (currentPlayer != null) {
-            logger.debug("Building game state - current player: {} (ID: {})", currentPlayer.getName(),
-                    currentPlayer.getPlayerId());
+            logger.debug("Building game state - current player: {} (ID: {})",
+                    currentPlayer.getName(), currentPlayer.getPlayerId());
         } else {
             logger.debug("Building game state - no active players found");
         }
+
+        List<PublicGameStateResponse.PlayerState> playerStates = new ArrayList<>();
         for (Player player : game.getPlayers()) {
-            String status = resolvePlayerStatus(player);
-            playerStateList.add(new PublicPlayerState(
-                    player.getPlayerId(),
-                    player.getName(),
-                    player.getChips(),
-                    player.getCurrentBet(),
-                    status,
-                    player.getIsAllIn(),
+            boolean isActive = player.isInHand();
+            Boolean isWinner = handSettled ? settledWinnerIds.contains(player.getPlayerId()) : null;
+            Integer chipsWon = handSettled
+                    ? settledAwards.getOrDefault(player.getPlayerId(), 0)
+                    : null;
+            playerStates.add(toPublicPlayerState(
+                    player,
                     player.equals(currentPlayer),
-                    player.getHasFolded(),
-                    player.getPlayerId().equals(smallBlindPlayerId),
-                    player.getPlayerId().equals(bigBlindPlayerId),
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    player.getDisconnectDeadlineEpochMs(),
-                    player.getIsReadyForNextHand()));
+                    smallBlindPlayerId,
+                    bigBlindPlayerId,
+                    dealerPlayerId,
+                    handSettled && !settledWinnerIds.isEmpty() && isActive ? player.getHandRank() : null,
+                    handSettled && !settledWinnerIds.isEmpty() && isActive ? player.getBestHand() : null,
+                    isWinner,
+                    chipsWon,
+                    revealHoleCards && isActive ? player.getHoleCards() : null));
         }
 
         String claimWinPlayerName = computeClaimWinPlayerName(game);
         boolean claimWinAvailable = claimWinPlayerName != null;
+        List<String> winnerNames = handSettled
+                ? game.getPlayers().stream()
+                        .filter(player -> settledWinnerIds.contains(player.getPlayerId()))
+                        .map(Player::getName)
+                        .toList()
+                : null;
+        Integer winningsPerPlayer = handSettled
+                ? computeEqualWinnerAward(settledWinnerIds, settledAwards)
+                : null;
 
-        return new PublicGameStateResponse(
-                room.getMaxPlayers(),
-                game.getPot(),
-                game.getPotBreakdown(),
-                game.getUncalledAmount(),
-                game.getCurrentPhase(),
-                game.getCurrentHighestBet(),
-                game.getCommunityCards(),
-                playerStateList,
-                currentPlayer != null ? currentPlayer.getName() : null,
-                currentPlayer != null ? currentPlayer.getPlayerId() : null,
-                null,
-                null,
-                null,
-                null,
-                game.isReadyCountdownActive(),
-                game.getReadyCountdownDeadlineEpochMs(),
-                claimWinAvailable,
-                claimWinPlayerName);
-
+        return PublicGameStateBuilder.forGame(game, clock.millis())
+                .players(playerStates)
+                .currentPlayer(
+                        currentPlayer != null ? currentPlayer.getName() : null,
+                        currentPlayer != null ? currentPlayer.getPlayerId() : null)
+                .winners(winnerNames)
+                .winningsPerPlayer(winningsPerPlayer)
+                .autoAdvance(autoAdvancing, autoAdvancing ? AUTO_ADVANCE_MESSAGE : null)
+                .readyCountdown(game.isReadyCountdownActive(), game.getReadyCountdownDeadlineEpochMs())
+                .claimWin(claimWinAvailable, claimWinPlayerName)
+                .handSettled(handSettled)
+                .carryOverAmount(handSettled ? lastPayout.remainder() : null)
+                .legalActions(currentPlayer == null ? List.of() : game.getLegalActionsFor(currentPlayer))
+                .minimumBetAmount(currentPlayer == null ? null : game.getBigBlind())
+                .minimumRaiseAmount(currentPlayer == null ? null : game.getMinimumRaiseAmount(currentPlayer))
+                .turnDeadlineEpochMs(
+                        currentPlayer == null ? null : game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT))
+                .inactivityDeadlineEpochMs(inactivityDeadlineEpochMs)
+                .build();
     }
 
-    /**
-     * Applies a single precedence order to overlapping player flags so clients receive
-     * one unambiguous render state.
-     *
-     * @param player player whose status is projected
-     * @return client-visible status value
-     */
+    private Integer computeEqualWinnerAward(Set<String> winnerIds, Map<String, Integer> potWinnings) {
+        if (winnerIds == null || winnerIds.isEmpty()) {
+            return null;
+        }
+        List<Integer> awards = winnerIds.stream()
+                .map(id -> potWinnings.getOrDefault(id, 0))
+                .toList();
+        return awards.stream().distinct().count() == 1 ? awards.getFirst() : null;
+    }
+
+    private PublicGameStateResponse.PlayerState toPublicPlayerState(
+            Player player,
+            boolean isCurrentPlayer,
+            String smallBlindPlayerId,
+            String bigBlindPlayerId,
+            String dealerPlayerId,
+            HandRank handRank,
+            List<Card> bestHand,
+            Boolean isWinner,
+            Integer chipsWon,
+            List<Card> holeCards) {
+        return new PublicGameStateResponse.PlayerState(
+                player.getPlayerId(),
+                player.getName(),
+                player.getChips(),
+                player.getCurrentBet(),
+                resolvePlayerStatus(player),
+                player.isAllIn(),
+                isCurrentPlayer,
+                player.hasFolded(),
+                player.getPlayerId().equals(smallBlindPlayerId),
+                player.getPlayerId().equals(bigBlindPlayerId),
+                player.getPlayerId().equals(dealerPlayerId),
+                handRank,
+                bestHand,
+                isWinner,
+                chipsWon,
+                holeCards,
+                player.getDisconnectDeadlineEpochMs(),
+                player.isReadyForNextHand());
+    }
+
     private String resolvePlayerStatus(Player player) {
-        if (player.getIsOut()) {
+        if (player.isOut()) {
             return PlayerStatus.OUT.getStatus();
         }
-        if (player.getIsDisconnected()) {
-            return PlayerStatus.DISCONNECTED.getStatus();
-        }
-        if (player.getHasFolded()) {
+        if (player.hasFolded()) {
             return PlayerStatus.FOLDED.getStatus();
         }
-        if (player.getIsAllIn()) {
+        if (player.isDisconnected()) {
+            return PlayerStatus.DISCONNECTED.getStatus();
+        }
+        if (player.isAllIn()) {
             return PlayerStatus.ALL_IN.getStatus();
         }
         return PlayerStatus.ACTIVE.getStatus();
     }
 
-    /**
-     * Projects claim availability only when exactly one eligible player is connected
-     * and at least one opponent is disconnected.
-     *
-     * @param game game whose claim affordance is projected
-     * @return eligible claimant name, or {@code null} when no claim is legal
-     */
     private String computeClaimWinPlayerName(Game game) {
-        List<Player> eligiblePlayers = game.getPlayers().stream()
-                .filter(player -> !player.getIsOut())
-                .toList();
+        return game.findClaimWinPlayer()
+                .map(Player::getName)
+                .orElse(null);
+    }
 
-        if (eligiblePlayers.size() < 2) {
-            return null;
+    private PrivatePlayerState buildPrivatePlayerState(Game game, Player player) {
+        List<Card> holeCards = player.getHoleCards() == null
+                ? List.of()
+                : new ArrayList<>(player.getHoleCards());
+        return new PrivatePlayerState(player.getPlayerId(), game.getHandNumber(), holeCards);
+    }
+
+    private void sendAfterSave(String destination, Object payload) {
+        PostSaveActions.runAfterSave(() -> messagingTemplate.convertAndSend(destination, payload));
+    }
+
+    private void sendToPlayerAfterSave(String gameId, String playerName, Object payload) {
+        Room room = roomService.getRoom(gameId);
+        if (room == null) {
+            return;
         }
+        // Capture membership ID before queuing so a replacement player with the same name never receives it.
+        // A missing or blank membership ID is dropped by sendToPrincipalAfterSave.
+        String membershipId = room.getMembershipId(playerName);
+        sendToPrincipalAfterSave(new PlayerPrincipal(playerName, gameId, membershipId), payload);
+    }
 
-        List<Player> connectedPlayers = eligiblePlayers.stream()
-                .filter(player -> !player.getIsDisconnected())
-                .toList();
-
-        boolean anyDisconnected = eligiblePlayers.stream().anyMatch(Player::getIsDisconnected);
-
-        if (!anyDisconnected || connectedPlayers.size() != 1) {
-            return null;
+    private void sendToPrincipalAfterSave(PlayerPrincipal origin, Object payload) {
+        if (origin.membershipId() == null || origin.membershipId().isBlank()) {
+            return;
         }
-
-        return connectedPlayers.getFirst().getName();
+        String user = origin.getName();
+        PostSaveActions.runAfterSave(() -> messagingTemplate.convertAndSendToUser(user, PRIVATE_QUEUE, payload));
     }
-
-    /**
-     * Builds a PrivatePlayerState object to show to specific players.
-     *
-     * @param player object
-     * @return a {@link PrivatePlayerState}
-     */
-    private PrivatePlayerState buildPrivatePlayerState(Player player) {
-        return new PrivatePlayerState(
-                player.getPlayerId(),
-                player.getHoleCards());
-
-    }
-
-    /**
-     * Defers shared game-state visibility until recovery can reproduce the same
-     * snapshot after a crash.
-     *
-     * @param destination shared STOMP destination
-     * @param payload     committed public payload
-     */
-    private void sendAfterCommit(String destination, Object payload) {
-        DurableTransactionContext.afterCommit(() -> messagingTemplate.convertAndSend(destination, payload));
-    }
-
-    /**
-     * Applies the same commit barrier to private player data so a player never sees
-     * hole cards or action results that exist only in memory.
-     *
-     * @param user        composite WebSocket principal name
-     * @param destination private user destination
-     * @param payload     committed private payload
-     */
-    private void sendToUserAfterCommit(String user, String destination, Object payload) {
-        DurableTransactionContext.afterCommit(
-                () -> messagingTemplate.convertAndSendToUser(user, destination, payload));
-    }
-
 }
