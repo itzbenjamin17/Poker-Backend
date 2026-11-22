@@ -298,6 +298,19 @@ class RoomTest {
     }
 
     /**
+     * Name matching for join ignores case, while the exact identity check does not.
+     */
+    @Test
+    void testHasPlayerNameIgnoringCase() {
+        room.addPlayer("Alice");
+
+        assertTrue(room.hasPlayerNameIgnoringCase("alice"));
+        assertTrue(room.hasPlayerNameIgnoringCase("ALICE"));
+        assertFalse(room.hasPlayerNameIgnoringCase("Alicia"));
+        assertFalse(room.hasPlayer("alice"));
+    }
+
+    /**
      * Protects the expected behavior for remove player.
      */
     @Test

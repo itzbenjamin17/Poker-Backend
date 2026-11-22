@@ -206,6 +206,18 @@ public class Room {
         return players.contains(playerName);
     }
 
+    /**
+     * Checks whether a player in this room has the given name, ignoring case. Used at join
+     * so names such as "Alice" and "alice" cannot share a table (room names are already
+     * case-insensitive); identity checks keep using the exact {@link #hasPlayer(String)}.
+     *
+     * @param playerName sanitized player name to look for
+     * @return {@code true} if a player's name matches ignoring case
+     */
+    public boolean hasPlayerNameIgnoringCase(String playerName) {
+        return players.stream().anyMatch(existing -> existing.equalsIgnoreCase(playerName));
+    }
+
     public boolean hasPassword() {
         return passwordHash != null && !passwordHash.isEmpty();
     }

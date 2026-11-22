@@ -459,6 +459,17 @@ class RoomServiceTest {
         }
 
         @Test
+        @DisplayName("should reject a player name that differs from a seated player only by case")
+        void givenNameDifferingOnlyByCase_whenJoinRoom_thenThrowNameTaken() {
+            String testRoomId = createRoom(roomService, validCreateRequest).roomId();
+
+            assertThatThrownBy(() -> withRoomLock(testRoomId, () -> roomService.joinRoom(testRoomId,
+                    new JoinRoomRequest("Test Room", "hostplayer", null))))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessage("Player name already taken");
+        }
+
+        @Test
         @DisplayName("should reject join with BadRequestException when room is full")
         void joinRoom_WhenRoomFull_ThrowsBadRequestException() {
             String roomId = createRoom(roomService,

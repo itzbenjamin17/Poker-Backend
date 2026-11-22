@@ -164,6 +164,7 @@ public class RoomService {
      * @throws ResourceNotFoundException if no room exists for {@code roomId}
      * @throws BadRequestException       if the game started, lobby expired, room is full,
      *                                   password is wrong, or player name is already taken
+     *                                   (compared ignoring case)
      */
     @DurableMutation
     public RoomEntryResult joinRoom(@RoomId String roomId, JoinRoomRequest joinRequest) {
@@ -195,7 +196,7 @@ public class RoomService {
                     room.getRoomName(), sanitizedPlayerName);
             throw new BadRequestException("Room is full");
         }
-        if (room.hasPlayer(sanitizedPlayerName)) {
+        if (room.hasPlayerNameIgnoringCase(sanitizedPlayerName)) {
             logger.warn("Join attempt failed: player name '{}' already taken in room {}",
                     sanitizedPlayerName, room.getRoomName());
             throw new BadRequestException("Player name already taken");
