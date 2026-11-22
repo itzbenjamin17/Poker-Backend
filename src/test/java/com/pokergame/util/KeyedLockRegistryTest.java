@@ -1,9 +1,8 @@
 package com.pokergame.util;
 
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,12 +12,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-
+/** Unit tests for {@link KeyedLockRegistry}. */
 @Tag("unit")
 class KeyedLockRegistryTest {
 
@@ -30,10 +29,19 @@ class KeyedLockRegistryTest {
     }
 
     @Test
+    @DisplayName("null keys throw NullPointerException on acquire and tryAcquire")
+    void nullKeyThrowsNullPointerException() {
+        assertThatThrownBy(() -> lockRegistry.acquire(null))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> lockRegistry.tryAcquire(null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
     @DisplayName("acquire provides mutual exclusion for same key and releases entry when closed")
     void acquireProvidesMutualExclusionAndCleansUp() throws Exception {
         String key = "room-1";
-        assertThat(lockRegistry.activeKeyCount()).isEqualTo(0);
+        assertThat(lockRegistry.activeKeyCount()).isZero();
 
         try (LockLease lease = lockRegistry.acquire(key)) {
             assertThat(lease).isNotNull();
@@ -41,19 +49,20 @@ class KeyedLockRegistryTest {
             assertThat(lockRegistry.isLocked(key)).isTrue();
             assertThat(lockRegistry.activeKeyCount()).isEqualTo(1);
 
-            // Concurrent tryAcquire from another thread must fail
-            try (ExecutorService pool = Executors.newSingleThreadExecutor()) {
+            ExecutorService pool = Executors.newSingleThreadExecutor();
+            try {
                 Future<LockLease> concurrent = pool.submit(() -> lockRegistry.tryAcquire(key));
                 assertThat(concurrent.get(2, TimeUnit.SECONDS)).isNull();
+            } finally {
+                pool.shutdownNow();
+                pool.awaitTermination(2, TimeUnit.SECONDS);
             }
-            // Failed tryAcquire should not leave an orphaned reservation
             assertThat(lockRegistry.reservationCount(key)).isEqualTo(1);
         }
 
-        // After close, reservation reaches 0 and entry is removed
-        assertThat(lockRegistry.reservationCount(key)).isEqualTo(0);
+        assertThat(lockRegistry.reservationCount(key)).isZero();
         assertThat(lockRegistry.isLocked(key)).isFalse();
-        assertThat(lockRegistry.activeKeyCount()).isEqualTo(0);
+        assertThat(lockRegistry.activeKeyCount()).isZero();
     }
 
     @Test
@@ -65,64 +74,77 @@ class KeyedLockRegistryTest {
                 assertThat(lease2).isNotNull();
                 assertThat(lockRegistry.activeKeyCount()).isEqualTo(2);
             }
-            assertThat(lockRegistry.reservationCount("room-2")).isEqualTo(0);
+            assertThat(lockRegistry.reservationCount("room-2")).isZero();
         }
-        assertThat(lockRegistry.activeKeyCount()).isEqualTo(0);
+        assertThat(lockRegistry.activeKeyCount()).isZero();
     }
 
     @Test
     @DisplayName("failed tryAcquire releases reservation immediately")
     void failedTryAcquireReleasesReservation() throws Exception {
         String key = "room-1";
+        CountDownLatch acquiredLatch = new CountDownLatch(1);
         CountDownLatch doneLatch = new CountDownLatch(1);
 
-        try (ExecutorService holderPool = Executors.newSingleThreadExecutor()) {
+        ExecutorService holderPool = Executors.newSingleThreadExecutor();
+        try {
             Future<?> holder = holderPool.submit(() -> {
                 try (LockLease _ = lockRegistry.acquire(key)) {
+                    acquiredLatch.countDown();
                     doneLatch.await(5, TimeUnit.SECONDS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
             });
-            await().until(() -> lockRegistry.isLocked(key));
+            assertThat(acquiredLatch.await(2, TimeUnit.SECONDS)).isTrue();
 
-            // While held, tryAcquire fails
             LockLease failed = lockRegistry.tryAcquire(key);
             assertThat(failed).isNull();
-            // Reservation should remain 1 (only the holder)
             assertThat(lockRegistry.reservationCount(key)).isEqualTo(1);
 
             doneLatch.countDown();
             holder.get(2, TimeUnit.SECONDS);
+        } finally {
+            doneLatch.countDown();
+            holderPool.shutdownNow();
+            holderPool.awaitTermination(2, TimeUnit.SECONDS);
         }
 
-        assertThat(lockRegistry.reservationCount(key)).isEqualTo(0);
-        assertThat(lockRegistry.activeKeyCount()).isEqualTo(0);
+        assertThat(lockRegistry.reservationCount(key)).isZero();
+        assertThat(lockRegistry.activeKeyCount()).isZero();
     }
 
     @Test
-    @DisplayName("nested acquisition increments reservation and remains locked until outer lease closes")
-    void nestedAcquisitionMaintainsLockUntilOuterCloses() {
+    @DisplayName("nested acquisition via acquire and tryAcquire increments reservation and inner double-close preserves outer lock")
+    void nestedAcquisitionAndReentrantDoubleClosePreserveOuterLock() {
         String key = "room-1";
 
         try (LockLease _ = lockRegistry.acquire(key)) {
             assertThat(lockRegistry.reservationCount(key)).isEqualTo(1);
             assertThat(lockRegistry.isLocked(key)).isTrue();
 
-            try (LockLease _ = lockRegistry.acquire(key)) {
-                assertThat(lockRegistry.reservationCount(key)).isEqualTo(2);
-                assertThat(lockRegistry.isLocked(key)).isTrue();
-            }
+            LockLease innerAcquire = lockRegistry.acquire(key);
+            assertThat(lockRegistry.reservationCount(key)).isEqualTo(2);
 
-            // Inner lease closed, but outer is still held
+            LockLease innerTry = lockRegistry.tryAcquire(key);
+            assertThat(innerTry).isNotNull();
+            assertThat(lockRegistry.reservationCount(key)).isEqualTo(3);
+
+            innerTry.close();
+            assertThatCode(innerTry::close).doesNotThrowAnyException();
+            assertThat(lockRegistry.reservationCount(key)).isEqualTo(2);
+            assertThat(lockRegistry.isLocked(key)).isTrue();
+
+            innerAcquire.close();
+            assertThatCode(innerAcquire::close).doesNotThrowAnyException();
             assertThat(lockRegistry.reservationCount(key)).isEqualTo(1);
             assertThat(lockRegistry.isLocked(key)).isTrue();
+            assertThat(lockRegistry.isHeldByCurrentThread(key)).isTrue();
         }
 
-        // Outer closed, completely freed
-        assertThat(lockRegistry.reservationCount(key)).isEqualTo(0);
+        assertThat(lockRegistry.reservationCount(key)).isZero();
         assertThat(lockRegistry.isLocked(key)).isFalse();
-        assertThat(lockRegistry.activeKeyCount()).isEqualTo(0);
+        assertThat(lockRegistry.activeKeyCount()).isZero();
     }
 
     @Test
@@ -133,22 +155,23 @@ class KeyedLockRegistryTest {
         assertThat(lockRegistry.reservationCount(key)).isEqualTo(1);
 
         lease.close();
-        assertThat(lockRegistry.reservationCount(key)).isEqualTo(0);
-        assertThat(lockRegistry.activeKeyCount()).isEqualTo(0);
+        assertThat(lockRegistry.reservationCount(key)).isZero();
+        assertThat(lockRegistry.activeKeyCount()).isZero();
 
-        // Subsequent closes must be no-ops
-        assertDoesNotThrow(lease::close);
-        assertThat(lockRegistry.reservationCount(key)).isEqualTo(0);
-        assertThat(lockRegistry.activeKeyCount()).isEqualTo(0);
+        assertThatCode(lease::close).doesNotThrowAnyException();
+        assertThat(lockRegistry.reservationCount(key)).isZero();
+        assertThat(lockRegistry.activeKeyCount()).isZero();
     }
 
     @Test
+    @DisplayName("wrong-thread close throws IllegalMonitorStateException and preserves lock and reservation")
     void wrongThreadClosePreservesLockAndReservation() throws Exception {
         String key = "room-1";
-        try (ExecutorService pool = Executors.newSingleThreadExecutor();
-             LockLease lease = lockRegistry.acquire(key)) {
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try (LockLease lease = lockRegistry.acquire(key)) {
             pool.submit(() -> {
-                assertThrows(IllegalMonitorStateException.class, lease::close);
+                assertThatThrownBy(lease::close)
+                        .isInstanceOf(IllegalMonitorStateException.class);
                 try (LockLease competingLease = lockRegistry.tryAcquire(key)) {
                     assertThat(competingLease).isNull();
                 }
@@ -156,6 +179,9 @@ class KeyedLockRegistryTest {
 
             assertThat(lockRegistry.reservationCount(key)).isEqualTo(1);
             assertThat(lockRegistry.isHeldByCurrentThread(key)).isTrue();
+        } finally {
+            pool.shutdownNow();
+            pool.awaitTermination(2, TimeUnit.SECONDS);
         }
 
         assertThat(lockRegistry.activeKeyCount()).isZero();
@@ -168,12 +194,16 @@ class KeyedLockRegistryTest {
         assertThat(lockRegistry.isHeldByCurrentThread(key)).isFalse();
         assertThat(lockRegistry.isHeldByCurrentThread(null)).isFalse();
 
-        try (LockLease lease = lockRegistry.acquire(key)) {
+        try (LockLease _ = lockRegistry.acquire(key)) {
             assertThat(lockRegistry.isHeldByCurrentThread(key)).isTrue();
 
-            try (ExecutorService pool = Executors.newSingleThreadExecutor()) {
+            ExecutorService pool = Executors.newSingleThreadExecutor();
+            try {
                 Future<Boolean> otherThreadHeld = pool.submit(() -> lockRegistry.isHeldByCurrentThread(key));
                 assertThat(otherThreadHeld.get(2, TimeUnit.SECONDS)).isFalse();
+            } finally {
+                pool.shutdownNow();
+                pool.awaitTermination(2, TimeUnit.SECONDS);
             }
         }
 
@@ -181,6 +211,49 @@ class KeyedLockRegistryTest {
     }
 
     @Test
+    @DisplayName("queued waiter transitions reservation count 2 -> 1 -> 0 across handoff")
+    void queuedWaiterHandoffTransitionsReservationCount() throws Exception {
+        String key = "handoff-key";
+        CountDownLatch waiterQueued = new CountDownLatch(1);
+        CountDownLatch waiterAcquired = new CountDownLatch(1);
+        CountDownLatch releaseWaiter = new CountDownLatch(1);
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Void> waiter;
+            try (LockLease _ = lockRegistry.acquire(key)) {
+                assertThat(lockRegistry.reservationCount(key)).isEqualTo(1);
+                waiter = pool.submit(() -> {
+                    waiterQueued.countDown();
+                    try (LockLease _ = lockRegistry.acquire(key)) {
+                        waiterAcquired.countDown();
+                        releaseWaiter.await(5, TimeUnit.SECONDS);
+                    }
+                    return null;
+                });
+                assertThat(waiterQueued.await(2, TimeUnit.SECONDS)).isTrue();
+                while (lockRegistry.reservationCount(key) < 2) {
+                    Thread.onSpinWait();
+                }
+                assertThat(lockRegistry.reservationCount(key)).isEqualTo(2);
+            }
+
+            assertThat(waiterAcquired.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(lockRegistry.reservationCount(key)).isEqualTo(1);
+
+            releaseWaiter.countDown();
+            waiter.get(2, TimeUnit.SECONDS);
+            assertThat(lockRegistry.reservationCount(key)).isZero();
+            assertThat(lockRegistry.activeKeyCount()).isZero();
+        } finally {
+            releaseWaiter.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    @DisplayName("concurrent waiters and releases maintain mutual exclusion")
     void concurrentWaitersAndReleasesMaintainMutualExclusion() throws Exception {
         String key = "concurrent-key";
         int threads = 10;
@@ -189,7 +262,8 @@ class KeyedLockRegistryTest {
         CountDownLatch ready = new CountDownLatch(threads);
         CountDownLatch start = new CountDownLatch(1);
 
-        try (ExecutorService executor = Executors.newFixedThreadPool(threads)) {
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        try {
             List<Future<?>> workers = new ArrayList<>();
             for (int index = 0; index < threads; index++) {
                 workers.add(executor.submit(() -> {
@@ -214,8 +288,12 @@ class KeyedLockRegistryTest {
             for (Future<?> worker : workers) {
                 worker.get(10, TimeUnit.SECONDS);
             }
-            assertThat(lockRegistry.reservationCount(key)).isEqualTo(0);
-            assertThat(lockRegistry.activeKeyCount()).isEqualTo(0);
+            assertThat(lockRegistry.reservationCount(key)).isZero();
+            assertThat(lockRegistry.activeKeyCount()).isZero();
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+            executor.awaitTermination(2, TimeUnit.SECONDS);
         }
     }
 }

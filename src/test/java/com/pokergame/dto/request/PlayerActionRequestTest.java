@@ -1,5 +1,9 @@
 package com.pokergame.dto.request;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
+
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.exception.BadRequestException;
 import jakarta.validation.ConstraintViolation;
@@ -13,13 +17,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
-
-import java.util.Set;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for {@link PlayerActionRequest}.
@@ -44,57 +41,79 @@ class PlayerActionRequestTest {
 
     @ParameterizedTest
     @EnumSource(value = PlayerAction.class, names = {"BET", "RAISE"})
-    @DisplayName("BET and RAISE require a strictly positive amount")
+    @DisplayName("BET and RAISE accept minimum positive amount of 1 and reject null, zero, or negative amounts")
     void wageringActionsRequirePositiveAmount(PlayerAction action) {
-        BadRequestException missing = assertThrows(
-                BadRequestException.class,
-                () -> new PlayerActionRequest(action, null));
-        assertEquals("AMOUNT_REQUIRED", missing.actionErrorCode());
+        assertThat(validator.validate(new PlayerActionRequest(action, 1))).isEmpty();
 
-        BadRequestException zero = assertThrows(
-                BadRequestException.class,
-                () -> new PlayerActionRequest(action, 0));
-        assertEquals("AMOUNT_REQUIRED", zero.actionErrorCode());
+        assertThatThrownBy(() -> new PlayerActionRequest(action, null))
+                .isInstanceOf(BadRequestException.class)
+                .extracting(
+                        e -> ((BadRequestException) e).actionErrorCode(),
+                        e -> ((BadRequestException) e).actionErrorMessage())
+                .containsExactly("AMOUNT_REQUIRED", "Enter a positive amount");
 
-        BadRequestException negative = assertThrows(
-                BadRequestException.class,
-                () -> new PlayerActionRequest(action, -10));
-        assertEquals("NEGATIVE_AMOUNT", negative.actionErrorCode());
+        assertThatThrownBy(() -> new PlayerActionRequest(action, 0))
+                .isInstanceOf(BadRequestException.class)
+                .extracting(
+                        e -> ((BadRequestException) e).actionErrorCode(),
+                        e -> ((BadRequestException) e).actionErrorMessage())
+                .containsExactly("AMOUNT_REQUIRED", "Amount must be positive; yours: 0");
+
+        assertThatThrownBy(() -> new PlayerActionRequest(action, -10))
+                .isInstanceOf(BadRequestException.class)
+                .extracting(
+                        e -> ((BadRequestException) e).actionErrorCode(),
+                        e -> ((BadRequestException) e).actionErrorMessage())
+                .containsExactly("NEGATIVE_AMOUNT", "Amount must be positive; yours: -10");
     }
 
     @ParameterizedTest
     @EnumSource(value = PlayerAction.class, names = {"FOLD", "CHECK", "CALL", "ALL_IN"})
-    @DisplayName("Non-wagering actions require zero amount and reject null or non-zero amount")
+    @DisplayName("Non-wagering actions require zero amount and reject null, positive, or negative amounts")
     void nonWageringActionsRejectNonZeroAmount(PlayerAction action) {
-        assertTrue(validator.validate(new PlayerActionRequest(action, 0)).isEmpty());
+        assertThat(validator.validate(new PlayerActionRequest(action, 0))).isEmpty();
 
-        BadRequestException missing = assertThrows(
-                BadRequestException.class,
-                () -> new PlayerActionRequest(action, null));
-        assertEquals("UNEXPECTED_AMOUNT", missing.actionErrorCode());
-        assertTrue(missing.getMessage().contains(action.name()));
+        assertThatThrownBy(() -> new PlayerActionRequest(action, null))
+                .isInstanceOf(BadRequestException.class)
+                .extracting(
+                        e -> ((BadRequestException) e).actionErrorCode(),
+                        e -> ((BadRequestException) e).actionErrorMessage())
+                .containsExactly("UNEXPECTED_AMOUNT", "No amount needed; yours: null");
 
-        BadRequestException unexpected = assertThrows(
-                BadRequestException.class,
-                () -> new PlayerActionRequest(action, 50));
-        assertEquals("UNEXPECTED_AMOUNT", unexpected.actionErrorCode());
-        assertTrue(unexpected.getMessage().contains(action.name()));
+        assertThatThrownBy(() -> new PlayerActionRequest(action, 50))
+                .isInstanceOf(BadRequestException.class)
+                .extracting(
+                        e -> ((BadRequestException) e).actionErrorCode(),
+                        e -> ((BadRequestException) e).actionErrorMessage())
+                .containsExactly("UNEXPECTED_AMOUNT", "No amount needed; yours: 50");
+
+        assertThatThrownBy(() -> new PlayerActionRequest(action, -10))
+                .isInstanceOf(BadRequestException.class)
+                .extracting(
+                        e -> ((BadRequestException) e).actionErrorCode(),
+                        e -> ((BadRequestException) e).actionErrorMessage())
+                .containsExactly("UNEXPECTED_AMOUNT", "No amount needed; yours: -10");
     }
 
     @Test
-    @DisplayName("Jakarta Bean Validation enforces non-null action and maximum amount")
-    void beanValidationEnforcesActionAndMaxAmount() {
-        PlayerActionRequest missingAction = new PlayerActionRequest(null, 0);
-        Set<ConstraintViolation<PlayerActionRequest>> missingViolations = validator.validate(missingAction);
-        assertFalse(missingViolations.isEmpty());
-        assertTrue(missingViolations.stream().anyMatch(v -> "Action is required".equals(v.getMessage())));
+    @DisplayName("Jakarta Bean Validation rejects null action even when amount is null or zero")
+    void beanValidationRejectsNullAction() {
+        assertThat(validator.validate(new PlayerActionRequest(null, 0)))
+                .extracting(v -> v.getPropertyPath().toString(), ConstraintViolation::getMessage)
+                .containsExactly(tuple("action", "Action is required"));
 
-        PlayerActionRequest overMax = new PlayerActionRequest(PlayerAction.BET, 10_000_001);
-        Set<ConstraintViolation<PlayerActionRequest>> maxViolations = validator.validate(overMax);
-        assertFalse(maxViolations.isEmpty());
-        assertTrue(maxViolations.stream().anyMatch(v -> "Amount cannot exceed 10,000,000".equals(v.getMessage())));
+        assertThat(validator.validate(new PlayerActionRequest(null, null)))
+                .extracting(v -> v.getPropertyPath().toString(), ConstraintViolation::getMessage)
+                .containsExactly(tuple("action", "Action is required"));
+    }
 
-        PlayerActionRequest atMax = new PlayerActionRequest(PlayerAction.RAISE, 10_000_000);
-        assertTrue(validator.validate(atMax).isEmpty());
+    @Test
+    @DisplayName("Jakarta Bean Validation enforces 10,000,000 maximum amount boundary")
+    void beanValidationEnforcesMaxAmount() {
+        assertThat(validator.validate(new PlayerActionRequest(PlayerAction.RAISE, 10_000_000))).isEmpty();
+
+        assertThat(validator.validate(new PlayerActionRequest(PlayerAction.BET, 10_000_001)))
+                .extracting(v -> v.getPropertyPath().toString(), ConstraintViolation::getMessage)
+                .containsExactly(tuple("amount", "Amount cannot exceed 10,000,000"));
     }
 }

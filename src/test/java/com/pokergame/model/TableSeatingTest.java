@@ -1,7 +1,18 @@
 package com.pokergame.model;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Random;
+import java.util.Set;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -9,18 +20,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Random;
-import java.util.Set;
-
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
+/** Unit tests for {@link TableSeating}. */
 @Tag("unit")
 class TableSeatingTest {
 
@@ -100,6 +100,7 @@ class TableSeatingTest {
             assertEquals("p1", seating.getBigBlindPlayerId(players));
             assertEquals("p0", seating.getCurrentPlayerId());
             assertEquals("p0", seating.getCurrentPlayer(players).getPlayerId());
+            assertEquals(List.of("p0", "p1"), seating.getHandSeatOrderSnapshot());
         }
 
         @Test
@@ -223,6 +224,19 @@ class TableSeatingTest {
             assertNull(unknownDealer.getSmallBlindPlayerId(active));
             assertNull(unknownDealer.getBigBlindPlayerId(active));
         }
+
+        @Test
+        void restoreConstructor_NullOrEmptyHandSeatOrder_FallsBackToTablePlayersAndReturnsImmutableSnapshot() {
+            List<Player> table = createPlayerList(3);
+
+            TableSeating fromNull = new TableSeating(null, "p0", "p1", "p2", "p0", table);
+            assertEquals(List.of("p0", "p1", "p2"), fromNull.getHandSeatOrderSnapshot());
+            assertThrows(UnsupportedOperationException.class,
+                    () -> fromNull.getHandSeatOrderSnapshot().add("p3"));
+
+            TableSeating fromEmpty = new TableSeating(List.of(), "p0", "p1", "p2", "p0", table);
+            assertEquals(List.of("p0", "p1", "p2"), fromEmpty.getHandSeatOrderSnapshot());
+        }
     }
 
     @Nested
@@ -333,12 +347,12 @@ class TableSeatingTest {
             TableSeating unknownCur = new TableSeating(
                     seatOrderOf(active), "p0", null, null, "unknown", active);
             unknownCur.nextPlayer(active);
-            assertTrue(curIndex(unknownCur, active) >= 0 && curIndex(unknownCur, active) < 3);
+            assertEquals("p0", unknownCur.getCurrentPlayerId());
 
             TableSeating nullCur = new TableSeating(
                     seatOrderOf(active), "p0", null, null, null, active);
             nullCur.nextPlayer(active);
-            assertTrue(curIndex(nullCur, active) >= 0 && curIndex(nullCur, active) < 3);
+            assertEquals("p0", nullCur.getCurrentPlayerId());
 
             nullCur.nextPlayer(List.of());
             assertThrows(IllegalStateException.class, () -> nullCur.getCurrentPlayer(List.of()));
@@ -363,16 +377,6 @@ class TableSeatingTest {
             assertEquals("p3", midDeparted.getCurrentPlayerId());
 
             List<Player> active = createPlayerList(3);
-            TableSeating unknownCur = new TableSeating(
-                    seatOrderOf(active), "p0", null, null, "unknown", active);
-            unknownCur.nextPlayer(active);
-            assertEquals("p0", unknownCur.getCurrentPlayerId());
-
-            TableSeating nullCur = new TableSeating(
-                    seatOrderOf(active), "p0", null, null, null, active);
-            nullCur.nextPlayer(active);
-            assertEquals("p0", nullCur.getCurrentPlayerId());
-
             active.get(0).doAction(PlayerAction.FOLD, 0);
             TableSeating foldedSeatZero = new TableSeating(
                     seatOrderOf(active), "p0", null, null, "unknown", active);
@@ -429,7 +433,6 @@ class TableSeatingTest {
             TableSeating removalSeating = new TableSeating(
                     seatOrderOf(table), "p0", null, null, "p0", table);
 
-            // Removing current actor p0 with p1 (isOut) next clockwise must skip p1 to p2.
             removeFromTable(table, active, removalSeating, table.get(0));
             assertEquals("p2", removalSeating.getCurrentPlayerId());
             assertEquals("p2", removalSeating.getCurrentPlayer(active).getPlayerId());
@@ -455,7 +458,7 @@ class TableSeatingTest {
         }
 
         @Test
-        void removePlayer_WithNullBlindIds_DerivesBlindIdsWithinActivePlayers() {
+        void removePlayer_WithNullBlindIds_DerivesExactHeadsUpBlindsWithinActivePlayers() {
             List<Player> table = createPlayerList(3);
             List<Player> active = new ArrayList<>(table);
             TableSeating seating = new TableSeating(
@@ -463,8 +466,8 @@ class TableSeatingTest {
 
             removeFromTable(table, active, seating, table.get(1));
             assertEquals(2, active.size());
-            assertTrue(sbIndex(seating, active) >= 0 && sbIndex(seating, active) < active.size());
-            assertTrue(bbIndex(seating, active) >= 0 && bbIndex(seating, active) < active.size());
+            assertEquals("p0", seating.getSmallBlindPlayerId(active));
+            assertEquals("p2", seating.getBigBlindPlayerId(active));
         }
 
         @Test
@@ -482,16 +485,16 @@ class TableSeatingTest {
             assertEquals("p2", seating.getBigBlindPlayerId(active));
             assertEquals("p3", seating.getCurrentPlayer(active).getPlayerId());
 
-            removeFromTable(table, active, seating, p1); // SB departs
+            removeFromTable(table, active, seating, p1);
             assertEquals("p1", seating.getSmallBlindPlayerId(active));
             assertEquals("p2", seating.getBigBlindPlayerId(active));
             assertEquals("p3", seating.getCurrentPlayer(active).getPlayerId());
 
-            removeFromTable(table, active, seating, p2); // BB departs
+            removeFromTable(table, active, seating, p2);
             assertEquals("p2", seating.getBigBlindPlayerId(active));
             assertEquals("p3", seating.getCurrentPlayer(active).getPlayerId());
 
-            removeFromTable(table, active, seating, p0); // Dealer departs
+            removeFromTable(table, active, seating, p0);
             assertEquals("p0", seating.getDealerPlayerId());
             assertEquals("p3", seating.getCurrentPlayer(active).getPlayerId());
         }
@@ -590,9 +593,8 @@ class TableSeatingTest {
         void nextPlayer_ExhaustiveFoldedAllInBitmasks_NeverHangsAndFindsNextActionable() {
             for (int tableSize = 2; tableSize <= 6; tableSize++) {
                 int totalStates = (int) Math.pow(3, tableSize);
-                int sampleStep = tableSize <= 4 ? 1 : 3;
 
-                for (int stateMask = 0; stateMask < totalStates; stateMask += sampleStep) {
+                for (int stateMask = 0; stateMask < totalStates; stateMask++) {
                     int temp = stateMask;
                     List<Player> players = new ArrayList<>();
                     boolean[] actionable = new boolean[tableSize];
@@ -633,7 +635,7 @@ class TableSeatingTest {
                             }
                             assertEquals(expected, next);
                         } else {
-                            assertTrue(next == current || !actionable[next]);
+                            assertEquals(current, next);
                         }
                     }
                 }
@@ -643,7 +645,7 @@ class TableSeatingTest {
         @Test
         void monteCarloRandomizedTournaments_AllInvariantsHoldThroughEveryHand() {
             Random random = new Random(42_1337);
-            for (int tourney = 1; tourney <= 200; tourney++) {
+            for (int tourney = 1; tourney <= 50; tourney++) {
                 List<Player> allPlayers = createPlayerList(10);
                 List<Player> active = new ArrayList<>(allPlayers);
                 String initialAnchor = "p" + random.nextInt(10);

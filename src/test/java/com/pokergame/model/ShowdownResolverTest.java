@@ -1,20 +1,22 @@
 package com.pokergame.model;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
 import com.pokergame.model.PotCalculator.PotAllocation;
 import com.pokergame.model.PotCalculator.PotAllocations;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
-import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.*;
-
-/** Unit tests for the package-private ShowdownResolver collaborator. */
+/** Unit tests for the package-private {@link ShowdownResolver} collaborator. */
 @Tag("unit")
 @DisplayName("ShowdownResolver collaborator")
 class ShowdownResolverTest {
@@ -109,7 +111,7 @@ class ShowdownResolverTest {
     }
 
     @Test
-    void distribute_SingleWinner_TakesWholePot() {
+    void distribute_SingleWinner_TakesWholePotAndRecordsWentToShowdownFlag() {
         Player a = player("a", 0, HandRank.FLUSH);
         Player b = player("b", 0, HandRank.ONE_PAIR);
         PotAllocations computation = new PotAllocations(
@@ -122,8 +124,19 @@ class ShowdownResolverTest {
         assertEquals(0, b.getChips());
         assertEquals(0, d.remainder());
         assertEquals(List.of(a), d.winners());
+        assertEquals(Set.of("a"), d.payout().winnerIds());
         assertEquals(200, d.payout().potWinnings().get("a"));
         assertTrue(d.payout().wentToShowdown());
+
+        Player foldSurvivor = player("s", 0, HandRank.NO_HAND);
+        PotAllocations foldPot = new PotAllocations(
+                List.of(new PotAllocation(50, List.of(foldSurvivor))), Map.of(), 0);
+        ShowdownResolver.Distribution uncontested = ShowdownResolver.distribute(
+                GAME_ID, foldPot, List.of(foldSurvivor), List.of("s"), "s", false);
+
+        assertEquals(50, foldSurvivor.getChips());
+        assertEquals(Set.of("s"), uncontested.payout().winnerIds());
+        assertFalse(uncontested.payout().wentToShowdown());
     }
 
     @Test
@@ -140,7 +153,24 @@ class ShowdownResolverTest {
         assertEquals(51, b.getChips());
         assertEquals(0, d.remainder());
         assertEquals(0, d.payout().remainder());
+        assertEquals(Set.of("a", "b"), d.payout().winnerIds());
         assertEquals(Map.of("a", 50, "b", 51), d.payout().potWinnings());
+    }
+
+    @Test
+    void distribute_OddChipSplitWithDepartedDealerAbsentFromHandSeatOrder_FallsBackToSeatOrder() {
+        Player a = player("a", 0, HandRank.FLUSH);
+        Player b = player("b", 0, HandRank.FLUSH);
+        PotAllocations computation = new PotAllocations(
+                List.of(new PotAllocation(101, List.of(a, b))), Map.of(), 0);
+
+        ShowdownResolver.Distribution d = ShowdownResolver.distribute(
+                GAME_ID, computation, List.of(a, b), List.of("a", "b"), "departed-dealer", true);
+
+        assertEquals(51, a.getChips());
+        assertEquals(50, b.getChips());
+        assertEquals(Set.of("a", "b"), d.payout().winnerIds());
+        assertEquals(Map.of("a", 51, "b", 50), d.payout().potWinnings());
     }
 
     @Test
@@ -159,6 +189,7 @@ class ShowdownResolverTest {
         assertEquals(33, b.getChips());
         assertEquals(0, d.remainder());
         assertEquals(0, d.payout().remainder());
+        assertEquals(Set.of("a", "b", "c"), d.payout().winnerIds());
         assertEquals(Map.of("a", 34, "b", 33, "c", 34), d.payout().potWinnings());
     }
 
@@ -177,13 +208,16 @@ class ShowdownResolverTest {
         assertEquals(34, c.getChips());
         assertEquals(33, a.getChips());
         assertEquals(0, d.remainder());
+        assertEquals(Set.of("a", "b", "c"), d.payout().winnerIds());
     }
 
     @Test
     void distribute_RefundsUncalledToActivePlayerOnly() {
         Player a = player("a", 0, HandRank.FLUSH);
-        Player folded = Player.restoreBuilder().name("f").playerId("f").holeCards(List.of()).bestHand(List.of()).chips(0).hasFolded(true).handRank(HandRank.NO_HAND).build();
-        Player out = Player.restoreBuilder().name("o").playerId("o").holeCards(List.of()).bestHand(List.of()).chips(0).out(true).handRank(HandRank.NO_HAND).build();
+        Player folded = Player.restoreBuilder().name("f").playerId("f").holeCards(List.of()).bestHand(List.of())
+                .chips(0).hasFolded(true).handRank(HandRank.NO_HAND).build();
+        Player out = Player.restoreBuilder().name("o").playerId("o").holeCards(List.of()).bestHand(List.of())
+                .chips(0).out(true).handRank(HandRank.NO_HAND).build();
         PotAllocations computation = new PotAllocations(
                 List.of(new PotAllocation(100, List.of(a))), Map.of("a", 40, "f", 30, "o", 20, "missing", 10), 100);
 
@@ -194,6 +228,7 @@ class ShowdownResolverTest {
         assertEquals(0, folded.getChips());
         assertEquals(0, out.getChips());
         assertEquals(Map.of("a", 40), d.payout().refunds());
+        assertEquals(Set.of("a"), d.payout().winnerIds());
     }
 
     @Test
@@ -206,6 +241,7 @@ class ShowdownResolverTest {
 
         assertEquals(75, d.remainder());
         assertTrue(d.winners().isEmpty());
+        assertTrue(d.payout().winnerIds().isEmpty());
     }
 
     @Test
@@ -252,6 +288,7 @@ class ShowdownResolverTest {
                 GAME_ID, pots, List.of(a, b, c), List.of("a", "b", "c"), "a", true);
 
         assertEquals(List.of(a, b, c), distribution.winners());
+        assertEquals(Set.of("a", "b", "c"), distribution.payout().winnerIds());
         assertEquals(Map.of("a", 30, "b", 51, "c", 50), distribution.payout().potWinnings());
         assertEquals(Map.of("c", 12), distribution.payout().refunds());
         assertEquals(62, c.getChips());

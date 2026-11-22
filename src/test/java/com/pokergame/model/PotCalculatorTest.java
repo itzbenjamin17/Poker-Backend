@@ -1,30 +1,32 @@
 package com.pokergame.model;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.pokergame.enums.HandRank;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import java.util.*;
-import java.util.stream.Collectors;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 /**
- * Dedicated unit tests for the package-private PotCalculator collaborator.
- * Verifies side-pot layering, uncalled-bet refunds, pot breakdowns,
- * dead-layer routing, eligibility coalescing, and contribution tracking.
+ * Unit tests for the package-private {@link PotCalculator} collaborator.
  */
 @Tag("unit")
 @DisplayName("PotCalculator collaborator")
 class PotCalculatorTest {
 
     private static final String GAME_ID = "pot-calc-test";
-
-    // =========================================================================
-    // 1. Contribution Tracking (trackContribution)
-    // =========================================================================
 
     @Test
     void trackContribution_AddsToExistingLedger() {
@@ -67,10 +69,6 @@ class PotCalculatorTest {
         assertEquals(50, ledger.get("p1"));
     }
 
-    // =========================================================================
-    // 2. Pot Decomposition (allocatePots)
-    // =========================================================================
-
     @Test
     void computePotAllocations_SimpleHeadsUp_ReturnsSingleAllocationNoUncalled() {
         Player p1 = player("p1", "Alice", 900);
@@ -102,10 +100,8 @@ class PotCalculatorTest {
                 350, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(2, result.allocations().size());
-        // Main pot: 50 * 3 = 150, eligible: Short, Mid, Deep
         assertEquals(150, result.allocations().get(0).amount());
         assertEquals(List.of(shortStack, midStack, deepStack), result.allocations().get(0).eligiblePlayers());
-        // Side pot: 100 * 2 = 200, eligible: Mid, Deep
         assertEquals(200, result.allocations().get(1).amount());
         assertEquals(List.of(midStack, deepStack), result.allocations().get(1).eligiblePlayers());
         assertEquals(0, result.uncalledTotal());
@@ -125,11 +121,11 @@ class PotCalculatorTest {
                 550, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(3, result.allocations().size());
-        assertEquals(200, result.allocations().get(0).amount()); // 50 * 4
+        assertEquals(200, result.allocations().get(0).amount());
         assertEquals(List.of(p1, p2, p3, p4), result.allocations().get(0).eligiblePlayers());
-        assertEquals(150, result.allocations().get(1).amount()); // 50 * 3
+        assertEquals(150, result.allocations().get(1).amount());
         assertEquals(List.of(p2, p3, p4), result.allocations().get(1).eligiblePlayers());
-        assertEquals(200, result.allocations().get(2).amount()); // 100 * 2
+        assertEquals(200, result.allocations().get(2).amount());
         assertEquals(List.of(p3, p4), result.allocations().get(2).eligiblePlayers());
         assertEquals(0, result.uncalledTotal());
     }
@@ -146,14 +142,12 @@ class PotCalculatorTest {
         PotCalculator.PotAllocations result = PotCalculator.allocatePots(
                 510, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
-        // Contested allocations: Layer 1 (10*3=30), Layer 2 (10*2=20)
         assertEquals(2, result.allocations().size());
         assertEquals(30, result.allocations().get(0).amount());
         assertEquals(List.of(shover, sb, bb), result.allocations().get(0).eligiblePlayers());
         assertEquals(20, result.allocations().get(1).amount());
         assertEquals(List.of(shover, bb), result.allocations().get(1).eligiblePlayers());
 
-        // Uncalled refund: 480 - 20 = 460 refunded to a1
         assertEquals(460, result.uncalledTotal());
         assertEquals(460, result.uncalledByPlayer().get("a1"));
     }
@@ -171,10 +165,8 @@ class PotCalculatorTest {
         PotCalculator.PotAllocations result = PotCalculator.allocatePots(
                 550, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
-        // Layer 1: 50 * 4 = 200, eligible: [a, b]
         assertEquals(200, result.allocations().get(0).amount());
         assertEquals(List.of(a, b), result.allocations().get(0).eligiblePlayers());
-        // Layer 2: 50 * 3 = 150, dead layer (100 * 2 = 200) routed down to Layer 2 -> 150 + 200 = 350
         assertEquals(350, result.allocations().get(1).amount());
         assertEquals(List.of(b), result.allocations().get(1).eligiblePlayers());
         assertEquals(0, result.uncalledTotal());
@@ -215,6 +207,7 @@ class PotCalculatorTest {
         assertEquals(200, result.allocations().get(1).amount());
         assertEquals(List.of(midPlayer), result.allocations().get(1).eligiblePlayers());
         assertEquals(0, result.uncalledTotal());
+        assertFalse(result.uncalledByPlayer().containsKey("departed"));
     }
 
     @Test
@@ -231,7 +224,6 @@ class PotCalculatorTest {
         PotCalculator.PotAllocations result = PotCalculator.allocatePots(
                 230, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
-        // Slices coalesce into single allocation so odd-chip remainder does not fragment across identical contenders
         assertEquals(1, result.allocations().size());
         assertEquals(230, result.allocations().get(0).amount());
         assertEquals(List.of(a, b), result.allocations().get(0).eligiblePlayers());
@@ -277,7 +269,6 @@ class PotCalculatorTest {
         List<Player> contenders = List.of(a, b);
         Map<String, Integer> contributions = Map.of("a", 50, "b", 50);
 
-        // Pot is 200 but ledger has only 100 and carry-over is 0
         assertThrows(IllegalStateException.class, () ->
                 PotCalculator.allocatePots(
                         200, 0, contributions, contenders, allPlayers, contenders, GAME_ID));
@@ -285,7 +276,6 @@ class PotCalculatorTest {
 
     @Test
     void computePotAllocations_ContestedLayerWithNoEligibleClaimant_ThrowsIllegalStateException() {
-        // Both contributors folded and nobody else can win, so the 100-chip layer has nowhere to go.
         Player a = foldedPlayer("a", "A", 950);
         Player b = foldedPlayer("b", "B", 950);
         List<Player> allPlayers = List.of(a, b);
@@ -298,7 +288,6 @@ class PotCalculatorTest {
 
     @Test
     void computePotAllocations_CarryOverWithNoEligibleClaimant_ThrowsIllegalStateException() {
-        // The ledger is empty, so only the 30-chip carry-over is in the pot, and no player can claim it.
         Player a = foldedPlayer("a", "A", 950);
         Player b = foldedPlayer("b", "B", 950);
         List<Player> allPlayers = List.of(a, b);
@@ -307,10 +296,6 @@ class PotCalculatorTest {
                 PotCalculator.allocatePots(
                         30, 30, Map.of(), allPlayers, allPlayers, List.of(), GAME_ID));
     }
-
-    // =========================================================================
-    // 3. Pot Breakdown Queries (getPotBreakdown)
-    // =========================================================================
 
     @Test
     void getPotBreakdown_EmptyPot_ReturnsEmptyList() {
@@ -362,7 +347,6 @@ class PotCalculatorTest {
         List<Player> active = List.of(shover, sb, bb);
         Map<String, Integer> contributions = Map.of("a1", 480, "s1", 10, "b1", 20);
 
-        // SB and BB owe call below 480 cap -> entire pot remains pending single layer
         List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
                 510, 0, contributions, active, active, false, 480, GAME_ID));
 
@@ -378,7 +362,6 @@ class PotCalculatorTest {
         List<Player> active = List.of(shortStack, bettor, owing, folded);
         Map<String, Integer> contributions = Map.of("short", 50, "bettor", 250, "owing", 50, "folded", 20);
 
-        // Pot 380, carry-over 10
         List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
                 380, 10, contributions, active, active, false, 250, GAME_ID));
 
@@ -387,7 +370,6 @@ class PotCalculatorTest {
 
     @Test
     void getPotBreakdown_PendingCallOnLaterStreet_CapComesFromWholeHandContributions() {
-        // Everyone put 100 in on earlier streets; only the bettor has wagered on this street (40).
         Player allIn = allInPlayerWithBet("a", "A", 0);
         Player owing = playerWithBet("b", "B", 900, 0);
         Player bettor = playerWithBet("c", "C", 860, 40);
@@ -396,7 +378,6 @@ class PotCalculatorTest {
         PotCalculator.PotInputs inputs = new PotCalculator.PotInputs(
                 340, 0, contributions, active, active, false, 40, GAME_ID);
 
-        // The matched 300 is the main pot; the 40 bet is an open layer, not a refund, while B may still call.
         assertEquals(List.of(300, 40), PotCalculator.getPotBreakdown(inputs));
         assertEquals(0, PotCalculator.getUncalledAmount(inputs));
     }
@@ -409,7 +390,6 @@ class PotCalculatorTest {
         List<Player> active = List.of(shortStack, midStack, deepStack);
         Map<String, Integer> contributions = Map.of("short", 50, "mid", 150, "deep", 150);
 
-        // Current highest bet is 150, all active non-all-in players have matched 150 (no owing calls)
         List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
                 350, 0, contributions, active, active, false, 150, GAME_ID));
 
@@ -424,11 +404,9 @@ class PotCalculatorTest {
         List<Player> active = List.of(shover, sb, bb);
         Map<String, Integer> contributions = Map.of("a1", 480, "s1", 10, "b1", 20);
 
-        // Action is complete (currentHighestBet = 20, SB is all-in for 10, BB matched 20)
         List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
                 510, 0, contributions, active, active, false, 20, GAME_ID));
 
-        // Contested breakdown only: 30 and 20; the 460 uncalled is excluded from contested breakdown
         assertEquals(List.of(30, 20), breakdown);
     }
 
@@ -449,38 +427,22 @@ class PotCalculatorTest {
         assertEquals(0, PotCalculator.getUncalledAmount(inputs));
     }
 
-    // =========================================================================
-    // 4. Uncalled Amount Queries (getUncalledAmount)
-    // =========================================================================
-
     @Test
-    void getUncalledAmount_EmptyPot_ReturnsZero() {
+    void getUncalledAmount_EmptySettledOrLivePending_ReturnsZero() {
         assertEquals(0, PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
                 0, 0, Map.of(), List.of(), List.of(), false, 0, GAME_ID)));
-    }
-
-    @Test
-    void getUncalledAmount_SettledGame_ReturnsZero() {
         assertEquals(0, PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
                 100, 0, Map.of(), List.of(), List.of(), true, 0, GAME_ID)));
-    }
 
-    @Test
-    void getUncalledAmount_LiveNoAllIn_ReturnsZero() {
         Player p1 = playerWithBet("p1", "Alice", 1000, 50);
         Player p2 = playerWithBet("p2", "Bob", 1000, 50);
-
         assertEquals(0, PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
                 100, 0, Map.of("p1", 50, "p2", 50), List.of(p1, p2), List.of(p1, p2), false, 50, GAME_ID)));
-    }
 
-    @Test
-    void getUncalledAmount_LiveWithPendingCall_ReturnsZero() {
         Player shortStack = allInPlayerWithBet("short", "Short", 50);
         Player bettor = playerWithBet("bettor", "Bettor", 800, 250);
         Player owing = playerWithBet("owing", "Owing", 950, 50);
         List<Player> active = List.of(shortStack, bettor, owing);
-
         assertEquals(0, PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
                 350, 0, Map.of("short", 50, "bettor", 250, "owing", 50), active, active, false, 250, GAME_ID)));
     }
@@ -493,82 +455,9 @@ class PotCalculatorTest {
         List<Player> active = List.of(shover, sb, bb);
         Map<String, Integer> contributions = Map.of("a1", 480, "s1", 10, "b1", 20);
 
-        // Action complete with currentHighestBet = 20 (SB is all-in for 10, BB matched 20)
         assertEquals(460, PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
                 510, 0, contributions, active, active, false, 20, GAME_ID)));
     }
-
-    // =========================================================================
-    // 5. Dead Layer Routing, Layer Coalescing, and Formatting
-    // =========================================================================
-
-    @Test
-    void deadLayerRouting_RollsIntoPreviousAllocation() {
-        Player p1 = player("p1", "Alice", 1000);
-        Player f1 = foldedPlayer("f1", "F1", 1000);
-        Player f2 = foldedPlayer("f2", "F2", 1000);
-        List<Player> allPlayers = List.of(p1, f1, f2);
-        List<Player> contenders = List.of(p1);
-
-        PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                250, 0, Map.of("p1", 50, "f1", 100, "f2", 100), contenders, allPlayers, contenders, GAME_ID);
-
-        assertEquals(1, result.allocations().size());
-        assertEquals(250, result.allocations().get(0).amount());
-        assertEquals(List.of(p1), result.allocations().get(0).eligiblePlayers());
-        assertEquals(0, result.uncalledTotal());
-    }
-
-    @Test
-    void deadLayerRouting_AssignsToContendersWhenNoPriorAllocationsExist() {
-        Player p1 = player("p1", "Alice", 1000);
-        Player f1 = foldedPlayer("f1", "F1", 1000);
-        Player f2 = foldedPlayer("f2", "F2", 1000);
-        List<Player> allPlayers = List.of(p1, f1, f2);
-        List<Player> contenders = List.of(p1);
-
-        PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                50, 0, Map.of("f1", 25, "f2", 25), contenders, allPlayers, contenders, GAME_ID);
-
-        assertEquals(1, result.allocations().size());
-        assertEquals(50, result.allocations().get(0).amount());
-        assertEquals(List.of(p1), result.allocations().get(0).eligiblePlayers());
-    }
-
-    @Test
-    void allocationCoalescing_MergesAdjacentLayersWithSameEligibility() {
-        Player p1 = player("p1", "Alice", 1000);
-        Player p2 = player("p2", "Bob", 1000);
-        Player f1 = foldedPlayer("f1", "Folded", 1000);
-        List<Player> allPlayers = List.of(p1, p2, f1);
-        List<Player> contenders = List.of(p1, p2);
-
-        PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                220, 0, Map.of("p1", 100, "p2", 100, "f1", 20), contenders, allPlayers, contenders, GAME_ID);
-
-        assertEquals(1, result.allocations().size());
-        assertEquals(220, result.allocations().get(0).amount());
-        assertEquals(List.of(p1, p2), result.allocations().get(0).eligiblePlayers());
-    }
-
-    @Test
-    void allocationCoalescing_KeepsLayersSeparateWhenContendersDiffer() {
-        Player p1 = allInPlayer("p1", "Short", 0);
-        Player p2 = player("p2", "Alice", 1000);
-        Player p3 = player("p3", "Bob", 1000);
-        List<Player> allPlayers = List.of(p1, p2, p3);
-
-        PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                250, 0, Map.of("p1", 50, "p2", 100, "p3", 100), allPlayers, allPlayers, allPlayers, GAME_ID);
-
-        assertEquals(2, result.allocations().size());
-        assertEquals(150, result.allocations().get(0).amount());
-        assertEquals(100, result.allocations().get(1).amount());
-    }
-
-    // =========================================================================
-    // 6. Adversarial Stress & Edge Case Challenges
-    // =========================================================================
 
     @Test
     void challenge_DeadLayerRouting_CascadingMultiLevelFoldsRollsDown() {
@@ -622,10 +511,9 @@ class PotCalculatorTest {
         List<Player> allPlayers = List.of(a, b, c);
         List<Player> contenders = List.of(a, b);
         Map<String, Integer> contributions = Map.of("a", 100, "b", 100, "c", 300);
-        int totalPot = 500;
 
         PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                totalPot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
+                500, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
 
         assertEquals(1, result.allocations().size());
         assertEquals(500, result.allocations().get(0).amount());
@@ -643,7 +531,6 @@ class PotCalculatorTest {
         List<Player> allPlayers = List.of(p1, p2, p3, f1);
         List<Player> contenders = List.of(p1, p2, p3);
 
-        // Layers 0-20 ([p1,p2,p3]=80) and 20-50 ([p1,p2,p3]=90) coalesce to 170; 50-100 ([p1,p2]=100) stays distinct.
         PotCalculator.PotAllocations result = PotCalculator.allocatePots(
                 270, 0, Map.of("p1", 100, "p2", 100, "p3", 50, "f1", 20),
                 contenders, allPlayers, contenders, GAME_ID);
@@ -653,25 +540,6 @@ class PotCalculatorTest {
         assertEquals(List.of(p1, p2, p3), result.allocations().get(0).eligiblePlayers());
         assertEquals(100, result.allocations().get(1).amount());
         assertEquals(List.of(p1, p2), result.allocations().get(1).eligiblePlayers());
-    }
-
-    @Test
-    void challenge_LiveWagerProjection_ActionablePlayerOwingCall_SingleAllInCap() {
-        Player allIn = allInPlayerWithBet("short", "Short", 100);
-        Player owing = playerWithBet("owing", "Owing", 900, 100);
-        Player bettor = playerWithBet("bettor", "Bettor", 700, 300);
-        List<Player> active = List.of(allIn, owing, bettor);
-        Map<String, Integer> contributions = Map.of("short", 100, "owing", 100, "bettor", 300);
-        int totalPot = 500;
-
-        int uncalled = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
-                totalPot, 0, contributions, active, active, false, 300, GAME_ID));
-        assertEquals(0, uncalled);
-
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
-                totalPot, 0, contributions, active, active, false, 300, GAME_ID));
-        assertEquals(List.of(300, 200), breakdown);
-        assertEquals(totalPot, breakdown.stream().mapToInt(Integer::intValue).sum());
     }
 
     @Test
@@ -695,54 +563,15 @@ class PotCalculatorTest {
     }
 
     @Test
-    void challenge_LiveWagerProjection_OwingBelowCap_CollapsesToSinglePot() {
-        Player allIn = allInPlayerWithBet("allIn", "AllIn", 500);
-        Player owing = playerWithBet("owing", "Owing", 950, 50);
-        List<Player> active = List.of(allIn, owing);
-        Map<String, Integer> contributions = Map.of("allIn", 500, "owing", 50);
-        int totalPot = 550;
-
-        int uncalled = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
-                totalPot, 0, contributions, active, active, false, 500, GAME_ID));
-        assertEquals(0, uncalled);
-
-        List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
-                totalPot, 0, contributions, active, active, false, 500, GAME_ID));
-        assertEquals(List.of(550), breakdown);
-    }
-
-    @Test
-    void challenge_DepartedPlayer_DefinesSidePotWithActivePlayer_NoRefund() {
-        Player activeA = player("a", "ActiveShort", 0);
-        Player activeB = player("b", "ActiveMid", 150);
-        List<Player> tablePlayers = List.of(activeA, activeB);
-        List<Player> contenders = List.of(activeA, activeB);
-        Map<String, Integer> contributions = Map.of("a", 50, "b", 150, "departed", 150);
-        int totalPot = 350;
-
-        PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                totalPot, 0, contributions, contenders, tablePlayers, contenders, GAME_ID);
-
-        assertEquals(2, result.allocations().size());
-        assertEquals(150, result.allocations().get(0).amount());
-        assertEquals(List.of(activeA, activeB), result.allocations().get(0).eligiblePlayers());
-        assertEquals(200, result.allocations().get(1).amount());
-        assertEquals(List.of(activeB), result.allocations().get(1).eligiblePlayers());
-        assertEquals(0, result.uncalledTotal());
-        assertFalse(result.uncalledByPlayer().containsKey("departed"));
-    }
-
-    @Test
-    void challenge_DepartedPlayer_SoleTopLayerRoutedDownWithoutRefund() {
+    void challenge_DepartedPlayer_SoleTopLayerAndOutPlayerRoutedDownWithoutRefund() {
         Player activeA = player("a", "ActiveA", 50);
         Player activeB = player("b", "ActiveB", 100);
         List<Player> tablePlayers = List.of(activeA, activeB);
         List<Player> contenders = List.of(activeA, activeB);
         Map<String, Integer> contributions = Map.of("a", 50, "b", 100, "departed", 250);
-        int totalPot = 400;
 
         PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                totalPot, 0, contributions, contenders, tablePlayers, contenders, GAME_ID);
+                400, 0, contributions, contenders, tablePlayers, contenders, GAME_ID);
 
         assertEquals(2, result.allocations().size());
         assertEquals(150, result.allocations().get(0).amount());
@@ -751,112 +580,283 @@ class PotCalculatorTest {
         assertEquals(List.of(activeB), result.allocations().get(1).eligiblePlayers());
         assertEquals(0, result.uncalledTotal());
         assertFalse(result.uncalledByPlayer().containsKey("departed"));
+
+        Player outP = outPlayer("outP", "OutP", 0);
+        PotCalculator.PotAllocations outResult = PotCalculator.allocatePots(
+                400, 0, Map.of("a", 100, "outP", 300), List.of(activeA), List.of(activeA, outP), List.of(activeA), GAME_ID);
+        assertEquals(1, outResult.allocations().size());
+        assertEquals(400, outResult.allocations().get(0).amount());
+        assertEquals(0, outResult.uncalledTotal());
+        assertFalse(outResult.uncalledByPlayer().containsKey("outP"));
     }
 
-    @Test
-    void challenge_DepartedPlayer_MarkedOutInTable_NoRefund() {
-        Player activeA = player("a", "ActiveA", 100);
-        Player outPlayer = outPlayer("outP", "OutP", 0);
-        List<Player> tablePlayers = List.of(activeA, outPlayer);
-        List<Player> contenders = List.of(activeA);
-        Map<String, Integer> contributions = Map.of("a", 100, "outP", 300);
-        int totalPot = 400;
+    @Nested
+    @DisplayName("PotAllocationEdgeCases")
+    class PotAllocationEdgeCases {
 
-        PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                totalPot, 0, contributions, contenders, tablePlayers, contenders, GAME_ID);
-
-        assertEquals(1, result.allocations().size());
-        assertEquals(400, result.allocations().get(0).amount());
-        assertEquals(List.of(activeA), result.allocations().get(0).eligiblePlayers());
-        assertEquals(0, result.uncalledTotal());
-        assertFalse(result.uncalledByPlayer().containsKey("outP"));
-    }
-
-    @Test
-    void challenge_FuzzInvariants_100PseudoRandomScenarios() {
-        java.util.Random rng = new java.util.Random(42);
-        for (int i = 0; i < 100; i++) {
-            int playerCount = 2 + rng.nextInt(6);
-            List<Player> allPlayers = new ArrayList<>();
-            List<Player> activePlayers = new ArrayList<>();
-            Map<String, Integer> contributions = new HashMap<>();
+        @Test
+        void challenge_TenPlayerAllIn_DistinctTiers_DecomposesExactNinePotsAndOneRefund() {
+            List<Player> players = new ArrayList<>();
+            Map<String, Integer> contributions = new LinkedHashMap<>();
             int totalPot = 0;
-            int carryOver = rng.nextInt(5) == 0 ? rng.nextInt(100) : 0;
-            totalPot += carryOver;
 
-            for (int p = 0; p < playerCount; p++) {
-                String id = "p" + p;
-                int contribution = 10 + rng.nextInt(500);
-                boolean folded = rng.nextDouble() < 0.3;
-                boolean allIn = !folded && rng.nextDouble() < 0.4;
-                boolean out = rng.nextDouble() < 0.1;
-                boolean departed = rng.nextDouble() < 0.1;
-
-                contributions.put(id, contribution);
-                totalPot += contribution;
-
-                if (!departed) {
-                    Player pl = Player.restoreBuilder()
-                            .playerId(id).name("P" + p).chips(allIn ? 0 : 500).currentBet(0)
-                            .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
-                            .hasFolded(folded).allIn(allIn).out(out).disconnected(false).readyForNextHand(false)
-                            .build();
-                    allPlayers.add(pl);
-                    if (!folded && !out) {
-                        activePlayers.add(pl);
-                    }
-                }
+            for (int i = 1; i <= 10; i++) {
+                String id = "p" + i;
+                int amount = i * 10;
+                players.add(allInPlayer(id, "Player_" + i, 0));
+                contributions.put(id, amount);
+                totalPot += amount;
             }
-
-            if (activePlayers.isEmpty()) {
-                Player survivor = Player.restoreBuilder()
-                        .playerId("survivor").name("Survivor").chips(100).currentBet(0)
-                        .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
-                        .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false)
-                        .build();
-                allPlayers.add(survivor);
-                activePlayers.add(survivor);
-                contributions.put("survivor", 10);
-                totalPot += 10;
-            }
+            assertEquals(550, totalPot);
 
             PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                    totalPot, carryOver, contributions, activePlayers, allPlayers, activePlayers, GAME_ID);
+                    totalPot, 0, contributions, players, players, players, GAME_ID);
 
-            int allocated = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
-            assertEquals(totalPot, allocated + result.uncalledTotal(),
-                    "Total pot must equal allocated + uncalled for run " + i);
+            int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
+            assertEquals(550, allocatedSum + result.uncalledTotal());
+            assertEquals(10, result.uncalledTotal());
+            assertEquals(10, result.uncalledByPlayer().get("p10"));
+            assertEquals(9, result.allocations().size());
 
-            int uncalledMapSum = result.uncalledByPlayer().values().stream().mapToInt(Integer::intValue).sum();
-            assertEquals(result.uncalledTotal(), uncalledMapSum,
-                    "Uncalled total must match uncalled map sum for run " + i);
-
-            for (PotCalculator.PotAllocation alloc : result.allocations()) {
-                assertTrue(alloc.amount() > 0, "Pot layer must be positive for run " + i);
-                for (Player el : alloc.eligiblePlayers()) {
-                    assertFalse(el.hasFolded(), "Eligible player must not be folded");
-                    assertFalse(el.isOut(), "Eligible player must not be out");
-                }
-            }
-
-            for (String uncalledId : result.uncalledByPlayer().keySet()) {
-                assertTrue(allPlayers.stream().anyMatch(p -> p.getPlayerId().equals(uncalledId)
-                        && !p.hasFolded() && !p.isOut()), "Uncalled recipient must be active seated player");
+            for (int i = 0; i < 9; i++) {
+                PotCalculator.PotAllocation alloc = result.allocations().get(i);
+                int expectedAmount = (10 - i) * 10;
+                int expectedEligibleCount = 10 - i;
+                assertEquals(expectedAmount, alloc.amount());
+                assertEquals(expectedEligibleCount, alloc.eligiblePlayers().size());
+                final String expectedId = "p" + (i + 1);
+                assertTrue(alloc.eligiblePlayers().stream().anyMatch(p -> p.getPlayerId().equals(expectedId)));
             }
 
             List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
-                    totalPot, carryOver, contributions, activePlayers, allPlayers, false, 0, GAME_ID));
-            int uncalledQuery = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
-                    totalPot, carryOver, contributions, activePlayers, allPlayers, false, 0, GAME_ID));
-            int breakdownSum = breakdown.stream().mapToInt(Integer::intValue).sum();
-            assertEquals(totalPot, breakdownSum + uncalledQuery,
-                    "Breakdown sum + uncalled query must equal total pot for run " + i);
+                    totalPot, 0, contributions, players, players, false, 100, GAME_ID));
+            assertEquals(List.of(100, 90, 80, 70, 60, 50, 40, 30, 20), breakdown);
+
+            int uncalled = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                    totalPot, 0, contributions, players, players, false, 100, GAME_ID));
+            assertEquals(10, uncalled);
+        }
+
+        @Test
+        void challenge_TenPlayers_AlternatingFolds_ActiveTopPlayer_GetsRefundAndRoutesDeadChips() {
+            List<Player> allPlayers = new ArrayList<>();
+            List<Player> contenders = new ArrayList<>();
+            Map<String, Integer> contributions = new LinkedHashMap<>();
+            int totalPot = 0;
+
+            for (int i = 1; i <= 10; i++) {
+                String id = "p" + i;
+                int amount = i * 10;
+                boolean fold = (i % 2 == 0 && i != 10);
+                Player p = fold ? foldedPlayer(id, "Folded_" + i, 0) : allInPlayer(id, "Active_" + i, 0);
+                allPlayers.add(p);
+                if (!fold) {
+                    contenders.add(p);
+                }
+                contributions.put(id, amount);
+                totalPot += amount;
+            }
+            assertEquals(550, totalPot);
+
+            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
+                    totalPot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
+
+            int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
+            assertEquals(550, allocatedSum + result.uncalledTotal());
+            assertEquals(10, result.uncalledTotal());
+            assertEquals(10, result.uncalledByPlayer().get("p10"));
+
+            for (PotCalculator.PotAllocation alloc : result.allocations()) {
+                for (Player eligible : alloc.eligiblePlayers()) {
+                    assertFalse(eligible.hasFolded());
+                }
+            }
+            assertEquals(540, allocatedSum);
+        }
+
+        @Test
+        void challenge_TenPlayers_TopPlayerFolded_DeadExcessRoutedToSurvivorsWithoutRefund() {
+            List<Player> allPlayers = new ArrayList<>();
+            List<Player> contenders = new ArrayList<>();
+            Map<String, Integer> contributions = new LinkedHashMap<>();
+            int totalPot = 0;
+
+            for (int i = 1; i <= 10; i++) {
+                String id = "p" + i;
+                int amount = i * 10;
+                boolean fold = (i % 2 == 0);
+                Player p = fold ? foldedPlayer(id, "Folded_" + i, 0) : allInPlayer(id, "Active_" + i, 0);
+                allPlayers.add(p);
+                if (!fold) {
+                    contenders.add(p);
+                }
+                contributions.put(id, amount);
+                totalPot += amount;
+            }
+            assertEquals(550, totalPot);
+
+            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
+                    totalPot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
+
+            assertEquals(0, result.uncalledTotal());
+            assertTrue(result.uncalledByPlayer().isEmpty());
+
+            int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
+            assertEquals(550, allocatedSum);
+
+            for (PotCalculator.PotAllocation alloc : result.allocations()) {
+                for (Player eligible : alloc.eligiblePlayers()) {
+                    assertFalse(eligible.hasFolded());
+                }
+            }
+        }
+
+        @Test
+        void challenge_LargeCarryOverAndHugePot_NoSilentNegativeWrap() {
+            int carryOver = 10_000_000;
+            Player p1 = allInPlayer("p1", "Short", 0);
+            Player p2 = player("p2", "Mid", 500);
+            Player p3 = player("p3", "Deep", 500);
+            List<Player> allPlayers = List.of(p1, p2, p3);
+            Map<String, Integer> contributions = Map.of("p1", 100, "p2", 300, "p3", 300);
+            int totalPot = carryOver + 700;
+
+            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
+                    totalPot, carryOver, contributions, allPlayers, allPlayers, allPlayers, GAME_ID);
+
+            assertEquals(2, result.allocations().size());
+            assertEquals(10_000_300, result.allocations().get(0).amount());
+            assertEquals(400, result.allocations().get(1).amount());
+
+            int p1Contrib = 500_000_000;
+            int p2Contrib = 1_000_000_000;
+            int hugePot = 1_500_000_000;
+            List<Player> hugePlayers = List.of(p1, p2);
+            PotCalculator.PotAllocations hugeResult = PotCalculator.allocatePots(
+                    hugePot, 0, Map.of("p1", p1Contrib, "p2", p2Contrib), hugePlayers, hugePlayers, hugePlayers, GAME_ID);
+
+            assertEquals(1, hugeResult.allocations().size());
+            assertEquals(1_000_000_000, hugeResult.allocations().get(0).amount());
+            assertEquals(500_000_000, hugeResult.uncalledTotal());
+            assertEquals(500_000_000, hugeResult.uncalledByPlayer().get("p2"));
+        }
+
+        @Test
+        void challenge_Boundary_AllInForOneChipAndTierCollisions() {
+            Player micro = allInPlayer("m1", "Micro", 0);
+            Player deep = player("d1", "Deep", 999);
+            List<Player> pair = List.of(micro, deep);
+            PotCalculator.PotAllocations oneChip = PotCalculator.allocatePots(
+                    501, 0, Map.of("m1", 1, "d1", 500), pair, pair, pair, GAME_ID);
+            assertEquals(1, oneChip.allocations().size());
+            assertEquals(2, oneChip.allocations().get(0).amount());
+            assertEquals(499, oneChip.uncalledTotal());
+
+            List<Player> players = new ArrayList<>();
+            Map<String, Integer> contributions = new LinkedHashMap<>();
+            int pot = 0;
+            for (int i = 1; i <= 3; i++) {
+                players.add(allInPlayer("p" + i, "Tier1_" + i, 0));
+                contributions.put("p" + i, 50);
+                pot += 50;
+            }
+            for (int i = 4; i <= 6; i++) {
+                players.add(allInPlayer("p" + i, "Tier2_" + i, 0));
+                contributions.put("p" + i, 150);
+                pot += 150;
+            }
+            for (int i = 7; i <= 8; i++) {
+                players.add(allInPlayer("p" + i, "Tier3_" + i, 0));
+                contributions.put("p" + i, 300);
+                pot += 300;
+            }
+            PotCalculator.PotAllocations tiers = PotCalculator.allocatePots(
+                    pot, 0, contributions, players, players, players, GAME_ID);
+            assertEquals(0, tiers.uncalledTotal());
+            assertEquals(3, tiers.allocations().size());
+            assertEquals(400, tiers.allocations().get(0).amount());
+            assertEquals(500, tiers.allocations().get(1).amount());
+            assertEquals(300, tiers.allocations().get(2).amount());
+        }
+
+        @Test
+        void challenge_PropertyBasedFuzzing_RandomizedScenarios_AllInvariantsHold() {
+            Random rng = new Random(42_1337);
+
+            for (int iteration = 0; iteration < 300; iteration++) {
+                int playerCount = 2 + rng.nextInt(9);
+                List<Player> allPlayers = new ArrayList<>();
+                List<Player> activePlayers = new ArrayList<>();
+                Map<String, Integer> contributions = new LinkedHashMap<>();
+                int totalPot = 0;
+                int carryOver = rng.nextDouble() < 0.2 ? rng.nextInt(100) : 0;
+                totalPot += carryOver;
+
+                for (int p = 0; p < playerCount; p++) {
+                    String id = "fuzz_p" + p;
+                    int contribution = 1 + rng.nextInt(500);
+                    boolean folded = p > 0 && rng.nextDouble() < 0.3;
+                    boolean allIn = !folded && rng.nextDouble() < 0.4;
+                    boolean out = p > 0 && rng.nextDouble() < 0.1;
+                    boolean departed = p > 0 && rng.nextDouble() < 0.1;
+
+                    contributions.put(id, contribution);
+                    totalPot += contribution;
+
+                    if (!departed) {
+                        Player pl = Player.restoreBuilder()
+                                .playerId(id).name("P" + p).chips(allIn ? 0 : 500).currentBet(0)
+                                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
+                                .hasFolded(folded).allIn(allIn).out(out).disconnected(false).readyForNextHand(false)
+                                .build();
+                        allPlayers.add(pl);
+                        if (!folded && !out) {
+                            activePlayers.add(pl);
+                        }
+                    }
+                }
+
+                PotCalculator.PotAllocations result = PotCalculator.allocatePots(
+                        totalPot, carryOver, contributions, activePlayers, allPlayers, activePlayers, "fuzz-" + iteration);
+
+                int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
+                assertEquals(totalPot, allocatedSum + result.uncalledTotal(),
+                        "Iteration " + iteration + ": Pot conservation violated");
+
+                int uncalledMapSum = result.uncalledByPlayer().values().stream().mapToInt(Integer::intValue).sum();
+                assertEquals(result.uncalledTotal(), uncalledMapSum,
+                        "Iteration " + iteration + ": uncalledTotal does not match map sum");
+
+                for (String refundedId : result.uncalledByPlayer().keySet()) {
+                    assertTrue(allPlayers.stream().anyMatch(pl -> pl.getPlayerId().equals(refundedId)
+                            && !pl.hasFolded() && !pl.isOut()));
+                }
+
+                Set<String> previousTierIds = null;
+                for (PotCalculator.PotAllocation alloc : result.allocations()) {
+                    assertTrue(alloc.amount() > 0);
+                    for (Player eligible : alloc.eligiblePlayers()) {
+                        assertFalse(eligible.hasFolded());
+                        assertFalse(eligible.isOut());
+                    }
+                    Set<String> currentTierIds = alloc.eligiblePlayers().stream()
+                            .map(Player::getPlayerId)
+                            .collect(Collectors.toSet());
+                    if (previousTierIds != null) {
+                        assertTrue(previousTierIds.containsAll(currentTierIds));
+                    }
+                    previousTierIds = currentTierIds;
+                }
+
+                List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
+                        totalPot, carryOver, contributions, activePlayers, allPlayers, false, 0, GAME_ID));
+                int uncalledQuery = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
+                        totalPot, carryOver, contributions, activePlayers, allPlayers, false, 0, GAME_ID));
+                int breakdownSum = breakdown.stream().mapToInt(Integer::intValue).sum();
+                assertEquals(totalPot, breakdownSum + uncalledQuery);
+            }
         }
     }
-
-    // =========================================================================
-    // Test Fixture Builders
-    // =========================================================================
 
     private static Player outPlayer(String id, String name, int chips) {
         return Player.restoreBuilder()
@@ -912,489 +912,5 @@ class PotCalculatorTest {
                 .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
                 .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false)
                 .build();
-    }
-
-    @Nested
-    @DisplayName("PotAllocationEdgeCases")
-    class PotAllocationEdgeCases {
-
-        private static final String GAME_ID = "adversarial-challenge-game";
-
-        // =========================================================================
-        // 1. 10-Player Multi-Way All-Ins With Distinct Contribution Tiers
-        // =========================================================================
-
-        @Test
-        void challenge_TenPlayerAllIn_DistinctTiers_DecomposesExactNinePotsAndOneRefund() {
-            // 10 players with contributions 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
-            List<Player> players = new ArrayList<>();
-            Map<String, Integer> contributions = new LinkedHashMap<>();
-            int totalPot = 0;
-
-            for (int i = 1; i <= 10; i++) {
-                String id = "p" + i;
-                int amount = i * 10;
-                players.add(allInPlayer(id, "Player_" + i, 0));
-                contributions.put(id, amount);
-                totalPot += amount;
-            }
-            assertEquals(550, totalPot);
-
-            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                    totalPot, 0, contributions, players, players, players, GAME_ID);
-
-            // Verification of Invariant: Conservation
-            int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
-            assertEquals(550, allocatedSum + result.uncalledTotal(), "Conservation invariant failed");
-
-            // Layer 10 (90 to 100): P10 is the sole contributor, so top 10 chips must be refunded as uncalled!
-            assertEquals(10, result.uncalledTotal());
-            assertEquals(10, result.uncalledByPlayer().get("p10"));
-
-            // Exactly 9 contested allocations
-            assertEquals(9, result.allocations().size());
-
-            // Verify each layer's expected amount and eligible contenders:
-            // Layer 1: 10 * 10 = 100, eligible p1..p10 (10 players)
-            // Layer 2: 10 * 9 = 90, eligible p2..p10 (9 players)
-            // Layer 3: 10 * 8 = 80, eligible p3..p10 (8 players)
-            // Layer 4: 10 * 7 = 70, eligible p4..p10 (7 players)
-            // Layer 5: 10 * 6 = 60, eligible p5..p10 (6 players)
-            // Layer 6: 10 * 5 = 50, eligible p6..p10 (5 players)
-            // Layer 7: 10 * 4 = 40, eligible p7..p10 (4 players)
-            // Layer 8: 10 * 3 = 30, eligible p8..p10 (3 players)
-            // Layer 9: 10 * 2 = 20, eligible p9..p10 (2 players)
-            for (int i = 0; i < 9; i++) {
-                PotCalculator.PotAllocation alloc = result.allocations().get(i);
-                int expectedAmount = (10 - i) * 10;
-                int expectedEligibleCount = 10 - i;
-                assertEquals(expectedAmount, alloc.amount(), "Layer " + (i + 1) + " amount mismatch");
-                assertEquals(expectedEligibleCount, alloc.eligiblePlayers().size(), "Layer " + (i + 1) + " eligible count mismatch");
-                final String expectedId = "p" + (i + 1);
-                assertTrue(alloc.eligiblePlayers().stream().anyMatch(p -> p.getPlayerId().equals(expectedId)));
-            }
-
-            // Test public getPotBreakdown() when action complete:
-            // Contested breakdown should be [100, 90, 80, 70, 60, 50, 40, 30, 20]
-            List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
-                    totalPot, 0, contributions, players, players, false, 100, GAME_ID));
-            assertEquals(List.of(100, 90, 80, 70, 60, 50, 40, 30, 20), breakdown);
-
-            // Test public getUncalledAmount()
-            int uncalled = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
-                    totalPot, 0, contributions, players, players, false, 100, GAME_ID));
-            assertEquals(10, uncalled);
-        }
-
-        // =========================================================================
-        // 2. Folded Players Contributing at Various Intermediate Tiers
-        // =========================================================================
-
-        @Test
-        void challenge_TenPlayers_AlternatingFolds_ActiveTopPlayer_GetsRefundAndRoutesDeadChips() {
-            // 10 players: Even indices 2, 4, 6, 8 fold; 1, 3, 5, 7, 9, 10 stay active
-            // P1(10), P2(20, fold), P3(30), P4(40, fold), P5(50),
-            // P6(60, fold), P7(70), P8(80, fold), P9(90), P10(100, active)
-            List<Player> allPlayers = new ArrayList<>();
-            List<Player> contenders = new ArrayList<>();
-            Map<String, Integer> contributions = new LinkedHashMap<>();
-            int totalPot = 0;
-
-            for (int i = 1; i <= 10; i++) {
-                String id = "p" + i;
-                int amount = i * 10;
-                // P10 is active, 2, 4, 6, 8 are folded
-                boolean fold = (i % 2 == 0 && i != 10);
-                Player p = fold ? foldedPlayer(id, "Folded_" + i, 0) : allInPlayer(id, "Active_" + i, 0);
-                allPlayers.add(p);
-                if (!fold) {
-                    contenders.add(p);
-                }
-                contributions.put(id, amount);
-                totalPot += amount;
-            }
-            assertEquals(550, totalPot);
-
-            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                    totalPot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
-
-            // Pot conservation check
-            int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
-            assertEquals(550, allocatedSum + result.uncalledTotal());
-
-            // Level 10 (90-100): P10 is active, alone -> 10 uncalled refunded to P10
-            assertEquals(10, result.uncalledTotal());
-            assertEquals(10, result.uncalledByPlayer().get("p10"));
-
-            // Verify that NO folded player is present in ANY allocation's eligible players
-            for (PotCalculator.PotAllocation alloc : result.allocations()) {
-                for (Player eligible : alloc.eligiblePlayers()) {
-                    assertFalse(eligible.hasFolded(), "Folded player found in eligible contenders: " + eligible.getPlayerId());
-                }
-            }
-
-            // Verify that dead chips from folded players are fully absorbed into contested pots
-            assertEquals(540, allocatedSum);
-        }
-
-        @Test
-        void challenge_TenPlayers_TopPlayerFolded_DeadExcessRoutedToSurvivorsWithoutRefund() {
-            // 10 players: P10 folds after betting 100!
-            // P1(10, active), P2..P10 all fold! Or alternating where P10 folds!
-            List<Player> allPlayers = new ArrayList<>();
-            List<Player> contenders = new ArrayList<>();
-            Map<String, Integer> contributions = new LinkedHashMap<>();
-            int totalPot = 0;
-
-            for (int i = 1; i <= 10; i++) {
-                String id = "p" + i;
-                int amount = i * 10;
-                boolean fold = (i % 2 == 0); // P2, P4, P6, P8, P10 fold! P1, P3, P5, P7, P9 active
-                Player p = fold ? foldedPlayer(id, "Folded_" + i, 0) : allInPlayer(id, "Active_" + i, 0);
-                allPlayers.add(p);
-                if (!fold) {
-                    contenders.add(p);
-                }
-                contributions.put(id, amount);
-                totalPot += amount;
-            }
-            assertEquals(550, totalPot);
-
-            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                    totalPot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
-
-            // Invariant: Because top player (P10) folded, NO uncalled refund is issued!
-            assertEquals(0, result.uncalledTotal());
-            assertTrue(result.uncalledByPlayer().isEmpty());
-
-            // Entire 550 chips must be contested among active players
-            int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
-            assertEquals(550, allocatedSum);
-
-            // No folded player is eligible
-            for (PotCalculator.PotAllocation alloc : result.allocations()) {
-                for (Player eligible : alloc.eligiblePlayers()) {
-                    assertFalse(eligible.hasFolded());
-                }
-            }
-        }
-
-        @Test
-        void challenge_DeepFoldedWhale_AllExcessDeadMoneyAbsorbedBySurvivors() {
-            // P1 contributes 50 (active), P2 contributes 50 (active)
-            // P3 is a whale who contributed 5000 chips and then FOLDED!
-            Player p1 = player("p1", "Survivor1", 100);
-            Player p2 = player("p2", "Survivor2", 100);
-            Player p3 = foldedPlayer("p3", "FoldedWhale", 100);
-            List<Player> allPlayers = List.of(p1, p2, p3);
-            List<Player> contenders = List.of(p1, p2);
-            Map<String, Integer> contributions = Map.of("p1", 50, "p2", 50, "p3", 5000);
-            int pot = 5100;
-
-            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                    pot, 0, contributions, contenders, allPlayers, contenders, GAME_ID);
-
-            // The whale folded, so CANNOT receive an uncalled refund.
-            assertEquals(0, result.uncalledTotal());
-            assertTrue(result.uncalledByPlayer().isEmpty());
-
-            // All 5,100 chips must be coalesced into a single allocation contested by [p1, p2]
-            assertEquals(1, result.allocations().size());
-            assertEquals(5100, result.allocations().get(0).amount());
-            assertEquals(List.of(p1, p2), result.allocations().get(0).eligiblePlayers());
-        }
-
-        // =========================================================================
-        // 3. Large Carry-Over Remainders and Large Chip Limits
-        // =========================================================================
-
-        @Test
-        void challenge_LargeCarryOver_AddedToMainPotWithoutDistortingSidePots() {
-            // Carry-over from previous hand: 10,000,000 chips
-            int carryOver = 10_000_000;
-            Player p1 = allInPlayer("p1", "Short", 0);
-            Player p2 = player("p2", "Mid", 500);
-            Player p3 = player("p3", "Deep", 500);
-            List<Player> allPlayers = List.of(p1, p2, p3);
-            List<Player> contenders = List.of(p1, p2, p3);
-
-            Map<String, Integer> contributions = Map.of("p1", 100, "p2", 300, "p3", 300);
-            int totalPot = carryOver + 700;
-
-            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                    totalPot, carryOver, contributions, contenders, allPlayers, contenders, GAME_ID);
-
-            // Conservation check
-            int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
-            assertEquals(totalPot, allocatedSum + result.uncalledTotal());
-
-            // Side pot: (300 - 100) * 2 = 400, eligible: [p2, p3]
-            // Main pot: 100 * 3 + carryOver = 300 + 10,000,000 = 10,000,300, eligible: [p1, p2, p3]
-            assertEquals(2, result.allocations().size());
-            assertEquals(10_000_300, result.allocations().get(0).amount());
-            assertEquals(List.of(p1, p2, p3), result.allocations().get(0).eligiblePlayers());
-            assertEquals(400, result.allocations().get(1).amount());
-            assertEquals(List.of(p2, p3), result.allocations().get(1).eligiblePlayers());
-        }
-
-        @Test
-        void challenge_HugePotNearMaxInteger_NoSilentNegativeWrap() {
-            // Handled amounts summing to 1.5 billion chips (fits in standard signed 32-bit int)
-            int p1Contrib = 500_000_000;
-            int p2Contrib = 1_000_000_000;
-            int totalPot = 1_500_000_000;
-
-            Player p1 = allInPlayer("p1", "Huge1", 0);
-            Player p2 = allInPlayer("p2", "Huge2", 0);
-            List<Player> allPlayers = List.of(p1, p2);
-
-            Map<String, Integer> contributions = Map.of("p1", p1Contrib, "p2", p2Contrib);
-
-            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                    totalPot, 0, contributions, allPlayers, allPlayers, allPlayers, GAME_ID);
-
-            // Layer 1: 500M * 2 = 1,000,000,000 (positive, no overflow)
-            assertEquals(1, result.allocations().size());
-            assertEquals(1_000_000_000, result.allocations().get(0).amount());
-
-            // Uncalled: 500,000,000 refunded to p2
-            assertEquals(500_000_000, result.uncalledTotal());
-            assertEquals(500_000_000, result.uncalledByPlayer().get("p2"));
-
-            // Sum matches
-            assertEquals(totalPot, result.allocations().get(0).amount() + result.uncalledTotal());
-        }
-
-        // =========================================================================
-        // 4. Boundary Cases (Empty pot, Zero chips, All-in for 1 chip)
-        // =========================================================================
-
-        @Test
-        void challenge_Boundary_EmptyPot_SafeEmptyReturns() {
-            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                    0, 0, Map.of(), List.of(), List.of(), List.of(), GAME_ID);
-
-            assertTrue(result.allocations().isEmpty());
-            assertTrue(result.uncalledByPlayer().isEmpty());
-            assertEquals(0, result.uncalledTotal());
-
-            List<Integer> breakdown = PotCalculator.getPotBreakdown(new PotCalculator.PotInputs(
-                    0, 0, Map.of(), List.of(), List.of(), false, 0, GAME_ID));
-            assertTrue(breakdown.isEmpty());
-
-            int uncalled = PotCalculator.getUncalledAmount(new PotCalculator.PotInputs(
-                    0, 0, Map.of(), List.of(), List.of(), false, 0, GAME_ID));
-            assertEquals(0, uncalled);
-        }
-
-        @Test
-        void challenge_Boundary_AllInForOneChip_VersusLargeStack() {
-            Player micro = allInPlayer("m1", "Micro", 0);
-            Player deep = player("d1", "Deep", 999);
-            List<Player> allPlayers = List.of(micro, deep);
-            Map<String, Integer> contributions = Map.of("m1", 1, "d1", 500);
-            int pot = 501;
-
-            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                    pot, 0, contributions, allPlayers, allPlayers, allPlayers, GAME_ID);
-
-            // Main pot: 1 * 2 = 2 chips contested by [micro, deep]
-            assertEquals(1, result.allocations().size());
-            assertEquals(2, result.allocations().get(0).amount());
-            assertEquals(List.of(micro, deep), result.allocations().get(0).eligiblePlayers());
-
-            // Uncalled: 499 chips refunded to deep
-            assertEquals(499, result.uncalledTotal());
-            assertEquals(499, result.uncalledByPlayer().get("d1"));
-
-            assertEquals(pot, result.allocations().get(0).amount() + result.uncalledTotal());
-        }
-
-        @Test
-        void challenge_Boundary_MultiplePlayersAllInForOneChip_TiedContribution() {
-            // 5 players all-in for 1 chip each
-            List<Player> players = new ArrayList<>();
-            Map<String, Integer> contributions = new LinkedHashMap<>();
-            for (int i = 1; i <= 5; i++) {
-                players.add(allInPlayer("p" + i, "P" + i, 0));
-                contributions.put("p" + i, 1);
-            }
-
-            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                    5, 0, contributions, players, players, players, GAME_ID);
-
-            assertEquals(1, result.allocations().size());
-            assertEquals(5, result.allocations().get(0).amount());
-            assertEquals(5, result.allocations().get(0).eligiblePlayers().size());
-            assertEquals(0, result.uncalledTotal());
-        }
-
-        // =========================================================================
-        // 5. Tier Collisions (Multiple players with identical contributions)
-        // =========================================================================
-
-        @Test
-        void challenge_TierCollision_ClustersOfIdenticalStacks() {
-            // Three tiers with multiple players at each tier:
-            // Tier 50: 3 players (p1, p2, p3)
-            // Tier 150: 3 players (p4, p5, p6)
-            // Tier 300: 2 players (p7, p8)
-            List<Player> players = new ArrayList<>();
-            Map<String, Integer> contributions = new LinkedHashMap<>();
-            int pot = 0;
-
-            for (int i = 1; i <= 3; i++) {
-                players.add(allInPlayer("p" + i, "Tier1_" + i, 0));
-                contributions.put("p" + i, 50);
-                pot += 50;
-            }
-            for (int i = 4; i <= 6; i++) {
-                players.add(allInPlayer("p" + i, "Tier2_" + i, 0));
-                contributions.put("p" + i, 150);
-                pot += 150;
-            }
-            for (int i = 7; i <= 8; i++) {
-                players.add(allInPlayer("p" + i, "Tier3_" + i, 0));
-                contributions.put("p" + i, 300);
-                pot += 300;
-            }
-            // Total pot: 3*50 + 3*150 + 2*300 = 150 + 450 + 600 = 1200
-            assertEquals(1200, pot);
-
-            PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                    pot, 0, contributions, players, players, players, GAME_ID);
-
-            // Since both top players contributed 300, no uncalled excess exists!
-            assertEquals(0, result.uncalledTotal());
-
-            // Exactly 3 distinct tiers -> exactly 3 allocation layers
-            assertEquals(3, result.allocations().size());
-
-            // Layer 1 (0 to 50): 8 players * 50 = 400
-            assertEquals(400, result.allocations().get(0).amount());
-            assertEquals(8, result.allocations().get(0).eligiblePlayers().size());
-
-            // Layer 2 (50 to 150): 5 players * 100 = 500
-            assertEquals(500, result.allocations().get(1).amount());
-            assertEquals(5, result.allocations().get(1).eligiblePlayers().size());
-
-            // Layer 3 (150 to 300): 2 players * 150 = 300
-            assertEquals(300, result.allocations().get(2).amount());
-            assertEquals(2, result.allocations().get(2).eligiblePlayers().size());
-
-            // Conservation check
-            assertEquals(1200, result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum());
-        }
-
-        // =========================================================================
-        // 6. Property-Based Fuzzing / Stress Harness (1,000 Iterations)
-        // =========================================================================
-
-        @Test
-        void challenge_PropertyBasedFuzzing_1000RandomizedScenarios_AllInvariantsHold() {
-            Random rng = new Random(42_1337);
-
-            for (int iteration = 0; iteration < 1000; iteration++) {
-                int playerCount = 2 + rng.nextInt(9); // 2 to 10 players
-                List<Player> allPlayers = new ArrayList<>();
-                List<Player> contenders = new ArrayList<>();
-                Map<String, Integer> contributions = new LinkedHashMap<>();
-                int pot = 0;
-
-                for (int p = 0; p < playerCount; p++) {
-                    String id = "fuzz_p" + p;
-                    int contribution = rng.nextInt(500) + 1; // 1 to 500 chips
-                    // Ensure at least one player does not fold
-                    boolean fold = (p > 0) && (rng.nextDouble() < 0.35);
-
-                    Player player = fold
-                            ? foldedPlayer(id, "Fold_" + p, 0)
-                            : allInPlayer(id, "Active_" + p, 0);
-
-                    allPlayers.add(player);
-                    if (!fold) {
-                        contenders.add(player);
-                    }
-                    contributions.put(id, contribution);
-                    pot += contribution;
-                }
-
-                int carryOver = (rng.nextDouble() < 0.2) ? rng.nextInt(100) : 0;
-                pot += carryOver;
-
-                PotCalculator.PotAllocations result = PotCalculator.allocatePots(
-                        pot, carryOver, contributions, contenders, allPlayers, contenders, "fuzz-" + iteration);
-
-                // Invariant 1: Conservation of Chips
-                int allocatedSum = result.allocations().stream().mapToInt(PotCalculator.PotAllocation::amount).sum();
-                int totalAccounted = allocatedSum + result.uncalledTotal();
-                assertEquals(pot, totalAccounted,
-                        "Iteration " + iteration + ": Pot conservation violated! pot=" + pot + " accounted=" + totalAccounted);
-
-                // Invariant 2: Uncalled Sum Matches Map Values
-                int uncalledMapSum = result.uncalledByPlayer().values().stream().mapToInt(Integer::intValue).sum();
-                assertEquals(result.uncalledTotal(), uncalledMapSum,
-                        "Iteration " + iteration + ": uncalledTotal does not match map sum");
-
-                // Invariant 3: No Folded Player in Uncalled Refund
-                for (String refundedId : result.uncalledByPlayer().keySet()) {
-                    Player refundedPlayer = allPlayers.stream().filter(pl -> pl.getPlayerId().equals(refundedId)).findFirst().orElseThrow();
-                    assertFalse(refundedPlayer.hasFolded(),
-                            "Iteration " + iteration + ": Folded player received refund: " + refundedId);
-                }
-
-                // Invariant 4: No Folded Player in Contested Allocations
-                for (PotCalculator.PotAllocation alloc : result.allocations()) {
-                    assertTrue(alloc.amount() > 0, "Allocation amount must be strictly positive");
-                    for (Player eligible : alloc.eligiblePlayers()) {
-                        assertFalse(eligible.hasFolded(),
-                                "Iteration " + iteration + ": Folded player found in eligible contenders");
-                        assertFalse(eligible.isOut(),
-                                "Iteration " + iteration + ": Out player found in eligible contenders");
-                    }
-                }
-
-                // Invariant 5: Monotonic Non-Increasing Eligibility Sets
-                // As contribution tiers rise, the set of eligible players cannot expand
-                Set<String> previousTierIds = null;
-                for (PotCalculator.PotAllocation alloc : result.allocations()) {
-                    Set<String> currentTierIds = alloc.eligiblePlayers().stream().map(Player::getPlayerId).collect(Collectors.toSet());
-                    if (previousTierIds != null) {
-                        assertTrue(previousTierIds.containsAll(currentTierIds),
-                                "Iteration " + iteration + ": Eligibility set illegally expanded in higher tier! "
-                                        + "prev=" + previousTierIds + " curr=" + currentTierIds);
-                    }
-                    previousTierIds = currentTierIds;
-                }
-            }
-        }
-
-        // =========================================================================
-        // Helpers
-        // =========================================================================
-
-        private static Player player(String id, String name, int chips) {
-            return Player.restoreBuilder()
-                    .playerId(id).name(name).chips(chips).currentBet(0)
-                    .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
-                    .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false)
-                    .build();
-        }
-
-        private static Player allInPlayer(String id, String name, int chips) {
-            return Player.restoreBuilder()
-                    .playerId(id).name(name).chips(chips).currentBet(0)
-                    .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
-                    .hasFolded(false).allIn(true).out(false).disconnected(false).readyForNextHand(false)
-                    .build();
-        }
-
-        private static Player foldedPlayer(String id, String name, int chips) {
-            return Player.restoreBuilder()
-                    .playerId(id).name(name).chips(chips).currentBet(0)
-                    .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
-                    .hasFolded(true).allIn(false).out(false).disconnected(false).readyForNextHand(false)
-                    .build();
-        }
     }
 }

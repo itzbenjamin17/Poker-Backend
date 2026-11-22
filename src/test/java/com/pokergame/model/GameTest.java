@@ -1,5 +1,15 @@
 package com.pokergame.model;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
@@ -12,6 +22,19 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Random;
+import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -19,29 +42,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.EnumMap;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Random;
-import java.util.Set;
-import java.util.UUID;
-
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for the {@link Game} aggregate root across lifecycle, betting, showdown settlement,
@@ -104,7 +104,7 @@ class GameTest {
     }
 
     private static Player restoredPlayer(
-            String id, String name, int chips, boolean isOut, boolean hasFolded, boolean isAllIn) {
+            String name, String id, int chips, boolean isOut, boolean hasFolded, boolean isAllIn) {
         return Player.restoreBuilder()
                 .playerId(id)
                 .name(name)
@@ -213,9 +213,13 @@ class GameTest {
             assertEquals("game123", game.getGameId());
             assertEquals(3, game.getPlayers().size());
             assertEquals(3, game.getActivePlayers().size());
+            assertNotNull(game.getCurrentPlayer());
+            assertNotNull(game.getCommunityCards());
             assertEquals(0, game.getPot());
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertFalse(game.isGameOver());
+            assertEquals(0, game.getCurrentHighestBet());
+            assertEquals("p1", game.toSnapshot().dealerPlayerId());
         }
 
         @Test
@@ -323,6 +327,22 @@ class GameTest {
         }
 
         @Test
+        void postBlindsThrowsWhenFewerThanTwoActivePlayers() {
+            Game singleActive = Game.restoreBuilder()
+                    .gameId("single-active-blinds")
+                    .players(List.of(new Player("Alice", "p1", 1000), new Player("Bob", "p2", 0)))
+                    .activePlayerIds(List.of("p1"))
+                    .remainingDeck(List.of())
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .build();
+
+            IllegalStateException ex = assertThrows(IllegalStateException.class, singleActive::postBlinds);
+            assertEquals("Trying to post blinds for a game single-active-blinds which has less than 2 players",
+                    ex.getMessage());
+        }
+
+        @Test
         void testDealStreetsAndResetBetsAcrossRounds() {
             game.postBlinds();
             assertEquals(20, game.getCurrentHighestBet());
@@ -415,6 +435,7 @@ class GameTest {
             assertFalse(game.resetForNewHand());
             assertTrue(first.isOut());
             assertEquals(2, game.getActivePlayers().size());
+            assertFalse(game.getActivePlayers().contains(first));
             assertFalse(game.isGameOver());
 
             Player second = game.getActivePlayers().getFirst();
@@ -422,40 +443,6 @@ class GameTest {
             assertTrue(game.resetForNewHand());
             assertEquals(1, game.getActivePlayers().size());
             assertTrue(game.isGameOver());
-        }
-
-        @Test
-        void testGetters() {
-            assertEquals("game123", game.getGameId());
-            assertEquals(3, game.getPlayers().size());
-            assertEquals(3, game.getActivePlayers().size());
-            assertNotNull(game.getCurrentPlayer());
-            assertNotNull(game.getCommunityCards());
-            assertEquals(0, game.getPot());
-            assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
-            assertFalse(game.isGameOver());
-            assertEquals(0, game.getCurrentHighestBet());
-            assertEquals("p1", game.toSnapshot().dealerPlayerId());
-        }
-
-        @Test
-        void testResetForNewHandWithEliminatedPlayers() {
-            Player eliminated = game.getActivePlayers().getFirst();
-            eliminated.doAction(PlayerAction.ALL_IN, 0);
-            eliminated.setIsOut();
-
-            game.resetForNewHand();
-
-            assertEquals(2, game.getActivePlayers().size());
-            assertFalse(game.getActivePlayers().contains(eliminated));
-        }
-
-        @Test
-        void testIsGameDecidedWhenOnePlayerHasChips() {
-            assertFalse(game.isGameDecided());
-            game.getPlayers().get(1).doAction(PlayerAction.ALL_IN, 0);
-            game.getPlayers().get(2).doAction(PlayerAction.ALL_IN, 0);
-            assertTrue(game.isGameDecided());
         }
 
         @Test
@@ -485,51 +472,6 @@ class GameTest {
 
             assertFalse(game.resetForNewHand());
             assertTrue(game.toSnapshot().actedPlayerIds().isEmpty());
-        }
-
-        @Test
-        @DisplayName("restoreBuilder fully reconstructs the game state from persistence boundaries")
-        void testRestoreBuilder() {
-            Player p1 = new Player("P1", "p1-id", 500);
-            Player p2 = new Player("P2", "p2-id", 300);
-            List<Card> deckCards = List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.HEARTS));
-            List<Card> community = List.of(new Card(Rank.TWO, Suit.DIAMONDS));
-            Map<String, Integer> contribs = Map.of("p1-id", 100);
-            Set<String> acted = Set.of("p1-id");
-            Map<ScheduledGameTask, Long> tasks = Map.of(ScheduledGameTask.AUTO_ADVANCE, 12345L);
-
-            Game restored = Game.restoreBuilder()
-                    .gameId("restored-game")
-                    .players(List.of(p1, p2))
-                    .activePlayerIds(List.of("p1-id", "p2-id"))
-                    .remainingDeck(deckCards)
-                    .communityCards(community)
-                    .pot(100)
-                    .dealerPlayerId("p2-id")
-                    .smallBlindPlayerId("p1-id")
-                    .bigBlindPlayerId("p2-id")
-                    .currentPlayerId("p1-id")
-                    .currentHighestBet(50)
-                    .currentPhase(GamePhase.FLOP)
-                    .gameOver(false)
-                    .smallBlind(10)
-                    .bigBlind(20)
-                    .handContributions(contribs)
-                    .readyGateState(ReadyGateState.COUNTING_DOWN)
-                    .readyCountdownDeadlineEpochMs(9999L)
-                    .allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(acted)
-                    .scheduledTimes(tasks)
-                    
-                    .build();
-
-            assertEquals("restored-game", restored.getGameId());
-            assertEquals(100, restored.getPot());
-            assertEquals(GamePhase.FLOP, restored.getCurrentPhase());
-            assertTrue(restored.getCommunityCards().contains(new Card(Rank.TWO, Suit.DIAMONDS)));
-            assertEquals(2, restored.getActivePlayers().size());
-            assertEquals(10, restored.getSmallBlind());
-            assertEquals(20, restored.getBigBlind());
         }
     }
 
@@ -795,15 +737,48 @@ class GameTest {
                     .allPlayersHadInitialTurn(false)
                     .actedPlayersInRound(Set.of())
                     .scheduledTimes(Map.of())
-                    
                     .build();
             assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, owingGame.advanceAfterBlinds().type());
         }
 
         @Test
+        void advanceAfterBlindsSkipsCurrentPlayerWhoWentAllInPostingBlinds() {
+            Player dealerAllIn = restoredPlayer("DealerSB", "p1", 0, 5, true);
+            Player deepBb = restoredPlayer("BigBlind", "p2", 990, 10, false);
+            Player utg = restoredPlayer("UTG", "p3", 1000, 0, false);
+            Game blindAllInGame = Game.restoreBuilder()
+                    .gameId("blind-allin-turn-skip")
+                    .players(List.of(dealerAllIn, deepBb, utg))
+                    .activePlayerIds(List.of("p1", "p2", "p3"))
+                    .remainingDeck(List.of())
+                    .communityCards(List.of())
+                    .pot(15)
+                    .dealerPlayerId("p1")
+                    .smallBlindPlayerId("p1")
+                    .bigBlindPlayerId("p2")
+                    .currentPlayerId("p1")
+                    .currentHighestBet(10)
+                    .currentPhase(GamePhase.PRE_FLOP)
+                    .gameOver(false)
+                    .smallBlind(5)
+                    .bigBlind(10)
+                    .handContributions(Map.of("p1", 5, "p2", 10))
+                    .carryOverPot(0)
+                    .allPlayersHadInitialTurn(false)
+                    .actedPlayersInRound(Set.of())
+                    .scheduledTimes(Map.of())
+                    .build();
+
+            TurnOutcome outcome = blindAllInGame.advanceAfterBlinds();
+
+            assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, outcome.type());
+            assertEquals("p2", blindAllInGame.getCurrentPlayer().getPlayerId());
+        }
+
+        @Test
         void departureLeavingOneContenderSettlesHandWithoutAnotherAction() {
             Player a = restoredPlayer("A", "a", 950, 50, false);
-            Player folded = restoredPlayer("f", "Folded", 950, false, true, false);
+            Player folded = restoredPlayer("Folded", "f", 950, false, true, false);
             Player leaving = restoredPlayer("Leaving", "leaving", 1000, 0, false);
             Game hand = Game.restoreBuilder()
                     .gameId("leave-finishes-hand")
@@ -1025,8 +1000,8 @@ class GameTest {
             a.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
             Player b = restoredPlayer("B", "b", 0, 0, false);
             b.setHoleCards(List.of(new Card(Rank.TWO, Suit.DIAMONDS), new Card(Rank.SEVEN, Suit.HEARTS)));
-            Player c = restoredPlayer("c", "C", 0, false, true, false);
-            Player d = restoredPlayer("d", "D", 0, false, true, false);
+            Player c = restoredPlayer("C", "c", 0, false, true, false);
+            Player d = restoredPlayer("D", "d", 0, false, true, false);
 
             Game deadUpper = Game.restoreBuilder().gameId("dead-upper-layer").players(List.of(a, b, c, d))
                     .activePlayerIds(List.of("a", "b", "c", "d")).remainingDeck(List.of())
@@ -1165,7 +1140,7 @@ class GameTest {
                     .bigBlindPlayerId(table.getLast().getPlayerId())
                     .currentPlayerId(active.getFirst().getPlayerId())
                     .currentHighestBet(highestBet).currentPhase(GamePhase.RIVER).gameOver(false)
-                    .smallBlind(10).bigBlind(20).handContributions(new java.util.HashMap<>(contributions))
+                    .smallBlind(10).bigBlind(20).handContributions(new HashMap<>(contributions))
                     .carryOverPot(carryOver).allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
                     .build();
@@ -1226,7 +1201,7 @@ class GameTest {
         void foldedContributorsDeadMoneyJoinsTheContestedPotAndOnlyTheCoveringExcessIsRefunded() {
             Player allIn = restoredPlayer("AllIn", "a", 0, 50, true);
             Player caller = restoredPlayer("Caller", "b", 850, 150, false);
-            Player folded = restoredPlayer("c", "Folded", 980, false, true, false);
+            Player folded = restoredPlayer("Folded", "c", 980, false, true, false);
             Game hand = riverGame("folded-dead-money", List.of(allIn, caller, folded), List.of(allIn, caller, folded),
                     220, 0, 150, Map.of("a", 50, "b", 150, "c", 20), SIDE_POT_BOARD);
 
@@ -1250,7 +1225,7 @@ class GameTest {
                 int carryOver = rng.nextInt(4) == 0 ? 1 + rng.nextInt(60) : 0;
                 List<Player> table = new ArrayList<>();
                 List<Player> active = new ArrayList<>();
-                Map<String, Integer> contributions = new java.util.LinkedHashMap<>();
+                Map<String, Integer> contributions = new LinkedHashMap<>();
                 int highestBet = 0;
                 int pot = carryOver;
                 boolean anyInHand = false;
@@ -1586,7 +1561,7 @@ class GameTest {
         }
 
         @Test
-        void realEvaluatorAndCarryOverAndIdempotencyAndTerminalSettlement() {
+        void realEvaluatorAndCarryOverAtShowdown() {
             List<Card> board = List.of(
                     new Card(Rank.TWO, Suit.SPADES), new Card(Rank.FOUR, Suit.HEARTS),
                     new Card(Rank.SEVEN, Suit.DIAMONDS), new Card(Rank.NINE, Suit.CLUBS),
@@ -1634,20 +1609,17 @@ class GameTest {
         }
 
         @Test
-        void conductShowdownIsIdempotentZeroContenderVoidTerminalResetAndChipConservation() {
-            Player p1 = new Player("Pieter", "p1", 1000);
-            Player p2 = new Player("BoshMan", "p2", 1000);
-            Game idemp = createGame("double-showdown-game", List.of(p1, p2), 10, 20);
-            idemp.dealHoleCards();
-            idemp.postBlinds();
-            idemp.processPlayerDecision(p1, PlayerAction.ALL_IN, 0);
-            idemp.processPlayerDecision(p2, PlayerAction.CALL, 0);
-            idemp.getCommunityCards().addAll(List.of(
-                    new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
-                    new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.CLUBS),
-                    new Card(Rank.THREE, Suit.DIAMONDS)));
+        void conductShowdownIsIdempotent() {
+            Player p1 = restoredPlayer("Pieter", "p1", 0, 1000, true);
             p1.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+            Player p2 = restoredPlayer("BoshMan", "p2", 0, 1000, true);
             p2.setHoleCards(List.of(new Card(Rank.FOUR, Suit.HEARTS), new Card(Rank.NINE, Suit.DIAMONDS)));
+            Game idemp = riverGame("double-showdown-game", List.of(p1, p2), List.of(p1, p2), 2000, 0, 1000,
+                    Map.of("p1", 1000, "p2", 1000),
+                    List.of(
+                            new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
+                            new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.CLUBS),
+                            new Card(Rank.THREE, Suit.DIAMONDS)));
 
             idemp.conductShowdown();
             Set<String> firstWinnerIds = idemp.getLastHandPayout().winnerIds();
@@ -1655,10 +1627,14 @@ class GameTest {
             assertEquals(2000, p1.getChips());
             assertEquals(0, p2.getChips());
             assertEquals(0, idemp.getPot());
+
             idemp.conductShowdown();
             assertEquals(firstWinnerIds, idemp.getLastHandPayout().winnerIds());
             assertEquals(2000, p1.getChips());
+        }
 
+        @Test
+        void conductShowdownWithZeroContendersPreservesCarryOverAndGameOverResetPreservesPot() {
             Game voidGame = createStandardGame(2, 100);
             voidGame.processPlayerDecision(voidGame.getPlayers().get(0), PlayerAction.BET, 50);
             voidGame.processPlayerDecision(voidGame.getPlayers().get(1), PlayerAction.CALL, 50);
@@ -1669,38 +1645,57 @@ class GameTest {
             assertFalse(voidGame.resetForNewHand());
             assertEquals(100, voidGame.toSnapshot().carryOverPot());
 
-            Player termA = restoredPlayer("A", "a", 50, 50, true);
-            Game unsettled = Game.restoreBuilder().gameId("terminal-reset-ledger").players(List.of(termA))
-                    .activePlayerIds(List.of("a")).remainingDeck(List.of()).communityCards(List.of())
-                    .pot(50).dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("a")
-                    .currentPlayerId("a").currentHighestBet(50).currentPhase(GamePhase.RIVER)
-                    .gameOver(true).smallBlind(10).bigBlind(20).handContributions(Map.of("a", 50))
-                    .carryOverPot(0).allPlayersHadInitialTurn(true)
-                    .actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
+            Player fundedA = restoredPlayer("A", "a", 50, 50, false);
+            Player fundedB = restoredPlayer("B", "b", 50, 0, false);
+            Game alreadyGameOver = Game.restoreBuilder()
+                    .gameId("finished-game-reset-ledger")
+                    .players(List.of(fundedA, fundedB))
+                    .activePlayerIds(List.of("a", "b"))
+                    .remainingDeck(List.of())
+                    .communityCards(List.of())
+                    .pot(50)
+                    .dealerPlayerId("a")
+                    .smallBlindPlayerId("a")
+                    .bigBlindPlayerId("b")
+                    .currentPlayerId("a")
+                    .currentHighestBet(50)
+                    .currentPhase(GamePhase.RIVER)
+                    .gameOver(true)
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .handContributions(Map.of("a", 50))
+                    .carryOverPot(0)
+                    .allPlayersHadInitialTurn(true)
+                    .actedPlayersInRound(Set.of())
+                    .scheduledTimes(Map.of())
                     .build();
-            assertTrue(unsettled.resetForNewHand());
-            assertEquals(0, unsettled.toSnapshot().carryOverPot());
-            assertEquals(Map.of("a", 50), unsettled.toSnapshot().handContributions());
-            assertEquals(50, unsettled.getPot());
+            assertTrue(alreadyGameOver.resetForNewHand());
+            assertEquals(2, alreadyGameOver.getActivePlayers().size());
+            assertEquals(0, alreadyGameOver.toSnapshot().carryOverPot());
+            assertEquals(Map.of("a", 50), alreadyGameOver.toSnapshot().handContributions());
+            assertEquals(50, alreadyGameOver.getPot());
+        }
 
-            Game terminalBlind = createGame("terminal-blind-pot", List.of(
+        @Test
+        void settleGameEndAwardsUnsettledPotAndCarryOverIdempotently() {
+            Game finishedBlind = createGame("finished-blind-pot", List.of(
                     new Player("Small", "small", 1000), new Player("Big", "big", 1000)),
                     10, 20);
-            terminalBlind.postBlinds();
-            Player small = terminalBlind.getPlayers().get(0);
-            Player big = terminalBlind.getPlayers().get(1);
-            terminalBlind.removePlayer(small);
-            Player winner = terminalBlind.settleGameEnd(null, Set.of());
+            finishedBlind.postBlinds();
+            Player small = finishedBlind.getPlayers().get(0);
+            Player big = finishedBlind.getPlayers().get(1);
+            finishedBlind.removePlayer(small);
+            Player winner = finishedBlind.settleGameEnd(null, Set.of());
             assertSame(big, winner);
             assertEquals(1010, big.getChips());
-            assertEquals(0, terminalBlind.getPot());
-            assertTrue(terminalBlind.isFinalPotSettled());
-            assertSame(big, terminalBlind.settleGameEnd(null, Set.of()));
+            assertEquals(0, finishedBlind.getPot());
+            assertTrue(finishedBlind.isFinalPotSettled());
+            assertSame(big, finishedBlind.settleGameEnd(null, Set.of()));
             assertEquals(1010, big.getChips());
 
             Player oa = new Player("A", "a", 100);
             Player ob = new Player("B", "b", 100);
-            Game oddCarry = Game.restoreBuilder().gameId("terminal-odd-carry").players(List.of(oa, ob))
+            Game oddCarry = Game.restoreBuilder().gameId("finished-odd-carry").players(List.of(oa, ob))
                     .activePlayerIds(List.of("a", "b")).remainingDeck(List.of()).communityCards(List.of())
                     .pot(1).dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                     .currentPlayerId("a").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN)
@@ -1714,16 +1709,18 @@ class GameTest {
             assertEquals(101, oddWinner.getChips());
             assertEquals(0, oddCarry.getPot());
             assertEquals(1, oddCarry.getLastHandPayout().remainder());
+        }
 
-            Game conserve = createStandardGame(3, 1000);
-            conserve.dealHoleCards();
-            conserve.postBlinds();
-            conserve.processPlayerDecision(conserve.getPlayers().get(0), PlayerAction.ALL_IN, 0);
-            conserve.processPlayerDecision(conserve.getPlayers().get(1), PlayerAction.ALL_IN, 0);
-            conserve.processPlayerDecision(conserve.getPlayers().get(2), PlayerAction.FOLD, 0);
-            conserve.dealFlop();
-            conserve.dealTurn();
-            conserve.dealRiver();
+        @Test
+        void conductShowdownConservesTotalChipsAcrossRepeatedCalls() {
+            Player p1 = restoredPlayer("P1", "p1", 0, 1000, true);
+            p1.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS)));
+            Player p2 = restoredPlayer("P2", "p2", 0, 1000, true);
+            p2.setHoleCards(List.of(new Card(Rank.KING, Suit.SPADES), new Card(Rank.KING, Suit.HEARTS)));
+            Player p3 = restoredPlayer("P3", "p3", 980, false, true, false);
+            Game conserve = riverGame("conserve-chips", List.of(p1, p2, p3), List.of(p1, p2, p3), 2020, 0, 1000,
+                    Map.of("p1", 1000, "p2", 1000, "p3", 20), SIDE_POT_BOARD);
+
             conserve.conductShowdown();
             assertEquals(3000, conserve.getPlayers().stream().mapToInt(Player::getChips).sum() + conserve.getPot());
             conserve.conductShowdown();
@@ -1737,7 +1734,7 @@ class GameTest {
             Player p0 = restoredPlayer("P0", "p0", 70, 0, true);
             Player p1 = restoredPlayer("P1", "p1", 70, 0, true);
             Player p2 = restoredPlayer("P2", "p2", 70, 0, true);
-            Player p3 = restoredPlayer("p3", "P3", 89, false, true, false);
+            Player p3 = restoredPlayer("P3", "p3", 89, false, true, false);
             Game threeWay = Game.restoreBuilder().gameId("three-way-odd-chips")
                     .players(List.of(p0, p1, p2, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
                     .remainingDeck(List.of()).communityCards(ROYAL_FLUSH_BOARD).pot(101)
@@ -1790,7 +1787,7 @@ class GameTest {
             assertEquals(0, headsUp.toSnapshot().carryOverPot());
 
             // Side pot with its own leftover chip (101) and rotated dealer 's2' -> 's1' is clockwise left of 's2' and gets +1.
-            Player s0 = restoredPlayer("s0", "S0", 69, false, true, false);
+            Player s0 = restoredPlayer("S0", "s0", 69, false, true, false);
             Player s1 = restoredPlayer("S1", "s1", 50, 0, true);
             s1.setHoleCards(List.of(new Card(Rank.ACE, Suit.DIAMONDS), new Card(Rank.FOUR, Suit.DIAMONDS)));
             Player s2 = restoredPlayer("S2", "s2", 50, 0, true);
@@ -1870,25 +1867,18 @@ class GameTest {
             assertTrue(unsettled.isHandSettled());
             assertFalse(unsettled.wasContestedShowdown());
 
-            Game contested = createStandardGame(2, 100);
-            contested.dealHoleCards();
-            contested.postBlinds();
-            contested.dealFlop();
-            contested.dealTurn();
-            contested.dealRiver();
+            Player c1 = restoredPlayer("P1", "p0", 80, 20, false);
+            deal(c1, 0);
+            Player c2 = restoredPlayer("P2", "p1", 80, 20, false);
+            deal(c2, 1);
+            Game contested = riverGame("contested-showdown", List.of(c1, c2), List.of(c1, c2), 40, 0, 20,
+                    Map.of("p0", 20, "p1", 20), SIDE_POT_BOARD);
             contested.conductShowdown();
             assertTrue(contested.wasContestedShowdown());
 
             Set<String> winnerIds = contested.getLastHandPayout().winnerIds();
-            Player winner = contested.getPlayers().stream()
-                    .filter(p -> winnerIds.contains(p.getPlayerId()))
-                    .findFirst()
-                    .orElseThrow();
-            Player loser = contested.getPlayers().stream()
-                    .filter(p -> !p.equals(winner))
-                    .findFirst()
-                    .orElseThrow();
-            contested.settleGameEnd(winner, Set.of(loser.getName()));
+            assertEquals(Set.of("p0"), winnerIds);
+            contested.settleGameEnd(c1, Set.of(c2.getName()));
             assertTrue(contested.wasContestedShowdown());
 
             Game voidGame = createStandardGame(2, 100);
@@ -1967,10 +1957,10 @@ class GameTest {
 
         @Test
         void removalWhenSuccessorFoldedAllInAtTailOrNonActionable() {
-            Player p0 = restoredPlayer("p0", "Alice", 1000, false, false, false);
-            Player p1 = restoredPlayer("p1", "Bob", 1000, false, false, false);
-            Player p2Folded = restoredPlayer("p2", "Charlie", 1000, false, true, false);
-            Player p3 = restoredPlayer("p3", "Dave", 1000, false, false, false);
+            Player p0 = restoredPlayer("Alice", "p0", 1000, false, false, false);
+            Player p1 = restoredPlayer("Bob", "p1", 1000, false, false, false);
+            Player p2Folded = restoredPlayer("Charlie", "p2", 1000, false, true, false);
+            Player p3 = restoredPlayer("Dave", "p3", 1000, false, false, false);
             Game foldedSuccessor = Game.restoreBuilder().gameId("succ-fold")
                     .players(List.of(p0, p1, p2Folded, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
                     .remainingDeck(List.of())
@@ -1978,7 +1968,7 @@ class GameTest {
             foldedSuccessor.removePlayer(p1);
             assertEquals("p3", foldedSuccessor.getCurrentPlayer().getPlayerId());
 
-            Player p2AllIn = restoredPlayer("p2", "Charlie", 0, false, false, true);
+            Player p2AllIn = restoredPlayer("Charlie", "p2", 0, false, false, true);
             Game allInSuccessor = Game.restoreBuilder().gameId("succ-allin")
                     .players(List.of(p0, p1, p2AllIn, p3)).activePlayerIds(List.of("p0", "p1", "p2", "p3"))
                     .remainingDeck(List.of())
@@ -1993,9 +1983,9 @@ class GameTest {
             tailWrap.removePlayer(p3);
             assertEquals("p0", tailWrap.getCurrentPlayer().getPlayerId());
 
-            Player ai = restoredPlayer("p0", "Alice", 0, false, false, true);
-            Player cur = restoredPlayer("p1", "Bob", 1000, false, false, false);
-            Player fld = restoredPlayer("p2", "Charlie", 1000, false, true, false);
+            Player ai = restoredPlayer("Alice", "p0", 0, false, false, true);
+            Player cur = restoredPlayer("Bob", "p1", 1000, false, false, false);
+            Player fld = restoredPlayer("Charlie", "p2", 1000, false, true, false);
             Game allNonActionable = Game.restoreBuilder().gameId("non-actionable")
                     .players(List.of(ai, cur, fld)).activePlayerIds(List.of("p0", "p1", "p2"))
                     .remainingDeck(List.of())
@@ -2340,7 +2330,7 @@ class GameTest {
             for (ScheduledGameTask task : ScheduledGameTask.values()) {
                 aggGame.scheduleTask(task, 70_000L + task.ordinal());
             }
-            java.util.Map<ScheduledGameTask, Long> versionsBeforeClearAll = aggGame.toSnapshot().timerVersions();
+            Map<ScheduledGameTask, Long> versionsBeforeClearAll = aggGame.toSnapshot().timerVersions();
             aggGame.clearReadyCountdownAndScheduledTasks();
             for (ScheduledGameTask task : ScheduledGameTask.values()) {
                 assertNull(aggGame.getScheduledTaskTime(task));
@@ -2354,6 +2344,26 @@ class GameTest {
                     null, null, PublicGameStateResponse.GameEnd.won("Alice", 2000, false, "Game Over"));
             aggGame.setGameEndResult(endResponse);
             assertSame(endResponse, aggGame.getGameEndResult());
+        }
+
+        @Test
+        void abandonDueToInactivity_MarksGameOverClosesReadyGateAndClearsScheduledTasks() {
+            Game inactiveGame = createStandardGame(2, 1000);
+            dealToRiverAndShowdown(inactiveGame);
+            inactiveGame.openOrWaitReadyGate(50_000L);
+            for (ScheduledGameTask task : ScheduledGameTask.values()) {
+                inactiveGame.scheduleTask(task, 80_000L + task.ordinal());
+            }
+
+            inactiveGame.abandonDueToInactivity();
+
+            assertTrue(inactiveGame.isGameOver());
+            assertTrue(inactiveGame.isMatchConcluded());
+            assertEquals(ReadyGateState.CLOSED, inactiveGame.getReadyGateState());
+            assertFalse(inactiveGame.isReadyCountdownActive());
+            for (ScheduledGameTask task : ScheduledGameTask.values()) {
+                assertNull(inactiveGame.getScheduledTaskTime(task));
+            }
         }
 
         @Test
@@ -2373,9 +2383,14 @@ class GameTest {
             assertFalse(survivor.isOut());
             assertTrue(pauseGame.isPausedForDisconnectedSurvivor());
             assertFalse(pauseGame.isGameOver());
+            assertFalse(pauseGame.isMatchConcluded());
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, pauseGame.getReadyGateState());
             assertNull(pauseGame.getScheduledTaskTime(ScheduledGameTask.AUTO_ADVANCE));
             assertEquals(60000L, pauseGame.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
+
+            pauseGame.clearPausedForDisconnectedSurvivor();
+            assertFalse(pauseGame.isPausedForDisconnectedSurvivor());
+            assertTrue(pauseGame.isMatchConcluded());
         }
 
         @Test
@@ -2470,10 +2485,12 @@ class GameTest {
         @Test
         void incrementStateRevision_MonotonicAcrossSequence() {
             Game revGame = createStandardGame(2, 1000);
-            for (int i = 1; i <= 10000; i++) {
-                revGame.incrementStateRevision();
-                assertEquals((long) i, revGame.getStateRevision());
-            }
+            revGame.incrementStateRevision();
+            assertEquals(1L, revGame.getStateRevision());
+            revGame.incrementStateRevision();
+            assertEquals(2L, revGame.getStateRevision());
+            revGame.incrementStateRevision();
+            assertEquals(3L, revGame.getStateRevision());
 
             Game nearMax = Game.restoreBuilder()
                     .gameId("near-max")
@@ -2773,7 +2790,7 @@ class GameTest {
             Map<ScheduledGameTask, Long> timerVersions = Map.of(
                     ScheduledGameTask.AUTO_ADVANCE, 3L,
                     ScheduledGameTask.CLEANUP, 1L);
-            PublicGameStateResponse terminalResult = new PublicGameStateResponse(
+            PublicGameStateResponse finishedResult = new PublicGameStateResponse(
                     3, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(), List.of(), null, null,
                     List.of("Alice"), null, false, null, false, null, false, null, true, 0,
                     List.of(), null, null, 1L, ReadyGateState.CLOSED, 1_700_000_000_000L, 1L,
@@ -2781,6 +2798,7 @@ class GameTest {
 
             Game settledGame = Game.restoreBuilder()
                     .gameId(RESTORE_GAME_ID)
+                    .maxPlayers(6)
                     .players(List.of(p1, p2, p3))
                     .activePlayerIds(List.of("p1", "p2"))
                     .remainingDeck(deckCards)
@@ -2807,13 +2825,28 @@ class GameTest {
                     .readyGateState(ReadyGateState.COUNTING_DOWN)
                     .handNumber(7L)
                     .stateRevision(88L)
-                    .gameEndResult(terminalResult)
+                    .gameEndResult(finishedResult)
                     .allPlayersHadInitialTurn(true)
                     .actedPlayersInRound(actedPlayers)
                     .scheduledTimes(scheduledTimes)
                     .timerVersions(timerVersions)
                     .build();
 
+            assertEquals(RESTORE_GAME_ID, settledGame.getGameId());
+            assertEquals(6, settledGame.getMaxPlayers());
+            assertEquals(List.of(p1, p2, p3), settledGame.getPlayers());
+            assertEquals(List.of(p1, p2), settledGame.getActivePlayers());
+            assertEquals(community, settledGame.getCommunityCards());
+            assertEquals(475, settledGame.getPot());
+            assertEquals(100, settledGame.getCurrentHighestBet());
+            assertEquals(GamePhase.FLOP, settledGame.getCurrentPhase());
+            assertFalse(settledGame.isGameOver());
+            assertEquals(15, settledGame.getSmallBlind());
+            assertEquals(30, settledGame.getBigBlind());
+            assertEquals("p3", settledGame.getSmallBlindPlayerId());
+            assertEquals("p1", settledGame.getBigBlindPlayerId());
+            assertEquals(ReadyGateState.COUNTING_DOWN, settledGame.getReadyGateState());
+            assertEquals(1700000000000L, settledGame.getReadyCountdownDeadlineEpochMs());
             Game.Snapshot snapshot = settledGame.toSnapshot();
             assertEquals(deckCards, snapshot.remainingDeck());
             assertEquals(25, snapshot.carryOverPot());
@@ -2832,7 +2865,7 @@ class GameTest {
             assertTrue(settledGame.isPausedForDisconnectedSurvivor());
             assertEquals(7L, settledGame.getHandNumber());
             assertEquals(88L, settledGame.getStateRevision());
-            assertEquals(terminalResult, settledGame.getGameEndResult());
+            assertEquals(finishedResult, settledGame.getGameEndResult());
             assertEquals(3L, settledGame.getTimerVersion(ScheduledGameTask.AUTO_ADVANCE));
 
             // Settled hand stays idempotent on showdown
@@ -2880,6 +2913,10 @@ class GameTest {
                         () -> validRestoreBuilder().gameId(invalidId).build());
                 assertEquals("Game ID cannot be null or empty", ex.getMessage());
             }
+
+            IllegalStateException nullPlayersEx = assertThrows(IllegalStateException.class,
+                    () -> validRestoreBuilder().players(null).build());
+            assertEquals("Invalid players list. Please try again.", nullPlayersEx.getMessage());
 
             List<Player> playersWithNull = new ArrayList<>();
             playersWithNull.add(restorePlayer("p1", "Alice", 1000));

@@ -1,28 +1,29 @@
 package com.pokergame.model;
 
-import com.pokergame.model.TurnOutcome.TurnOutcomeType;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.exception.ActionFeedbackException;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
+import com.pokergame.model.TurnOutcome.TurnOutcomeType;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Stream;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
+/** Unit tests for {@link BettingRound}. */
 @Tag("unit")
 class BettingRoundTest {
 
@@ -53,40 +54,69 @@ class BettingRoundTest {
     }
 
     @Test
-    void legalActionsReflectCallCheckAndContestableRaise() {
+    void shortStackAllInAllowedWhenRaisesClosedAndDoesNotExceedHighestBet() {
+        Player shortAlice = playerWhoPosted("Alice", "a", 30, 20);
+        Player bob = new Player("Bob", "b", 100);
+        List<Player> players = List.of(shortAlice, bob);
+        TableSeating seating = new TableSeating(players, players);
+
+        BettingRound shortRaiseRound = new BettingRound(
+                30, false, Set.of("a"), 0, Map.of("a", 20));
+
+        assertEquals(List.of(PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.ALL_IN),
+                shortRaiseRound.legalActionsFor(shortAlice, players, players, seating, GamePhase.FLOP, 20));
+        var allInResult = shortRaiseRound.validateDecision(shortAlice, PlayerAction.ALL_IN, 0, players, 20);
+        assertEquals(PlayerAction.ALL_IN, allInResult.action());
+
+        Player deeperAlice = playerWhoPosted("Alice", "a", 31, 20);
+        List<Player> deeperPlayers = List.of(deeperAlice, bob);
+        ActionFeedbackException error = assertThrows(ActionFeedbackException.class, () ->
+                shortRaiseRound.validateDecision(deeperAlice, PlayerAction.ALL_IN, 0, deeperPlayers, 20));
+        assertEquals("RAISE_NOT_REOPENED", error.actionErrorCode());
+    }
+
+    @Test
+    void legalActionsReflectCallCheckContestableRaiseAndShowdownOrNonMemberGuards() {
         Player alice = new Player("Alice", "a", 100);
         Player bob = new Player("Bob", "b", 100);
+        Player outsider = new Player("Outsider", "x", 100);
         List<Player> players = List.of(alice, bob);
         TableSeating seating = new TableSeating(players, players);
 
         BettingRound checkedPot = new BettingRound();
         assertEquals(List.of(PlayerAction.FOLD, PlayerAction.CHECK, PlayerAction.BET, PlayerAction.ALL_IN),
                 checkedPot.legalActionsFor(alice, players, players, seating, GamePhase.FLOP, 20));
+        assertEquals(List.of(),
+                checkedPot.legalActionsFor(alice, players, players, seating, GamePhase.SHOWDOWN, 20));
+        assertEquals(List.of(),
+                checkedPot.legalActionsFor(outsider, players, players, seating, GamePhase.FLOP, 20));
 
         checkedPot.setHighestBet(20);
         assertEquals(List.of(PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.RAISE, PlayerAction.ALL_IN),
                 checkedPot.legalActionsFor(alice, players, players, seating, GamePhase.FLOP, 20));
         assertEquals(List.of(),
                 checkedPot.legalActionsFor(bob, players, players, seating, GamePhase.FLOP, 20));
-
-        ActionFeedbackException error = assertThrows(ActionFeedbackException.class, () ->
-                checkedPot.validateDecision(alice, PlayerAction.CHECK, 0,
-                        players, 20));
-        assertEquals("CHECK_NOT_AVAILABLE", error.actionErrorCode());
     }
 
     @Test
-    void shortCallIsValidatedAsAllInWithoutMutatingPlayer() {
-        Player alice = new Player("Alice", "a", 10);
+    void normalPartialCallComputesExactDifferenceAndShortCallIsConvertedToAllIn() {
+        Player partialAlice = playerWhoPosted("Alice", "a", 100, 10);
         Player bob = new Player("Bob", "b", 100);
-        BettingRound round = new BettingRound(20, false, Set.of(), 0, Map.of());
+        BettingRound round = new BettingRound(30, false, Set.of(), 0, Map.of());
 
-        var result = round.validateDecision(alice, PlayerAction.CALL, 0,
-                List.of(alice, bob), 20);
-        assertEquals(PlayerAction.ALL_IN, result.action());
-        assertEquals(0, result.amount());
-        assertNotNull(result.playerActionNotice());
-        assertEquals(10, alice.getChips());
+        var normalCall = round.validateDecision(partialAlice, PlayerAction.CALL, 0,
+                List.of(partialAlice, bob), 20);
+        assertEquals(PlayerAction.CALL, normalCall.action());
+        assertEquals(20, normalCall.amount());
+        assertNull(normalCall.playerActionNotice());
+
+        Player shortAlice = new Player("Alice", "a", 10);
+        var shortCall = round.validateDecision(shortAlice, PlayerAction.CALL, 0,
+                List.of(shortAlice, bob), 20);
+        assertEquals(PlayerAction.ALL_IN, shortCall.action());
+        assertEquals(0, shortCall.amount());
+        assertNotNull(shortCall.playerActionNotice());
+        assertEquals(10, shortAlice.getChips());
     }
 
     @Test
@@ -112,52 +142,35 @@ class BettingRoundTest {
     }
 
     @Test
-    void removalCapsBetAndProgressionChoosesAutoAdvance() {
+    void removalCapsBetWhenAtMostOneActionableRemainsAndPreservesOrResetsOtherwise() {
         Player alice = new Player("Alice", "a", 100);
         Player bob = new Player("Bob", "b", 20);
         bob.doAction(PlayerAction.ALL_IN, 0);
-        List<Player> remaining = List.of(alice, bob);
+        Player carol = new Player("Carol", "c", 100);
 
+        BettingRound twoActionableRound = new BettingRound(50, false, Set.of("d"), 0, Map.of("d", 50));
+        twoActionableRound.removePlayer("d");
+        twoActionableRound.recalculateHighestBetAfterRemoval(List.of(alice, bob, carol));
+        assertEquals(50, twoActionableRound.getCurrentHighestBet());
+
+        List<Player> oneActionable = List.of(alice, bob);
         BettingRound round = new BettingRound(50, false, Set.of("d"), 0, Map.of("d", 50));
         round.removePlayer("d");
-        round.recalculateHighestBetAfterRemoval(remaining);
+        round.recalculateHighestBetAfterRemoval(oneActionable);
 
         assertEquals(20, round.getCurrentHighestBet());
         assertFalse(round.getActedPlayerIdsSnapshot().contains("d"));
         assertFalse(round.getPreviousBetsSnapshot().containsKey("d"));
-        assertEquals(TurnOutcomeType.NEXT_PLAYER, round.nextProgression(remaining, false, GamePhase.FLOP));
+        assertEquals(TurnOutcomeType.NEXT_PLAYER, round.nextProgression(oneActionable, false, GamePhase.FLOP));
 
         alice.doAction(PlayerAction.CALL, 20);
         round.recordAppliedDecision(alice, 20, 0);
-        assertEquals(TurnOutcomeType.AUTO_ADVANCING, round.nextProgression(remaining, false, GamePhase.FLOP));
-    }
+        assertEquals(TurnOutcomeType.AUTO_ADVANCING, round.nextProgression(oneActionable, false, GamePhase.FLOP));
 
-    @Test
-    void rejectsUnavailableActionsWithStableFeedback() {
-        Player actor = new Player("Actor", "a", 100);
-        Player opponent = new Player("Opponent", "b", 100);
-        List<Player> players = List.of(actor, opponent);
-
-        assertDecisionError("CALL_NOT_AVAILABLE", actor, PlayerAction.CALL, 0, players, 0, Map.of());
-        assertDecisionError("RAISE_NOT_AVAILABLE", actor, PlayerAction.RAISE, 40, players, 0, Map.of());
-        assertDecisionError("BET_NOT_AVAILABLE", actor, PlayerAction.BET, 20, players, 20, Map.of());
-        assertDecisionError("RAISE_NOT_REOPENED", actor, PlayerAction.RAISE, 50, players, 25, Map.of("a", 20));
-        assertDecisionError("CHECK_NOT_AVAILABLE", actor, PlayerAction.CHECK, 0, players, 20, Map.of());
-        assertDecisionError("BET_NOT_AVAILABLE", actor, PlayerAction.BET, 20, List.of(actor), 0, Map.of());
-        assertDecisionError("ACTION_NOT_AVAILABLE", null, PlayerAction.FOLD, 0, players, 0, Map.of());
-    }
-
-    @Test
-    void rejectsInvalidWagerAmountsWithStableFeedback() {
-        Player actor = new Player("Actor", "a", 100);
-        List<Player> players = List.of(actor, new Player("Opponent", "b", 100));
-
-        assertDecisionError("BET_AMOUNT_REQUIRED", actor, PlayerAction.BET, 0, players, 0, Map.of());
-        assertDecisionError("RAISE_AMOUNT_REQUIRED", actor, PlayerAction.RAISE, 0, players, 20, Map.of());
-        assertDecisionError("INSUFFICIENT_CHIPS", actor, PlayerAction.RAISE, 101, players, 20, Map.of());
-        assertDecisionError("INSUFFICIENT_CHIPS", actor, PlayerAction.BET, 101, players, 0, Map.of());
-        assertDecisionError("MIN_RAISE", actor, PlayerAction.RAISE, 30, players, 20, Map.of());
-        assertDecisionError("MIN_BET", actor, PlayerAction.BET, 10, players, 0, Map.of());
+        Player folded = new Player("Folded", "f", 100);
+        folded.doAction(PlayerAction.FOLD, 0);
+        round.recalculateHighestBetAfterRemoval(List.of(folded));
+        assertEquals(0, round.getCurrentHighestBet());
     }
 
     @ParameterizedTest(name = "[{index}] {0}")
@@ -238,22 +251,7 @@ class BettingRoundTest {
                 Arguments.of("bet below big blind", BadRequestException.class, "MIN_BET",
                         eligibleActor, PlayerAction.BET, 10, twoEligible, 0, Map.of()),
                 Arguments.of("check with active bet owed", UnauthorisedActionException.class, "CHECK_NOT_AVAILABLE",
-                        eligibleActor, PlayerAction.CHECK, 0, twoEligible, 20, Map.of())
-        );
-    }
-
-    private static void assertDecisionError(
-            String code,
-            Player actor,
-            PlayerAction action,
-            int amount,
-            List<Player> players,
-            int highestBet,
-            Map<String, Integer> previousBets) {
-        BettingRound round = new BettingRound(highestBet, false, Set.of(), 0, previousBets);
-        ActionFeedbackException error = assertThrows(ActionFeedbackException.class, () ->
-                round.validateDecision(actor, action, amount, players, 20));
-        assertEquals(code, error.actionErrorCode());
+                        eligibleActor, PlayerAction.CHECK, 0, twoEligible, 20, Map.of()));
     }
 
     @Test
@@ -272,7 +270,7 @@ class BettingRoundTest {
         assertEquals(50, recordedRound.getLastFullRaise());
         recordedRound.resetForNewRound(List.of(actor));
         assertEquals(0, recordedRound.getLastFullRaise());
-        assertEquals(20, round.getMinimumRaiseAmount(actor, 20));
+        assertEquals(20, recordedRound.getMinimumRaiseAmount(actor, 20));
     }
 
     @Test
@@ -355,8 +353,6 @@ class BettingRoundTest {
         assertFalse(round.hasAllPlayersHadInitialTurn());
         assertEquals(0, round.getLastFullRaise());
     }
-
-    // ---- One rule set: legalActionsFor and validateDecision must agree ----
 
     private record Scenario(Player actor, List<Player> players, BettingRound round, List<PlayerAction> expectedLegal) {
     }

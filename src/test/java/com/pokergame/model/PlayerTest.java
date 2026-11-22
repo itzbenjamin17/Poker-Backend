@@ -1,22 +1,28 @@
 package com.pokergame.model;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.Suit;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Unit tests for the Player class.
+ * Unit tests for {@link Player}.
  */
 @Tag("unit")
 @DisplayName("Player model")
@@ -44,19 +50,16 @@ class PlayerTest {
     }
 
     @Test
-    void testPlayerCreationWithNullName() {
-        IllegalStateException exception = assertThrows(
+    void testPlayerCreationWithNullOrBlankName() {
+        IllegalStateException nullName = assertThrows(
                 IllegalStateException.class,
                 () -> new Player(null, "player789", 1000));
-        assertEquals("Player name required", exception.getMessage());
-    }
+        assertEquals("Player name required", nullName.getMessage());
 
-    @Test
-    void testPlayerCreationWithEmptyName() {
-        IllegalStateException exception = assertThrows(
+        IllegalStateException blankName = assertThrows(
                 IllegalStateException.class,
                 () -> new Player("   ", "player789", 1000));
-        assertEquals("Player name required", exception.getMessage());
+        assertEquals("Player name required", blankName.getMessage());
     }
 
     @Test
@@ -92,70 +95,34 @@ class PlayerTest {
     }
 
     @Test
-    void testFoldAction() {
-        int committed = player.doAction(PlayerAction.FOLD, 0);
+    void testFoldAndCheckActions() {
+        assertEquals(0, player.doAction(PlayerAction.CHECK, 0));
+        assertFalse(player.hasFolded());
+        assertEquals(1000, player.getChips());
 
-        assertEquals(0, committed, "Fold should commit 0 chips");
+        assertEquals(0, player.doAction(PlayerAction.FOLD, 0));
         assertTrue(player.hasFolded());
-        assertEquals(1000, player.getChips(), "Chips should not change on fold");
+        assertEquals(1000, player.getChips());
     }
 
     @Test
-    void testCheckAction() {
-        int committed = player.doAction(PlayerAction.CHECK, 0);
-
-        assertEquals(0, committed, "Check should commit 0 chips");
-        assertEquals(1000, player.getChips(), "Chips should not change on check");
-        assertEquals(0, player.getCurrentBet());
-    }
-
-    @Test
-    void testBetAction() {
-        int betAmount = 50;
-        int committed = player.doAction(PlayerAction.BET, betAmount);
-
-        assertEquals(betAmount, committed, "Committed chips should equal bet amount");
-        assertEquals(950, player.getChips(), "Chips should decrease by bet amount");
-        assertEquals(50, player.getCurrentBet());
-    }
-
-    @Test
-    void testCallAction() {
-        int callAmount = 50;
-        int committed = player.doAction(PlayerAction.CALL, callAmount);
-
-        assertEquals(callAmount, committed);
+    void testBetCallRaiseAndAllInActions() {
+        assertEquals(50, player.doAction(PlayerAction.BET, 50));
         assertEquals(950, player.getChips());
         assertEquals(50, player.getCurrentBet());
-    }
 
-    @Test
-    void testRaiseAction() {
-        int raiseAmount = 100;
-        int committed = player.doAction(PlayerAction.RAISE, raiseAmount);
-
-        assertEquals(raiseAmount, committed);
+        assertEquals(50, player.doAction(PlayerAction.CALL, 50));
         assertEquals(900, player.getChips());
         assertEquals(100, player.getCurrentBet());
-    }
 
-    @Test
-    void testAllInAction() {
-        int committed = player.doAction(PlayerAction.ALL_IN, 0);
+        assertEquals(100, player.doAction(PlayerAction.RAISE, 100));
+        assertEquals(800, player.getChips());
+        assertEquals(200, player.getCurrentBet());
 
-        assertEquals(1000, committed, "All chips should be committed");
-        assertEquals(0, player.getChips(), "Player should have no chips left");
+        assertEquals(800, player.doAction(PlayerAction.ALL_IN, 0));
+        assertEquals(0, player.getChips());
         assertTrue(player.isAllIn());
         assertEquals(1000, player.getCurrentBet());
-    }
-
-    @Test
-    void testBetCommitsExactAmount() {
-        int committed = player.doAction(PlayerAction.BET, 250);
-
-        assertEquals(250, committed);
-        assertEquals(750, player.getChips());
-        assertEquals(250, player.getCurrentBet());
     }
 
     @Test
@@ -194,20 +161,37 @@ class PlayerTest {
     }
 
     @Test
-    void testResetAttributes() {
-        player.doAction(PlayerAction.BET, 100);
-        player.doAction(PlayerAction.FOLD, 0);
-        player.setHandRank(HandRank.FLUSH);
-        player.setBestHand(List.of(new Card(Rank.ACE, Suit.SPADES)));
+    void testResetAttributesClearsPerHandStateAndPreservesMatchAndConnectionState() {
+        Player inHand = Player.restoreBuilder()
+                .name("Alice")
+                .playerId("p1")
+                .holeCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
+                .bestHand(List.of(new Card(Rank.ACE, Suit.SPADES)))
+                .handRank(HandRank.FLUSH)
+                .chips(400)
+                .currentBet(100)
+                .hasFolded(true)
+                .allIn(true)
+                .out(true)
+                .disconnected(true)
+                .disconnectDeadlineEpochMs(987654321L)
+                .readyForNextHand(true)
+                .build();
 
-        player.resetAttributes();
+        inHand.resetAttributes();
 
-        assertEquals(0, player.getHoleCards().size());
-        assertEquals(0, player.getBestHand().size());
-        assertEquals(HandRank.NO_HAND, player.getHandRank());
-        assertFalse(player.hasFolded());
-        assertFalse(player.isAllIn());
-        assertEquals(0, player.getCurrentBet());
+        assertTrue(inHand.getHoleCards().isEmpty());
+        assertTrue(inHand.getBestHand().isEmpty());
+        assertEquals(HandRank.NO_HAND, inHand.getHandRank());
+        assertFalse(inHand.hasFolded());
+        assertFalse(inHand.isAllIn());
+        assertEquals(0, inHand.getCurrentBet());
+        assertFalse(inHand.isReadyForNextHand());
+
+        assertEquals(400, inHand.getChips());
+        assertTrue(inHand.isOut());
+        assertTrue(inHand.isDisconnected());
+        assertEquals(987654321L, inHand.getDisconnectDeadlineEpochMs());
     }
 
     @Test
@@ -217,7 +201,7 @@ class PlayerTest {
 
         player.resetCurrentBet();
         assertEquals(0, player.getCurrentBet());
-        assertEquals(900, player.getChips(), "Chips should not be affected");
+        assertEquals(900, player.getChips());
     }
 
     @Test
@@ -228,105 +212,17 @@ class PlayerTest {
     }
 
     @Test
-    void testSetBestHand() {
-        List<Card> hand = List.of(
-                new Card(Rank.ACE, Suit.SPADES),
-                new Card(Rank.KING, Suit.SPADES),
-                new Card(Rank.QUEEN, Suit.SPADES),
-                new Card(Rank.JACK, Suit.SPADES),
-                new Card(Rank.TEN, Suit.SPADES));
-
-        player.setBestHand(hand);
-        assertEquals(5, player.getBestHand().size());
-        assertEquals(hand, player.getBestHand());
-    }
-
-    @Test
-    void testSetHandRank() {
-        player.setHandRank(HandRank.ROYAL_FLUSH);
-        assertEquals(HandRank.ROYAL_FLUSH, player.getHandRank());
-    }
-
-    @Test
-    void testMultipleBetsIncrementCurrentBet() {
-        player.doAction(PlayerAction.BET, 100);
-        assertEquals(100, player.getCurrentBet());
-
-        player.doAction(PlayerAction.RAISE, 200);
-        assertEquals(300, player.getCurrentBet());
-        assertEquals(700, player.getChips());
-    }
-
-    @Test
-    void testPlayerStatePersistsAcrossActions() {
-        int pot = 0;
-
-        pot += player.doAction(PlayerAction.BET, 100);
-        assertEquals(100, pot);
-        assertEquals(900, player.getChips());
-
-        pot += player.doAction(PlayerAction.RAISE, 200);
-        assertEquals(300, pot);
-        assertEquals(700, player.getChips());
-        assertEquals(300, player.getCurrentBet());
-    }
-
-    @Test
-    void testAllInWithPartialChips() {
-        Player shortStack = new Player("ShortStack", "player999", 50);
-
-        int committed = shortStack.doAction(PlayerAction.ALL_IN, 0);
-
-        assertEquals(50, committed);
-        assertEquals(0, shortStack.getChips());
-        assertTrue(shortStack.isAllIn());
-        assertEquals(50, shortStack.getCurrentBet());
-    }
-
-    @Test
-    void testHoleCardsInitiallyEmpty() {
-        List<Card> holeCards = player.getHoleCards();
-        assertNotNull(holeCards);
-        assertEquals(0, holeCards.size());
-    }
-
-    /**
-     * Identity is keyed on the stable player ID, not the display name, so a reconstructed player
-     * with the same ID but a different name is treated as the same participant.
-     */
-    @Test
-    void testEqualsUsesStablePlayerIdAcrossReconstructedInstances() {
+    void testEqualsAndHashCodeUseStablePlayerIdAcrossReconstructedInstances() {
         Player reconstructed = new Player("DifferentName", "player123", 50);
+        Player differentPlayer = new Player("TestPlayer", "other-player", 1000);
 
         assertEquals(player, reconstructed);
         assertEquals(reconstructed, player);
-    }
-
-    @Test
-    void testHashCodeMatchesForSamePlayerId() {
-        Player reconstructed = new Player("DifferentName", "player123", 50);
-
         assertEquals(player.hashCode(), reconstructed.hashCode());
-    }
-
-    @Test
-    void testEqualsReturnsFalseForDifferentPlayerIds() {
-        Player differentPlayer = new Player("TestPlayer", "other-player", 1000);
-
         assertNotEquals(player, differentPlayer);
-    }
 
-    /**
-     * Player identity supports hash-based collection membership, so a reconstructed instance with
-     * the same ID resolves to the same entry.
-     */
-    @Test
-    void testEqualsSupportsCollectionLookupsForReconstructedInstances() {
         HashSet<Player> players = new HashSet<>();
         players.add(player);
-
-        Player reconstructed = new Player("TestPlayer", "player123", 1000);
-
         assertTrue(players.contains(reconstructed));
     }
 

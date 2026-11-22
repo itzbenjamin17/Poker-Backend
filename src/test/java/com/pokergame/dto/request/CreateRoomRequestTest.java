@@ -1,22 +1,23 @@
 package com.pokergame.dto.request;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
+
 import com.pokergame.util.RoomPasswordPolicy;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import jakarta.validation.ValidatorFactory;
+import java.util.Set;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-
-import java.util.Set;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Unit tests for {@link CreateRoomRequest}.
@@ -48,66 +49,95 @@ class CreateRoomRequestTest {
     void validRequestPassesValidation() {
         CreateRoomRequest request = validWithPassword("  secret  ");
 
-        assertTrue(validator.validate(request).isEmpty());
-        assertTrue(request.hasPassword());
-        assertEquals("  secret  ", request.password());
+        assertThat(validator.validate(request)).isEmpty();
+        assertThat(request.hasPassword()).isTrue();
+        assertThat(request.password()).isEqualTo("  secret  ");
     }
 
     @Test
     @DisplayName("Whitespace-only password normalizes to null and does not mark room password-protected")
     void blankPasswordNormalizesToNull() {
         CreateRoomRequest blank = validWithPassword("   \t ");
-        assertNull(blank.password());
-        assertFalse(blank.hasPassword());
-        assertTrue(blank.isPasswordWithinByteLimit());
+        assertThat(blank.password()).isNull();
+        assertThat(blank.hasPassword()).isFalse();
+        assertThat(blank.isPasswordWithinByteLimit()).isTrue();
     }
 
     @Test
     @DisplayName("Rejects multi-byte password exceeding 72 UTF-8 bytes even under 50 chars")
     void rejectsMultiBytePasswordExceedingBcryptByteLimit() {
-        // 19 four-byte emoji characters = 19 chars (<= 50) but 76 UTF-8 bytes (> 72)
         String nineteenEmoji = "\uD83D\uDE00".repeat(19);
         CreateRoomRequest request = validWithPassword(nineteenEmoji);
 
         Set<ConstraintViolation<CreateRoomRequest>> violations = validator.validate(request);
-        assertFalse(request.isPasswordWithinByteLimit());
-        assertTrue(violations.stream()
-                .anyMatch(v -> RoomPasswordPolicy.BYTE_LIMIT_MESSAGE.equals(v.getMessage())));
+        assertThat(request.isPasswordWithinByteLimit()).isFalse();
+        assertThat(violations)
+                .extracting(v -> v.getPropertyPath().toString(), ConstraintViolation::getMessage)
+                .containsExactly(tuple("passwordWithinByteLimit", RoomPasswordPolicy.BYTE_LIMIT_MESSAGE));
     }
 
     @Test
     @DisplayName("Accepts multi-byte password of exactly 72 UTF-8 bytes")
     void acceptsPasswordOfExact72Utf8Bytes() {
-        // 18 four-byte emoji = 36 UTF-16 chars (<= 50) and exactly 72 UTF-8 bytes
         String eighteenEmoji = "\uD83D\uDE00".repeat(18);
         CreateRoomRequest request = validWithPassword(eighteenEmoji);
 
-        assertTrue(validator.validate(request).isEmpty());
+        assertThat(validator.validate(request)).isEmpty();
     }
 
-    @Test
-    @DisplayName("Rejects blank names, HTML tags, format characters, and out-of-range numeric settings")
-    void rejectsInvalidFieldConstraints() {
-        CreateRoomRequest invalid = new CreateRoomRequest(
-                "<script>room</script>",
-                "Alice\u200B",
-                11,
-                0,
-                1,
-                19,
-                "valid");
+    static Stream<Arguments> invalidFieldCases() {
+        return Stream.of(
+                Arguments.of(new CreateRoomRequest("   ", "Alice", 6, 10, 20, 1000, null),
+                        "roomName", "Room name is required"),
+                Arguments.of(new CreateRoomRequest("R".repeat(51), "Alice", 6, 10, 20, 1000, null),
+                        "roomName", "Room name must be 50 characters or less"),
+                Arguments.of(new CreateRoomRequest("Room\u0007", "Alice", 6, 10, 20, 1000, null),
+                        "roomName", "Room name cannot contain control characters"),
+                Arguments.of(new CreateRoomRequest("Room\u200B", "Alice", 6, 10, 20, 1000, null),
+                        "roomName", "Input contains illegal format characters."),
+                Arguments.of(new CreateRoomRequest("<script>room</script>", "Alice", 6, 10, 20, 1000, null),
+                        "roomName", "Input contains illegal HTML tags."),
+                Arguments.of(new CreateRoomRequest("High Rollers", "   ", 6, 10, 20, 1000, null),
+                        "playerName", "Player name is required"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "P".repeat(31), 6, 10, 20, 1000, null),
+                        "playerName", "Player name must be 30 characters or less"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice\n", 6, 10, 20, 1000, null),
+                        "playerName", "Player name cannot contain control characters"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice\u200B", 6, 10, 20, 1000, null),
+                        "playerName", "Input contains illegal format characters."),
+                Arguments.of(new CreateRoomRequest("High Rollers", "<b>Alice</b>", 6, 10, 20, 1000, null),
+                        "playerName", "Input contains illegal HTML tags."),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice", 1, 10, 20, 1000, null),
+                        "maxPlayers", "Minimum 2 players required"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice", 11, 10, 20, 1000, null),
+                        "maxPlayers", "Maximum 10 players allowed"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice", 6, 0, 20, 1000, null),
+                        "smallBlind", "Small blind must be at least 1"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice", 6, 10_001, 20_000, 20_000, null),
+                        "smallBlind", "Small blind cannot exceed 10,000"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice", 6, 1, 1, 1000, null),
+                        "bigBlind", "Big blind must be at least 2"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice", 6, 10, 20_001, 20_001, null),
+                        "bigBlind", "Big blind cannot exceed 20,000"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice", 6, 1, 2, 19, null),
+                        "buyIn", "Buy-in must be at least 20"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice", 6, 10, 20, 1_000_001, null),
+                        "buyIn", "Buy-in cannot exceed 1,000,000"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice", 6, 10, 20, 1000, "p".repeat(51)),
+                        "password", "Password must be 50 characters or less"),
+                Arguments.of(new CreateRoomRequest("High Rollers", "Alice", 6, 10, 20, 1000, "pass\u0000"),
+                        "password", "Password cannot contain control characters"));
+    }
 
-        Set<ConstraintViolation<CreateRoomRequest>> violations = validator.validate(invalid);
-        Set<String> messages = violations.stream()
-                .map(ConstraintViolation::getMessage)
-                .collect(java.util.stream.Collectors.toSet());
+    @ParameterizedTest
+    @MethodSource("invalidFieldCases")
+    @DisplayName("Rejects invalid individual field constraints with exact property path and message")
+    void rejectsInvalidFieldConstraints(CreateRoomRequest request, String expectedPath, String expectedMessage) {
+        Set<ConstraintViolation<CreateRoomRequest>> violations = validator.validate(request);
 
-        assertTrue(messages.contains("Input contains illegal HTML tags."));
-        assertTrue(messages.contains("Input contains illegal format characters."));
-        assertTrue(messages.contains("Maximum 10 players allowed"));
-        assertTrue(messages.contains("Small blind must be at least 1"));
-        assertTrue(messages.contains("Big blind must be at least 2"));
-        assertTrue(messages.contains("Buy-in must be at least 20"));
+        assertThat(violations)
+                .extracting(v -> v.getPropertyPath().toString(), ConstraintViolation::getMessage)
+                .contains(tuple(expectedPath, expectedMessage));
     }
 
     @Test
@@ -117,8 +147,9 @@ class CreateRoomRequestTest {
         CreateRoomRequest request = validWithPassword(secret);
 
         String rendered = request.toString();
-        assertTrue(rendered.contains("hasPassword=true"));
-        assertFalse(rendered.contains(secret));
+        assertThat(rendered)
+                .contains("hasPassword=true")
+                .doesNotContain(secret);
     }
 
     @Test
@@ -128,8 +159,10 @@ class CreateRoomRequestTest {
 
         Set<ConstraintViolation<CreateRoomRequest>> violations = validator.validate(request);
 
-        assertEquals(1, violations.size());
-        assertEquals("Big blind must be at least twice the small blind.", violations.iterator().next().getMessage());
+        assertThat(violations)
+                .extracting(v -> v.getPropertyPath().toString(), ConstraintViolation::getMessage)
+                .containsExactly(tuple("bigBlindAtLeastTwiceSmallBlind",
+                        "Big blind must be at least twice the small blind."));
     }
 
     @Test
@@ -139,19 +172,31 @@ class CreateRoomRequestTest {
 
         Set<ConstraintViolation<CreateRoomRequest>> violations = validator.validate(request);
 
-        assertEquals(1, violations.size());
-        assertEquals("Buy-in must be at least the big blind amount.", violations.iterator().next().getMessage());
+        assertThat(violations)
+                .extracting(v -> v.getPropertyPath().toString(), ConstraintViolation::getMessage)
+                .containsExactly(tuple("buyInAtLeastBigBlind", "Buy-in must be at least the big blind amount."));
     }
 
-    @Test
+    static Stream<Arguments> nullBlindAndBuyInCombinations() {
+        return Stream.of(
+                Arguments.of(null, 20, 1000, Set.of("smallBlind")),
+                Arguments.of(10, null, 1000, Set.of("bigBlind")),
+                Arguments.of(10, 20, null, Set.of("buyIn")),
+                Arguments.of(null, null, null, Set.of("smallBlind", "bigBlind", "buyIn")));
+    }
+
+    @ParameterizedTest
+    @MethodSource("nullBlindAndBuyInCombinations")
     @DisplayName("Null blinds or buy-in only trigger NotNull without cross-field AssertTrue noise")
-    void nullBlindsOrBuyInDoNotTriggerCrossFieldAssertTrue() {
-        CreateRoomRequest request = new CreateRoomRequest("High Rollers", "Alice", 6, null, null, null, null);
+    void nullBlindsOrBuyInDoNotTriggerCrossFieldAssertTrue(
+            Integer smallBlind, Integer bigBlind, Integer buyIn, Set<String> expectedNullPaths) {
+        CreateRoomRequest request = new CreateRoomRequest("High Rollers", "Alice", 6, smallBlind, bigBlind, buyIn, null);
 
         Set<ConstraintViolation<CreateRoomRequest>> violations = validator.validate(request);
 
-        assertEquals(3, violations.size());
-        assertFalse(violations.stream().anyMatch(v -> v.getMessage().contains("twice the small blind")));
-        assertFalse(violations.stream().anyMatch(v -> v.getMessage().contains("at least the big blind")));
+        assertThat(violations)
+                .extracting(v -> v.getPropertyPath().toString())
+                .containsExactlyInAnyOrderElementsOf(expectedNullPaths)
+                .doesNotContain("bigBlindAtLeastTwiceSmallBlind", "buyInAtLeastBigBlind");
     }
 }
