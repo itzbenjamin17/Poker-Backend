@@ -978,6 +978,10 @@ public class Game {
         return seating.getBigBlindPlayerId(activePlayers);
     }
 
+    public String getDealerPlayerId() {
+        return seating.getDealerPlayerId();
+    }
+
     public long getHandNumber() {
         return handNumber;
     }

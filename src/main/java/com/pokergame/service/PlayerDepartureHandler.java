@@ -2,6 +2,7 @@ package com.pokergame.service;
 
 import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.enums.ForfeitReason;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.exception.BadRequestException;
@@ -15,8 +16,6 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -69,22 +68,7 @@ class PlayerDepartureHandler {
      * @param playerNames names of players leaving or timing out
      */
     void removePlayers(String roomId, Collection<String> playerNames) {
-        Room room = roomService.getRoom(roomId);
-        Game game = activeGames.get(roomId);
-        if (room == null) {
-            if (game == null || game.isGameOver()) {
-                return;
-            }
-            logger.info("Room {} not found while removing players from game. Cleaning up game without broadcast.",
-                    roomId);
-            activeGames.remove(roomId);
-            return;
-        }
-        if (game != null && room.isInactivityExpired(clock.millis())) {
-            completionHandler.abandonGameDueToInactivity(roomId);
-            return;
-        }
-        removePlayersFromRoomAndGame(roomId, playerNames, room, game);
+        removePlayers(roomId, playerNames, ForfeitReason.PLAYER_LEFT);
     }
 
     /**
@@ -151,7 +135,7 @@ class PlayerDepartureHandler {
                 if (game.isPausedForDisconnectedSurvivor() && game.countContenders() == 1
                         && game.isContender(player)) {
                     game.clearPausedForDisconnectedSurvivor();
-                    completionHandler.handleGameEndWithForfeits(gameId, player, Set.of());
+                    completionHandler.handleGameEndWithForfeits(gameId, player, List.of(), null);
                     markRoomMemberConnected(room, playerName);
                     return;
                 }
@@ -203,7 +187,7 @@ class PlayerDepartureHandler {
             throw new UnauthorisedActionException("Cannot claim win right now.");
         }
         List<String> opponents = game.disconnectedOpponentsOf(playerName);
-        removePlayersFromRoomAndGame(gameId, opponents, room, game);
+        removePlayersFromRoomAndGame(gameId, opponents, room, game, ForfeitReason.DISCONNECTED);
         return game.getGameEndResult();
     }
 
@@ -233,7 +217,7 @@ class PlayerDepartureHandler {
             return;
         }
         if (hasDisconnectGraceExpired(room, game, playerName, expectedDeadlineEpochMs)) {
-            removePlayersFromRoomAndGame(gameId, List.of(playerName), room, game);
+            removePlayersFromRoomAndGame(gameId, List.of(playerName), room, game, ForfeitReason.DISCONNECTED);
         }
     }
 
@@ -245,37 +229,50 @@ class PlayerDepartureHandler {
     void handleTurnTimeout(Game game) {
         String gameId = game.getGameId();
         String actorToDepart = game.getCurrentPlayer().getName();
-        removePlayers(gameId, List.of(actorToDepart));
+        removePlayers(gameId, List.of(actorToDepart), ForfeitReason.TURN_TIMEOUT);
         logger.info("Player {} timed out after {} ms in game {}; removing from seat",
                 actorToDepart, timings.turnAllowanceMs(), gameId);
     }
 
-    private void removePlayersFromRoomAndGame(String roomId, Collection<String> playerNames, Room room, Game game) {
+    private void removePlayers(String roomId, Collection<String> playerNames, ForfeitReason reason) {
+        Room room = roomService.getRoom(roomId);
+        Game game = activeGames.get(roomId);
+        if (room == null) {
+            if (game == null || game.isGameOver()) {
+                return;
+            }
+            logger.info("Room {} not found while removing players from game. Cleaning up game without broadcast.",
+                    roomId);
+            activeGames.remove(roomId);
+            return;
+        }
+        if (game != null && room.isInactivityExpired(clock.millis())) {
+            completionHandler.abandonGameDueToInactivity(roomId);
+            return;
+        }
+        removePlayersFromRoomAndGame(roomId, playerNames, room, game, reason);
+    }
+
+    // The reason only reaches the final result when the departure ends the match by forfeit.
+    private void removePlayersFromRoomAndGame(
+            String roomId, Collection<String> playerNames, Room room, Game game, ForfeitReason reason) {
         List<String> departing = List.copyOf(new LinkedHashSet<>(playerNames));
         List<String> departingRoomMembers = departing.stream().filter(room.getPlayers()::contains).toList();
         if (game == null) {
-            removeFromLobby(roomId, room, departingRoomMembers);
-        } else {
-            removeFromGame(roomId, room, game, departing, departingRoomMembers);
-        }
-    }
-
-    private void removeFromLobby(String roomId, Room room, List<String> departingRoomMembers) {
-        if (departingRoomMembers.isEmpty()) {
+            if (departingRoomMembers.isEmpty()) {
+                return;
+            }
+            String currentHost = room.getHostName();
+            if (currentHost != null && departingRoomMembers.contains(currentHost)) {
+                // leaveRoom destroys the whole lobby when the host leaves, so the other departing
+                // players need no separate removal.
+                roomService.leaveRoom(roomId, currentHost);
+            } else {
+                roomService.removeMembers(roomId, departingRoomMembers, currentHost);
+            }
             return;
         }
-        String currentHost = room.getHostName();
-        if (currentHost != null && departingRoomMembers.contains(currentHost)) {
-            // leaveRoom destroys the whole lobby when the host leaves, so the other departing
-            // players need no separate removal.
-            roomService.leaveRoom(roomId, currentHost);
-        } else {
-            roomService.removeMembers(roomId, departingRoomMembers, currentHost);
-        }
-    }
 
-    private void removeFromGame(
-            String roomId, Room room, Game game, List<String> departing, List<String> departingRoomMembers) {
         List<Player> departingGamePlayers = game.getPlayers().stream()
                 .filter(p -> departing.contains(p.getName()))
                 .toList();
@@ -312,7 +309,8 @@ class PlayerDepartureHandler {
                     .filter(game::isContender)
                     .findFirst()
                     .orElseThrow();
-            handleSingleSurvivorForfeit(roomId, room, game, departingRoomMembers, departingGamePlayers, survivor);
+            handleSingleSurvivorForfeit(
+                    roomId, room, game, departingRoomMembers, departingGamePlayers, survivor, reason);
             return;
         }
 
@@ -403,7 +401,8 @@ class PlayerDepartureHandler {
             Game game,
             List<String> departingRoomMembers,
             List<Player> departingGamePlayers,
-            Player survivor) {
+            Player survivor,
+            ForfeitReason reason) {
         if (survivor.isDisconnected()) {
             game.pauseForDisconnectedSurvivor(departingGamePlayers);
             timerRegistry.cancelAllForGame(roomId, false);
@@ -415,10 +414,10 @@ class PlayerDepartureHandler {
             return;
         }
 
-        Set<String> forfeitedNames = departingGamePlayers.stream()
+        List<String> forfeitedNames = departingGamePlayers.stream()
                 .map(Player::getName)
-                .collect(Collectors.toSet());
-        completionHandler.handleGameEndWithForfeits(roomId, survivor, forfeitedNames);
+                .toList();
+        completionHandler.handleGameEndWithForfeits(roomId, survivor, forfeitedNames, reason);
         room.setFinished(true);
         detachRoomMembers(roomId, room, game, departingRoomMembers);
     }

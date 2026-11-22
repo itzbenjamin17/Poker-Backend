@@ -135,6 +135,7 @@
         "hasFolded" : false,
         "isSmallBlind" : true,
         "isBigBlind" : false,
+        "isDealer" : true,
         "handRank" : "HIGH_CARD",
         "bestHand" : [ {
           "rank" : "ACE",
@@ -162,6 +163,7 @@
         "hasFolded" : false,
         "isSmallBlind" : false,
         "isBigBlind" : true,
+        "isDealer" : false,
         "handRank" : null,
         "bestHand" : [ ],
         "isWinner" : false,
@@ -195,6 +197,7 @@
         "isForfeit" : false,
         "abandoned" : null,
         "reason" : null,
+        "forfeitedPlayers" : null,
         "message" : "Alice wins the game with 2000 chips!"
       }
     }

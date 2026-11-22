@@ -996,6 +996,53 @@ class PlayerDepartureHandlerTest {
                 assertEquals(1510, bigBlind.getChips());
             }
         }
+
+        /** The final result says why a heads-up game ended by forfeit and who forfeited, so players can be told. */
+        @Test
+        void headsUpForfeitsNameTheReasonAndThePlayerWhoForfeited() {
+            Map<String, String> expectedReasons = Map.of(
+                    "leave", "PLAYER_LEFT", "claim", "DISCONNECTED", "grace", "DISCONNECTED", "timeout", "TURN_TIMEOUT");
+            for (String ending : List.of("leave", "claim", "grace", "timeout")) {
+                String gameId = ROOM_ID + "-reason-" + ending;
+                Room room = new Room(gameId, "Reason " + ending, "Host", 2, 10, 20, 1000, null);
+                room.addPlayer("Host");
+                room.addPlayer("Player2");
+                when(roomService.getRoom(gameId)).thenReturn(room);
+                reset(messagingTemplate);
+                wireLifecycle();
+
+                withRoomLock(gameId, () -> gameLifecycleService.createGameFromRoom(gameId));
+                Game game = getGameLocked(gameId);
+                String loser = game.getCurrentPlayer().getName();
+                String winner = loser.equals("Host") ? "Player2" : "Host";
+
+                withRoomLock(gameId, () -> {
+                    switch (ending) {
+                        case "leave" -> departureHandler.removePlayers(gameId, List.of(loser));
+                        case "timeout" -> departureHandler.handleTurnTimeout(game);
+                        case "claim" -> {
+                            departureHandler.markPlayerDisconnected(gameId, loser, BASE_EPOCH_MS + 60_000L);
+                            departureHandler.claimWin(gameId, winner);
+                        }
+                        default -> {
+                            departureHandler.markPlayerDisconnected(gameId, loser, BASE_EPOCH_MS + 60_000L);
+                            long deadline = BASE_EPOCH_MS - 100;
+                            findGamePlayer(game, loser).setDisconnectDeadlineEpochMs(deadline);
+                            departureHandler.removeDisconnectedPlayer(
+                                    gameId, loser, room.getMembershipId(loser), deadline);
+                        }
+                    }
+                });
+
+                PublicGameStateResponse.GameEnd end = fixture.gameEndBroadcasts(gameId).getFirst().gameEnd();
+                assertEquals(winner, end.winner(), ending);
+                assertTrue(end.isForfeit(), ending);
+                assertFalse(end.abandoned(), ending);
+                assertEquals(expectedReasons.get(ending), end.reason(), ending);
+                assertEquals(List.of(loser), end.forfeitedPlayers(), ending);
+                assertEquals(end, game.getGameEndResult().gameEnd(), "the review keeps the reason for " + ending);
+            }
+        }
     }
 
     // ==================== Disconnected Grace Period Guards ====================

@@ -569,13 +569,13 @@ class RoomSnapshotMapperTest {
                 List.of(new Card(Rank.TEN, Suit.CLUBS)),
                 List.of(
                         new PublicGameStateResponse.PlayerState(
-                                "a", "Alice", 2000, 0, "ACTIVE", false, false, false, true, false,
+                                "a", "Alice", 2000, 0, "ACTIVE", false, false, false, true, false, true,
                                 HandRank.HIGH_CARD, List.of(new Card(Rank.ACE, Suit.SPADES)),
                                 true, 2000,
                                 List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)),
                                 1_700_000_015_000L, false),
                         new PublicGameStateResponse.PlayerState(
-                                "b", "Bob", 0, 0, "OUT", false, false, false, false, true,
+                                "b", "Bob", 0, 0, "OUT", false, false, false, false, true, false,
                                 null, List.of(), false, 0, null, null, true)),
                 null, null, List.of("Alice"), 2000, false, null, false, null, false, null,
                 true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, 123456789L, 42,
@@ -707,10 +707,10 @@ class RoomSnapshotMapperTest {
                 6, 15, List.of(15), 0, GamePhase.PRE_FLOP, 10, List.of(),
                 List.of(
                         new PublicGameStateResponse.PlayerState(
-                                "alice-id", "Alice", 995, 5, "ACTIVE", false, true, false, true, false,
+                                "alice-id", "Alice", 995, 5, "ACTIVE", false, true, false, true, false, true,
                                 null, List.of(), false, null, null, null, false),
                         new PublicGameStateResponse.PlayerState(
-                                "bob-id", "Bob", 990, 10, "ACTIVE", false, false, false, false, true,
+                                "bob-id", "Bob", 990, 10, "ACTIVE", false, false, false, false, true, false,
                                 null, List.of(), false, null, null, null, false)),
                 null, null, List.of(), null, false, null, false, null, false, null, false, null,
                 List.of(), null, null, 1L, ReadyGateState.CLOSED, FIXED_EPOCH_MS, 3L, null, null,

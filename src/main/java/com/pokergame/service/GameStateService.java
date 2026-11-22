@@ -5,6 +5,7 @@ import static java.util.Objects.requireNonNull;
 import com.pokergame.dto.response.PlayerFeedbackResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.enums.ForfeitReason;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerStatus;
@@ -148,6 +149,7 @@ public class GameStateService {
         boolean isActualShowdown = game.wasContestedShowdown();
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
+        String dealerPlayerId = game.getDealerPlayerId();
 
         List<PublicGameStateResponse.PlayerState> playersList = game.getPlayers().stream().map(player -> {
             boolean isWinner = winnerIds.contains(player.getPlayerId());
@@ -157,6 +159,7 @@ public class GameStateService {
                     false,
                     smallBlindPlayerId,
                     bigBlindPlayerId,
+                    dealerPlayerId,
                     isActive ? player.getHandRank() : null,
                     isActive ? player.getBestHand() : List.of(),
                     isWinner,
@@ -195,6 +198,7 @@ public class GameStateService {
 
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
+        String dealerPlayerId = game.getDealerPlayerId();
 
         List<PublicGameStateResponse.PlayerState> playersList = game.getPlayers().stream()
                 .map(player -> toPublicPlayerState(
@@ -202,6 +206,7 @@ public class GameStateService {
                         false,
                         smallBlindPlayerId,
                         bigBlindPlayerId,
+                        dealerPlayerId,
                         player.getHandRank(),
                         List.of(),
                         null,
@@ -283,6 +288,28 @@ public class GameStateService {
     }
 
     /**
+     * Increments the game's state revision and builds the final game-end snapshot for a game won because the
+     * other players forfeited, recording why and who forfeited so clients can explain the result.
+     *
+     * @param game             the completed game instance
+     * @param winner           the winning player
+     * @param reason           why the other players forfeited
+     * @param forfeitedPlayers names of the players who forfeited, in seat order
+     * @return the completed {@link PublicGameStateResponse} with {@code gameEnd} populated
+     */
+    public PublicGameStateResponse advanceRevisionAndBuildForfeitEnd(
+            Game game, Player winner, ForfeitReason reason, List<String> forfeitedPlayers) {
+        requireNonNull(game, "game must not be null");
+        requireNonNull(winner, "winner must not be null");
+        requireNonNull(reason, "reason must not be null");
+        requireNonNull(forfeitedPlayers, "forfeitedPlayers must not be null");
+        game.incrementStateRevision();
+        PublicGameStateResponse.GameEnd gameEnd = PublicGameStateResponse.GameEnd.wonByForfeit(
+                winner.getName(), winner.getChips(), reason, forfeitedPlayers, winnerMessage(winner));
+        return buildCompletedGameState(game, winner, gameEnd);
+    }
+
+    /**
      * Increments the game's state revision and builds the final snapshot for a game closed due
      * to inactivity.
      *
@@ -306,9 +333,8 @@ public class GameStateService {
     public PublicGameStateResponse buildGameEndResponse(Game game, Player winner, boolean isForfeit) {
         requireNonNull(game, "game must not be null");
         requireNonNull(winner, "winner must not be null");
-        String message = winner.getName() + " wins the game with " + winner.getChips() + " chips!";
         PublicGameStateResponse.GameEnd gameEnd = PublicGameStateResponse.GameEnd.won(
-                winner.getName(), winner.getChips(), isForfeit, message);
+                winner.getName(), winner.getChips(), isForfeit, winnerMessage(winner));
         return buildCompletedGameState(game, winner, gameEnd);
     }
 
@@ -341,6 +367,7 @@ public class GameStateService {
     private PublicGameStateResponse buildAbandonedGameState(Game game, PublicGameStateResponse.GameEnd gameEnd) {
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
+        String dealerPlayerId = game.getDealerPlayerId();
 
         List<PublicGameStateResponse.PlayerState> playerStates = game.getPlayers().stream()
                 .map(player -> toPublicPlayerState(
@@ -348,6 +375,7 @@ public class GameStateService {
                         false,
                         smallBlindPlayerId,
                         bigBlindPlayerId,
+                        dealerPlayerId,
                         null,
                         List.of(),
                         false,
@@ -368,6 +396,10 @@ public class GameStateService {
                 .build();
     }
 
+    private static String winnerMessage(Player winner) {
+        return winner.getName() + " wins the game with " + winner.getChips() + " chips!";
+    }
+
     private PublicGameStateResponse buildCompletedGameState(
             Game game, Player winner, PublicGameStateResponse.GameEnd gameEnd) {
         boolean handSettled = game.isHandSettled();
@@ -375,6 +407,7 @@ public class GameStateService {
 
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
+        String dealerPlayerId = game.getDealerPlayerId();
 
         List<PublicGameStateResponse.PlayerState> playerStates = game.getPlayers().stream().map(player -> {
             boolean isWinner = winner.equals(player);
@@ -384,6 +417,7 @@ public class GameStateService {
                     false,
                     smallBlindPlayerId,
                     bigBlindPlayerId,
+                    dealerPlayerId,
                     isActive ? player.getHandRank() : null,
                     isActive ? player.getBestHand() : List.of(),
                     isWinner,
@@ -429,6 +463,7 @@ public class GameStateService {
                 : null;
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
+        String dealerPlayerId = game.getDealerPlayerId();
         if (currentPlayer != null) {
             logger.debug("Building game state - current player: {} (ID: {})",
                     currentPlayer.getName(), currentPlayer.getPlayerId());
@@ -448,6 +483,7 @@ public class GameStateService {
                     player.equals(currentPlayer),
                     smallBlindPlayerId,
                     bigBlindPlayerId,
+                    dealerPlayerId,
                     handSettled && !settledWinnerIds.isEmpty() && isActive ? player.getHandRank() : null,
                     handSettled && !settledWinnerIds.isEmpty() && isActive ? player.getBestHand() : null,
                     isWinner,
@@ -503,6 +539,7 @@ public class GameStateService {
             boolean isCurrentPlayer,
             String smallBlindPlayerId,
             String bigBlindPlayerId,
+            String dealerPlayerId,
             HandRank handRank,
             List<Card> bestHand,
             Boolean isWinner,
@@ -519,6 +556,7 @@ public class GameStateService {
                 player.hasFolded(),
                 player.getPlayerId().equals(smallBlindPlayerId),
                 player.getPlayerId().equals(bigBlindPlayerId),
+                player.getPlayerId().equals(dealerPlayerId),
                 handRank,
                 bestHand,
                 isWinner,

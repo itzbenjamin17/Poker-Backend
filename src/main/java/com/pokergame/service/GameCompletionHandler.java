@@ -2,6 +2,7 @@ package com.pokergame.service;
 
 import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.enums.ForfeitReason;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -10,6 +11,7 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import java.time.Clock;
+import java.util.List;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,7 +56,7 @@ class GameCompletionHandler {
      * @param gameId the unique ID of the game
      */
     void handleGameEnd(String gameId) {
-        handleGameEndInternal(gameId, false, null, Set.of());
+        handleGameEndInternal(gameId, false, null, List.of(), null);
     }
 
     /**
@@ -62,10 +64,12 @@ class GameCompletionHandler {
      *
      * @param gameId           the unique ID of the game
      * @param forfeitWinner    the player declared winner, if determined before settlement
-     * @param forfeitedPlayers names of players who forfeited
+     * @param forfeitedPlayers names of players who forfeited, in seat order
+     * @param reason           why they forfeited, or {@code null} when it is no longer known
      */
-    void handleGameEndWithForfeits(String gameId, Player forfeitWinner, Set<String> forfeitedPlayers) {
-        handleGameEndInternal(gameId, true, forfeitWinner, Set.copyOf(forfeitedPlayers));
+    void handleGameEndWithForfeits(
+            String gameId, Player forfeitWinner, List<String> forfeitedPlayers, ForfeitReason reason) {
+        handleGameEndInternal(gameId, true, forfeitWinner, List.copyOf(forfeitedPlayers), reason);
     }
 
     /**
@@ -213,7 +217,8 @@ class GameCompletionHandler {
             String gameId,
             boolean isForfeit,
             Player forfeitWinner,
-            Set<String> forfeitedPlayers) {
+            List<String> forfeitedPlayers,
+            ForfeitReason reason) {
         Game game = activeGames.get(gameId);
         if (game == null) {
             return;
@@ -225,7 +230,7 @@ class GameCompletionHandler {
             return;
         }
 
-        Player winner = game.settleGameEnd(forfeitWinner, forfeitedPlayers);
+        Player winner = game.settleGameEnd(forfeitWinner, Set.copyOf(forfeitedPlayers));
         timerRegistry.cancelAllForGame(gameId, true);
 
         Room room = roomService.getRoom(gameId);
@@ -235,7 +240,9 @@ class GameCompletionHandler {
 
         PublicGameStateResponse event = game.getGameEndResult();
         if (event == null) {
-            event = gameStateService.advanceRevisionAndBuildGameEnd(game, winner, isForfeit);
+            event = isForfeit && reason != null
+                    ? gameStateService.advanceRevisionAndBuildForfeitEnd(game, winner, reason, forfeitedPlayers)
+                    : gameStateService.advanceRevisionAndBuildGameEnd(game, winner, isForfeit);
             game.setGameEndResult(event);
         }
         gameStateService.sendGameEnd(gameId, event);

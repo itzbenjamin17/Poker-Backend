@@ -331,6 +331,7 @@ public final class RoomSnapshotMapper {
                 gameEnd.isForfeit(),
                 gameEnd.abandoned() ? Boolean.TRUE : null,
                 gameEnd.reason(),
+                gameEnd.forfeitedPlayers(),
                 gameEnd.message());
     }
 
@@ -346,6 +347,7 @@ public final class RoomSnapshotMapper {
                 player.hasFolded(),
                 player.isSmallBlind(),
                 player.isBigBlind(),
+                player.isDealer(),
                 player.handRank(),
                 cards(player.bestHand()),
                 player.isWinner(),
@@ -398,6 +400,7 @@ public final class RoomSnapshotMapper {
                 state.isForfeit(),
                 Boolean.TRUE.equals(state.abandoned()),
                 state.reason(),
+                state.forfeitedPlayers(),
                 state.message());
     }
 
@@ -414,6 +417,7 @@ public final class RoomSnapshotMapper {
                 state.hasFolded(),
                 state.isSmallBlind(),
                 state.isBigBlind(),
+                state.isDealer(),
                 state.handRank(),
                 cardsFromState(state.bestHand()),
                 state.isWinner(),

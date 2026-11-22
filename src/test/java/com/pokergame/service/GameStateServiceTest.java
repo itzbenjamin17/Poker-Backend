@@ -51,6 +51,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -1352,6 +1353,45 @@ class GameStateServiceTest {
     }
 
     /**
+     * Protects the contract that heads-up the dealer button is on the small blind, and only there.
+     */
+    @Test
+    void broadcastGameState_HeadsUp_ShouldMarkTheSmallBlindAsTheOnlyDealer() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testGame.dealHoleCards();
+        testGame.postBlinds();
+
+        gameStateService.broadcastGameState(testGame);
+
+        PublicGameStateResponse response = capturePublicBroadcast();
+        List<PublicGameStateResponse.PlayerState> dealers = response.players().stream()
+                .filter(PublicGameStateResponse.PlayerState::isDealer).toList();
+        assertEquals(1, dealers.size());
+        assertTrue(dealers.getFirst().isSmallBlind());
+    }
+
+    /**
+     * Protects the contract that at three or more seats the dealer button sits one seat before the small blind.
+     */
+    @Test
+    void broadcastGameState_ThreeHanded_ShouldMarkTheSeatBeforeTheSmallBlindAsDealer() {
+        testPlayers.add(new Player("Player3", UUID.randomUUID().toString(), 100));
+        testGame = new Game(GAME_ID, testPlayers, 6, 5, 10);
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testGame.dealHoleCards();
+        testGame.postBlinds();
+
+        gameStateService.broadcastGameState(testGame);
+
+        List<PublicGameStateResponse.PlayerState> seats = capturePublicBroadcast().players();
+        int smallBlindSeat = IntStream.range(0, seats.size())
+                .filter(i -> seats.get(i).isSmallBlind()).findFirst().orElseThrow();
+        List<String> dealers = seats.stream().filter(PublicGameStateResponse.PlayerState::isDealer)
+                .map(PublicGameStateResponse.PlayerState::name).toList();
+        assertEquals(List.of(seats.get((smallBlindSeat + seats.size() - 1) % seats.size()).name()), dealers);
+    }
+
+    /**
      * Protects the contract that the broadcast after dealing the flop carries the three community cards and keeps blind flags.
      */
     @Test
@@ -2507,8 +2547,9 @@ class GameStateServiceTest {
     private static PublicGameStateResponse.PlayerState viewState(String id, String name, int chips, int bet, String status,
             boolean allIn, boolean current, boolean folded, boolean smallBlind, boolean bigBlind,
             HandRank rank, List<Card> best, Boolean winner, Integer won, List<Card> hole) {
+        // viewGame gives the dealer button to Alice ("a").
         return new PublicGameStateResponse.PlayerState(id, name, chips, bet, status, allIn, current, folded, smallBlind,
-                bigBlind, rank, best, winner, won, hole, null, false);
+                bigBlind, "a".equals(id), rank, best, winner, won, hole, null, false);
     }
 
     private static List<Player> viewPlayers(boolean allIn) {

@@ -1,6 +1,7 @@
 package com.pokergame.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.pokergame.enums.ForfeitReason;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
@@ -98,6 +99,7 @@ public record PublicGameStateResponse(
      * @param hasFolded                 whether the player folded this hand
      * @param isSmallBlind              whether the player posted the small blind
      * @param isBigBlind                whether the player posted the big blind
+     * @param isDealer                  whether the player holds the dealer button
      * @param handRank                  evaluated hand rank at showdown, or {@code null}
      * @param bestHand                  best 5-card hand at showdown, or {@code null}
      * @param isWinner                  whether the player won the settled hand or match, or {@code null}
@@ -117,6 +119,7 @@ public record PublicGameStateResponse(
             boolean hasFolded,
             boolean isSmallBlind,
             boolean isBigBlind,
+            boolean isDealer,
             HandRank handRank,
             List<Card> bestHand,
             Boolean isWinner,
@@ -137,10 +140,13 @@ public record PublicGameStateResponse(
      *
      * @param winner      winning player's name, or {@code null} when abandoned
      * @param winnerChips winner's final chip stack, or {@code null} when abandoned
-     * @param isForfeit   {@code true} when the match ended by opponent departure or disconnect claim
-     * @param abandoned   {@code true} when the match ended without a winner
-     * @param reason      abandonment reason (e.g. {@code "INACTIVITY"}), or {@code null}
-     * @param message     human-readable summary of the final result
+     * @param isForfeit        {@code true} when the match ended by opponent departure or disconnect claim
+     * @param abandoned        {@code true} when the match ended without a winner
+     * @param reason           abandonment reason (e.g. {@code "INACTIVITY"}), the {@link ForfeitReason} name of a
+     *                         forfeit, or {@code null} when unknown or not applicable
+     * @param forfeitedPlayers names of the players who forfeited, in seat order, or {@code null} when not a forfeit
+     *                         or unknown
+     * @param message          human-readable summary of the final result
      */
     public record GameEnd(
             String winner,
@@ -148,10 +154,15 @@ public record PublicGameStateResponse(
             boolean isForfeit,
             @JsonInclude(JsonInclude.Include.NON_DEFAULT) boolean abandoned,
             @JsonInclude(JsonInclude.Include.NON_NULL) String reason,
+            @JsonInclude(JsonInclude.Include.NON_NULL) List<String> forfeitedPlayers,
             String message) {
 
+        public GameEnd {
+            forfeitedPlayers = forfeitedPlayers == null ? null : List.copyOf(forfeitedPlayers);
+        }
+
         /**
-         * Creates a won-game summary.
+         * Creates a won-game summary without a recorded forfeit reason.
          *
          * @param winner      winning player's name
          * @param winnerChips winner's final chip stack
@@ -160,7 +171,22 @@ public record PublicGameStateResponse(
          * @return won-game summary
          */
         public static GameEnd won(String winner, int winnerChips, boolean isForfeit, String message) {
-            return new GameEnd(winner, winnerChips, isForfeit, false, null, message);
+            return new GameEnd(winner, winnerChips, isForfeit, false, null, null, message);
+        }
+
+        /**
+         * Creates a summary for a match won because the other players forfeited.
+         *
+         * @param winner           winning player's name
+         * @param winnerChips      winner's final chip stack
+         * @param reason           why the other players forfeited
+         * @param forfeitedPlayers names of the players who forfeited, in seat order
+         * @param message          human-readable summary of the result
+         * @return forfeit-win summary
+         */
+        public static GameEnd wonByForfeit(
+                String winner, int winnerChips, ForfeitReason reason, List<String> forfeitedPlayers, String message) {
+            return new GameEnd(winner, winnerChips, true, false, reason.name(), forfeitedPlayers, message);
         }
 
         /**
@@ -171,7 +197,7 @@ public record PublicGameStateResponse(
          * @return abandoned-game summary
          */
         public static GameEnd abandoned(String reason, String message) {
-            return new GameEnd(null, null, false, true, reason, message);
+            return new GameEnd(null, null, false, true, reason, null, message);
         }
     }
 }

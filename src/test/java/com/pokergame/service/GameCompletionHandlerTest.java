@@ -24,6 +24,7 @@ import static org.mockito.Mockito.when;
 
 import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.enums.ForfeitReason;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.ScheduledGameTask;
@@ -228,7 +229,7 @@ class GameCompletionHandlerTest {
 
             clearInvocations(messagingTemplate, taskScheduler);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
-                completionHandler.handleGameEndWithForfeits(ROOM_ID, host, Set.of("Player2"));
+                completionHandler.handleGameEndWithForfeits(ROOM_ID, host, List.of("Player2"), ForfeitReason.PLAYER_LEFT);
             }
 
             assertTrue(p2.isOut());
@@ -241,6 +242,8 @@ class GameCompletionHandlerTest {
             assertNotNull(response.gameEnd());
             assertEquals("Host", response.gameEnd().winner());
             assertTrue(response.gameEnd().isForfeit());
+            assertEquals("PLAYER_LEFT", response.gameEnd().reason());
+            assertEquals(List.of("Player2"), response.gameEnd().forfeitedPlayers());
             assertSame(response, game.getGameEndResult());
             assertEquals(BASE_EPOCH_MS + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
                     game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
@@ -472,7 +475,7 @@ class GameCompletionHandlerTest {
                 assertThrows(ConflictException.class, () -> completionHandler.getGameReview(ROOM_ID, "Host"));
 
                 completionHandler.handleGameEndWithForfeits(
-                        ROOM_ID, game.getPlayers().getFirst(), Set.of("Player2", "Player3"));
+                        ROOM_ID, game.getPlayers().getFirst(), List.of("Player2", "Player3"), ForfeitReason.DISCONNECTED);
                 PublicGameStateResponse gameEndResult = game.getGameEndResult();
                 assertNotNull(gameEndResult);
 

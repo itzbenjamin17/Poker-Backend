@@ -439,7 +439,7 @@ class GameControllerIT extends AbstractControllerSliceIT {
     /** Builds the finished-game response whose roster holds {@link #PLAYER} as the 1,000-chip winner. */
     private static PublicGameStateResponse finalGameState(boolean forfeit) {
         PublicGameStateResponse.PlayerState winner = new PublicGameStateResponse.PlayerState(
-                "p-1", PLAYER, 1000, 0, "CONNECTED", false, false, false,
+                "p-1", PLAYER, 1000, 0, "CONNECTED", false, false, false, false,
                 false, false, null, List.of(), true, null, null, null, false);
         return state(GamePhase.SHOWDOWN, 0, List.of(winner),
                 PublicGameStateResponse.GameEnd.won(PLAYER, 1000, forfeit, "Winner"));

@@ -124,6 +124,7 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
             boolean isForfeit,
             Boolean abandoned,
             String reason,
+            List<String> forfeitedPlayers,
             String message) {
     }
 
@@ -171,6 +172,7 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
             boolean hasFolded,
             boolean isSmallBlind,
             boolean isBigBlind,
+            boolean isDealer,
             HandRank handRank,
             List<CardState> bestHand,
             Boolean isWinner,
