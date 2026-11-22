@@ -1,712 +1,231 @@
 package com.pokergame.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.matchesPattern;
+import static org.hamcrest.Matchers.startsWith;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.exception.InvalidRoomPasswordException;
-import com.pokergame.security.JwtAuthenticationFilter;
-import com.pokergame.security.JwtService;
-import com.pokergame.security.PayloadSizeFilter;
-import com.pokergame.security.PlayerPrincipal;
-import com.pokergame.service.GameLifecycleService;
+import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.model.Room;
+import com.pokergame.security.RateLimitService;
 import com.pokergame.service.RoomService;
-import org.junit.jupiter.api.BeforeEach;
+import com.pokergame.util.RoomPasswordPolicy;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.context.WebApplicationContext;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
-import java.util.Collections;
-import java.util.List;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.matchesPattern;
-import static org.hamcrest.Matchers.startsWith;
-import static org.mockito.Mockito.*;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
-import com.pokergame.security.EndpointRateLimitFilter;
-import com.pokergame.security.RateLimitService;
-import com.pokergame.service.GameStateService;
-import com.pokergame.util.RoomCoordinator;
-import com.pokergame.util.LockLease;
-import org.mockito.ArgumentCaptor;
-import org.mockito.ArgumentMatchers;
-import org.mockito.Mockito;
-import org.springframework.context.annotation.Import;
-import org.springframework.test.context.TestPropertySource;
-import com.pokergame.model.Room;
-
-/** Tests room controller behavior. */
+/** Tests the room REST endpoints through the web layer with mocked services and the real room lock. */
 @Tag("integration")
-@WebMvcTest(RoomController.class)
-@AutoConfigureMockMvc(addFilters = false)
-@ActiveProfiles("test")
-@TestPropertySource(properties = "poker.rate-limiting.enabled=true")
-@Import({
-        RateLimitService.class,
-        EndpointRateLimitFilter.class,
-        PayloadSizeFilter.class
-})
-class RoomControllerIT {
+class RoomControllerIT extends AbstractControllerSliceIT {
+    private static final String ROOM_ID = "room-123";
+    private static final String HOST = "HostPlayer";
+    private static final String PLAYER = "Player1";
+    private static final String STALE_MEMBERSHIP_MESSAGE = "Token membership is stale or invalid.";
+    /** 25 CJK characters are 75 UTF-8 bytes: within the 50-character limit but over BCrypt's 72-byte limit. */
+    private static final String OVERSIZED_UNICODE_PASSWORD = "\u6F22".repeat(25);
 
-    /** Unsupported password bytes produce client validation errors on both public commands. */
-    @Test
-    void oversizedUnicodePasswordsReturnBadRequestBeforeServiceInvocation() throws Exception {
-        String password = "æ¼¢".repeat(25);
-        mockMvc.perform(post("/api/room/create").contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(new CreateRoomRequest(
-                                "Room", "Host", 4, 5, 10, 100, password))))
-                .andExpect(status().isBadRequest());
-        mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(new JoinRoomRequest("Room", "Guest", password))))
-                .andExpect(status().isBadRequest());
-        verifyNoInteractions(roomService);
+    private final AtomicBoolean lockHeldDuringService = new AtomicBoolean();
+
+    /** The secured room endpoints that bind the token to the room and validate membership. */
+    private enum SecuredRoomEndpoint {
+        LEAVE("POST /api/room/{roomId}/leave") {
+            @Override
+            MockHttpServletRequestBuilder request(String roomId) {
+                return post("/api/room/{roomId}/leave", roomId);
+            }
+        },
+        START_GAME("POST /api/room/{roomId}/start-game") {
+            @Override
+            MockHttpServletRequestBuilder request(String roomId) {
+                return post("/api/room/{roomId}/start-game", roomId);
+            }
+        },
+        ROOM_INFO("GET /api/room/{roomId}") {
+            @Override
+            MockHttpServletRequestBuilder request(String roomId) {
+                return get("/api/room/{roomId}", roomId);
+            }
+        };
+
+        private final String label;
+
+        SecuredRoomEndpoint(String label) {
+            this.label = label;
+        }
+
+        abstract MockHttpServletRequestBuilder request(String roomId);
+
+        @Override
+        public String toString() {
+            return label;
+        }
     }
 
-    /** Invalid blind/buy-in ratios return HTTP 400 at validation before service invocation. */
+    // ---------------------------------------------------------------------------------------------
+    // Create and join
+    // ---------------------------------------------------------------------------------------------
+
     @Test
-    void invalidBlindAndBuyInRatiosReturnBadRequestBeforeServiceInvocation() throws Exception {
-        mockMvc.perform(post("/api/room/create").contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(new CreateRoomRequest(
-                                "Room", "Host", 4, 10, 15, 100, null))))
-                .andExpect(status().isBadRequest());
-        mockMvc.perform(post("/api/room/create").contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(new CreateRoomRequest(
-                                "Room", "Host", 4, 10, 50, 30, null))))
-                .andExpect(status().isBadRequest());
-        verifyNoInteractions(roomService);
-    }
-
-    @Autowired
-    private MockMvc mockMvc;
-
-    @Autowired
-    private WebApplicationContext webApplicationContext;
-
-    @Autowired
-    private PayloadSizeFilter payloadSizeFilter;
-
-    @Autowired
-    private EndpointRateLimitFilter endpointRateLimitFilter;
-
-    @Autowired
-    private RateLimitService rateLimitService;
-
-    private final ObjectMapper objectMapper = new ObjectMapper();
-
-    @MockitoBean
-    private RoomService roomService;
-
-    @MockitoBean
-    private GameLifecycleService gameLifecycleService;
-
-    /** Required by the WebSocket exception advice that the controller slice loads. */
-    @MockitoBean
-    private GameStateService gameStateService;
-
-    @MockitoBean
-    private JwtService jwtService;
-
-    @MockitoBean
-    private JwtAuthenticationFilter jwtAuthenticationFilter;
-    @MockitoBean
-    private RoomCoordinator roomCoordinator;
-
-    /**
-     * Initializes the test fixtures before each scenario.
-     */
-    @BeforeEach
-    void setup() {
-        Mockito.when(roomCoordinator.acquire(ArgumentMatchers.anyString()))
-                .thenReturn(LockLease.none());
-
-        // Reset rate limit buckets to ensure a fresh start for each test
-        rateLimitService.reset();
-
-        // We need to manually add the filters because @WebMvcTest 
-        // doesn't include custom filters by default even if they are @Components.
-        mockMvc = MockMvcBuilders.webAppContextSetup(webApplicationContext)
-                .addFilter(payloadSizeFilter)
-                .addFilter(endpointRateLimitFilter)
-                .build();
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Success.
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Success")
-    void createRoom_ShouldReturnTokenResponse() throws Exception {
-        CreateRoomRequest request = new CreateRoomRequest("Room1", "Player1", 6, 10, 20, 1000, null);
-        String roomId = "room-123";
+    @DisplayName("POST /api/room/create - Issues a token for the canonical name and admitted membership")
+    void createRoom_ValidRequest_ReturnsTokenForCanonicalNameAndMembership() throws Exception {
+        CreateRoomRequest request = new CreateRoomRequest("Room1", "  Player1  ", 6, 10, 20, 1000, null);
+        String membershipId = newRoom().addPlayer(PLAYER);
         when(roomService.createRoom(anyString(), any(CreateRoomRequest.class)))
-                .thenReturn(new RoomService.EntryResult(roomId, "Player1", "mem-1"));
-        when(jwtService.generateToken("Player1", roomId, "mem-1")).thenReturn("mock-token");
+                .thenReturn(new RoomService.EntryResult(ROOM_ID, PLAYER, membershipId));
+        when(jwtService.generateToken(PLAYER, ROOM_ID, membershipId)).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.token").value("mock-token"))
-                .andExpect(jsonPath("$.roomId").value(roomId))
-                .andExpect(jsonPath("$.playerName").value("Player1"));
+                .andExpect(jsonPath("$.roomId").value(ROOM_ID))
+                .andExpect(jsonPath("$.playerName").value(PLAYER));
 
-        verify(roomService).createRoom(anyString(), any(CreateRoomRequest.class));
-        verify(jwtService).generateToken("Player1", roomId, "mem-1");
+        ArgumentCaptor<CreateRoomRequest> passed = ArgumentCaptor.forClass(CreateRoomRequest.class);
+        verify(roomService).createRoom(anyString(), passed.capture());
+        assertThat(passed.getValue()).isEqualTo(request);
+        verify(roomService, never()).getRoom(anyString());
     }
 
-    /**
-     * Verifies the expected response for POST /api/room/join - Success.
-     */
     @Test
-    @DisplayName("POST /api/room/join - Success")
-    void joinRoom_ShouldReturnTokenResponse() throws Exception {
-        JoinRoomRequest request = new JoinRoomRequest("Room1", "Player2", null);
-        String roomId = "room-123";
-        when(roomService.resolveRoomIdByName("Room1")).thenReturn(roomId);
-        when(roomService.joinRoom(eq(roomId), any(JoinRoomRequest.class)))
-                .thenReturn(new RoomService.EntryResult(roomId, "Player2", "mem-2"));
-        when(jwtService.generateToken("Player2", roomId, "mem-2")).thenReturn("mock-token");
+    @DisplayName("POST /api/room/join - Issues a token for the canonical name and admitted membership")
+    void joinRoom_ValidRequest_ReturnsTokenForCanonicalNameAndMembership() throws Exception {
+        JoinRoomRequest request = new JoinRoomRequest("Room1", "  Player2  ", null);
+        Room room = newRoom();
+        room.addPlayer(HOST);
+        String membershipId = room.addPlayer("Player2");
+        when(roomService.resolveRoomIdByName("Room1")).thenReturn(ROOM_ID);
+        when(roomService.joinRoom(eq(ROOM_ID), any(JoinRoomRequest.class))).thenAnswer(
+                recordingLockHeld(ROOM_ID, lockHeldDuringService,
+                        new RoomService.EntryResult(ROOM_ID, "Player2", membershipId)));
+        when(jwtService.generateToken("Player2", ROOM_ID, membershipId)).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.token").value("mock-token"))
-                .andExpect(jsonPath("$.roomId").value(roomId))
+                .andExpect(jsonPath("$.roomId").value(ROOM_ID))
                 .andExpect(jsonPath("$.playerName").value("Player2"));
 
-        verify(roomService).resolveRoomIdByName("Room1");
-        verify(roomService).closeLobbyIfExpired(roomId);
-        verify(roomService).joinRoom(eq(roomId), any(JoinRoomRequest.class));
-        verify(jwtService).generateToken("Player2", roomId, "mem-2");
+        ArgumentCaptor<JoinRoomRequest> passed = ArgumentCaptor.forClass(JoinRoomRequest.class);
+        verify(roomService).joinRoom(eq(ROOM_ID), passed.capture());
+        assertThat(passed.getValue()).isEqualTo(request);
+        assertThat(lockHeldDuringService).isTrue();
+        verify(roomService, never()).getRoom(anyString());
+    }
+
+    @Test
+    @DisplayName("POST /api/room/join - Unknown room name returns 404 without joining")
+    void joinRoom_UnknownRoomName_ReturnsNotFound() throws Exception {
+        when(roomService.resolveRoomIdByName("Nowhere")).thenThrow(new ResourceNotFoundException("Room not found"));
+
+        mockMvc.perform(post("/api/room/join")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new JoinRoomRequest("Nowhere", PLAYER, null))))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Room not found"));
+
+        verify(roomService, never()).joinRoom(anyString(), any(JoinRoomRequest.class));
+        verifyNoInteractions(jwtService);
     }
 
     @Test
     @DisplayName("POST /api/room/join - Closes expired lobby before join and returns 400")
     void joinRoom_ExpiredLobby_ClosesBeforeJoinAndReturnsBadRequest() throws Exception {
-        JoinRoomRequest request = new JoinRoomRequest("Room1", "Player2", null);
-        String roomId = "room-123";
-        when(roomService.resolveRoomIdByName("Room1")).thenReturn(roomId);
-        when(roomService.closeLobbyIfExpired(roomId)).thenReturn(true);
+        when(roomService.resolveRoomIdByName("Room1")).thenReturn(ROOM_ID);
+        when(roomService.closeLobbyIfExpired(ROOM_ID)).thenReturn(true);
 
         mockMvc.perform(post("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new JoinRoomRequest("Room1", "Player2", null))))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("Room has expired due to inactivity."));
 
-        verify(roomService).closeLobbyIfExpired(roomId);
         verify(roomService, never()).joinRoom(anyString(), any(JoinRoomRequest.class));
-        verify(jwtService, never()).generateToken(anyString(), anyString());
+        verifyNoInteractions(jwtService);
     }
 
-    /**
-     * Verifies the expected response for POST /api/room/{roomId}/leave - Success (No Game Active).
-     */
-    @Test
-    @DisplayName("POST /api/room/{roomId}/leave - Success (No Game Active)")
-    void leaveRoom_NoGameActive_ShouldReturnSuccess() throws Exception {
-        String roomId = "room-123";
-        String playerName = "Player1";
-        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-
-        mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
-                .principal(auth))
-                .andExpect(status().isNoContent());
-
-        verify(gameLifecycleService).removePlayers(roomId, List.of(playerName));
+    /** Blank passwords mean "no password"; every other password reaches the service exactly as typed. */
+    private static Stream<Arguments> passwordNormalisationCases() {
+        return Stream.of(
+                Arguments.of("   ", null),
+                Arguments.of("  secret123  ", "  secret123  "));
     }
 
-    @Test
-    @DisplayName("POST /api/room/{roomId}/leave - Closes expired lobby and returns 404")
-    void leaveRoom_ExpiredLobby_ClosesAndReturnsNotFound() throws Exception {
-        String roomId = "room-123";
-        PlayerPrincipal principal = new PlayerPrincipal("Player1", roomId, "mem-1");
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(roomService.closeLobbyIfExpired(roomId)).thenReturn(true);
-
-        mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
-                .principal(auth))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.detail").value("Room not found"));
-
-        verify(roomService).closeLobbyIfExpired(roomId);
-        verifyNoInteractions(gameLifecycleService);
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/{roomId}/leave - Success (Game Active, Player in Game).
-     */
-    @Test
-    @DisplayName("POST /api/room/{roomId}/leave - Success (Game Active, Player in Game)")
-    void leaveRoom_GameActive_ShouldLeaveBoth() throws Exception {
-        String roomId = "room-123";
-        String playerName = "Player1";
-        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-
-        mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
-                .principal(auth))
-                .andExpect(status().isNoContent());
-
-        verify(gameLifecycleService).removePlayers(roomId, List.of(playerName));
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/{roomId}/leave - Success (Game Active, Player NOT in Game).
-     */
-    @Test
-    @DisplayName("POST /api/room/{roomId}/leave - Success (Game Active, Player NOT in Game)")
-    void leaveRoom_GameActive_PlayerNotInGame() throws Exception {
-        String roomId = "room-123";
-        String playerName = "Player1";
-        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-
-        mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
-                .principal(auth))
-                .andExpect(status().isNoContent());
-
-        verify(gameLifecycleService).removePlayers(roomId, List.of(playerName));
-    }
-
-    /**
-     * Verifies the expected response for GET /api/room/{roomId} - Success.
-     */
-    @Test
-    @DisplayName("GET /api/room/{roomId} - Success")
-    void getRoomInfo_ShouldReturnRoomData() throws Exception {
-        String roomId = "room-123";
-        String playerName = "Player1";
-        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-
-        Room room = new Room(roomId, "Room1", playerName, 6, 10, 20, 1000, null);
-        room.addPlayer(playerName);
-        when(roomService.getRoom(roomId)).thenReturn(room);
-
-        RoomDataResponse.RoomPlayer pInfo = new RoomDataResponse.RoomPlayer(playerName, true);
-        RoomDataResponse roomData = new RoomDataResponse(
-                roomId, "Room1", 6, 1000, 10, 20, List.of(pInfo), true, false, null, null, null);
-        when(roomService.getRoomData(roomId)).thenReturn(roomData);
-
-        mockMvc.perform(get("/api/room/{roomId}", roomId)
-                .principal(auth))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.roomId").value(roomId))
-                .andExpect(jsonPath("$.roomName").value("Room1"))
-                .andExpect(jsonPath("$.players[0].name").value(playerName))
-                .andExpect(jsonPath("$.players[0].isHost").value(true));
-    }
-
-    /**
-     * Verifies the expected response for GET /api/room/{roomId} - Not Found.
-     */
-    @Test
-    @DisplayName("GET /api/room/{roomId} - Not Found")
-    void getRoomInfo_NotFound_ShouldReturn404() throws Exception {
-        String roomId = "unknown";
-        PlayerPrincipal principal = new PlayerPrincipal("Player1", roomId);
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(roomService.getRoom(roomId)).thenReturn(null);
-
-        mockMvc.perform(get("/api/room/{roomId}", roomId)
-                .principal(auth))
-                .andExpect(status().isNotFound());
-    }
-
-    @Test
-    @DisplayName("GET /api/room/{roomId} - Closes expired lobby and returns 404")
-    void getRoomInfo_ExpiredLobby_ClosesAndReturnsNotFound() throws Exception {
-        String roomId = "room-123";
-        PlayerPrincipal principal = new PlayerPrincipal("Player1", roomId, "mem-1");
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(roomService.closeLobbyIfExpired(roomId)).thenReturn(true);
-
-        mockMvc.perform(get("/api/room/{roomId}", roomId)
-                .principal(auth))
-                .andExpect(status().isNotFound());
-
-        verify(roomService).closeLobbyIfExpired(roomId);
-        verify(roomService, never()).getRoomData(anyString());
-        verifyNoInteractions(gameLifecycleService);
-    }
-
-    /**
-     * Verifies that GET /api/room/{roomId} rejects tokens issued for another room with 403 before resource lookup.
-     */
-    @Test
-    @DisplayName("GET /api/room/{roomId} - Cross-Room Token (403)")
-    void getRoomInfo_CrossRoomToken_ShouldReturn403() throws Exception {
-        String roomId = "room-123";
-        PlayerPrincipal principal = new PlayerPrincipal("Player1", "different-room-456");
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-
-        mockMvc.perform(get("/api/room/{roomId}", roomId)
-                .principal(auth))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.title").value("Forbidden"))
-                .andExpect(jsonPath("$.detail").value("Token is not valid for this room."));
-
-        verify(roomService, never()).getRoom(anyString());
-        verify(roomService, never()).getRoomData(anyString());
-    }
-
-    /**
-     * Verifies that GET /api/room/{roomId} rejects authenticated non-members with 403.
-     */
-    @Test
-    @DisplayName("GET /api/room/{roomId} - Non-Member (403)")
-    void getRoomInfo_NonMember_ShouldReturn403() throws Exception {
-        String roomId = "room-123";
-        PlayerPrincipal principal = new PlayerPrincipal("NonMemberPlayer", roomId);
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-
-        Room room = new Room(roomId, "Room1", "HostPlayer", 6, 10, 20, 1000, null);
-        room.addPlayer("HostPlayer");
-        when(roomService.getRoom(roomId)).thenReturn(room);
-
-        mockMvc.perform(get("/api/room/{roomId}", roomId)
-                .principal(auth))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.title").value("Forbidden"))
-                .andExpect(jsonPath("$.detail").value("You are not a member of this room."));
-
-        verify(roomService, never()).getRoomData(anyString());
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Validation Error (Oversized Name).
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Validation Error (Oversized Name)")
-    void createRoom_ValidationError_OversizedName() throws Exception {
-        CreateRoomRequest request = new CreateRoomRequest("A".repeat(51), "Player1", 6, 10, 20, 1000, null);
-
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("Room name must be 50 characters or less"));
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Validation Error (Control Characters).
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Validation Error (Control Characters)")
-    void createRoom_ValidationError_ControlChars() throws Exception {
-        CreateRoomRequest request = new CreateRoomRequest("Room" + (char) 7, "Player1", 6, 10, 20, 1000, null);
-
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("Room name cannot contain control characters"));
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Validation Error (Format Characters in Room Name).
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Validation Error (Format Characters in Room Name)")
-    void createRoom_ValidationError_FormatCharsRoomName() throws Exception {
-        CreateRoomRequest request = new CreateRoomRequest("Room\u200B1", "Player1", 6, 10, 20, 1000, null);
-
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Validation Error (Format Characters in Player Name).
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Validation Error (Format Characters in Player Name)")
-    void createRoom_ValidationError_FormatCharsPlayerName() throws Exception {
-        CreateRoomRequest request = new CreateRoomRequest("Room1", "Player\u200D1", 6, 10, 20, 1000, null);
-
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Validation Error (HTML Tags in Room Name).
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Validation Error (HTML Tags in Room Name)")
-    void createRoom_ValidationError_HtmlTagsRoomName() throws Exception {
-        CreateRoomRequest request = new CreateRoomRequest("<b>Room</b>", "Player1", 6, 10, 20, 1000, null);
-
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Validation Error (HTML Tags in Player Name).
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Validation Error (HTML Tags in Player Name)")
-    void createRoom_ValidationError_HtmlTagsPlayerName() throws Exception {
-        CreateRoomRequest request = new CreateRoomRequest("Room1", "<script>alert(1)</script>", 6, 10, 20, 1000, null);
-
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Whitespace-only password treated as absent.
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Whitespace-only password treated as absent")
-    void createRoom_WhitespaceOnlyPassword_TreatedAsAbsent() throws Exception {
-        ArgumentCaptor<CreateRoomRequest> captor = ArgumentCaptor.forClass(CreateRoomRequest.class);
+    @ParameterizedTest(name = "password [{0}] reaches the service as [{1}]")
+    @MethodSource("passwordNormalisationCases")
+    @DisplayName("POST /api/room/create - Blank password is dropped and other passwords keep their spaces")
+    void createRoom_Password_NormalisedBeforeReachingService(String sentPassword, String expectedPassword)
+            throws Exception {
         when(roomService.createRoom(anyString(), any(CreateRoomRequest.class)))
-                .thenReturn(new RoomService.EntryResult("room-123", "Player1", "mem-1"));
-        when(jwtService.generateToken("Player1", "room-123", "mem-1")).thenReturn("mock-token");
+                .thenReturn(new RoomService.EntryResult(ROOM_ID, PLAYER, "mem-1"));
+        when(jwtService.generateToken(PLAYER, ROOM_ID, "mem-1")).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"roomName\":\"Room1\",\"playerName\":\"Player1\",\"maxPlayers\":6,\"smallBlind\":10,\"bigBlind\":20,\"buyIn\":1000,\"password\":\"   \"}"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "roomName", "Room1", "playerName", PLAYER, "maxPlayers", 6,
+                                "smallBlind", 10, "bigBlind", 20, "buyIn", 1000, "password", sentPassword))))
                 .andExpect(status().isOk());
 
-        verify(roomService).createRoom(anyString(), captor.capture());
-        assertThat(captor.getValue().password()).isNull();
-        assertThat(captor.getValue().hasPassword()).isFalse();
+        ArgumentCaptor<CreateRoomRequest> passed = ArgumentCaptor.forClass(CreateRoomRequest.class);
+        verify(roomService).createRoom(anyString(), passed.capture());
+        assertThat(passed.getValue().password()).isEqualTo(expectedPassword);
+        assertThat(passed.getValue().hasPassword()).isEqualTo(expectedPassword != null);
     }
 
-    /**
-     * Verifies the expected response for POST /api/room/create - Password preserves spaces.
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Password preserves spaces")
-    void createRoom_PasswordPreservesSpaces() throws Exception {
-        ArgumentCaptor<CreateRoomRequest> captor = ArgumentCaptor.forClass(CreateRoomRequest.class);
-        when(roomService.createRoom(anyString(), any(CreateRoomRequest.class)))
-                .thenReturn(new RoomService.EntryResult("room-123", "Player1", "mem-1"));
-        when(jwtService.generateToken("Player1", "room-123", "mem-1")).thenReturn("mock-token");
+    @ParameterizedTest(name = "password [{0}] reaches the service as [{1}]")
+    @MethodSource("passwordNormalisationCases")
+    @DisplayName("POST /api/room/join - Blank password is dropped and other passwords keep their spaces")
+    void joinRoom_Password_NormalisedBeforeReachingService(String sentPassword, String expectedPassword)
+            throws Exception {
+        when(roomService.resolveRoomIdByName("Room1")).thenReturn(ROOM_ID);
+        when(roomService.joinRoom(eq(ROOM_ID), any(JoinRoomRequest.class)))
+                .thenReturn(new RoomService.EntryResult(ROOM_ID, "Player2", "mem-2"));
+        when(jwtService.generateToken("Player2", ROOM_ID, "mem-2")).thenReturn("mock-token");
 
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"roomName\":\"Room1\",\"playerName\":\"Player1\",\"maxPlayers\":6,\"smallBlind\":10,\"bigBlind\":20,\"buyIn\":1000,\"password\":\"  secret123  \"}"))
+        mockMvc.perform(post("/api/room/join")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "roomName", "Room1", "playerName", "Player2", "password", sentPassword))))
                 .andExpect(status().isOk());
 
-        verify(roomService).createRoom(anyString(), captor.capture());
-        assertThat(captor.getValue().password()).isEqualTo("  secret123  ");
-        assertThat(captor.getValue().hasPassword()).isTrue();
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Validation Error (Invalid Numeric Range).
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Validation Error (Invalid Numeric Range)")
-    void createRoom_ValidationError_InvalidRange() throws Exception {
-        CreateRoomRequest request = new CreateRoomRequest("Room1", "Player1", 1, 10, 20, 1000, null);
-
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("Minimum 2 players required"));
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/join - Validation Error (Oversized Player Name).
-     */
-    @Test
-    @DisplayName("POST /api/room/join - Validation Error (Oversized Player Name)")
-    void joinRoom_ValidationError_OversizedPlayerName() throws Exception {
-        JoinRoomRequest request = new JoinRoomRequest("Room1", "A".repeat(31), null);
-
-        mockMvc.perform(post("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("Player name must be 30 characters or less"));
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/join - Validation Error (Format Characters in Room Name).
-     */
-    @Test
-    @DisplayName("POST /api/room/join - Validation Error (Format Characters in Room Name)")
-    void joinRoom_ValidationError_FormatCharsRoomName() throws Exception {
-        JoinRoomRequest request = new JoinRoomRequest("Room\u200B1", "Player1", null);
-
-        mockMvc.perform(post("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/join - Validation Error (Format Characters in Player Name).
-     */
-    @Test
-    @DisplayName("POST /api/room/join - Validation Error (Format Characters in Player Name)")
-    void joinRoom_ValidationError_FormatCharsPlayerName() throws Exception {
-        JoinRoomRequest request = new JoinRoomRequest("Room1", "Player\u200D1", null);
-
-        mockMvc.perform(post("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/join - Validation Error (HTML Tags in Room Name).
-     */
-    @Test
-    @DisplayName("POST /api/room/join - Validation Error (HTML Tags in Room Name)")
-    void joinRoom_ValidationError_HtmlTagsRoomName() throws Exception {
-        JoinRoomRequest request = new JoinRoomRequest("<b>Room</b>", "Player1", null);
-
-        mockMvc.perform(post("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/join - Validation Error (HTML Tags in Player Name).
-     */
-    @Test
-    @DisplayName("POST /api/room/join - Validation Error (HTML Tags in Player Name)")
-    void joinRoom_ValidationError_HtmlTagsPlayerName() throws Exception {
-        JoinRoomRequest request = new JoinRoomRequest("Room1", "<i>Player</i>", null);
-
-        mockMvc.perform(post("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/join - Whitespace-only password treated as null.
-     */
-    @Test
-    @DisplayName("POST /api/room/join - Whitespace-only password treated as null")
-    void joinRoom_WhitespaceOnlyPassword_TreatedAsNull() throws Exception {
-        ArgumentCaptor<JoinRoomRequest> captor = ArgumentCaptor.forClass(JoinRoomRequest.class);
-        when(roomService.resolveRoomIdByName("Room1")).thenReturn("room-123");
-        when(roomService.joinRoom(eq("room-123"), any(JoinRoomRequest.class)))
-                .thenReturn(new RoomService.EntryResult("room-123", "Player2", "mem-2"));
-        when(jwtService.generateToken("Player2", "room-123", "mem-2")).thenReturn("mock-token");
-
-        mockMvc.perform(post("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"roomName\":\"Room1\",\"playerName\":\"Player2\",\"password\":\"   \"}"))
-                .andExpect(status().isOk());
-
-        verify(roomService).joinRoom(eq("room-123"), captor.capture());
-        assertThat(captor.getValue().password()).isNull();
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/join - Password preserves spaces.
-     */
-    @Test
-    @DisplayName("POST /api/room/join - Password preserves spaces")
-    void joinRoom_PasswordPreservesSpaces() throws Exception {
-        ArgumentCaptor<JoinRoomRequest> captor = ArgumentCaptor.forClass(JoinRoomRequest.class);
-        when(roomService.resolveRoomIdByName("Room1")).thenReturn("room-123");
-        when(roomService.joinRoom(eq("room-123"), any(JoinRoomRequest.class)))
-                .thenReturn(new RoomService.EntryResult("room-123", "Player2", "mem-2"));
-        when(jwtService.generateToken("Player2", "room-123", "mem-2")).thenReturn("mock-token");
-
-        mockMvc.perform(post("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"roomName\":\"Room1\",\"playerName\":\"Player2\",\"password\":\"  secret123  \"}"))
-                .andExpect(status().isOk());
-
-        verify(roomService).joinRoom(eq("room-123"), captor.capture());
-        assertThat(captor.getValue().password()).isEqualTo("  secret123  ");
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Malformed JSON.
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Malformed JSON")
-    void createRoom_MalformedJson() throws Exception {
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{ \"roomName\": \"Room1\", \"maxPlayers\": \"not-a-number\" }"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("Malformed JSON request payload"));
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Payload Too Large.
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Payload Too Large")
-    void createRoom_PayloadTooLarge() throws Exception {
-        // Since we enabled the filter in SecurityConfig, we need to ensure the test MockMvc uses it.
-        // However, standard @WebMvcTest doesn't include custom filters from the context unless explicitly configured.
-        // But the PayloadSizeFilter is a @Component and OncePerRequestFilter.
-        
-        // Create a large body (> 10KB)
-        String largeBody = "{ \"roomName\": \"" + "A".repeat(11000) + "\", \"playerName\": \"P\" }";
-
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(largeBody))
-                .andExpect(status().isContentTooLarge())
-                .andExpect(jsonPath("$.detail").value("Request payload too large. Maximum allowed is 10KB."));
-    }
-
-    /**
-     * Verifies the expected response for POST /api/room/create - Rate Limit Exceeded.
-     */
-    @Test
-    @DisplayName("POST /api/room/create - Rate Limit Exceeded")
-    void createRoom_RateLimitExceeded() throws Exception {
-        CreateRoomRequest request = new CreateRoomRequest("Room", "Player1", 6, 10, 20, 1000, null);
-
-        // We don't need to simulate failures because the rate limit applies to successful requests too.
-        when(roomService.createRoom(anyString(), any()))
-                .thenReturn(new RoomService.EntryResult("room-123", "Player1", "mem-1"));
-
-        for (int i = 0; i < RateLimitService.REST_CAPACITY; i++) {
-            mockMvc.perform(post("/api/room/create")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .content(objectMapper.writeValueAsString(request)))
-                    .andExpect(status().isOk());
-        }
-
-        // The next attempt fails with 429 and states the real (short) wait.
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isTooManyRequests())
-                .andExpect(header().string("Retry-After", matchesPattern("[1-3]")))
-                .andExpect(jsonPath("$.detail").value(
-                        matchesPattern("Too many requests\\. Please try again in [1-3] seconds?\\.")));
+        ArgumentCaptor<JoinRoomRequest> passed = ArgumentCaptor.forClass(JoinRoomRequest.class);
+        verify(roomService).joinRoom(eq(ROOM_ID), passed.capture());
+        assertThat(passed.getValue().password()).isEqualTo(expectedPassword);
     }
 
     /**
@@ -714,7 +233,7 @@ class RoomControllerIT {
      * a fresh player name each time; a correct password is then refused too until the wait ends.
      */
     @Test
-    @DisplayName("POST /api/room/join - repeated wrong passwords lock the room for that IP")
+    @DisplayName("POST /api/room/join - Repeated wrong passwords lock the room for that IP")
     void joinRoom_RepeatedWrongPasswords_LockRoomForThatIp() throws Exception {
         when(roomService.resolveRoomIdByName("Locked")).thenReturn("room-locked");
         when(roomService.resolveRoomIdByName("Other")).thenReturn("room-other");
@@ -725,7 +244,8 @@ class RoomControllerIT {
 
         for (int i = 0; i < RateLimitService.JOIN_PASSWORD_FAILURES; i++) {
             mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
-                            .content(objectMapper.writeValueAsString(new JoinRoomRequest("Locked", "Bot" + i, "guess" + i))))
+                            .content(objectMapper.writeValueAsString(
+                                    new JoinRoomRequest("Locked", "Bot" + i, "guess" + i))))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.detail").value("Invalid password"));
         }
@@ -733,143 +253,323 @@ class RoomControllerIT {
         mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new JoinRoomRequest("Locked", "Fresh", "right"))))
                 .andExpect(status().isTooManyRequests())
-                .andExpect(header().exists("Retry-After"))
-                .andExpect(jsonPath("$.detail").value(
-                        startsWith("Too many requests. Please try again in ")));
+                .andExpect(header().string("Retry-After", matchesPattern("[1-9]\\d*")))
+                .andExpect(jsonPath("$.detail").value(startsWith("Too many requests. Please try again in ")));
+
+        // The locked attempt is refused before the service sees the (correct) password.
+        verify(roomService, times(RateLimitService.JOIN_PASSWORD_FAILURES))
+                .joinRoom(eq("room-locked"), any(JoinRoomRequest.class));
+
+        // The budget refills one attempt at a time: after one refill interval a single guess gets through
+        // to the service (and fails), then the room is locked again.
+        clock.advanceByMillis(RateLimitService.JOIN_PASSWORD_WINDOW.toMillis()
+                / RateLimitService.JOIN_PASSWORD_FAILURES);
+        mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new JoinRoomRequest("Locked", "Retry", "guess"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Invalid password"));
+        mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new JoinRoomRequest("Locked", "Fresh", "right"))))
+                .andExpect(status().isTooManyRequests());
+        verify(roomService, times(RateLimitService.JOIN_PASSWORD_FAILURES + 1))
+                .joinRoom(eq("room-locked"), any(JoinRoomRequest.class));
 
         mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new JoinRoomRequest("Other", "Guest", null))))
                 .andExpect(status().isOk());
     }
 
-    /**
-     * Verifies the expected response for POST /api/room/{roomId}/start-game - Success (Host).
-     */
-    @Test
-    @DisplayName("POST /api/room/{roomId}/start-game - Success (Host)")
-    void startGame_Host_ShouldReturnNoContent() throws Exception {
-        String roomId = "room-123";
-        String playerName = "HostPlayer";
-        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(roomService.isRoomHost(roomId, playerName)).thenReturn(true);
-        when(gameLifecycleService.createGameFromRoom(roomId)).thenReturn("game-123");
+    // ---------------------------------------------------------------------------------------------
+    // Request validation (rejected before any service is reached)
+    // ---------------------------------------------------------------------------------------------
 
-        mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
-                .principal(auth))
+    private static Stream<Arguments> invalidCreateRequests() {
+        return Stream.of(
+                Arguments.of("oversized room name",
+                        new CreateRoomRequest("A".repeat(51), PLAYER, 6, 10, 20, 1000, null),
+                        "Room name must be 50 characters or less"),
+                Arguments.of("control character in room name",
+                        new CreateRoomRequest("Room" + (char) 7, PLAYER, 6, 10, 20, 1000, null),
+                        "Room name cannot contain control characters"),
+                Arguments.of("format character in room name",
+                        new CreateRoomRequest("Room\u200B1", PLAYER, 6, 10, 20, 1000, null),
+                        "Input contains illegal format characters."),
+                Arguments.of("format character in player name",
+                        new CreateRoomRequest("Room1", "Player\u200D1", 6, 10, 20, 1000, null),
+                        "Input contains illegal format characters."),
+                Arguments.of("HTML tags in room name",
+                        new CreateRoomRequest("<b>Room</b>", PLAYER, 6, 10, 20, 1000, null),
+                        "Input contains illegal HTML tags."),
+                Arguments.of("HTML tags in player name",
+                        new CreateRoomRequest("Room1", "<script>alert(1)</script>", 6, 10, 20, 1000, null),
+                        "Input contains illegal HTML tags."),
+                Arguments.of("single-seat room",
+                        new CreateRoomRequest("Room1", PLAYER, 1, 10, 20, 1000, null),
+                        "Minimum 2 players required"),
+                Arguments.of("big blind below twice the small blind",
+                        new CreateRoomRequest("Room1", PLAYER, 4, 10, 15, 100, null),
+                        "Big blind must be at least twice the small blind."),
+                Arguments.of("buy-in below the big blind",
+                        new CreateRoomRequest("Room1", PLAYER, 4, 10, 50, 30, null),
+                        "Buy-in must be at least the big blind amount."),
+                Arguments.of("password over 72 UTF-8 bytes",
+                        new CreateRoomRequest("Room1", PLAYER, 4, 5, 10, 100, OVERSIZED_UNICODE_PASSWORD),
+                        RoomPasswordPolicy.BYTE_LIMIT_MESSAGE));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("invalidCreateRequests")
+    @DisplayName("POST /api/room/create - Invalid request returns 400 before the service is invoked")
+    void createRoom_InvalidRequest_ReturnsBadRequestBeforeServiceInvocation(
+            String ignoredCase, CreateRoomRequest request, String expectedDetail) throws Exception {
+        mockMvc.perform(post("/api/room/create")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(expectedDetail));
+
+        verifyNoInteractions(roomService, jwtService);
+    }
+
+    private static Stream<Arguments> invalidJoinRequests() {
+        return Stream.of(
+                Arguments.of("oversized player name",
+                        new JoinRoomRequest("Room1", "A".repeat(31), null),
+                        "Player name must be 30 characters or less"),
+                Arguments.of("format character in room name",
+                        new JoinRoomRequest("Room\u200B1", PLAYER, null),
+                        "Input contains illegal format characters."),
+                Arguments.of("format character in player name",
+                        new JoinRoomRequest("Room1", "Player\u200D1", null),
+                        "Input contains illegal format characters."),
+                Arguments.of("HTML tags in room name",
+                        new JoinRoomRequest("<b>Room</b>", PLAYER, null),
+                        "Input contains illegal HTML tags."),
+                Arguments.of("HTML tags in player name",
+                        new JoinRoomRequest("Room1", "<i>Player</i>", null),
+                        "Input contains illegal HTML tags."),
+                Arguments.of("password over 72 UTF-8 bytes",
+                        new JoinRoomRequest("Room1", PLAYER, OVERSIZED_UNICODE_PASSWORD),
+                        RoomPasswordPolicy.BYTE_LIMIT_MESSAGE));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("invalidJoinRequests")
+    @DisplayName("POST /api/room/join - Invalid request returns 400 before the service is invoked")
+    void joinRoom_InvalidRequest_ReturnsBadRequestBeforeServiceInvocation(
+            String ignoredCase, JoinRoomRequest request, String expectedDetail) throws Exception {
+        mockMvc.perform(post("/api/room/join")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(expectedDetail));
+
+        verifyNoInteractions(roomService, jwtService);
+    }
+
+    @Test
+    @DisplayName("POST /api/room/create - Malformed JSON returns 400 before the service is invoked")
+    void createRoom_MalformedJson_ReturnsBadRequest() throws Exception {
+        mockMvc.perform(post("/api/room/create")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{ \"roomName\": \"Room1\", \"maxPlayers\": \"not-a-number\" }"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Malformed JSON request payload"));
+
+        verifyNoInteractions(roomService);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Leave
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("POST /api/room/{roomId}/leave - Valid member is removed and receives 204")
+    void leaveRoom_ValidMember_RemovesPlayerAndReturnsNoContent() throws Exception {
+        String membershipId = newRoom().addPlayer(PLAYER);
+        doAnswer(recordingLockHeld(ROOM_ID, lockHeldDuringService, null))
+                .when(gameLifecycleService).removePlayers(ROOM_ID, List.of(PLAYER));
+
+        mockMvc.perform(post("/api/room/{roomId}/leave", ROOM_ID)
+                        .principal(authenticated(PLAYER, ROOM_ID, membershipId)))
                 .andExpect(status().isNoContent());
 
-        verify(gameLifecycleService).createGameFromRoom(roomId);
+        verify(gameLifecycleService).validatePlayerMembership(ROOM_ID, PLAYER, membershipId);
+        verify(gameLifecycleService).removePlayers(ROOM_ID, List.of(PLAYER));
+        assertThat(lockHeldDuringService).isTrue();
+    }
+
+    @Test
+    @DisplayName("POST /api/room/{roomId}/leave - Closes expired lobby and returns 404")
+    void leaveRoom_ExpiredLobby_ClosesAndReturnsNotFound() throws Exception {
+        when(roomService.closeLobbyIfExpired(ROOM_ID)).thenReturn(true);
+
+        mockMvc.perform(post("/api/room/{roomId}/leave", ROOM_ID)
+                        .principal(authenticated(PLAYER, ROOM_ID, "mem-1")))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Room not found"));
+
+        verifyNoInteractions(gameLifecycleService);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Room info
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("GET /api/room/{roomId} - Member receives the room data")
+    void getRoomInfo_Member_ReturnsRoomData() throws Exception {
+        Room room = newRoom();
+        String membershipId = room.addPlayer(HOST);
+        when(roomService.getRoom(ROOM_ID)).thenReturn(room);
+        RoomDataResponse roomData = new RoomDataResponse(
+                ROOM_ID, "Room1", 6, 1000, 10, 20,
+                List.of(new RoomDataResponse.RoomPlayer(HOST, true)), true, false, null, null, null);
+        when(roomService.getRoomData(ROOM_ID)).thenAnswer(recordingLockHeld(ROOM_ID, lockHeldDuringService, roomData));
+
+        mockMvc.perform(get("/api/room/{roomId}", ROOM_ID)
+                        .principal(authenticated(HOST, ROOM_ID, membershipId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.roomId").value(ROOM_ID))
+                .andExpect(jsonPath("$.roomName").value("Room1"))
+                .andExpect(jsonPath("$.players[0].name").value(HOST))
+                .andExpect(jsonPath("$.players[0].isHost").value(true));
+
+        verify(gameLifecycleService).validatePlayerMembership(ROOM_ID, HOST, membershipId);
+        assertThat(lockHeldDuringService).isTrue();
+    }
+
+    @Test
+    @DisplayName("GET /api/room/{roomId} - Unknown room returns 404")
+    void getRoomInfo_UnknownRoom_ReturnsNotFound() throws Exception {
+        when(roomService.getRoom("unknown")).thenReturn(null);
+
+        mockMvc.perform(get("/api/room/{roomId}", "unknown")
+                        .principal(authenticated(PLAYER, "unknown", "mem-1")))
+                .andExpect(status().isNotFound());
+
+        verify(roomService, never()).getRoomData(anyString());
+    }
+
+    @Test
+    @DisplayName("GET /api/room/{roomId} - Closes expired lobby and returns 404")
+    void getRoomInfo_ExpiredLobby_ClosesAndReturnsNotFound() throws Exception {
+        when(roomService.closeLobbyIfExpired(ROOM_ID)).thenReturn(true);
+
+        mockMvc.perform(get("/api/room/{roomId}", ROOM_ID)
+                        .principal(authenticated(PLAYER, ROOM_ID, "mem-1")))
+                .andExpect(status().isNotFound());
+
+        verify(roomService, never()).getRoomData(anyString());
+        verifyNoInteractions(gameLifecycleService);
+    }
+
+    @Test
+    @DisplayName("GET /api/room/{roomId} - Authenticated non-member returns 403")
+    void getRoomInfo_NonMember_ReturnsForbidden() throws Exception {
+        Room room = newRoom();
+        room.addPlayer(HOST);
+        when(roomService.getRoom(ROOM_ID)).thenReturn(room);
+
+        mockMvc.perform(get("/api/room/{roomId}", ROOM_ID)
+                        .principal(authenticated("NonMemberPlayer", ROOM_ID, "mem-9")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.title").value("Forbidden"))
+                .andExpect(jsonPath("$.detail").value("You are not a member of this room."));
+
+        verify(roomService, never()).getRoomData(anyString());
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Start game
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("POST /api/room/{roomId}/start-game - Host starts the game and receives 204")
+    void startGame_Host_ReturnsNoContent() throws Exception {
+        String membershipId = newRoom().addPlayer(HOST);
+        when(roomService.isRoomHost(ROOM_ID, HOST)).thenReturn(true);
+        when(gameLifecycleService.createGameFromRoom(ROOM_ID))
+                .thenAnswer(recordingLockHeld(ROOM_ID, lockHeldDuringService, "game-123"));
+
+        mockMvc.perform(post("/api/room/{roomId}/start-game", ROOM_ID)
+                        .principal(authenticated(HOST, ROOM_ID, membershipId)))
+                .andExpect(status().isNoContent());
+
+        verify(gameLifecycleService).validatePlayerMembership(ROOM_ID, HOST, membershipId);
+        verify(gameLifecycleService).createGameFromRoom(ROOM_ID);
+        assertThat(lockHeldDuringService).isTrue();
     }
 
     @Test
     @DisplayName("POST /api/room/{roomId}/start-game - Closes expired lobby and returns 404")
     void startGame_ExpiredLobby_ClosesAndReturnsNotFound() throws Exception {
-        String roomId = "room-123";
-        PlayerPrincipal principal = new PlayerPrincipal("HostPlayer", roomId, "mem-1");
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(roomService.closeLobbyIfExpired(roomId)).thenReturn(true);
+        when(roomService.closeLobbyIfExpired(ROOM_ID)).thenReturn(true);
 
-        mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
-                .principal(auth))
+        mockMvc.perform(post("/api/room/{roomId}/start-game", ROOM_ID)
+                        .principal(authenticated(HOST, ROOM_ID, "mem-1")))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("Room not found"));
 
-        verify(roomService).closeLobbyIfExpired(roomId);
         verifyNoInteractions(gameLifecycleService);
     }
 
-    /**
-     * Verifies the expected response for POST /api/room/{roomId}/start-game - Forbidden (Non-Host).
-     */
     @Test
-    @DisplayName("POST /api/room/{roomId}/start-game - Forbidden (Non-Host)")
-    void startGame_NonHost_ShouldReturn403() throws Exception {
-        String roomId = "room-123";
-        String playerName = "GuestPlayer";
-        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-        when(roomService.isRoomHost(roomId, playerName)).thenReturn(false);
+    @DisplayName("POST /api/room/{roomId}/start-game - Non-host returns 403 and no game is created")
+    void startGame_NonHost_ReturnsForbidden() throws Exception {
+        when(roomService.isRoomHost(ROOM_ID, "GuestPlayer")).thenReturn(false);
 
-        mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
-                .principal(auth))
+        mockMvc.perform(post("/api/room/{roomId}/start-game", ROOM_ID)
+                        .principal(authenticated("GuestPlayer", ROOM_ID, "mem-2")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.title").value("Forbidden"))
-                .andExpect(jsonPath("$.detail").value("Only the room host can start the game. Please ask the host to start."));
+                .andExpect(jsonPath("$.detail")
+                        .value("Only the room host can start the game. Please ask the host to start."));
 
         verify(gameLifecycleService, never()).createGameFromRoom(anyString());
     }
 
-    @Test
-    @DisplayName("POST /api/room/create - Keeps admitted membershipId after host replacement")
-    void createRoom_WithActiveMembership_ShouldIssueTokenWithMembershipId() throws Exception {
-        CreateRoomRequest request = new CreateRoomRequest("RoomMem", "HostAlice", 6, 10, 20, 1000, null);
-        String roomId = "room-mem-123";
-        Room room = new Room(roomId, "RoomMem", "HostAlice", 6, 10, 20, 1000, null);
-        String expectedMembershipId = room.addPlayer("HostAlice");
+    // ---------------------------------------------------------------------------------------------
+    // Token binding and membership across the secured endpoints
+    // ---------------------------------------------------------------------------------------------
 
-        when(roomService.createRoom(anyString(), any(CreateRoomRequest.class)))
-                .thenReturn(new RoomService.EntryResult(roomId, "HostAlice", expectedMembershipId));
-        room.removePlayer("HostAlice");
-        room.addPlayer("HostAlice");
-        when(jwtService.generateToken("HostAlice", roomId, expectedMembershipId)).thenReturn("token-with-mid");
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(SecuredRoomEndpoint.class)
+    @DisplayName("Secured room endpoints - Token issued for another room returns 403 before any service call")
+    void securedEndpoint_TokenForAnotherRoom_ReturnsForbiddenBeforeAnyServiceCall(SecuredRoomEndpoint endpoint)
+            throws Exception {
+        mockMvc.perform(endpoint.request(ROOM_ID)
+                        .principal(authenticated(PLAYER, "different-room-456", "mem-1")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.title").value("Forbidden"))
+                .andExpect(jsonPath("$.detail").value("Token is not valid for this room."));
 
-        mockMvc.perform(post("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.token").value("token-with-mid"))
-                .andExpect(jsonPath("$.roomId").value(roomId))
-                .andExpect(jsonPath("$.playerName").value("HostAlice"));
-
-        verify(jwtService).generateToken("HostAlice", roomId, expectedMembershipId);
+        verifyNoInteractions(roomService, gameLifecycleService);
     }
 
-    @Test
-    @DisplayName("POST /api/room/join - Keeps admitted membershipId after player replacement")
-    void joinRoom_WithActiveMembership_ShouldIssueTokenWithMembershipId() throws Exception {
-        JoinRoomRequest request = new JoinRoomRequest("RoomMem", "Bob", null);
-        String roomId = "room-mem-456";
-        Room room = new Room(roomId, "RoomMem", "HostAlice", 6, 10, 20, 1000, null);
-        room.addPlayer("HostAlice");
-        String expectedMembershipId = room.addPlayer("Bob");
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(SecuredRoomEndpoint.class)
+    @DisplayName("Secured room endpoints - Stale membership token returns 401 and nothing else runs")
+    void securedEndpoint_StaleMembershipToken_ReturnsUnauthorizedAndStopsBeforeWork(SecuredRoomEndpoint endpoint)
+            throws Exception {
+        doThrow(new AccessDeniedException(STALE_MEMBERSHIP_MESSAGE))
+                .when(gameLifecycleService).validatePlayerMembership(ROOM_ID, PLAYER, "stale-mid");
 
-        when(roomService.resolveRoomIdByName("RoomMem")).thenReturn(roomId);
-        when(roomService.joinRoom(eq(roomId), any(JoinRoomRequest.class)))
-                .thenReturn(new RoomService.EntryResult(roomId, "Bob", expectedMembershipId));
-        room.removePlayer("Bob");
-        room.addPlayer("Bob");
-        when(jwtService.generateToken("Bob", roomId, expectedMembershipId)).thenReturn("token-with-mid-bob");
-
-        mockMvc.perform(post("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.token").value("token-with-mid-bob"))
-                .andExpect(jsonPath("$.roomId").value(roomId))
-                .andExpect(jsonPath("$.playerName").value("Bob"));
-
-        verify(jwtService).generateToken("Bob", roomId, expectedMembershipId);
-    }
-
-    @Test
-    @DisplayName("GET /api/room/{roomId} - Unauthorized when membership token is stale (401)")
-    void getRoomInfo_StaleMembershipToken_ShouldReturnUnauthorized401() throws Exception {
-        String roomId = "room-123";
-        String playerName = "Player1";
-        PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId, "stale-mid");
-        Authentication auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-
-        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
-                .when(gameLifecycleService).validatePlayerMembership(roomId, playerName, "stale-mid");
-
-        mockMvc.perform(get("/api/room/{roomId}", roomId)
-                .principal(auth))
+        mockMvc.perform(endpoint.request(ROOM_ID)
+                        .principal(authenticated(PLAYER, ROOM_ID, "stale-mid")))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.status").value(401))
                 .andExpect(jsonPath("$.title").value("Unauthorized"))
-                .andExpect(jsonPath("$.detail").value("Token membership is stale or invalid."));
+                .andExpect(jsonPath("$.detail").value(STALE_MEMBERSHIP_MESSAGE));
 
-        verify(roomService, never()).getRoomData(anyString());
+        // Only the expiry check and the membership guard ran: no removal, no game, no room data.
+        verify(roomService).closeLobbyIfExpired(ROOM_ID);
+        verifyNoMoreInteractions(roomService);
+        verify(gameLifecycleService).validatePlayerMembership(ROOM_ID, PLAYER, "stale-mid");
+        verifyNoMoreInteractions(gameLifecycleService);
+    }
+
+    private static Room newRoom() {
+        return new Room(ROOM_ID, "Room1", HOST, 6, 10, 20, 1000, null, FIXED_CLOCK);
     }
 }

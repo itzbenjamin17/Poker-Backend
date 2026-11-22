@@ -1,5 +1,19 @@
 package com.pokergame.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
@@ -10,553 +24,435 @@ import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
-import com.pokergame.security.JwtAuthenticationFilter;
 import com.pokergame.security.PlayerPrincipal;
-import com.pokergame.service.GameLifecycleService;
-import com.pokergame.service.GameStateService;
-import com.pokergame.service.PlayerActionService;
-import com.pokergame.util.RoomCoordinator;
-import com.pokergame.util.LockLease;
-import org.junit.jupiter.api.BeforeEach;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.NullSource;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
-
-import java.util.Collections;
-import java.util.List;
-
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.*;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
-import com.pokergame.security.EndpointRateLimitFilter;
-import com.pokergame.security.PayloadSizeFilter;
-
-/** Tests game controller behavior. */
+/** Tests the game REST endpoints and STOMP handlers through the web layer with the real room lock. */
 @Tag("integration")
-@WebMvcTest(GameController.class)
-@AutoConfigureMockMvc(addFilters = false)
-@ActiveProfiles("test")
-class GameControllerIT {
+class GameControllerIT extends AbstractControllerSliceIT {
+    private static final String GAME_ID = "game-123";
+    private static final String PLAYER = "Player1";
+    private static final String MEMBERSHIP_ID = "mem-1";
+    private static final String STALE_MEMBERSHIP_ID = "stale-mid";
+    private static final String STALE_MEMBERSHIP_MESSAGE = "Token membership is stale or invalid.";
+    private static final String WRONG_GAME_MESSAGE = "Token is not valid for this game.";
 
-    @Autowired
-    private MockMvc mockMvc;
+    /** Every secured HTTP endpoint that binds the token to the game and validates membership. */
+    private enum GameEndpoint {
+        STATE("GET /api/game/{gameId}/state") {
+            @Override
+            MockHttpServletRequestBuilder request(String gameId) {
+                return get("/api/game/{gameId}/state", gameId);
+            }
+        },
+        PRIVATE_STATE("GET /api/game/{gameId}/private-state") {
+            @Override
+            MockHttpServletRequestBuilder request(String gameId) {
+                return get("/api/game/{gameId}/private-state", gameId);
+            }
+        },
+        REVIEW("GET /api/game/{gameId}/review") {
+            @Override
+            MockHttpServletRequestBuilder request(String gameId) {
+                return get("/api/game/{gameId}/review", gameId);
+            }
+        },
+        CLAIM_WIN("POST /api/game/{gameId}/claim-win") {
+            @Override
+            MockHttpServletRequestBuilder request(String gameId) {
+                return post("/api/game/{gameId}/claim-win", gameId);
+            }
+        };
+
+        private final String label;
+
+        GameEndpoint(String label) {
+            this.label = label;
+        }
+
+        abstract MockHttpServletRequestBuilder request(String gameId);
+
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    /** The STOMP message handlers, invoked directly with a principal as the message broker would supply. */
+    private enum StompHandler {
+        PERFORM_ACTION {
+            @Override
+            void invoke(GameController controller, String gameId, PlayerPrincipal principal) {
+                controller.performAction(gameId, new PlayerActionRequest(PlayerAction.CALL, 0), principal);
+            }
+        },
+        MARK_READY {
+            @Override
+            void invoke(GameController controller, String gameId, PlayerPrincipal principal) {
+                controller.markReady(gameId, principal);
+            }
+        },
+        UNMARK_READY {
+            @Override
+            void invoke(GameController controller, String gameId, PlayerPrincipal principal) {
+                controller.unmarkReady(gameId, principal);
+            }
+        };
+
+        abstract void invoke(GameController controller, String gameId, PlayerPrincipal principal);
+    }
 
     @Autowired
     private GameController gameController;
 
-    @MockitoBean
-    private GameLifecycleService gameLifecycleService;
+    private final Authentication auth = authenticated(PLAYER, GAME_ID, MEMBERSHIP_ID);
+    private final AtomicBoolean lockHeldDuringService = new AtomicBoolean();
 
-    @MockitoBean
-    private GameStateService gameStateService;
+    // ---------------------------------------------------------------------------------------------
+    // Public and private state
+    // ---------------------------------------------------------------------------------------------
 
-    @MockitoBean
-    private PlayerActionService playerActionService;
-    @MockitoBean
-    private RoomCoordinator roomCoordinator;
-
-    @MockitoBean
-    private JwtAuthenticationFilter jwtAuthenticationFilter;
-
-    @MockitoBean
-    private EndpointRateLimitFilter endpointRateLimitFilter;
-
-    @MockitoBean
-    private PayloadSizeFilter payloadSizeFilter;
-
-    private final String gameId = "game-123";
-    private final String playerName = "Player1";
-    private PlayerPrincipal principal;
-    private Authentication auth;
-
-    /**
-     * Initializes the test fixtures before each scenario.
-     */
-    @BeforeEach
-    void setUp() {
-        when(roomCoordinator.acquire(anyString())).thenReturn(LockLease.none());
-        principal = new PlayerPrincipal(playerName, gameId);
-        auth = new PreAuthenticatedAuthenticationToken(principal, "token", Collections.emptyList());
-    }
-
-    /**
-     * Verifies the expected response for GET /api/game/{gameId}/state - Success.
-     */
     @Test
-    @DisplayName("GET /api/game/{gameId}/state - Success")
-    void getGameState_Success() throws Exception {
-        Game game = mock(Game.class);
-        PublicGameStateResponse response = state(6, 100, GamePhase.PRE_FLOP, 10, List.of(), playerName, "p1-id", null);
+    @DisplayName("GET /api/game/{gameId}/state - Returns the public snapshot for a player in the live game")
+    void getGameState_PlayerInLiveGame_ReturnsPublicSnapshot() throws Exception {
+        Game game = stubLiveGameWithPlayer();
+        when(gameStateService.getPublicGameStateSnapshot(game)).thenAnswer(recordingLockHeld(
+                GAME_ID, lockHeldDuringService, state(GamePhase.PRE_FLOP, 100, List.of(), null)));
 
-        when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(true);
-        when(gameLifecycleService.getGame(gameId)).thenReturn(game);
-        when(gameStateService.getPublicGameStateSnapshot(game)).thenReturn(response);
-
-        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(auth))
+        mockMvc.perform(get("/api/game/{gameId}/state", GAME_ID).principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.pot").value(100))
                 .andExpect(jsonPath("$.phase").value("PRE_FLOP"));
+
+        verify(gameLifecycleService).validatePlayerMembership(GAME_ID, PLAYER, MEMBERSHIP_ID);
+        assertThat(lockHeldDuringService).isTrue();
     }
 
-    /**
-     * Verifies the expected response for GET /api/game/{gameId}/state - Game Not Found.
-     */
     @Test
-    @DisplayName("GET /api/game/{gameId}/state - Game Not Found")
-    void getGameState_NotFound() throws Exception {
-        when(gameLifecycleService.gameExists(gameId)).thenReturn(false);
+    @DisplayName("GET /api/game/{gameId}/private-state - Returns the caller's own private snapshot")
+    void getPrivateState_PlayerInLiveGame_ReturnsPrivateSnapshot() throws Exception {
+        Game game = stubLiveGameWithPlayer();
+        PrivatePlayerState privateState = new PrivatePlayerState("p1-id", 1L, Collections.emptyList());
+        when(gameStateService.getPrivatePlayerStateSnapshot(game, PLAYER)).thenAnswer(
+                recordingLockHeld(GAME_ID, lockHeldDuringService, privateState));
 
-        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(auth))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.detail").value("Game not found"));
-    }
-
-    /**
-     * Verifies the expected response for GET /api/game/{gameId}/state - Game Null (404).
-     */
-    @Test
-    @DisplayName("GET /api/game/{gameId}/state - Game Null (404)")
-    void getGameState_GameNull() throws Exception {
-        when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(true);
-        when(gameLifecycleService.getGame(gameId)).thenReturn(null);
-
-        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(auth))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.detail").value("Game not found"));
-    }
-
-    /**
-     * Verifies that GET /api/game/{gameId}/state returns 404 when the game has already finished.
-     */
-    @Test
-    @DisplayName("GET /api/game/{gameId}/state - Game Over (404)")
-    void getGameState_GameOver_ShouldReturn404() throws Exception {
-        Game game = mock(Game.class);
-        when(game.isGameOver()).thenReturn(true);
-        when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(true);
-        when(gameLifecycleService.getGame(gameId)).thenReturn(game);
-
-        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(auth))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.detail").value("Game not found"));
-    }
-
-    /**
-     * Verifies the expected response for GET /api/game/{gameId}/state - Not In Game (403).
-     */
-    @Test
-    @DisplayName("GET /api/game/{gameId}/state - Not In Game (403)")
-    void getGameState_NotInGame() throws Exception {
-        when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(false);
-
-        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(auth))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.detail").value("You are no longer part of this game."));
-    }
-
-    /**
-     * Verifies the expected response for GET /api/game/{gameId}/private-state - Success.
-     */
-    @Test
-    @DisplayName("GET /api/game/{gameId}/private-state - Success")
-    void getPrivateState_Success() throws Exception {
-        Game game = mock(Game.class);
-        PrivatePlayerState response = new PrivatePlayerState("p1-id", 1L, Collections.emptyList());
-
-        when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(true);
-        when(gameLifecycleService.getGame(gameId)).thenReturn(game);
-        when(gameStateService.getPrivatePlayerStateSnapshot(game, playerName)).thenReturn(response);
-
-        mockMvc.perform(get("/api/game/{gameId}/private-state", gameId)
-                .principal(auth))
+        mockMvc.perform(get("/api/game/{gameId}/private-state", GAME_ID).principal(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.playerId").value("p1-id"))
                 .andExpect(jsonPath("$.handNumber").value(1));
+
+        verify(gameLifecycleService).validatePlayerMembership(GAME_ID, PLAYER, MEMBERSHIP_ID);
+        assertThat(lockHeldDuringService).isTrue();
     }
 
-    /**
-     * Verifies the expected response for GET /api/game/{gameId}/private-state - Not In Game (403).
-     */
-    @Test
-    @DisplayName("GET /api/game/{gameId}/private-state - Not In Game (403)")
-    void getPrivateState_NotInGame() throws Exception {
-        when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(false);
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(value = GameEndpoint.class, names = {"STATE", "PRIVATE_STATE"})
+    @DisplayName("Live game state endpoints - Unknown game returns 404")
+    void liveGameEndpoint_UnknownGame_ReturnsNotFound(GameEndpoint endpoint) throws Exception {
+        when(gameLifecycleService.gameExists(GAME_ID)).thenReturn(false);
 
-        mockMvc.perform(get("/api/game/{gameId}/private-state", gameId)
-                .principal(auth))
+        mockMvc.perform(endpoint.request(GAME_ID).principal(auth))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Game not found"));
+
+        verifyNoInteractions(gameStateService);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(value = GameEndpoint.class, names = {"STATE", "PRIVATE_STATE"})
+    @DisplayName("Live game state endpoints - Game that cannot be loaded returns 404")
+    void liveGameEndpoint_GameCannotBeLoaded_ReturnsNotFound(GameEndpoint endpoint) throws Exception {
+        when(gameLifecycleService.gameExists(GAME_ID)).thenReturn(true);
+        when(gameLifecycleService.playerExistsInGame(GAME_ID, PLAYER)).thenReturn(true);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(null);
+
+        mockMvc.perform(endpoint.request(GAME_ID).principal(auth))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Game not found"));
+
+        verifyNoInteractions(gameStateService);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(value = GameEndpoint.class, names = {"STATE", "PRIVATE_STATE"})
+    @DisplayName("Live game state endpoints - Finished game returns 404")
+    void liveGameEndpoint_FinishedGame_ReturnsNotFound(GameEndpoint endpoint) throws Exception {
+        Game game = stubLiveGameWithPlayer();
+        when(game.isGameOver()).thenReturn(true);
+
+        mockMvc.perform(endpoint.request(GAME_ID).principal(auth))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Game not found"));
+
+        verifyNoInteractions(gameStateService);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(value = GameEndpoint.class, names = {"STATE", "PRIVATE_STATE"})
+    @DisplayName("Live game state endpoints - Player no longer in the game returns 403")
+    void liveGameEndpoint_PlayerNoLongerInGame_ReturnsForbidden(GameEndpoint endpoint) throws Exception {
+        when(gameLifecycleService.gameExists(GAME_ID)).thenReturn(true);
+        when(gameLifecycleService.playerExistsInGame(GAME_ID, PLAYER)).thenReturn(false);
+
+        mockMvc.perform(endpoint.request(GAME_ID).principal(auth))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.detail").value("You are no longer part of this game."));
+
+        verifyNoInteractions(gameStateService);
     }
 
-    /**
-     * Verifies the expected response for POST /api/game/{gameId}/claim-win - Success.
-     */
-    @Test
-    @DisplayName("POST /api/game/{gameId}/claim-win - Success")
-    void claimWin_Success() throws Exception {
-        PublicGameStateResponse endResponse = state(6, 0, GamePhase.SHOWDOWN, 0, List.of(), null, null,
-                PublicGameStateResponse.GameEnd.won(playerName, 1000, true, "Winner"));
-        when(gameLifecycleService.claimWin(gameId, playerName)).thenReturn(endResponse);
-
-        mockMvc.perform(post("/api/game/{gameId}/claim-win", gameId)
-                .principal(auth))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.gameEnd.winner").value(playerName))
-                .andExpect(jsonPath("$.gameEnd.winnerChips").value(1000));
-
-        verify(gameLifecycleService).claimWin(gameId, playerName);
-    }
+    // ---------------------------------------------------------------------------------------------
+    // Claim win and post-game review
+    // ---------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("POST /api/game/{gameId}/claim-win - Returns PublicGameStateResponse with valid terminal state and winner")
-    void claimWin_ReturnsPublicGameStateWithValidTerminalStateAndWinner() throws Exception {
-        PublicGameStateResponse.PlayerState playerState = new PublicGameStateResponse.PlayerState(
-                "p-1", playerName, 1000, 0, "CONNECTED", false, false, false,
-                false, false, null, List.of(), true, null, null, null, false);
-        PublicGameStateResponse endResponse = state(6, 0, GamePhase.SHOWDOWN, 0, List.of(playerState), null, null,
-                PublicGameStateResponse.GameEnd.won(playerName, 1000, true, "Winner"));
-        when(gameLifecycleService.claimWin(gameId, playerName)).thenReturn(endResponse);
+    @DisplayName("POST /api/game/{gameId}/claim-win - Returns the final game state with the forfeit winner")
+    void claimWin_RemainingPlayer_ReturnsFinalGameStateWithWinner() throws Exception {
+        when(gameLifecycleService.claimWin(GAME_ID, PLAYER)).thenAnswer(
+                recordingLockHeld(GAME_ID, lockHeldDuringService, finalGameState(true)));
 
-        mockMvc.perform(post("/api/game/{gameId}/claim-win", gameId)
-                .principal(auth))
+        mockMvc.perform(post("/api/game/{gameId}/claim-win", GAME_ID).principal(auth))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.gameEnd.winner").value(playerName))
+                .andExpect(jsonPath("$.gameEnd.winner").value(PLAYER))
                 .andExpect(jsonPath("$.gameEnd.winnerChips").value(1000))
                 .andExpect(jsonPath("$.gameEnd.isForfeit").value(true))
                 .andExpect(jsonPath("$.maxPlayers").value(6))
-                .andExpect(jsonPath("$.players[0].name").value(playerName))
+                .andExpect(jsonPath("$.players[0].name").value(PLAYER))
                 .andExpect(jsonPath("$.players[0].chips").value(1000))
                 .andExpect(jsonPath("$.players[0].isWinner").value(true));
 
-        verify(gameLifecycleService).claimWin(gameId, playerName);
+        verify(gameLifecycleService).validatePlayerMembership(GAME_ID, PLAYER, MEMBERSHIP_ID);
+        assertThat(lockHeldDuringService).isTrue();
     }
 
     @Test
-    @DisplayName("POST /api/game/{gameId}/claim-win - Forbidden when principal token room does not match")
-    void claimWin_WrongRoomId_ThrowsForbidden() throws Exception {
-        PlayerPrincipal wrongPrincipal = new PlayerPrincipal(playerName, "other-room");
-        Authentication wrongAuth = new PreAuthenticatedAuthenticationToken(wrongPrincipal, "token", Collections.emptyList());
+    @DisplayName("GET /api/game/{gameId}/review - Finished game returns the final game state")
+    void getGameReview_FinishedGame_ReturnsFinalGameStateWithWinner() throws Exception {
+        when(gameLifecycleService.getGameReview(GAME_ID, PLAYER)).thenAnswer(
+                recordingLockHeld(GAME_ID, lockHeldDuringService, finalGameState(false)));
 
-        mockMvc.perform(post("/api/game/{gameId}/claim-win", gameId)
-                .principal(wrongAuth))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.status").value(403))
-                .andExpect(jsonPath("$.detail").value("Token is not valid for this game."));
-
-        verify(gameLifecycleService, never()).claimWin(anyString(), anyString());
-    }
-
-    @Test
-    @DisplayName("GET /api/game/{gameId}/review - Success (200 OK)")
-    void getGameReview_Success() throws Exception {
-        PublicGameStateResponse endResponse = state(6, 0, GamePhase.SHOWDOWN, 0, List.of(), null, null,
-                PublicGameStateResponse.GameEnd.won(playerName, 1000, false, "Winner"));
-        when(gameLifecycleService.getGameReview(gameId, playerName)).thenReturn(endResponse);
-
-        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
-                .principal(auth))
+        mockMvc.perform(get("/api/game/{gameId}/review", GAME_ID).principal(auth))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.gameEnd.winner").value(playerName))
-                .andExpect(jsonPath("$.gameEnd.winnerChips").value(1000));
-
-        verify(gameLifecycleService).getGameReview(gameId, playerName);
-    }
-
-    @Test
-    @DisplayName("GET /api/game/{gameId}/review - Returns 200 with terminal PublicGameStateResponse after game is over")
-    void getGameReview_AfterGameOver_Returns200WithTerminalPublicGameState() throws Exception {
-        PublicGameStateResponse.PlayerState playerState = new PublicGameStateResponse.PlayerState(
-                "p-1", playerName, 1000, 0, "CONNECTED", false, false, false,
-                false, false, null, List.of(), true, null, null, null, false);
-        PublicGameStateResponse endResponse = state(6, 0, GamePhase.SHOWDOWN, 0, List.of(playerState), null, null,
-                PublicGameStateResponse.GameEnd.won(playerName, 1000, false, "Winner"));
-        when(gameLifecycleService.getGameReview(gameId, playerName)).thenReturn(endResponse);
-
-        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
-                .principal(auth))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.gameEnd.winner").value(playerName))
+                .andExpect(jsonPath("$.gameEnd.winner").value(PLAYER))
                 .andExpect(jsonPath("$.gameEnd.winnerChips").value(1000))
                 .andExpect(jsonPath("$.gameEnd.isForfeit").value(false))
                 .andExpect(jsonPath("$.maxPlayers").value(6))
-                .andExpect(jsonPath("$.players[0].name").value(playerName));
+                .andExpect(jsonPath("$.players[0].name").value(PLAYER));
 
-        verify(gameLifecycleService).getGameReview(gameId, playerName);
+        verify(gameLifecycleService).validatePlayerMembership(GAME_ID, PLAYER, MEMBERSHIP_ID);
+        assertThat(lockHeldDuringService).isTrue();
     }
 
     @Test
     @DisplayName("GET /api/game/{gameId}/review - Conflict when game is not finished (409)")
-    void getGameReview_GameNotFinished() throws Exception {
-        when(gameLifecycleService.getGameReview(gameId, playerName))
+    void getGameReview_GameNotFinished_ReturnsConflict() throws Exception {
+        when(gameLifecycleService.getGameReview(GAME_ID, PLAYER))
                 .thenThrow(new ConflictException("Game has not finished"));
 
-        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
-                .principal(auth))
+        mockMvc.perform(get("/api/game/{gameId}/review", GAME_ID).principal(auth))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.status").value(409))
                 .andExpect(jsonPath("$.detail").value("Game has not finished"));
     }
 
     @Test
-    @DisplayName("GET /api/game/{gameId}/review - Not Found when absent or expired (404)")
-    void getGameReview_NotFound() throws Exception {
-        when(gameLifecycleService.getGameReview(gameId, playerName))
+    @DisplayName("GET /api/game/{gameId}/review - Not found when absent or expired (404)")
+    void getGameReview_AbsentOrExpiredGame_ReturnsNotFound() throws Exception {
+        when(gameLifecycleService.getGameReview(GAME_ID, PLAYER))
                 .thenThrow(new ResourceNotFoundException("Game not found"));
 
-        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
-                .principal(auth))
+        mockMvc.perform(get("/api/game/{gameId}/review", GAME_ID).principal(auth))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.status").value(404));
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.detail").value("Game not found"));
     }
 
     @Test
-    @DisplayName("GET /api/game/{gameId}/review - Forbidden when token room does not match (403)")
-    void getGameReview_WrongTokenRoom() throws Exception {
-        PlayerPrincipal wrongPrincipal = new PlayerPrincipal(playerName, "other-room");
-        Authentication wrongAuth = new PreAuthenticatedAuthenticationToken(wrongPrincipal, "token", Collections.emptyList());
-
-        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
-                .principal(wrongAuth))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.status").value(403));
-    }
-
-    @Test
-    @DisplayName("GET /api/game/{gameId}/review - Forbidden when player not in terminal roster (403)")
-    void getGameReview_NotInTerminalRoster() throws Exception {
-        when(gameLifecycleService.getGameReview(gameId, playerName))
+    @DisplayName("GET /api/game/{gameId}/review - Forbidden when player is not in the finished-game roster (403)")
+    void getGameReview_PlayerNotInFinishedGameRoster_ReturnsForbidden() throws Exception {
+        when(gameLifecycleService.getGameReview(GAME_ID, PLAYER))
                 .thenThrow(new UnauthorisedActionException("You are not part of this game's game result."));
 
-        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
-                .principal(auth))
+        mockMvc.perform(get("/api/game/{gameId}/review", GAME_ID).principal(auth))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.status").value(403));
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.detail").value("You are not part of this game's game result."));
     }
 
     @Test
     @DisplayName("GET /api/game/{gameId}/review - Ignores spoofed query playerName and uses authenticated principal")
-    void getGameReview_IgnoresQueryPlayerNameAndUsesAuthenticatedPrincipal() throws Exception {
-        PublicGameStateResponse endResponse = state(6, 0, GamePhase.SHOWDOWN, 0, List.of(), null, null,
-                PublicGameStateResponse.GameEnd.won(playerName, 1000, false, "Winner"));
-        when(gameLifecycleService.getGameReview(gameId, playerName)).thenReturn(endResponse);
+    void getGameReview_SpoofedQueryPlayerName_UsesAuthenticatedPrincipal() throws Exception {
+        // Only the authenticated player's name is stubbed: any other lookup returns no body.
+        when(gameLifecycleService.getGameReview(GAME_ID, PLAYER)).thenReturn(finalGameState(false));
 
-        mockMvc.perform(get("/api/game/{gameId}/review", gameId)
-                .param("playerName", "different-player")
-                .principal(auth))
+        mockMvc.perform(get("/api/game/{gameId}/review", GAME_ID)
+                        .param("playerName", "different-player")
+                        .principal(auth))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.gameEnd.winner").value(playerName))
+                .andExpect(jsonPath("$.gameEnd.winner").value(PLAYER))
                 .andExpect(jsonPath("$.gameEnd.winnerChips").value(1000));
-
-        verify(gameLifecycleService).getGameReview(gameId, playerName);
-        verify(gameLifecycleService, never()).getGameReview(gameId, "different-player");
     }
 
-    @Test
-    @DisplayName("GET /api/game/{gameId}/review - Forbidden when unauthenticated (403)")
-    void getGameReview_Unauthenticated_Forbidden() throws Exception {
-        mockMvc.perform(get("/api/game/{gameId}/review", gameId))
+    // ---------------------------------------------------------------------------------------------
+    // Token binding and membership across every secured HTTP endpoint
+    // ---------------------------------------------------------------------------------------------
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(GameEndpoint.class)
+    @DisplayName("Secured game endpoints - Token issued for another game returns 403 before any service call")
+    void securedEndpoint_TokenForAnotherGame_ReturnsForbiddenBeforeAnyServiceCall(GameEndpoint endpoint)
+            throws Exception {
+        mockMvc.perform(endpoint.request(GAME_ID).principal(authenticated(PLAYER, "other-room", MEMBERSHIP_ID)))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403))
-                .andExpect(jsonPath("$.detail").value("Invalid authentication principal"));
+                .andExpect(jsonPath("$.detail").value(WRONG_GAME_MESSAGE));
 
-        verify(gameLifecycleService, never()).getGameReview(anyString(), anyString());
+        verifyNoInteractions(gameLifecycleService, gameStateService);
     }
 
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(GameEndpoint.class)
+    @DisplayName("Secured game endpoints - Stale membership token returns 401 before any game is read")
+    void securedEndpoint_StaleMembershipToken_ReturnsUnauthorizedBeforeAnyGameRead(GameEndpoint endpoint)
+            throws Exception {
+        doThrow(new AccessDeniedException(STALE_MEMBERSHIP_MESSAGE))
+                .when(gameLifecycleService).validatePlayerMembership(GAME_ID, PLAYER, STALE_MEMBERSHIP_ID);
 
-    /**
-     * Protects the contract that WebSocket actions delegate the authenticated
-     * player identity and request to the action service.
-     */
-    @Test
-    @DisplayName("WS performAction - Success")
-    void performAction_ShouldCallService() {
-        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, 0);
-        
-        gameController.performAction(gameId, request, principal);
-
-        verify(playerActionService).processPlayerAction(eq(gameId), eq(request), eq(playerName));
-    }
-
-    /**
-     * Protects the contract that ready messages mark the authenticated player ready.
-     */
-    @Test
-    @DisplayName("WS markReady - Success")
-    void markReady_ShouldCallService() {
-        gameController.markReady(gameId, principal);
-
-        verify(gameLifecycleService).markPlayerReadyForNextHand(gameId, playerName);
-    }
-
-    /**
-     * Protects the contract that unready messages clear the authenticated player's ready state.
-     */
-    @Test
-    @DisplayName("WS unmarkReady - Success")
-    void unmarkReady_ShouldCallService() {
-        gameController.unmarkReady(gameId, principal);
-
-        verify(gameLifecycleService).unmarkPlayerReadyForNextHand(gameId, playerName);
-    }
-
-    @Test
-    @DisplayName("GET /api/game/{gameId}/state - Unauthorized when membership token is stale (401)")
-    void getGameState_StaleMembershipToken_ShouldReturnUnauthorized401() throws Exception {
-        PlayerPrincipal stalePrincipal = new PlayerPrincipal(playerName, gameId, "stale-mid-1");
-        Authentication staleAuth = new PreAuthenticatedAuthenticationToken(stalePrincipal, "token", Collections.emptyList());
-
-        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
-                .when(gameLifecycleService).validatePlayerMembership(gameId, playerName, "stale-mid-1");
-
-        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(staleAuth))
+        mockMvc.perform(endpoint.request(GAME_ID).principal(authenticated(PLAYER, GAME_ID, STALE_MEMBERSHIP_ID)))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.status").value(401))
                 .andExpect(jsonPath("$.title").value("Unauthorized"))
-                .andExpect(jsonPath("$.detail").value("Token membership is stale or invalid."));
+                .andExpect(jsonPath("$.detail").value(STALE_MEMBERSHIP_MESSAGE));
+
+        // The membership guard is the only call: no game lookup, review, claim, or snapshot happened.
+        verify(gameLifecycleService).validatePlayerMembership(GAME_ID, PLAYER, STALE_MEMBERSHIP_ID);
+        verifyNoMoreInteractions(gameLifecycleService);
+        verifyNoInteractions(gameStateService);
     }
 
-    @Test
-    @DisplayName("GET /api/game/{gameId}/private-state - Unauthorized when membership token is stale (401)")
-    void getPrivateState_StaleMembershipToken_ShouldReturnUnauthorized401() throws Exception {
-        PlayerPrincipal stalePrincipal = new PlayerPrincipal(playerName, gameId, "stale-mid-2");
-        Authentication staleAuth = new PreAuthenticatedAuthenticationToken(stalePrincipal, "token", Collections.emptyList());
+    // ---------------------------------------------------------------------------------------------
+    // STOMP handlers
+    // ---------------------------------------------------------------------------------------------
 
-        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
-                .when(gameLifecycleService).validatePlayerMembership(gameId, playerName, "stale-mid-2");
+    /** The STOMP handlers are not reachable through MockMvc, so they are called directly. */
+    @Nested
+    @DisplayName("Direct STOMP handler guards and delegation")
+    class DirectStompHandlers {
+        private final PlayerPrincipal principal = new PlayerPrincipal(PLAYER, GAME_ID, MEMBERSHIP_ID);
 
-        mockMvc.perform(get("/api/game/{gameId}/private-state", gameId)
-                .principal(staleAuth))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.status").value(401))
-                .andExpect(jsonPath("$.title").value("Unauthorized"))
-                .andExpect(jsonPath("$.detail").value("Token membership is stale or invalid."));
+        @Test
+        @DisplayName("performAction - Valid member's action is delegated under the room lock")
+        void performAction_ValidMember_DelegatesUnderRoomLock() {
+            PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, 0);
+            doAnswer(recordingLockHeld(GAME_ID, lockHeldDuringService, null))
+                    .when(playerActionService).processPlayerAction(GAME_ID, request, PLAYER);
+
+            gameController.performAction(GAME_ID, request, principal);
+
+            verify(gameLifecycleService).validatePlayerMembership(GAME_ID, PLAYER, MEMBERSHIP_ID);
+            verify(playerActionService).processPlayerAction(GAME_ID, request, PLAYER);
+            assertThat(lockHeldDuringService).isTrue();
+        }
+
+        @Test
+        @DisplayName("markReady - Valid member is marked ready under the room lock")
+        void markReady_ValidMember_DelegatesUnderRoomLock() {
+            doAnswer(recordingLockHeld(GAME_ID, lockHeldDuringService, null))
+                    .when(gameLifecycleService).markPlayerReadyForNextHand(GAME_ID, PLAYER);
+
+            gameController.markReady(GAME_ID, principal);
+
+            verify(gameLifecycleService).validatePlayerMembership(GAME_ID, PLAYER, MEMBERSHIP_ID);
+            verify(gameLifecycleService).markPlayerReadyForNextHand(GAME_ID, PLAYER);
+            assertThat(lockHeldDuringService).isTrue();
+        }
+
+        @Test
+        @DisplayName("unmarkReady - Valid member is unmarked under the room lock")
+        void unmarkReady_ValidMember_DelegatesUnderRoomLock() {
+            doAnswer(recordingLockHeld(GAME_ID, lockHeldDuringService, null))
+                    .when(gameLifecycleService).unmarkPlayerReadyForNextHand(GAME_ID, PLAYER);
+
+            gameController.unmarkReady(GAME_ID, principal);
+
+            verify(gameLifecycleService).validatePlayerMembership(GAME_ID, PLAYER, MEMBERSHIP_ID);
+            verify(gameLifecycleService).unmarkPlayerReadyForNextHand(GAME_ID, PLAYER);
+            assertThat(lockHeldDuringService).isTrue();
+        }
+
+        @ParameterizedTest
+        @EnumSource(StompHandler.class)
+        @DisplayName("Token issued for another game is rejected before any service call")
+        void handler_TokenForAnotherGame_ThrowsForbiddenBeforeAnyServiceCall(StompHandler handler) {
+            PlayerPrincipal otherGame = new PlayerPrincipal(PLAYER, "other-room", MEMBERSHIP_ID);
+
+            assertThatThrownBy(() -> handler.invoke(gameController, GAME_ID, otherGame))
+                    .isInstanceOf(UnauthorisedActionException.class)
+                    .hasMessage(WRONG_GAME_MESSAGE);
+
+            verifyNoInteractions(gameLifecycleService, playerActionService);
+        }
+
+        @ParameterizedTest
+        @EnumSource(StompHandler.class)
+        @DisplayName("Stale membership token is rejected before any game work")
+        void handler_StaleMembershipToken_ThrowsAccessDeniedBeforeAnyGameWork(StompHandler handler) {
+            PlayerPrincipal stale = new PlayerPrincipal(PLAYER, GAME_ID, STALE_MEMBERSHIP_ID);
+            doThrow(new AccessDeniedException(STALE_MEMBERSHIP_MESSAGE))
+                    .when(gameLifecycleService).validatePlayerMembership(GAME_ID, PLAYER, STALE_MEMBERSHIP_ID);
+
+            assertThatThrownBy(() -> handler.invoke(gameController, GAME_ID, stale))
+                    .isInstanceOf(AccessDeniedException.class)
+                    .hasMessage(STALE_MEMBERSHIP_MESSAGE);
+
+            verify(gameLifecycleService).validatePlayerMembership(GAME_ID, PLAYER, STALE_MEMBERSHIP_ID);
+            verifyNoMoreInteractions(gameLifecycleService);
+            verifyNoInteractions(playerActionService);
+        }
     }
 
-    @Test
-    @DisplayName("POST /api/game/{gameId}/claim-win - Unauthorized when membership token is stale (401)")
-    void claimWin_StaleMembershipToken_ShouldReturnUnauthorized401() throws Exception {
-        PlayerPrincipal stalePrincipal = new PlayerPrincipal(playerName, gameId, "stale-mid-4");
-        Authentication staleAuth = new PreAuthenticatedAuthenticationToken(stalePrincipal, "token", Collections.emptyList());
+    // ---------------------------------------------------------------------------------------------
+    // Fixtures
+    // ---------------------------------------------------------------------------------------------
 
-        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
-                .when(gameLifecycleService).validatePlayerMembership(gameId, playerName, "stale-mid-4");
-
-        mockMvc.perform(post("/api/game/{gameId}/claim-win", gameId)
-                .principal(staleAuth))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.status").value(401))
-                .andExpect(jsonPath("$.title").value("Unauthorized"));
-
-        verify(gameLifecycleService, never()).claimWin(anyString(), anyString());
-    }
-
-    @Test
-    @DisplayName("WS performAction - Throws AccessDeniedException when membership token is stale")
-    void performAction_StaleMembershipToken_ShouldThrowAccessDenied() {
-        PlayerPrincipal stalePrincipal = new PlayerPrincipal(playerName, gameId, "stale-mid-ws");
-        PlayerActionRequest request = new PlayerActionRequest(PlayerAction.CALL, 0);
-
-        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
-                .when(gameLifecycleService).validatePlayerMembership(gameId, playerName, "stale-mid-ws");
-
-        assertThatThrownBy(() -> gameController.performAction(gameId, request, stalePrincipal))
-                .isInstanceOf(AccessDeniedException.class)
-                .hasMessage("Token membership is stale or invalid.");
-
-        verify(playerActionService, never()).processPlayerAction(anyString(), any(), anyString());
-    }
-
-    /**
-     * Membership boundary: a secured endpoint must be rejected with 401 whenever the
-     * active membership boundary refuses the token. The boundary (validatePlayerMembership,
-     * ADR-0004) fails closed for a null, blank, stale (mismatched), or absent-authoritative
-     * membership, so each of those values must be refused before any game state is read.
-     * Blank is represented by whitespace; null is covered by the @NullSource case.
-     */
-    @ParameterizedTest(name = "membershipId=[{0}]")
-    @NullSource
-    @ValueSource(strings = {"", "   ", "stale-does-not-match", "no-active-membership"})
-    @DisplayName("GET /api/game/{gameId}/state - Unauthorized (401) for null/blank/stale/missing membership")
-    void getGameState_RejectedMembership_ShouldReturnUnauthorized401(String membershipId) throws Exception {
-        PlayerPrincipal rejectedPrincipal = new PlayerPrincipal(playerName, gameId, membershipId);
-        Authentication rejectedAuth =
-                new PreAuthenticatedAuthenticationToken(rejectedPrincipal, "token", Collections.emptyList());
-
-        doThrow(new AccessDeniedException("Token membership is stale or invalid."))
-                .when(gameLifecycleService).validatePlayerMembership(gameId, playerName, membershipId);
-
-        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(rejectedAuth))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.status").value(401))
-                .andExpect(jsonPath("$.title").value("Unauthorized"))
-                .andExpect(jsonPath("$.detail").value("Token membership is stale or invalid."));
-
-        // The boundary runs before game state is read, so no snapshot is produced for a refused token.
-        verify(gameStateService, never()).getPublicGameStateSnapshot(any());
-    }
-
-    @Test
-    @DisplayName("GET /api/game/{gameId}/state - 200 when membership matches the active id")
-    void getGameState_MatchingMembership_ShouldReturnOk() throws Exception {
-        String activeMembershipId = "active-mid";
-        PlayerPrincipal matchingPrincipal = new PlayerPrincipal(playerName, gameId, activeMembershipId);
-        Authentication matchingAuth =
-                new PreAuthenticatedAuthenticationToken(matchingPrincipal, "token", Collections.emptyList());
-
+    /** Stubs a live game that {@link #PLAYER} still belongs to and returns it. */
+    private Game stubLiveGameWithPlayer() {
         Game game = mock(Game.class);
-        PublicGameStateResponse response = state(6, 100, GamePhase.PRE_FLOP, 10, List.of(), playerName, "p1-id", null);
-        // A matching membership passes the boundary (no throw), so the request proceeds.
-        when(gameLifecycleService.gameExists(gameId)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(gameId, playerName)).thenReturn(true);
-        when(gameLifecycleService.getGame(gameId)).thenReturn(game);
-        when(gameStateService.getPublicGameStateSnapshot(game)).thenReturn(response);
-
-        mockMvc.perform(get("/api/game/{gameId}/state", gameId)
-                .principal(matchingAuth))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.pot").value(100));
-
-        verify(gameLifecycleService).validatePlayerMembership(gameId, playerName, activeMembershipId);
+        when(gameLifecycleService.gameExists(GAME_ID)).thenReturn(true);
+        when(gameLifecycleService.playerExistsInGame(GAME_ID, PLAYER)).thenReturn(true);
+        when(gameLifecycleService.getGame(GAME_ID)).thenReturn(game);
+        return game;
     }
 
-    private static PublicGameStateResponse state(int maxPlayers, int pot, GamePhase phase, int currentBet,
-            List<PublicGameStateResponse.PlayerState> players, String currentPlayerName, String currentPlayerId,
-            PublicGameStateResponse.GameEnd gameEnd) {
+    /** Builds the finished-game response whose roster holds {@link #PLAYER} as the 1,000-chip winner. */
+    private static PublicGameStateResponse finalGameState(boolean forfeit) {
+        PublicGameStateResponse.PlayerState winner = new PublicGameStateResponse.PlayerState(
+                "p-1", PLAYER, 1000, 0, "CONNECTED", false, false, false,
+                false, false, null, List.of(), true, null, null, null, false);
+        return state(GamePhase.SHOWDOWN, 0, List.of(winner),
+                PublicGameStateResponse.GameEnd.won(PLAYER, 1000, forfeit, "Winner"));
+    }
+
+    private static PublicGameStateResponse state(GamePhase phase, int pot,
+            List<PublicGameStateResponse.PlayerState> players, PublicGameStateResponse.GameEnd gameEnd) {
         return new PublicGameStateResponse(
-                maxPlayers, pot, Collections.emptyList(), 0, phase, currentBet,
-                Collections.emptyList(), players, currentPlayerName, currentPlayerId,
+                6, pot, Collections.emptyList(), 0, phase, 0,
+                Collections.emptyList(), players, null, null,
                 gameEnd != null && gameEnd.winner() != null ? List.of(gameEnd.winner()) : null,
                 null, false, null, false, null, false, null,
                 gameEnd != null, null, Collections.emptyList(), null, null, 1L, ReadyGateState.CLOSED,
                 0L, 1L, null, null, gameEnd);
     }
 }
-
