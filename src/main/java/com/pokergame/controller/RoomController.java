@@ -39,7 +39,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * REST controller for poker room management.
  * Handles room creation, joining, leaving, and game initialisation.
- * Secured operations hold the room lease from membership validation through completion.
+ * Secured operations hold the room lock from membership validation through completion.
  */
 @RestController
 @RequestMapping("/api/room")

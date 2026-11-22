@@ -32,7 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
  * REST and STOMP controller for active poker game operations: gameplay actions,
  * public and private state snapshots, disconnect win claims, and post-game review.
  * Room departures live in {@link RoomController}.
- * Secured operations hold the room lease from membership validation through completion.
+ * Secured operations hold the room lock from membership validation through completion.
  */
 @RestController
 @RequestMapping("/api/game")
@@ -189,10 +189,6 @@ public class GameController {
     public ResponseEntity<PublicGameStateResponse> getGameReview(
             @PathVariable String gameId,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
-        if (playerPrincipal == null) {
-            throw new UnauthorisedActionException("Authentication required.");
-        }
-
         String playerName = playerPrincipal.playerName();
         logger.debug("Player {} requested game review for {}", playerName, gameId);
 
@@ -218,10 +214,6 @@ public class GameController {
     public ResponseEntity<PublicGameStateResponse> claimWin(
             @PathVariable String gameId,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
-        if (playerPrincipal == null) {
-            throw new UnauthorisedActionException("Authentication required.");
-        }
-
         String playerName = playerPrincipal.playerName();
         logger.info("Player {} attempting to claim win in game {}", playerName, gameId);
 
