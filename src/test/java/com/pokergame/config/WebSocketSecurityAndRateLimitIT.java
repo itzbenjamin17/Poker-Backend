@@ -1,20 +1,42 @@
 package com.pokergame.config;
 
-import com.pokergame.persistence.RoomAggregates;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import static com.pokergame.testutil.TestRoomLocks.runWithRoomLock;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
+
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.PlayerFeedbackResponse;
+import com.pokergame.dto.response.TokenResponse;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.persistence.RoomAggregates;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.RateLimitService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.GameStateService;
-import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
-import org.awaitility.Awaitility;
+import com.pokergame.testutil.TestStompClientSupport;
+import com.pokergame.util.RoomCoordinator;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Collection;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,62 +53,29 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.MediaType;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
-import org.springframework.messaging.converter.CompositeMessageConverter;
-import org.springframework.messaging.converter.JacksonJsonMessageConverter;
-import org.springframework.messaging.converter.StringMessageConverter;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.messaging.simp.SimpMessageType;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler;
-import org.springframework.messaging.simp.stomp.StompCommand;
-import org.springframework.messaging.simp.stomp.StompFrameHandler;
-import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
-import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
-import org.springframework.messaging.simp.user.SimpUser;
 import org.springframework.messaging.simp.user.SimpUserRegistry;
 import org.springframework.messaging.simp.user.UserDestinationResolver;
 import org.springframework.messaging.support.AbstractMessageChannel;
 import org.springframework.messaging.support.ChannelInterceptor;
-import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
-import org.springframework.web.socket.WebSocketHttpHeaders;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
-
-import java.lang.reflect.Type;
-import java.time.Duration;
-import java.util.Collection;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-
-import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Integration tests covering WebSocket/STOMP origin checks, subscription and destination isolation,
- * membership boundary enforcement, identity isolation across rooms, and per-session rate throttling.
+ * membership boundary enforcement, and per-session rate throttling.
  */
 @Tag("integration")
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {
-                "poker.rate-limiting.enabled=true",
-                "poker.game.ready-countdown-ms=30000"
-        })
+        properties = "poker.rate-limiting.enabled=true")
 @ActiveProfiles("test")
 @DisplayName("WebSocket security, identity isolation, and rate-limit integration")
 class WebSocketSecurityAndRateLimitIT {
@@ -94,6 +83,7 @@ class WebSocketSecurityAndRateLimitIT {
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
     private static final String ALLOWED_ORIGIN = "http://localhost:5173";
     private static final String DISALLOWED_ORIGIN = "http://malicious-site.com";
+    private static final String PRIVATE_QUEUE = "/user/queue/private";
     private static final AtomicLong UNIQUE_COUNTER = new AtomicLong();
 
     @LocalServerPort
@@ -119,6 +109,9 @@ class WebSocketSecurityAndRateLimitIT {
     private AbstractMessageChannel outboundChannel;
 
     @Autowired
+    private SimpMessagingTemplate messagingTemplate;
+
+    @Autowired
     private RoomService roomService;
 
     @Autowired
@@ -133,176 +126,25 @@ class WebSocketSecurityAndRateLimitIT {
     @Autowired
     private RoomCoordinator roomCoordinator;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Autowired
+    private ObjectMapper objectMapper;
+
     private final Set<String> trackedRoomIds = ConcurrentHashMap.newKeySet();
-    private final List<StompSession> trackedSessions = new CopyOnWriteArrayList<>();
-    private final List<WebSocketStompClient> trackedClients = new CopyOnWriteArrayList<>();
+    private TestStompClientSupport stomp;
     private RestClient restClient;
 
     @BeforeEach
     void setUp() {
         rateLimitService.reset();
         restClient = RestClient.builder().baseUrl("http://localhost:" + port).build();
+        stomp = new TestStompClientSupport(port, userRegistry, userDestinationResolver, broker);
     }
 
     @AfterEach
     void tearDown() {
-        for (StompSession session : trackedSessions) {
-            if (session != null && session.isConnected()) {
-                try {
-                    session.disconnect();
-                } catch (RuntimeException ignored) {
-                    // Best-effort disconnect on teardown.
-                }
-            }
-        }
-        trackedSessions.clear();
-        for (WebSocketStompClient client : trackedClients) {
-            if (client != null) {
-                try {
-                    client.stop();
-                } catch (RuntimeException ignored) {
-                    // Best-effort stop on teardown.
-                }
-            }
-        }
-        trackedClients.clear();
-        for (String roomId : List.copyOf(trackedRoomIds)) {
-            withRoomLock(roomCoordinator, roomId, () -> {
-                roomService.destroyRoom(roomId);
-                roomAggregates.remove(roomId);
-                return null;
-            });
-        }
-        trackedRoomIds.clear();
+        stomp.closeAllAndDestroyRooms(roomCoordinator, roomService, roomAggregates, trackedRoomIds);
         rateLimitService.reset();
     }
-
-    private static String uniqueName(String prefix) {
-        return prefix + "-" + UNIQUE_COUNTER.incrementAndGet();
-    }
-
-    private JsonNode createRoom(String roomName, String hostName, int maxPlayers) throws Exception {
-        String body = restClient.post()
-                .uri("/api/room/create")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(new CreateRoomRequest(roomName, hostName, maxPlayers, 10, 20, 1000, null))
-                .retrieve()
-                .body(String.class);
-        JsonNode data = objectMapper.readTree(body);
-        String roomId = data.path("roomId").asText();
-        if (!roomId.isBlank()) {
-            trackedRoomIds.add(roomId);
-        }
-        return data;
-    }
-
-    private JsonNode joinRoom(String roomName, String playerName) throws Exception {
-        String body = restClient.post()
-                .uri("/api/room/join")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(new JoinRoomRequest(roomName, playerName, null))
-                .retrieve()
-                .body(String.class);
-        return objectMapper.readTree(body);
-    }
-
-    private int startGame(String roomId, String hostToken) {
-        return restClient.post()
-                .uri("/api/room/" + roomId + "/start-game")
-                .header("Authorization", "Bearer " + hostToken)
-                .retrieve()
-                .toBodilessEntity()
-                .getStatusCode()
-                .value();
-    }
-
-    private JsonNode readGameState(String gameId, String token) throws Exception {
-        String body = restClient.get()
-                .uri("/api/game/" + gameId + "/state")
-                .header("Authorization", "Bearer " + token)
-                .retrieve()
-                .body(String.class);
-        return objectMapper.readTree(body);
-    }
-
-    private WebSocketStompClient createStompClient() {
-        WebSocketStompClient stompClient = new WebSocketStompClient(new StandardWebSocketClient());
-        stompClient.setMessageConverter(new CompositeMessageConverter(
-                List.of(new StringMessageConverter(), new JacksonJsonMessageConverter())));
-        trackedClients.add(stompClient);
-        return stompClient;
-    }
-
-    private StompSession connectSession(WebSocketStompClient stompClient, String token) throws Exception {
-        return connectSessionWithOrigin(stompClient, token, ALLOWED_ORIGIN).get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-    }
-
-    private CompletableFuture<StompSession> connectSessionWithOrigin(
-            WebSocketStompClient stompClient, String token, String origin) {
-        WebSocketHttpHeaders handshakeHeaders = new WebSocketHttpHeaders();
-        handshakeHeaders.add("Origin", origin);
-        StompHeaders connectHeaders = new StompHeaders();
-        connectHeaders.add("Authorization", "Bearer " + token);
-
-        CompletableFuture<StompSession> future = stompClient.connectAsync(
-                "ws://localhost:" + port + "/ws",
-                handshakeHeaders,
-                connectHeaders,
-                new StompSessionHandlerAdapter() {});
-        future.thenAccept(trackedSessions::add);
-        return future;
-    }
-
-    private StompSession connectSessionWithErrorHandler(
-            WebSocketStompClient stompClient, String token, AtomicBoolean errorReceived) throws Exception {
-        WebSocketHttpHeaders handshakeHeaders = new WebSocketHttpHeaders();
-        handshakeHeaders.add("Origin", ALLOWED_ORIGIN);
-        StompHeaders connectHeaders = new StompHeaders();
-        connectHeaders.add("Authorization", "Bearer " + token);
-
-        StompSession session = stompClient.connectAsync(
-                "ws://localhost:" + port + "/ws",
-                handshakeHeaders,
-                connectHeaders,
-                new StompSessionHandlerAdapter() {
-                    @Override
-                    public void handleException(
-                            @NonNull StompSession session,
-                            StompCommand command,
-                            @NonNull StompHeaders headers,
-                            byte @NonNull [] payload,
-                            @NonNull Throwable exception) {
-                        errorReceived.set(true);
-                    }
-
-                    @Override
-                    public void handleTransportError(@NonNull StompSession session, @NonNull Throwable exception) {
-                        errorReceived.set(true);
-                    }
-                }).get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-        trackedSessions.add(session);
-        return session;
-    }
-
-    private void awaitBrokerSubscription(String destination) {
-        SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
-        headers.setDestination(destination);
-        var probe = MessageBuilder.createMessage(new byte[0], headers.getMessageHeaders());
-        Awaitility.await().atMost(TIMEOUT)
-                .until(() -> !broker.getSubscriptionRegistry().findSubscriptions(probe).isEmpty());
-    }
-
-    private static JsonNode playerState(JsonNode state, String playerName) {
-        for (JsonNode player : state.path("players")) {
-            if (playerName.equals(player.path("name").asText())) {
-                return player;
-            }
-        }
-        throw new AssertionError("Missing player in public projection: " + playerName);
-    }
-
-    private record PrivateProjection(String playerId, long handNumber, List<String> holeCards) {}
 
     @Nested
     @DisplayName("Subscription and origin security")
@@ -312,56 +154,45 @@ class WebSocketSecurityAndRateLimitIT {
         @DisplayName("subscribing to another player's private topic closes the STOMP session")
         void forbiddenPrivateTopicSubscriptionClosesSession() throws Exception {
             String roomName = uniqueName("WSSecurityRoom");
-            JsonNode player1 = createRoom(roomName, "Player1", 6);
+            TokenResponse player1 = createRoom(roomName, "Player1", 6);
             joinRoom(roomName, "Player2");
 
-            WebSocketStompClient stompClient = createStompClient();
             AtomicBoolean errorReceived = new AtomicBoolean(false);
-            StompSession session1 = connectSessionWithErrorHandler(stompClient, player1.path("token").asText(), errorReceived);
+            StompSession session1 = stomp.connectSessionWithErrorHandler(
+                    stomp.createJsonClient(), player1.token(), errorReceived);
 
-            String forbiddenTopic = "/game/" + player1.path("roomId").asText() + "/player-name/Player2/private";
-            session1.subscribe(forbiddenTopic, new StompFrameHandler() {
-                @Override
-                public @NonNull Type getPayloadType(@NonNull StompHeaders headers) {
-                    return String.class;
-                }
+            String forbiddenTopic = "/game/" + player1.roomId() + "/player-name/Player2/private";
+            stomp.subscribe(session1, forbiddenTopic, String.class, frame -> { });
 
-                @Override
-                public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                }
-            });
-
-            Awaitility.await().atMost(TIMEOUT)
-                    .untilAsserted(() -> assertThat(session1.isConnected()).isFalse());
+            awaitSessionClosedWithError(session1, errorReceived);
+            assertThat(stomp.hasBrokerSubscription(forbiddenTopic)).isFalse();
         }
 
         @Test
         @DisplayName("each live private subscription receives only its own authenticated player projection")
         void livePrivateSubscriptionsReceiveOnlyAuthenticatedProjection() throws Exception {
             String roomName = uniqueName("WSPrivateIsolation");
-            JsonNode host = createRoom(roomName, "Player1", 2);
-            JsonNode guest = joinRoom(roomName, "Player2");
-            String roomId = host.path("roomId").asText();
-            String hostToken = host.path("token").asText();
-            String guestToken = guest.path("token").asText();
+            TokenResponse host = createRoom(roomName, "Player1", 2);
+            TokenResponse guest = joinRoom(roomName, "Player2");
+            String roomId = host.roomId();
 
-            WebSocketStompClient stompClient = createStompClient();
-            StompSession hostSession = connectSession(stompClient, hostToken);
-            StompSession guestSession = connectSession(stompClient, guestToken);
-            assertThat(startGame(roomId, hostToken)).isEqualTo(204);
+            WebSocketStompClient stompClient = stomp.createJsonClient();
+            StompSession hostSession = stomp.connectSession(stompClient, host.token());
+            StompSession guestSession = stomp.connectSession(stompClient, guest.token());
+            assertThat(startGame(roomId, host.token())).isEqualTo(204);
 
-            PrivateProjection hostProjection = readPrivateProjection(roomId, hostToken);
-            PrivateProjection guestProjection = readPrivateProjection(roomId, guestToken);
-            JsonNode table = readGameState(roomId, hostToken);
-            assertThat(hostProjection.playerId()).isEqualTo(playerState(table, "Player1").path("id").asText());
-            assertThat(guestProjection.playerId()).isEqualTo(playerState(table, "Player2").path("id").asText());
+            PrivateProjection hostProjection = readPrivateProjection(roomId, host.token());
+            PrivateProjection guestProjection = readPrivateProjection(roomId, guest.token());
+            JsonNode table = readGameState(roomId, host.token());
+            assertThat(hostProjection.playerId()).isEqualTo(playerState(table, "Player1").path("id").asString());
+            assertThat(guestProjection.playerId()).isEqualTo(playerState(table, "Player2").path("id").asString());
             assertThat(hostProjection.holeCards()).hasSize(2).doesNotContainAnyElementsOf(guestProjection.holeCards());
             assertThat(guestProjection.holeCards()).hasSize(2);
 
             BlockingQueue<PrivateProjection> hostFrames = new LinkedBlockingQueue<>();
             BlockingQueue<PrivateProjection> guestFrames = new LinkedBlockingQueue<>();
-            String hostBrokerSession = subscribePrivate(hostSession, hostToken, hostFrames);
-            String guestBrokerSession = subscribePrivate(guestSession, guestToken, guestFrames);
+            String hostBrokerSession = subscribePrivate(hostSession, host.token(), hostFrames);
+            String guestBrokerSession = subscribePrivate(guestSession, guest.token(), guestFrames);
             Set<String> sessionIds = Set.of(hostBrokerSession, guestBrokerSession);
 
             var dispatches = new ConcurrentLinkedQueue<Message<?>>();
@@ -378,10 +209,8 @@ class WebSocketSecurityAndRateLimitIT {
             };
             outboundChannel.addInterceptor(capture);
             try {
-                withRoomLock(roomCoordinator, roomId, () -> {
-                    gameStateService.broadcastGameState(gameLifecycleService.getGame(roomId));
-                    return null;
-                });
+                runWithRoomLock(roomCoordinator, roomId,
+                        () -> gameStateService.broadcastGameState(gameLifecycleService.getGame(roomId)));
 
                 assertThat(hostFrames.poll(TIMEOUT.toSeconds(), TimeUnit.SECONDS)).isEqualTo(hostProjection);
                 assertThat(guestFrames.poll(TIMEOUT.toSeconds(), TimeUnit.SECONDS)).isEqualTo(guestProjection);
@@ -393,60 +222,53 @@ class WebSocketSecurityAndRateLimitIT {
         }
 
         @Test
-        @DisplayName("live handshake from disallowed Origin fails upgrade")
-        void disallowedOriginHandshakeRejected() throws Exception {
-            JsonNode player1 = createRoom(uniqueName("WSOriginReject"), "Player1", 6);
-            WebSocketStompClient stompClient = createStompClient();
-            CompletableFuture<StompSession> attempt =
-                    connectSessionWithOrigin(stompClient, player1.path("token").asText(), DISALLOWED_ORIGIN);
-
-            ExecutionException failure = assertThrows(
-                    ExecutionException.class,
-                    () -> attempt.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS));
-            assertThat(failure.getCause()).isNotNull();
+        @DisplayName("WebSocket upgrade from the allowed Origin is accepted")
+        void allowedOriginHandshakeIsUpgraded() throws IOException {
+            assertThat(handshakeStatus(ALLOWED_ORIGIN)).isEqualTo(101);
         }
 
-        private PrivateProjection readPrivateProjection(String roomId, String token) throws Exception {
+        @Test
+        @DisplayName("WebSocket upgrade from a disallowed Origin is refused with 403")
+        void disallowedOriginHandshakeRejected() throws IOException {
+            assertThat(handshakeStatus(DISALLOWED_ORIGIN)).isEqualTo(403);
+        }
+
+        /** Sends a raw WebSocket upgrade request with {@code origin} and returns the HTTP status of the reply. */
+        private int handshakeStatus(String origin) throws IOException {
+            try (Socket socket = new Socket("localhost", port)) {
+                socket.setSoTimeout((int) TIMEOUT.toMillis());
+                String request = "GET /ws HTTP/1.1\r\n"
+                        + "Host: localhost:" + port + "\r\n"
+                        + "Origin: " + origin + "\r\n"
+                        + "Connection: Upgrade\r\n"
+                        + "Upgrade: websocket\r\n"
+                        + "Sec-WebSocket-Version: 13\r\n"
+                        + "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                        + "\r\n";
+                socket.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII));
+                socket.getOutputStream().flush();
+                String statusLine = new BufferedReader(
+                        new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII)).readLine();
+                return Integer.parseInt(statusLine.split(" ")[1]);
+            }
+        }
+
+        private PrivateProjection readPrivateProjection(String roomId, String token) {
             String body = restClient.get()
                     .uri("/api/game/" + roomId + "/private-state")
-                    .header("Authorization", "Bearer " + token)
+                    .headers(headers -> headers.setBearerAuth(token))
                     .retrieve()
                     .body(String.class);
             return objectMapper.readValue(body, PrivateProjection.class);
         }
 
         private String subscribePrivate(StompSession session, String token, BlockingQueue<PrivateProjection> frames) {
-            String identity = jwtService.extractPrincipal(token).getName();
-            SimpUser user = Awaitility.await().atMost(TIMEOUT).until(
-                    () -> userRegistry.getUser(identity), registered -> registered != null && registered.hasSessions());
-            assertThat(user.getSessions()).hasSize(1);
-            String sessionId = user.getSessions().iterator().next().getId();
-            String destination = "/user/queue/private";
-
-            session.subscribe(destination, new StompFrameHandler() {
-                @Override
-                public @NonNull Type getPayloadType(@NonNull StompHeaders headers) {
-                    return PrivateProjection.class;
-                }
-
-                @Override
-                public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                    frames.add((PrivateProjection) payload);
-                }
-            });
-
-            var headers = SimpMessageHeaderAccessor.create(SimpMessageType.SUBSCRIBE);
-            headers.setSessionId(sessionId);
-            headers.setDestination(destination);
-            var subscription = MessageBuilder.createMessage(new byte[0], headers.getMessageHeaders());
-            var resolved = userDestinationResolver.resolveDestination(subscription);
-            assertThat(resolved.getTargetDestinations()).hasSize(1);
-            awaitBrokerSubscription(resolved.getTargetDestinations().iterator().next());
-            return sessionId;
+            stomp.subscribe(session, PRIVATE_QUEUE, PrivateProjection.class, frames::add);
+            return stomp.awaitUserBrokerSubscription(jwtService.extractPrincipal(token).getName(), PRIVATE_QUEUE);
         }
 
         private void assertPrivateDispatches(
-                Collection<Message<?>> dispatches, String sessionId, PrivateProjection expected) throws Exception {
+                Collection<Message<?>> dispatches, String sessionId, PrivateProjection expected) {
             List<Message<?>> forSession = dispatches.stream()
                     .filter(frame -> sessionId.equals(SimpMessageHeaderAccessor.getSessionId(frame.getHeaders())))
                     .toList();
@@ -464,33 +286,27 @@ class WebSocketSecurityAndRateLimitIT {
         @DisplayName("direct SEND to /game/{roomId} closes sender session and never delivers to subscribers")
         void directSendToGameBrokerRejectedAndIsolated() throws Exception {
             String roomName = uniqueName("WSSpoofIsolation");
-            JsonNode player1 = createRoom(roomName, "Player1", 6);
-            String roomId = player1.path("roomId").asText();
-            JsonNode player2 = joinRoom(roomName, "Player2");
+            TokenResponse player1 = createRoom(roomName, "Player1", 6);
+            String roomId = player1.roomId();
+            TokenResponse player2 = joinRoom(roomName, "Player2");
 
-            WebSocketStompClient stompClient = createStompClient();
-            StompSession session2 = connectSession(stompClient, player2.path("token").asText());
+            WebSocketStompClient stompClient = stomp.createJsonClient();
+            StompSession session2 = stomp.connectSession(stompClient, player2.token());
             BlockingQueue<String> receivedFrames = new LinkedBlockingQueue<>();
-            session2.subscribe("/game/" + roomId, new StompFrameHandler() {
-                @Override
-                public @NonNull Type getPayloadType(@NonNull StompHeaders headers) {
-                    return String.class;
-                }
-
-                @Override
-                public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                    receivedFrames.add(String.valueOf(payload));
-                }
-            });
-            awaitBrokerSubscription("/game/" + roomId);
+            stomp.subscribe(session2, "/game/" + roomId, String.class, receivedFrames::add);
+            stomp.awaitBrokerSubscription("/game/" + roomId);
 
             AtomicBoolean errorReceived = new AtomicBoolean(false);
-            StompSession session1 = connectSessionWithErrorHandler(stompClient, player1.path("token").asText(), errorReceived);
+            StompSession session1 = stomp.connectSessionWithErrorHandler(stompClient, player1.token(), errorReceived);
             session1.send("/game/" + roomId, "{\"spoofed\":\"event\"}");
 
-            Awaitility.await().atMost(TIMEOUT)
-                    .untilAsserted(() -> assertThat(session1.isConnected()).isFalse());
-            assertThat(receivedFrames.poll(500, TimeUnit.MILLISECONDS)).isNull();
+            awaitSessionClosedWithError(session1, errorReceived);
+
+            // A genuine server broadcast reaches the subscriber only after the rejected SEND was processed, so
+            // seeing it first proves the spoofed frame was never fanned out.
+            messagingTemplate.convertAndSend("/game/" + roomId, "sentinel");
+            await().atMost(TIMEOUT).until(() -> receivedFrames.contains("sentinel"));
+            assertThat(receivedFrames).containsExactly("sentinel");
         }
 
         @ParameterizedTest
@@ -501,18 +317,16 @@ class WebSocketSecurityAndRateLimitIT {
         })
         @DisplayName("direct SEND to broker destinations or blank /app/ destination closes the session")
         void directBrokerAndBlankAppDestinationsCloseSession(String destinationTemplate) throws Exception {
-            JsonNode player1 = createRoom(uniqueName("WSDestBlock"), "Player1", 6);
-            String roomId = player1.path("roomId").asText();
-            String destination = destinationTemplate.replace("{roomId}", roomId);
+            TokenResponse player1 = createRoom(uniqueName("WSDestBlock"), "Player1", 6);
+            String destination = destinationTemplate.replace("{roomId}", player1.roomId());
 
-            WebSocketStompClient stompClient = createStompClient();
             AtomicBoolean errorReceived = new AtomicBoolean(false);
-            StompSession session1 = connectSessionWithErrorHandler(stompClient, player1.path("token").asText(), errorReceived);
+            StompSession session1 = stomp.connectSessionWithErrorHandler(
+                    stomp.createJsonClient(), player1.token(), errorReceived);
 
             session1.send(destination, "{\"spoofed\":\"payload\"}");
 
-            Awaitility.await().atMost(TIMEOUT)
-                    .untilAsserted(() -> assertThat(session1.isConnected()).isFalse());
+            awaitSessionClosedWithError(session1, errorReceived);
         }
 
         @ParameterizedTest
@@ -525,174 +339,134 @@ class WebSocketSecurityAndRateLimitIT {
         })
         @DisplayName("cross-room STOMP SENDs close the sender session")
         void crossRoomAppSendsCloseSession(String destinationTemplate) throws Exception {
-            JsonNode player1 = createRoom(uniqueName("WSCrossOne"), "Player1", 6);
-            JsonNode player2 = createRoom(uniqueName("WSCrossTwo"), "Player2", 6);
-            String otherRoomId = player2.path("roomId").asText();
-            String destination = destinationTemplate.replace("{otherRoomId}", otherRoomId);
+            TokenResponse player1 = createRoom(uniqueName("WSCrossOne"), "Player1", 6);
+            TokenResponse player2 = createRoom(uniqueName("WSCrossTwo"), "Player2", 6);
+            String destination = destinationTemplate.replace("{otherRoomId}", player2.roomId());
 
-            WebSocketStompClient stompClient = createStompClient();
             AtomicBoolean errorReceived = new AtomicBoolean(false);
-            StompSession session1 = connectSessionWithErrorHandler(stompClient, player1.path("token").asText(), errorReceived);
+            StompSession session1 = stomp.connectSessionWithErrorHandler(
+                    stomp.createJsonClient(), player1.token(), errorReceived);
 
-            if (destination.endsWith("/action") && !destination.contains("/room/")) {
-                session1.send(destination, new PlayerActionRequest(PlayerAction.FOLD, 0));
-            } else {
-                session1.send(destination, "{}");
-            }
+            session1.send(destination, new PlayerActionRequest(PlayerAction.FOLD, 0));
 
-            Awaitility.await().atMost(TIMEOUT)
-                    .untilAsserted(() -> assertThat(session1.isConnected()).isFalse());
+            awaitSessionClosedWithError(session1, errorReceived);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"/room/{otherRoomId}", "/game/{otherRoomId}"})
+        @DisplayName("cross-room STOMP SUBSCRIBEs close the session and never register with the broker")
+        void crossRoomSubscribesCloseSession(String destinationTemplate) throws Exception {
+            TokenResponse player1 = createRoom(uniqueName("WSSubOne"), "Player1", 6);
+            TokenResponse player2 = createRoom(uniqueName("WSSubTwo"), "Player2", 6);
+            String destination = destinationTemplate.replace("{otherRoomId}", player2.roomId());
+
+            AtomicBoolean errorReceived = new AtomicBoolean(false);
+            StompSession session1 = stomp.connectSessionWithErrorHandler(
+                    stomp.createJsonClient(), player1.token(), errorReceived);
+
+            stomp.subscribe(session1, destination, String.class, frame -> { });
+
+            awaitSessionClosedWithError(session1, errorReceived);
+            assertThat(stomp.hasBrokerSubscription(destination)).isFalse();
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"/room/{roomId}", "/game/{roomId}"})
+        @DisplayName("subscribing to the player's own room and game topics is accepted and stays connected")
+        void ownRoomSubscribesAreAccepted(String destinationTemplate) throws Exception {
+            TokenResponse player1 = createRoom(uniqueName("WSSubOwn"), "Player1", 6);
+            String destination = destinationTemplate.replace("{roomId}", player1.roomId());
+
+            StompSession session1 = stomp.connectSession(stomp.createJsonClient(), player1.token());
+            stomp.subscribe(session1, destination, String.class, frame -> { });
+
+            stomp.awaitBrokerSubscription(destination);
+            assertThat(session1.isConnected()).isTrue();
         }
 
         @Test
         @DisplayName("ready and unready STOMP commands update only the acting player's state")
         void readyAndUnreadyCommandsChangeOnlyActingPlayer() throws Exception {
             String roomName = uniqueName("WSAuthorizedSend");
-            JsonNode host = createRoom(roomName, "Player1", 2);
-            JsonNode guest = joinRoom(roomName, "Player2");
-            String roomId = host.path("roomId").asText();
-            String hostToken = host.path("token").asText();
+            TokenResponse host = createRoom(roomName, "Player1", 2);
+            TokenResponse guest = joinRoom(roomName, "Player2");
+            String roomId = host.roomId();
 
-            WebSocketStompClient stompClient = createStompClient();
-            StompSession hostSession = connectSession(stompClient, hostToken);
-            StompSession guestSession = connectSession(stompClient, guest.path("token").asText());
-            startGame(roomId, hostToken);
+            WebSocketStompClient stompClient = stomp.createJsonClient();
+            StompSession hostSession = stomp.connectSession(stompClient, host.token());
+            StompSession guestSession = stomp.connectSession(stompClient, guest.token());
+            assertThat(startGame(roomId, host.token())).isEqualTo(204);
 
-            String actor = readGameState(roomId, hostToken).path("currentPlayerName").asText();
+            String actor = readGameState(roomId, host.token()).path("currentPlayerName").asString();
             StompSession actingSession = "Player1".equals(actor) ? hostSession : guestSession;
             actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, 0));
 
-            JsonNode opened = Awaitility.await().atMost(TIMEOUT).until(
-                    () -> readGameState(roomId, hostToken),
-                    state -> "COUNTING_DOWN".equals(state.path("readyGateState").asText()));
+            JsonNode opened = await().atMost(TIMEOUT).until(
+                    () -> readGameState(roomId, host.token()),
+                    state -> "COUNTING_DOWN".equals(state.path("readyGateState").asString()));
             long handNumber = opened.path("handNumber").asLong();
             assertThat(handNumber).isPositive();
-            assertThat(playerState(opened, "Player1").path("isReadyForNextHand").asText()).isEqualTo("false");
-            assertThat(playerState(opened, "Player2").path("isReadyForNextHand").asText()).isEqualTo("false");
+            assertThat(readyFlag(opened, "Player1")).isFalse();
+            assertThat(readyFlag(opened, "Player2")).isFalse();
 
             hostSession.send("/app/" + roomId + "/ready", "");
-            long readyRevision = awaitReadiness(roomId, hostToken, handNumber, opened.path("stateRevision").asLong(), true);
+            long readyRevision = awaitReadiness(roomId, host.token(), handNumber, opened.path("stateRevision").asLong(), true);
             hostSession.send("/app/" + roomId + "/unready", "");
-            awaitReadiness(roomId, hostToken, handNumber, readyRevision, false);
+            awaitReadiness(roomId, host.token(), handNumber, readyRevision, false);
             assertThat(hostSession.isConnected()).isTrue();
+            assertThat(guestSession.isConnected()).isTrue();
         }
 
         private long awaitReadiness(String roomId, String token, long handNumber, long previousRevision, boolean ready) {
-            JsonNode updated = Awaitility.await().atMost(TIMEOUT).until(
+            JsonNode updated = await().atMost(TIMEOUT).until(
                     () -> readGameState(roomId, token),
                     state -> state.path("stateRevision").asLong() > previousRevision
                             && state.path("handNumber").asLong() == handNumber
-                            && "COUNTING_DOWN".equals(state.path("readyGateState").asText())
-                            && Boolean.toString(ready).equals(playerState(state, "Player1").path("isReadyForNextHand").asText()));
-            assertThat(playerState(updated, "Player2").path("isReadyForNextHand").asText()).isEqualTo("false");
+                            && "COUNTING_DOWN".equals(state.path("readyGateState").asString())
+                            && ready == readyFlag(state, "Player1"));
+            assertThat(readyFlag(updated, "Player2")).isFalse();
             return updated.path("stateRevision").asLong();
         }
     }
 
     @Nested
-    @DisplayName("Membership and identity isolation boundaries")
-    class MembershipAndIdentityIsolation {
+    @DisplayName("Membership boundaries")
+    class MembershipBoundaries {
 
         @Test
         @DisplayName("stale-membership token is rejected on STOMP CONNECT while active token advances the game")
         void staleMembershipTokenRejectedOnConnectWhileActiveActs() throws Exception {
             String roomName = uniqueName("MembershipRoom");
-            JsonNode hostData = createRoom(roomName, "HostMember", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String guestToken = joinRoom(roomName, "GuestMember").path("token").asText();
-            startGame(gameId, hostToken);
+            TokenResponse host = createRoom(roomName, "HostMember", 6);
+            String gameId = host.roomId();
+            String guestToken = joinRoom(roomName, "GuestMember").token();
+            startGame(gameId, host.token());
 
-            JsonNode beforeState = readGameState(gameId, hostToken);
-            String currentPlayer = beforeState.path("currentPlayerName").asText();
-            String validActingToken = jwtService.extractPlayerName(hostToken).equals(currentPlayer) ? hostToken : guestToken;
+            JsonNode beforeState = readGameState(gameId, host.token());
+            String currentPlayer = beforeState.path("currentPlayerName").asString();
+            String validActingToken = jwtService.extractPlayerName(host.token()).equals(currentPlayer)
+                    ? host.token()
+                    : guestToken;
             String staleToken = jwtService.generateToken(currentPlayer, gameId, "forged-stale-membership");
 
-            WebSocketStompClient stompClient = createStompClient();
-            assertThatThrownBy(() -> connectSession(stompClient, staleToken))
+            WebSocketStompClient stompClient = stomp.createJsonClient();
+            assertThatThrownBy(() -> stomp.connectSession(stompClient, staleToken))
                     .as("stale-membership CONNECT must be rejected by the membership boundary")
-                    .isInstanceOf(Exception.class);
+                    .isInstanceOf(ExecutionException.class);
 
-            JsonNode afterStale = readGameState(gameId, hostToken);
-            assertThat(afterStale.path("phase").asText()).isEqualTo("PRE_FLOP");
-            assertThat(afterStale.path("currentPlayerName").asText()).isEqualTo(currentPlayer);
+            JsonNode afterStale = readGameState(gameId, host.token());
+            assertThat(afterStale.path("phase").asString()).isEqualTo("PRE_FLOP");
+            assertThat(afterStale.path("currentPlayerName").asString()).isEqualTo(currentPlayer);
 
-            StompSession validSession = connectSession(stompClient, validActingToken);
+            StompSession validSession = stomp.connectSession(stompClient, validActingToken);
             validSession.send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CALL, 0));
 
-            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-                JsonNode next = readGameState(gameId, hostToken);
-                boolean advanced = !currentPlayer.equals(next.path("currentPlayerName").asText())
-                        || !"PRE_FLOP".equals(next.path("phase").asText());
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                JsonNode next = readGameState(gameId, host.token());
+                boolean advanced = !currentPlayer.equals(next.path("currentPlayerName").asString())
+                        || !"PRE_FLOP".equals(next.path("phase").asString());
                 assertThat(advanced).isTrue();
             });
-        }
-
-        @Test
-        @DisplayName("same player name in room A cannot access room B")
-        void playerInRoomACannotAccessRoomB() throws Exception {
-            JsonNode aliceAData = createRoom(uniqueName("RoomA"), "Alice", 6);
-            JsonNode aliceBData = createRoom(uniqueName("RoomB"), "Alice", 6);
-            String roomIdB = aliceBData.path("roomId").asText();
-            String tokenA = aliceAData.path("token").asText();
-
-            HttpClientErrorException forbidden = assertThrows(HttpClientErrorException.class, () -> restClient.post()
-                    .uri("/api/room/" + roomIdB + "/leave")
-                    .header("Authorization", "Bearer " + tokenA)
-                    .retrieve()
-                    .toBodilessEntity());
-
-            assertThat(forbidden.getStatusCode().value()).isEqualTo(403);
-            assertThat(forbidden.getResponseBodyAsString()).contains("Token is not valid for this room");
-        }
-
-        @Test
-        @DisplayName("leaving and rejoining retires prior token on both room and game endpoints with 401")
-        void leaveAndRejoinRetiresStaleTokenAcrossRoomAndGameEndpoints() throws Exception {
-            String roomName = uniqueName("StaleSessionRoom");
-            JsonNode hostData = createRoom(roomName, "HostPlayer", 6);
-            String roomId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String staleToken = joinRoom(roomName, "Alice").path("token").asText();
-
-            restClient.post()
-                    .uri("/api/room/" + roomId + "/leave")
-                    .header("Authorization", "Bearer " + staleToken)
-                    .retrieve()
-                    .toBodilessEntity();
-
-            String activeToken = joinRoom(roomName, "Alice").path("token").asText();
-            assertThat(activeToken).isNotEqualTo(staleToken);
-
-            HttpClientErrorException roomRejected = assertThrows(HttpClientErrorException.class, () -> restClient.get()
-                    .uri("/api/room/" + roomId)
-                    .header("Authorization", "Bearer " + staleToken)
-                    .retrieve()
-                    .toBodilessEntity());
-            assertThat(roomRejected.getStatusCode().value()).isEqualTo(401);
-            assertThat(roomRejected.getResponseBodyAsString()).contains("Unauthorized");
-
-            assertThat(restClient.get()
-                    .uri("/api/room/" + roomId)
-                    .header("Authorization", "Bearer " + activeToken)
-                    .retrieve()
-                    .body(String.class)).contains(roomId);
-
-            startGame(roomId, hostToken);
-
-            HttpClientErrorException gameRejected = assertThrows(HttpClientErrorException.class, () -> restClient.get()
-                    .uri("/api/game/" + roomId + "/state")
-                    .header("Authorization", "Bearer " + staleToken)
-                    .retrieve()
-                    .toBodilessEntity());
-            assertThat(gameRejected.getStatusCode().value()).isEqualTo(401);
-            assertThat(gameRejected.getResponseBodyAsString()).contains("Unauthorized");
-
-            assertThat(restClient.get()
-                    .uri("/api/game/" + roomId + "/state")
-                    .header("Authorization", "Bearer " + activeToken)
-                    .retrieve()
-                    .body(String.class)).contains("Alice");
         }
     }
 
@@ -703,66 +477,123 @@ class WebSocketSecurityAndRateLimitIT {
         @Test
         @DisplayName("exceeding STOMP message rate limit closes the offending connection")
         void highMessageRateClosesSession() throws Exception {
-            JsonNode host = createRoom(uniqueName("ThrottledRoom"), "ThrottledPlayer", 6);
-            String roomId = host.path("roomId").asText();
-            String token = host.path("token").asText();
+            TokenResponse host = createRoom(uniqueName("ThrottledRoom"), "ThrottledPlayer", 6);
 
-            WebSocketStompClient stompClient = createStompClient();
             AtomicBoolean errorReceived = new AtomicBoolean(false);
-            StompSession session = connectSessionWithErrorHandler(stompClient, token, errorReceived);
+            StompSession session = stomp.connectSessionWithErrorHandler(
+                    stomp.createJsonClient(), host.token(), errorReceived);
 
             for (int i = 0; i < 15; i++) {
                 try {
-                    session.send("/app/" + roomId + "/ready", "");
-                } catch (Exception e) {
+                    session.send("/app/" + host.roomId() + "/ready", "");
+                } catch (RuntimeException sessionAlreadyClosed) {
                     break;
                 }
             }
 
-            Awaitility.await().atMost(TIMEOUT)
-                    .untilAsserted(() -> assertThat(session.isConnected()).isFalse());
+            awaitSessionClosedWithError(session, errorReceived);
         }
 
         @Test
         @DisplayName("same player name in different rooms has isolated WebSocket rate-limit buckets")
         void samePlayerNameInDifferentRoomsIsolatedWsRateLimits() throws Exception {
-            JsonNode alice1Data = createRoom(uniqueName("RateRoom1"), "Alice", 6);
-            JsonNode alice2Data = createRoom(uniqueName("RateRoom2"), "Alice", 6);
-            String roomId1 = alice1Data.path("roomId").asText();
-            String roomId2 = alice2Data.path("roomId").asText();
-            String token1 = alice1Data.path("token").asText();
-            String token2 = alice2Data.path("token").asText();
+            TokenResponse alice1 = createRoom(uniqueName("RateRoom1"), "Alice", 6);
+            TokenResponse alice2 = createRoom(uniqueName("RateRoom2"), "Alice", 6);
 
-            WebSocketStompClient stompClient = createStompClient();
-            StompSession session1 = connectSession(stompClient, token1);
-            StompSession session2 = connectSession(stompClient, token2);
+            WebSocketStompClient stompClient = stomp.createJsonClient();
+            AtomicBoolean session1Error = new AtomicBoolean(false);
+            StompSession session1 = stomp.connectSessionWithErrorHandler(stompClient, alice1.token(), session1Error);
+            StompSession session2 = stomp.connectSession(stompClient, alice2.token());
 
             CompletableFuture<PlayerFeedbackResponse> session2Reply = new CompletableFuture<>();
-            session2.subscribe("/user/queue/private", new StompFrameHandler() {
-                @Override
-                public @NonNull Type getPayloadType(@NonNull StompHeaders headers) {
-                    return PlayerFeedbackResponse.class;
-                }
-
-                @Override
-                public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                    if (payload instanceof PlayerFeedbackResponse reply && !session2Reply.isDone()) {
-                        session2Reply.complete(reply);
-                    }
-                }
-            });
+            stomp.subscribe(session2, PRIVATE_QUEUE, PlayerFeedbackResponse.class, session2Reply::complete);
+            stomp.awaitUserBrokerSubscription(jwtService.extractPrincipal(alice2.token()).getName(), PRIVATE_QUEUE);
 
             for (int i = 0; i < 6; i++) {
-                session1.send("/app/" + roomId1 + "/action", new PlayerActionRequest(PlayerAction.CHECK, 0));
+                try {
+                    session1.send("/app/" + alice1.roomId() + "/action", new PlayerActionRequest(PlayerAction.CHECK, 0));
+                } catch (RuntimeException sessionAlreadyClosed) {
+                    break;
+                }
             }
+            awaitSessionClosedWithError(session1, session1Error);
 
-            Awaitility.await().atMost(TIMEOUT)
-                    .untilAsserted(() -> assertThat(session1.isConnected()).isFalse());
+            session2.send("/app/" + alice2.roomId() + "/action", new PlayerActionRequest(PlayerAction.CHECK, 0));
 
-            session2.send("/app/" + roomId2 + "/action", new PlayerActionRequest(PlayerAction.CHECK, 0));
             PlayerFeedbackResponse reply = session2Reply.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(reply).isNotNull();
+            assertThat(reply.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
+            assertThat(reply.code()).isEqualTo("GAME_NOT_FOUND");
             assertThat(session2.isConnected()).isTrue();
         }
     }
+
+    private static String uniqueName(String prefix) {
+        return prefix + "-" + UNIQUE_COUNTER.incrementAndGet();
+    }
+
+    private static void awaitSessionClosedWithError(StompSession session, AtomicBoolean errorReceived) {
+        await().atMost(TIMEOUT).untilAsserted(() -> {
+            assertThat(session.isConnected()).isFalse();
+            assertThat(errorReceived).isTrue();
+        });
+    }
+
+    private TokenResponse createRoom(String roomName, String hostName, int maxPlayers) {
+        TokenResponse created = restClient.post()
+                .uri("/api/room/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new CreateRoomRequest(roomName, hostName, maxPlayers, 10, 20, 1000, null))
+                .retrieve()
+                .body(TokenResponse.class);
+        assertThat(created).isNotNull();
+        trackedRoomIds.add(created.roomId());
+        return created;
+    }
+
+    private TokenResponse joinRoom(String roomName, String playerName) {
+        TokenResponse joined = restClient.post()
+                .uri("/api/room/join")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new JoinRoomRequest(roomName, playerName, null))
+                .retrieve()
+                .body(TokenResponse.class);
+        assertThat(joined).isNotNull();
+        return joined;
+    }
+
+    private int startGame(String roomId, String hostToken) {
+        return restClient.post()
+                .uri("/api/room/" + roomId + "/start-game")
+                .headers(headers -> headers.setBearerAuth(hostToken))
+                .retrieve()
+                .toBodilessEntity()
+                .getStatusCode()
+                .value();
+    }
+
+    private JsonNode readGameState(String gameId, String token) {
+        String body = restClient.get()
+                .uri("/api/game/" + gameId + "/state")
+                .headers(headers -> headers.setBearerAuth(token))
+                .retrieve()
+                .body(String.class);
+        return objectMapper.readTree(body);
+    }
+
+    private static JsonNode playerState(JsonNode state, String playerName) {
+        for (JsonNode player : state.path("players")) {
+            if (playerName.equals(player.path("name").asString())) {
+                return player;
+            }
+        }
+        throw new AssertionError("Missing player in public projection: " + playerName);
+    }
+
+    private static boolean readyFlag(JsonNode state, String playerName) {
+        JsonNode flag = playerState(state, playerName).path("isReadyForNextHand");
+        assertThat(flag.isBoolean()).as("isReadyForNextHand of %s", playerName).isTrue();
+        return flag.booleanValue();
+    }
+
+    private record PrivateProjection(String playerId, long handNumber, List<String> holeCards) { }
 }
