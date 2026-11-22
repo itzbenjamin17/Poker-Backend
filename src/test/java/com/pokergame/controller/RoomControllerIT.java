@@ -6,6 +6,7 @@ import com.pokergame.dto.internal.RoomEntryResult;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.RoomDataResponse;
+import com.pokergame.exception.InvalidRoomPasswordException;
 import com.pokergame.security.JwtAuthenticationFilter;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PayloadSizeFilter;
@@ -34,6 +35,8 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.matchesPattern;
+import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -691,25 +694,58 @@ class RoomControllerIT {
     void createRoom_RateLimitExceeded() throws Exception {
         CreateRoomRequest request = new CreateRoomRequest("Room", "Player1", 6, 10, 20, 1000, null);
 
-        // Consume the limit (5 per 15 minutes). We don't need to simulate failures
-        // because the rate limit properly applies to successful requests too.
+        // We don't need to simulate failures because the rate limit applies to successful requests too.
         when(roomService.createRoom(anyString(), any()))
                 .thenReturn(new RoomEntryResult("room-123", "Player1"));
 
-        // Consume the limit (5 per 15 minutes)
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < RateLimitService.REST_CAPACITY; i++) {
             mockMvc.perform(post("/api/room/create")
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(request)))
                     .andExpect(status().isOk());
         }
 
-        // The 6th attempt should fail with 429
+        // The next attempt fails with 429 and states the real (short) wait.
         mockMvc.perform(post("/api/room/create")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isTooManyRequests())
-                .andExpect(jsonPath("$.message").value("Too many requests. Please try again in 15 minutes."));
+                .andExpect(header().string("Retry-After", matchesPattern("[1-3]")))
+                .andExpect(jsonPath("$.message").value(
+                        matchesPattern("Too many requests\\. Please try again in [1-3] seconds?\\.")));
+    }
+
+    /**
+     * Repeated wrong passwords from one IP lock that IP out of that room only, even with
+     * a fresh player name each time; a correct password is then refused too until the wait ends.
+     */
+    @Test
+    @DisplayName("POST /api/room/join - repeated wrong passwords lock the room for that IP")
+    void joinRoom_RepeatedWrongPasswords_LockRoomForThatIp() throws Exception {
+        when(roomService.resolveRoomIdByName("Locked")).thenReturn("room-locked");
+        when(roomService.resolveRoomIdByName("Other")).thenReturn("room-other");
+        when(roomService.joinRoom(eq("room-locked"), any(JoinRoomRequest.class)))
+                .thenThrow(new InvalidRoomPasswordException());
+        when(roomService.joinRoom(eq("room-other"), any(JoinRoomRequest.class)))
+                .thenReturn(new RoomEntryResult("room-other", "Guest"));
+
+        for (int i = 0; i < RateLimitService.JOIN_PASSWORD_FAILURES; i++) {
+            mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(new JoinRoomRequest("Locked", "Bot" + i, "guess" + i))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("Invalid password"));
+        }
+
+        mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new JoinRoomRequest("Locked", "Fresh", "right"))))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().exists("Retry-After"))
+                .andExpect(jsonPath("$.message").value(
+                        startsWith("Too many requests. Please try again in ")));
+
+        mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new JoinRoomRequest("Other", "Guest", null))))
+                .andExpect(status().isOk());
     }
 
     /**

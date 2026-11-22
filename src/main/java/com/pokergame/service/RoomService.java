@@ -11,6 +11,7 @@ import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.InvalidRoomPasswordException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Room;
 import com.pokergame.persistence.transaction.DurableMutation;
@@ -187,7 +188,7 @@ public class RoomService {
         if (room.hasPassword() && !room.checkPassword(joinRequest.password(), passwordEncoder)) {
             logger.warn("Invalid password attempt for room {} by player {}",
                     room.getRoomName(), sanitizedPlayerName);
-            throw new BadRequestException("Invalid password");
+            throw new InvalidRoomPasswordException();
         }
         if (room.isFull()) {
             logger.warn("Join attempt failed: room {} is full (player: {})",

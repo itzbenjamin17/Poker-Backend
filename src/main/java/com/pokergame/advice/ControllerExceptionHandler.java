@@ -84,7 +84,13 @@ public class ControllerExceptionHandler {
     @ExceptionHandler(TooManyRequestsException.class)
     public ResponseEntity<ErrorResponse> handleTooManyRequestsException(TooManyRequestsException ex) {
         logger.warn("Rate limit exceeded: {}", ex.getMessage());
-        return errorResponse(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
+        ResponseEntity<ErrorResponse> response = errorResponse(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
+        if (ex.getRetryAfterSeconds() <= 0) {
+            return response;
+        }
+        return ResponseEntity.status(response.getStatusCode())
+                .header("Retry-After", Long.toString(ex.getRetryAfterSeconds()))
+                .body(response.getBody());
     }
 
     /**

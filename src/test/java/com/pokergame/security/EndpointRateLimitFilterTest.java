@@ -43,11 +43,11 @@ class EndpointRateLimitFilterTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain filterChain = new MockFilterChain();
 
-        when(rateLimitService.tryConsumeRest("192.168.1.100:/api/room/create")).thenReturn(true);
+        when(rateLimitService.consumeRest("192.168.1.100:/api/room/create")).thenReturn(RateLimitService.Decision.ALLOWED);
 
         filter.doFilterInternal(request, response, filterChain);
 
-        verify(rateLimitService).tryConsumeRest("192.168.1.100:/api/room/create");
+        verify(rateLimitService).consumeRest("192.168.1.100:/api/room/create");
         assertThat(filterChain.getRequest()).isNotNull();
         assertThat(response.getStatus()).isEqualTo(200);
     }
@@ -63,11 +63,11 @@ class EndpointRateLimitFilterTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain filterChain = new MockFilterChain();
 
-        when(rateLimitService.tryConsumeRest("203.0.113.195:/api/room/join")).thenReturn(true);
+        when(rateLimitService.consumeRest("203.0.113.195:/api/room/join")).thenReturn(RateLimitService.Decision.ALLOWED);
 
         filter.doFilterInternal(request, response, filterChain);
 
-        verify(rateLimitService).tryConsumeRest("203.0.113.195:/api/room/join");
+        verify(rateLimitService).consumeRest("203.0.113.195:/api/room/join");
         assertThat(filterChain.getRequest()).isNotNull();
     }
 
@@ -81,12 +81,13 @@ class EndpointRateLimitFilterTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain filterChain = new MockFilterChain();
 
-        when(rateLimitService.tryConsumeRest("10.1.1.1:/api/room/create")).thenReturn(false);
+        when(rateLimitService.consumeRest("10.1.1.1:/api/room/create")).thenReturn(RateLimitService.Decision.rejected(42));
 
         filter.doFilterInternal(request, response, filterChain);
 
         assertThat(response.getStatus()).isEqualTo(429);
-        assertThat(response.getContentAsString()).contains("Too many requests");
+        assertThat(response.getHeader("Retry-After")).isEqualTo("42");
+        assertThat(response.getContentAsString()).contains("Please try again in 42 seconds.");
         assertThat(filterChain.getRequest()).isNull();
     }
 
@@ -100,7 +101,7 @@ class EndpointRateLimitFilterTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain filterChain = new MockFilterChain();
 
-        when(rateLimitService.tryConsumeRest("10.1.1.2:/api/room/join")).thenReturn(false);
+        when(rateLimitService.consumeRest("10.1.1.2:/api/room/join")).thenReturn(RateLimitService.Decision.rejected(42));
 
         filter.doFilterInternal(request, response, filterChain);
 
@@ -119,7 +120,7 @@ class EndpointRateLimitFilterTest {
 
         filter.doFilterInternal(request, response, filterChain);
 
-        verify(rateLimitService, never()).tryConsumeRest(anyString());
+        verify(rateLimitService, never()).consumeRest(anyString());
         assertThat(filterChain.getRequest()).isNotNull();
         assertThat(response.getStatus()).isEqualTo(200);
     }

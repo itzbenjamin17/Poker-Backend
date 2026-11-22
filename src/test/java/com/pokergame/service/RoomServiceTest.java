@@ -28,6 +28,7 @@ import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.enums.ResponseMessage;
 import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.InvalidRoomPasswordException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Room;
 import com.pokergame.service.event.RoomDestroyed;
@@ -392,6 +393,7 @@ class RoomServiceTest {
 
             assertThatThrownBy(() -> joinByName(roomService,
                     new JoinRoomRequest("Private Room", "NewPlayer", "wrongpassword")))
+                    .isInstanceOf(InvalidRoomPasswordException.class)
                     .isInstanceOf(BadRequestException.class)
                     .hasMessage("Invalid password");
         }

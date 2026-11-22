@@ -424,7 +424,7 @@ class HttpSecurityIT {
         void rateLimitExhaustionReturns429BeforeJwtValidation() {
             String invalidRoomName = "A".repeat(51);
 
-            for (int i = 0; i < 5; i++) {
+            for (int i = 0; i < RateLimitService.REST_CAPACITY; i++) {
                 final int idx = i;
                 HttpClientErrorException validationError = assertThrows(HttpClientErrorException.class, () -> restClient.post()
                         .uri("/api/room/create")
@@ -435,12 +435,12 @@ class HttpSecurityIT {
                 assertThat(validationError.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             }
 
-            // 6th request with malformed JWT must fail with 429 from EndpointRateLimitFilter before JwtAuthenticationFilter.
+            // The next request, with a malformed JWT, must fail with 429 from EndpointRateLimitFilter before JwtAuthenticationFilter.
             HttpClientErrorException rateLimited = assertThrows(HttpClientErrorException.class, () -> restClient.post()
                     .uri("/api/room/create")
                     .contentType(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer malformed.invalid.token")
-                    .body(new CreateRoomRequest(invalidRoomName, "Player6", 6, 10, 20, 1000, null))
+                    .body(new CreateRoomRequest(invalidRoomName, "PlayerOverLimit", 6, 10, 20, 1000, null))
                     .retrieve()
                     .toBodilessEntity());
             assertThat(rateLimited.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
@@ -457,7 +457,7 @@ class HttpSecurityIT {
         void concurrentJoinsRespectMaxPlayersCap() throws Exception {
             String roomName = uniqueName("ConcurrentCap");
             JsonNode host = createRoom(roomName, "Host", 2);
-            int attempts = 5; // Within REST /api/room/join limit of 5 req/15min
+            int attempts = 5; // Within the REST /api/room/join limit (RateLimitService.REST_CAPACITY per minute)
             CyclicBarrier ready = new CyclicBarrier(attempts);
             List<Future<String>> outcomes = new ArrayList<>();
 

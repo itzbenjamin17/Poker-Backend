@@ -28,6 +28,7 @@ import org.springframework.web.context.WebApplicationContext;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -81,7 +82,17 @@ class ControllerExceptionHandlerMvcIT {
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.status").value(429))
                 .andExpect(jsonPath("$.error").value("Too Many Requests"))
-                .andExpect(jsonPath("$.message").value("Slow down"));
+                .andExpect(jsonPath("$.message").value("Slow down"))
+                .andExpect(header().doesNotExist("Retry-After"));
+    }
+
+    @Test
+    @DisplayName("TooManyRequestsException with a known wait sends a Retry-After header")
+    void tooManyRequestsWithWait_Returns429WithRetryAfter() throws Exception {
+        mockMvc.perform(get("/probe/too-many-requests-with-wait"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "42"))
+                .andExpect(jsonPath("$.message").value("Wait a bit"));
     }
 
     @Test
@@ -187,6 +198,11 @@ class ControllerExceptionHandlerMvcIT {
         @GetMapping("/probe/too-many-requests")
         void tooManyRequests() {
             throw new TooManyRequestsException("Slow down");
+        }
+
+        @GetMapping("/probe/too-many-requests-with-wait")
+        void tooManyRequestsWithWait() {
+            throw new TooManyRequestsException("Wait a bit", 42);
         }
 
         @GetMapping("/probe/security")

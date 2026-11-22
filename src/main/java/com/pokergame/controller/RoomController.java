@@ -9,21 +9,26 @@ import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.dto.response.TokenResponse;
 import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.InvalidRoomPasswordException;
 import com.pokergame.exception.ResourceNotFoundException;
+import com.pokergame.exception.TooManyRequestsException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Room;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.PlayerPrincipal;
+import com.pokergame.security.RateLimitService;
 import com.pokergame.service.GameLifecycleService;
 import com.pokergame.service.RoomService;
 import com.pokergame.util.LockLease;
 import com.pokergame.util.RoomCoordinator;
+import com.pokergame.util.SecurityUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -44,20 +49,22 @@ public class RoomController {
     private static final Logger logger = LoggerFactory.getLogger(RoomController.class);
 
     private final RoomService roomService;
-
     private final GameLifecycleService gameLifecycleService;
-
     private final JwtService jwtService;
-
     private final RoomCoordinator roomCoordinator;
+    private final RateLimitService rateLimitService;
 
-    /** Creates the controller with the shared room coordination boundary. */
+    @Value("${poker.security.trust-proxy:false}")
+    private boolean trustProxy;
+
+    /** Creates the controller with the shared room coordination boundary and the join rate limiter. */
     public RoomController(RoomService roomService, GameLifecycleService gameLifecycleService,
-            JwtService jwtService, RoomCoordinator roomCoordinator) {
+            JwtService jwtService, RoomCoordinator roomCoordinator, RateLimitService rateLimitService) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.jwtService = jwtService;
         this.roomCoordinator = requireNonNull(roomCoordinator);
+        this.rateLimitService = rateLimitService;
     }
 
     /**
@@ -94,11 +101,14 @@ public class RoomController {
 
     /**
      * Joins an existing poker room.
-     * PUBLIC ENDPOINT - Issues JWT token.
+     * PUBLIC ENDPOINT - Issues JWT token. Wrong passwords are counted per client IP and room;
+     * once that budget is spent, further attempts on the room are refused until it refills.
      *
      * @param joinRequest room name and player information
      * @param request current servlet request
      * @return room ID and JWT token
+     * @throws TooManyRequestsException if this client has used up its wrong-password budget for the room
+     * @throws InvalidRoomPasswordException if the password is wrong (and records the failure)
      */
     @PostMapping("/join")
     public ResponseEntity<ApiResponse<TokenResponse>> joinRoom(
@@ -109,12 +119,25 @@ public class RoomController {
         // Sanitization is owned by the room service; it returns the canonical player
         // name so the token binds to exactly the name that was stored.
         String targetRoomId = roomService.resolveRoomIdByName(joinRequest.roomName());
+
+        // Password guessing is limited per IP + room (not per typed name, which is free to change).
+        // Only wrong passwords spend the budget; once spent, every attempt on this room waits.
+        String clientIp = SecurityUtils.getClientIp(request, trustProxy);
+        RateLimitService.Decision attempt = rateLimitService.checkJoinPasswordAttempt(clientIp, targetRoomId);
+        if (!attempt.allowed()) {
+            throw new TooManyRequestsException(
+                    RateLimitService.tooManyRequestsMessage(attempt.retryAfterSeconds()), attempt.retryAfterSeconds());
+        }
+
         RoomEntryResult entry;
         try (LockLease _ = roomCoordinator.acquire(targetRoomId)) {
             if (roomService.closeLobbyIfExpired(targetRoomId)) {
                 throw new BadRequestException("Room has expired due to inactivity.");
             }
             entry = roomService.joinRoom(targetRoomId, joinRequest);
+        } catch (InvalidRoomPasswordException wrongPassword) {
+            rateLimitService.recordFailedJoinPassword(clientIp, targetRoomId);
+            throw wrongPassword;
         }
         String roomId = entry.roomId();
         String canonicalPlayerName = entry.canonicalPlayerName();

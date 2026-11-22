@@ -57,11 +57,12 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
             // Key by IP + Path to prevent IP-based flooding across different actions
             String key = clientIp + ":" + path;
 
-            if (!rateLimitService.tryConsumeRest(key)) {
+            RateLimitService.Decision decision = rateLimitService.consumeRest(key);
+            if (!decision.allowed()) {
                 logThrottler.throttle(key, () -> logger.warn(
-                        "Rate limit exceeded (429): method={}, path={}, clientIp={}, limit={}",
-                        request.getMethod(), path, clientIp, "5 req/15min"));
-                sendRateLimitError(response);
+                        "Rate limit exceeded (429): method={}, path={}, clientIp={}, limit={} req/{}",
+                        request.getMethod(), path, clientIp, RateLimitService.REST_CAPACITY, RateLimitService.REST_WINDOW));
+                sendRateLimitError(response, decision.retryAfterSeconds());
                 return;
             }
         }
@@ -73,9 +74,11 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
         return SecurityUtils.getClientIp(request, trustProxy);
     }
 
-    private void sendRateLimitError(HttpServletResponse response) throws IOException {
+    private void sendRateLimitError(HttpServletResponse response, long retryAfterSeconds) throws IOException {
         response.setStatus(429); // Too Many Requests
+        response.setHeader("Retry-After", Long.toString(retryAfterSeconds));
         response.setContentType("application/json");
-        response.getWriter().write("{\"message\": \"Too many requests. Please try again in 15 minutes.\"}");
+        // The message is built from fixed text and a number, so it needs no JSON escaping.
+        response.getWriter().write("{\"message\": \"" + RateLimitService.tooManyRequestsMessage(retryAfterSeconds) + "\"}");
     }
 }

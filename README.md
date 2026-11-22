@@ -86,7 +86,7 @@ The engine follows a **Layered Architecture** with explicit concurrency and dura
 - **Session-Bound JWT Identity:** Tokens bind `playerName` (subject), `roomId`, and a unique session `membershipId` ([ADR-0004](docs/adr/0004-stateless-jwt-session-membership-validation.md)), preventing cross-room impersonation and immediately invalidating tokens from vacated or rejoined seats.
 - **STOMP Destination Authorization:** `WebSocketAuthInterceptor` enforces `/app/` destination prefix whitelisting, room-targeted SEND/SUBSCRIBE authorization, and active membership checks on every frame.
 - **Private User Queues:** Hole cards and player-specific errors are routed exclusively via Spring user destinations (`/user/queue/private` bound to `playerName:roomId:membershipId`), preventing topic eavesdropping.
-- **Rate Limiting:** Bucket4j throttles REST room entry endpoints and STOMP gameplay actions per identity/IP.
+- **Rate Limiting:** Bucket4j limits room create/join to 20 requests per minute per client IP and endpoint, wrong join passwords to 10 per 5 minutes per client IP and room, and STOMP gameplay messages to 5 per second per player. REST 429 responses state the real wait and send `Retry-After`.
 - **Lifecycle & Concurrency Enforcement:** Per-room lock leases serialize room/game mutations across REST requests, STOMP frames, and scheduled tasks, preventing late joins, duplicate starts, or stale timer callbacks.
 - **Input & Payload Hardening:** Request bodies are validated and sanitized against control/format characters and HTML tags; oversized payloads (10KB limit), malformed JSON, and BCrypt-truncating passwords (>72 UTF-8 bytes) are rejected early.
 
