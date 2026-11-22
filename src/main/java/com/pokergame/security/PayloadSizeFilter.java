@@ -9,7 +9,11 @@ import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,35 +28,37 @@ import tools.jackson.databind.ObjectMapper;
  * Filter to reject requests with excessively large payloads to prevent DoS attacks.
  *
  * <p>Two layers of enforcement are applied. A declared {@code Content-Length} larger than the
- * limit is rejected before the body is read (fast path). When the declared length is unknown
- * ({@code -1}, as with chunked transfer encoding) the request stream is wrapped so that the byte
- * count is enforced while the body is consumed downstream; crossing the limit aborts the request
- * with HTTP 413 instead of streaming an unbounded body.
+ * limit is rejected before the body is read (fast path). For requests that may carry a body
+ * (including unknown-length / chunked transfer encoding), up to {@code MAX_PAYLOAD_SIZE + 1}
+ * bytes are buffered upfront so oversized bodies are rejected with HTTP 413 before reaching
+ * downstream filters or Spring MVC message converters.
  */
 @Component
 public class PayloadSizeFilter extends OncePerRequestFilter {
     private static final Logger logger = LoggerFactory.getLogger(PayloadSizeFilter.class);
-    private static final long MAX_PAYLOAD_SIZE = 10_240; // 10KB
+    private static final int MAX_PAYLOAD_SIZE = 10_240; // 10KB
 
     private final ObjectMapper objectMapper;
-
-    @Value("${poker.security.trust-proxy:false}")
-    private boolean trustProxy;
+    private final boolean trustProxy;
 
     private final LogThrottler logThrottler = new LogThrottler(5000L);
 
     /**
-     * Creates the payload size filter with the JSON mapper for problem detail errors.
+     * Creates the payload size filter with the JSON mapper and trusted-proxy setting.
      *
      * @param objectMapper object mapper for problem detail responses
+     * @param trustProxy   whether to trust {@code X-Forwarded-For} headers for client IP logging
      */
-    public PayloadSizeFilter(ObjectMapper objectMapper) {
+    public PayloadSizeFilter(
+            ObjectMapper objectMapper,
+            @Value("${poker.security.trust-proxy:false}") boolean trustProxy) {
         this.objectMapper = objectMapper;
+        this.trustProxy = trustProxy;
     }
 
     /**
      * Rejects payloads larger than 10 KiB, whether the length is declared up front or only
-     * discovered while the body is streamed (unknown-length / chunked requests).
+     * discovered when reading the request stream (unknown-length / chunked requests).
      *
      * @param request current HTTP request
      * @param response current HTTP response
@@ -71,19 +77,28 @@ public class PayloadSizeFilter extends OncePerRequestFilter {
             return;
         }
 
-        // For unknown-length bodies (Content-Length == -1, e.g. chunked transfer encoding) the
-        // declared-length fast path above cannot help, so enforce the bound while the body is read.
-        HttpServletRequest boundedRequest = new BoundedRequest(request);
-        try {
-            filterChain.doFilter(boundedRequest, response);
-        } catch (PayloadTooLargeException ex) {
-            // The wrapped stream aborted downstream reading once the limit was crossed. If the
-            // response has not been committed yet, surface the documented 413 contract to the client.
-            if (!response.isCommitted()) {
-                response.reset();
-                rejectOversized(request, response, ex.getBytesRead());
+        if (mayCarryBody(request, contentLength)) {
+            byte[] body = request.getInputStream().readNBytes(MAX_PAYLOAD_SIZE + 1);
+            if (body.length > MAX_PAYLOAD_SIZE) {
+                rejectOversized(request, response, body.length);
+                return;
             }
+            filterChain.doFilter(new CachedBodyRequest(request, body), response);
+            return;
         }
+
+        filterChain.doFilter(request, response);
+    }
+
+    private static boolean mayCarryBody(HttpServletRequest request, long contentLength) {
+        if (request.getHeader("Transfer-Encoding") != null || contentLength > 0) {
+            return true;
+        }
+        String method = request.getMethod();
+        return !"GET".equalsIgnoreCase(method)
+                && !"HEAD".equalsIgnoreCase(method)
+                && !"OPTIONS".equalsIgnoreCase(method)
+                && !"TRACE".equalsIgnoreCase(method);
     }
 
     private void rejectOversized(HttpServletRequest request, HttpServletResponse response, long size)
@@ -102,93 +117,72 @@ public class PayloadSizeFilter extends OncePerRequestFilter {
                         "Request payload too large. Maximum allowed is 10KB.")));
     }
 
-    private static final class PayloadTooLargeException extends IOException {
-        private final long bytesRead;
+    private static final class CachedBodyRequest extends HttpServletRequestWrapper {
+        private final byte[] body;
 
-        PayloadTooLargeException(long bytesRead) {
-            this.bytesRead = bytesRead;
-        }
-
-        long getBytesRead() {
-            return bytesRead;
-        }
-    }
-
-    private static final class BoundedRequest extends HttpServletRequestWrapper {
-        private BoundedServletInputStream inputStream;
-
-        BoundedRequest(HttpServletRequest request) {
+        CachedBodyRequest(HttpServletRequest request, byte[] body) {
             super(request);
+            this.body = body;
         }
 
         @Override
-        public ServletInputStream getInputStream() throws IOException {
-            if (inputStream == null) {
-                inputStream = new BoundedServletInputStream(super.getInputStream());
-            }
-            return inputStream;
+        public ServletInputStream getInputStream() {
+            return new CachedServletInputStream(body);
+        }
+
+        @Override
+        public BufferedReader getReader() {
+            String encoding = getCharacterEncoding();
+            return new BufferedReader(new InputStreamReader(
+                    new ByteArrayInputStream(body),
+                    encoding != null ? java.nio.charset.Charset.forName(encoding) : StandardCharsets.UTF_8));
+        }
+
+        @Override
+        public int getContentLength() {
+            return body.length;
+        }
+
+        @Override
+        public long getContentLengthLong() {
+            return body.length;
         }
     }
 
-    // Throws once the cumulative byte count exceeds MAX_PAYLOAD_SIZE so chunked/unknown-length bodies stay bounded.
-    private static final class BoundedServletInputStream extends ServletInputStream {
-        private final ServletInputStream delegate;
-        private long bytesRead;
+    private static final class CachedServletInputStream extends ServletInputStream {
+        private final ByteArrayInputStream delegate;
 
-        BoundedServletInputStream(ServletInputStream delegate) {
-            this.delegate = delegate;
-        }
-
-        private int countAndCheck(int value) throws IOException {
-            if (value >= 0) {
-                bytesRead++;
-                if (bytesRead > MAX_PAYLOAD_SIZE) {
-                    throw new PayloadTooLargeException(bytesRead);
-                }
-            }
-            return value;
+        CachedServletInputStream(byte[] body) {
+            this.delegate = new ByteArrayInputStream(body);
         }
 
         @Override
-        public int read() throws IOException {
-            return countAndCheck(delegate.read());
+        public int read() {
+            return delegate.read();
         }
 
         @Override
-        public int read(byte[] b, int off, int len) throws IOException {
-            int n = delegate.read(b, off, len);
-            if (n > 0) {
-                bytesRead += n;
-                if (bytesRead > MAX_PAYLOAD_SIZE) {
-                    throw new PayloadTooLargeException(bytesRead);
-                }
-            }
-            return n;
+        public int read(byte[] b, int off, int len) {
+            return delegate.read(b, off, len);
         }
 
         @Override
         public boolean isFinished() {
-            return delegate.isFinished();
+            return delegate.available() == 0;
         }
 
         @Override
         public boolean isReady() {
-            return delegate.isReady();
+            return true;
         }
 
         @Override
         public void setReadListener(ReadListener readListener) {
-            delegate.setReadListener(readListener);
         }
 
         @Override
-        public int available() throws IOException {
+        public int available() {
             return delegate.available();
-        }
-
-        @Override
-        public void close() throws IOException {
-            delegate.close();
         }
     }
 }

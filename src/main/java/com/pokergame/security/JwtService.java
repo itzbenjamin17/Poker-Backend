@@ -1,18 +1,19 @@
 package com.pokergame.security;
 
+import static java.util.Objects.requireNonNull;
+
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
-import jakarta.annotation.PostConstruct;
+import java.time.Clock;
+import java.util.Date;
+import java.util.UUID;
+import javax.crypto.SecretKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-
-import javax.crypto.SecretKey;
-import java.util.Date;
-import java.util.UUID;
 
 /**
  * Service responsible for generating and validating JWT tokens for stateless
@@ -23,31 +24,35 @@ import java.util.UUID;
 public class JwtService {
     private static final Logger logger = LoggerFactory.getLogger(JwtService.class);
 
-    @Value("${app.jwt.base64-secret}")
-    private String secretKeyString;
-
-    @Value("${jwt.expirationMillis:14400000}") // default 4h
-    private long expirationMillis;
-
-    private SecretKey secretKey;
+    private final SecretKey secretKey;
+    private final long expirationMillis;
+    private final Clock clock;
 
     /**
-     * Decodes and validates the configured signing key after dependency injection.
+     * Creates the JWT service and decodes the configured Base64 HMAC signing key.
      *
+     * @param secretKeyString  Base64-encoded HMAC secret (at least 512 bits)
+     * @param expirationMillis token validity duration in milliseconds
+     * @param clock            clock used for token issuance and expiry validation
      * @throws IllegalStateException if the key is absent, malformed, or too weak
      */
-    @PostConstruct
-    public void init() {
+    public JwtService(
+            @Value("${app.jwt.base64-secret}") String secretKeyString,
+            @Value("${jwt.expirationMillis:14400000}") long expirationMillis,
+            Clock clock) {
+        this.clock = requireNonNull(clock, "clock must not be null");
+        this.expirationMillis = expirationMillis;
         if (secretKeyString == null || secretKeyString.isBlank()) {
-            throw new IllegalStateException("JWT base64 secret key is missing. Please provide it via 'app.jwt.base64-secret' or the JWT_SECRET environment variable.");
+            throw new IllegalStateException(
+                    "JWT base64 secret key is missing. Please provide it via 'app.jwt.base64-secret' or the JWT_SECRET environment variable.");
         }
-
         try {
-            // Decode the Base64 string directly into a byte array
             byte[] keyBytes = Decoders.BASE64.decode(secretKeyString);
             this.secretKey = Keys.hmacShaKeyFor(keyBytes);
         } catch (Exception e) {
-            throw new IllegalStateException("JWT secret key parsing failed. Ensure it is a valid Base64 string and provides at least 512 bits of key material.", e);
+            throw new IllegalStateException(
+                    "JWT secret key parsing failed. Ensure it is a valid Base64 string and provides at least 512 bits of key material.",
+                    e);
         }
     }
 
@@ -71,7 +76,7 @@ public class JwtService {
      * @return signed token with the configured expiry
      */
     public String generateToken(String playerName, String roomId, String membershipId) {
-        long now = System.currentTimeMillis();
+        long now = clock.millis();
         var builder = Jwts.builder()
                 .subject(playerName)
                 .claim("roomId", roomId)
@@ -174,6 +179,7 @@ public class JwtService {
     private Claims parseClaims(String token) {
         return Jwts.parser()
                 .verifyWith(secretKey)
+                .clock(() -> Date.from(clock.instant()))
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();

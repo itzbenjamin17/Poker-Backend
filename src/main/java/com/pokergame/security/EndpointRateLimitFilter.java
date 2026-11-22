@@ -10,6 +10,7 @@ import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -26,21 +27,24 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
 
     private final RateLimitService rateLimitService;
     private final ObjectMapper objectMapper;
+    private final boolean trustProxy;
 
     private final LogThrottler logThrottler = new LogThrottler(5000L);
 
-    @Value("${poker.security.trust-proxy:false}")
-    private boolean trustProxy;
-
     /**
-     * Creates the endpoint filter with its shared bucket service and JSON mapper.
+     * Creates the endpoint filter with its shared bucket service, JSON mapper, and trusted-proxy setting.
      *
      * @param rateLimitService REST rate limiter
      * @param objectMapper     object mapper for problem detail responses
+     * @param trustProxy       whether to trust {@code X-Forwarded-For} headers for client IP resolution
      */
-    public EndpointRateLimitFilter(RateLimitService rateLimitService, ObjectMapper objectMapper) {
+    public EndpointRateLimitFilter(
+            RateLimitService rateLimitService,
+            ObjectMapper objectMapper,
+            @Value("${poker.security.trust-proxy:false}") boolean trustProxy) {
         this.rateLimitService = rateLimitService;
         this.objectMapper = objectMapper;
+        this.trustProxy = trustProxy;
     }
 
     /**
@@ -57,9 +61,12 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
 
         String path = request.getRequestURI();
-        
-        // We only rate limit room creation and joining currently, may need to change this
-        if (path.equals("/api/room/create") || path.equals("/api/room/join")) {
+
+        // We only rate limit room creation and joining currently, may need to change this.
+        // CORS preflight (OPTIONS) requests are skipped: they carry no room action, and counting them would
+        // halve a browser client's allowance because every real request is preceded by one.
+        boolean preflight = HttpMethod.OPTIONS.matches(request.getMethod());
+        if (!preflight && (path.equals("/api/room/create") || path.equals("/api/room/join"))) {
             String clientIp = getClientIp(request);
             // Key by IP + Path to prevent IP-based flooding across different actions
             String key = clientIp + ":" + path;

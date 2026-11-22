@@ -1,8 +1,12 @@
 package com.pokergame.security;
 
+import static java.util.Objects.requireNonNull;
+
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import io.github.bucket4j.ConsumptionProbe;
+import io.github.bucket4j.TimeMeter;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -46,10 +50,36 @@ public class RateLimitService {
             .refillGreedy(5, Duration.ofSeconds(1))
             .build();
 
-    @Value("${poker.rate-limiting.enabled:true}")
-    private boolean enabled;
+    private final boolean enabled;
+    private final Clock clock;
+    private final TimeMeter timeMeter;
+
     private final ConcurrentMap<String, TrackedBucket> restBuckets = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, TrackedBucket> wsBuckets = new ConcurrentHashMap<>();
+
+    /**
+     * Creates the rate-limit service with the given toggle and clock.
+     *
+     * @param enabled whether rate limiting is active
+     * @param clock   clock driving token refill and idle-bucket eviction
+     */
+    public RateLimitService(
+            @Value("${poker.rate-limiting.enabled:true}") boolean enabled,
+            Clock clock) {
+        this.enabled = enabled;
+        this.clock = requireNonNull(clock, "clock must not be null");
+        this.timeMeter = new TimeMeter() {
+            @Override
+            public long currentTimeNanos() {
+                return RateLimitService.this.clock.millis() * 1_000_000L;
+            }
+
+            @Override
+            public boolean isWallClockBased() {
+                return true;
+            }
+        };
+    }
 
     /**
      * Consumes a token for a REST request.
@@ -121,6 +151,7 @@ public class RateLimitService {
 
     /**
      * Try to consume a token for a WebSocket message.
+     *
      * @param username the player's username
      * @return true if token consumed, false if rate limited
      */
@@ -179,47 +210,24 @@ public class RateLimitService {
         wsBuckets.clear();
     }
 
-    /**
-     * Test hook: backdates a WebSocket bucket's last access.
-     *
-     * @param username WebSocket bucket key
-     * @param epochMs last-access time to set
-     */
-    void setLastAccessForTesting(String username, long epochMs) {
-        backdate(wsBuckets, username, epochMs);
-    }
-
-    /**
-     * Test hook: backdates a REST bucket's last access.
-     *
-     * @param key REST bucket key
-     * @param epochMs last-access time to set
-     */
-    void setRestLastAccessForTesting(String key, long epochMs) {
-        backdate(restBuckets, key, epochMs);
-    }
-
-    private static Bucket touch(ConcurrentMap<String, TrackedBucket> buckets, String key, Bandwidth limit) {
-        long now = System.currentTimeMillis();
+    private Bucket touch(ConcurrentMap<String, TrackedBucket> buckets, String key, Bandwidth limit) {
+        long now = clock.millis();
         return buckets.compute(key, (k, existing) -> {
             if (existing == null) {
-                return new TrackedBucket(Bucket.builder().addLimit(limit).build(), now);
+                Bucket bucket = Bucket.builder()
+                        .addLimit(limit)
+                        .withCustomTimePrecision(timeMeter)
+                        .build();
+                return new TrackedBucket(bucket, now);
             }
             existing.lastAccessEpochMs = now;
             return existing;
         }).bucket;
     }
 
-    private static void evictIdle(ConcurrentMap<String, TrackedBucket> buckets, long idleWindowMs) {
-        long cutoff = System.currentTimeMillis() - idleWindowMs;
+    private void evictIdle(ConcurrentMap<String, TrackedBucket> buckets, long idleWindowMs) {
+        long cutoff = clock.millis() - idleWindowMs;
         buckets.entrySet().removeIf(entry -> entry.getValue().lastAccessEpochMs < cutoff);
-    }
-
-    private static void backdate(ConcurrentMap<String, TrackedBucket> buckets, String key, long epochMs) {
-        TrackedBucket entry = buckets.get(key);
-        if (entry != null) {
-            entry.lastAccessEpochMs = epochMs;
-        }
     }
 
     private static long toSeconds(long nanos) {
