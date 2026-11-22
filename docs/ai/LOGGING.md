@@ -45,7 +45,7 @@ The production VPS runs a Docker Compose deployment located at `~/poker-app`. Wa
     environment:
       LOG_FILE: /app/logs/poker.log
     volumes:
-      - poker-wal-data:/var/lib/poker/wal
+      - /opt/poker/wal:/var/lib/poker/wal
       - /opt/poker/logs:/app/logs
     logging:
       driver: json-file
@@ -241,7 +241,7 @@ Alternatively, periodic stats logging can be disabled in `WebSocketConfig` via `
   - Local development defaults to `LOG_FILE=./logs/poker.log` (automatically created, git-ignored).
   - Test suites run with `logging.file.name=` in `src/test/resources/application-test.properties` so tests do not pollute disk with log files.
 - **WAL Storage Alignment:**
-  `POKER_PERSISTENCE_DIRECTORY=/var/lib/poker/wal` in `.env` must match the Docker Compose volume mount (`poker-wal-data:/var/lib/poker/wal`).
+  `POKER_PERSISTENCE_DIRECTORY=/var/lib/poker/wal` in `.env` must match the Docker Compose volume mount (`/opt/poker/wal:/var/lib/poker/wal`).
   - Verify volume mounting with:
     ```bash
     docker inspect poker-backend --format '{{json .Mounts}}'

@@ -35,6 +35,8 @@ docker run --rm -p 8080:8080 \
   poker-backend
 ```
 
+`/var/lib/poker/wal` is the path **inside the container**. When mounting a named Docker volume (such as `poker-wal`), Docker stores the underlying files on the host under `/var/lib/docker/volumes/<volume-name>/_data` rather than `/var/lib/poker/wal` on the host; use a host bind mount (for example `-v /opt/poker/wal:/var/lib/poker/wal`) if you want files directly on the host filesystem. Verify the host mount path with `docker inspect <container> --format '{{json .Mounts}}'` and inspect live WAL files inside the container with `docker exec <container> ls -la /var/lib/poker/wal` (the directory is empty when no rooms or active games exist). If you deploy with an `.env` file, make sure `POKER_PERSISTENCE_DIRECTORY` matches the mounted container path (`/var/lib/poker/wal`) rather than `.env.example`'s local default (`./data/poker-wal`).
+
 Do not run rolling replicas against the same volume. Stop the writer before copying or restoring a volume backup. A filesystem snapshot must contain the whole directory at one point in time; copying individual active WALs while writes continue is not a supported backup.
 
 ## Rotation and retirement
