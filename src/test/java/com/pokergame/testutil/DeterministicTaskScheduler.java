@@ -1,12 +1,13 @@
 package com.pokergame.testutil;
 
+import static java.util.Objects.requireNonNull;
+
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Delayed;
@@ -42,25 +43,12 @@ public final class DeterministicTaskScheduler implements TaskScheduler {
         public boolean isCancelled() {
             return future.isCancelled();
         }
-
-        /** Returns whether this task has completed or been cancelled. */
-        public boolean isDone() {
-            return future.isDone();
-        }
     }
 
     private final Clock clock;
     private final List<ScheduledTask> tasks = new CopyOnWriteArrayList<>();
     private final AtomicBoolean rejectNext = new AtomicBoolean(false);
     private final AtomicReference<Runnable> nextScheduleHook = new AtomicReference<>();
-    private final AtomicReference<Runnable> onScheduleHook = new AtomicReference<>();
-
-    /**
-     * Creates a scheduler backed by {@link Clock#systemUTC()}.
-     */
-    public DeterministicTaskScheduler() {
-        this(Clock.systemUTC());
-    }
 
     /**
      * Creates a scheduler backed by {@code clock} (for example, a {@link MutableClock}).
@@ -68,7 +56,7 @@ public final class DeterministicTaskScheduler implements TaskScheduler {
      * @param clock clock used for {@link #getClock()} and {@link #runDueTasks()}
      */
     public DeterministicTaskScheduler(Clock clock) {
-        this.clock = Objects.requireNonNull(clock, "clock must not be null");
+        this.clock = requireNonNull(clock, "clock must not be null");
     }
 
     /** {@inheritDoc} */
@@ -85,8 +73,8 @@ public final class DeterministicTaskScheduler implements TaskScheduler {
      */
     @Override
     public ScheduledFuture<?> schedule(Runnable task, Instant startTime) {
-        Objects.requireNonNull(task, "task must not be null");
-        Objects.requireNonNull(startTime, "startTime must not be null");
+        requireNonNull(task, "task must not be null");
+        requireNonNull(startTime, "startTime must not be null");
         if (rejectNext.compareAndSet(true, false)) {
             throw new TaskRejectedException("Scheduler configured to reject next task");
         }
@@ -97,10 +85,6 @@ public final class DeterministicTaskScheduler implements TaskScheduler {
         Runnable oneShot = nextScheduleHook.getAndSet(null);
         if (oneShot != null) {
             oneShot.run();
-        }
-        Runnable persistent = onScheduleHook.get();
-        if (persistent != null) {
-            persistent.run();
         }
         return future;
     }
@@ -153,7 +137,7 @@ public final class DeterministicTaskScheduler implements TaskScheduler {
      * @return number of tasks executed
      */
     public int runDueTasks(Clock targetClock) {
-        Objects.requireNonNull(targetClock, "targetClock must not be null");
+        requireNonNull(targetClock, "targetClock must not be null");
         return runDueTasks(targetClock.instant());
     }
 
@@ -166,10 +150,10 @@ public final class DeterministicTaskScheduler implements TaskScheduler {
      * @return number of tasks executed
      */
     public int runDueTasks(Instant now) {
-        Objects.requireNonNull(now, "now must not be null");
+        requireNonNull(now, "now must not be null");
         List<ScheduledTask> due = new ArrayList<>();
         for (ScheduledTask entry : tasks) {
-            if (!entry.startTime().isAfter(now) && !entry.future().isDone()) {
+            if (!entry.startTime().isAfter(now) && isPending(entry)) {
                 due.add(entry);
             }
         }
@@ -204,14 +188,14 @@ public final class DeterministicTaskScheduler implements TaskScheduler {
     }
 
     /**
-     * Returns the number of scheduled tasks that have neither completed nor been cancelled.
+     * Returns the number of scheduled tasks that are still pending execution.
      *
      * @return pending task count
      */
     public int pendingCount() {
         int count = 0;
         for (ScheduledTask entry : tasks) {
-            if (!entry.future().isDone()) {
+            if (isPending(entry)) {
                 count++;
             }
         }
@@ -228,14 +212,18 @@ public final class DeterministicTaskScheduler implements TaskScheduler {
     }
 
     /**
-     * Returns an immutable snapshot of tasks that are still pending (neither completed nor cancelled).
+     * Returns an immutable snapshot of tasks that are still pending execution.
      *
      * @return pending {@link ScheduledTask} entries
      */
     public List<ScheduledTask> pendingTasks() {
         return tasks.stream()
-                .filter(entry -> !entry.future().isDone())
+                .filter(DeterministicTaskScheduler::isPending)
                 .toList();
+    }
+
+    private static boolean isPending(ScheduledTask entry) {
+        return ((DeterministicScheduledFuture) entry.future()).isPending();
     }
 
     /**
@@ -245,7 +233,6 @@ public final class DeterministicTaskScheduler implements TaskScheduler {
         tasks.clear();
         rejectNext.set(false);
         nextScheduleHook.set(null);
-        onScheduleHook.set(null);
     }
 
     /**
@@ -269,16 +256,6 @@ public final class DeterministicTaskScheduler implements TaskScheduler {
         nextScheduleHook.set(hook);
     }
 
-    /**
-     * Registers a persistent hook invoked inside every {@link #schedule(Runnable, Instant)} call
-     * immediately before returning the {@link ScheduledFuture}.
-     *
-     * @param hook callback to run before {@code schedule} returns, or {@code null} to clear
-     */
-    public void setOnSchedule(Runnable hook) {
-        onScheduleHook.set(hook);
-    }
-
     private static final class DeterministicScheduledFuture implements ScheduledFuture<Object> {
         private static final int PENDING = 0;
         private static final int RUNNING = 1;
@@ -292,6 +269,10 @@ public final class DeterministicTaskScheduler implements TaskScheduler {
         private DeterministicScheduledFuture(Clock clock, Instant startTime) {
             this.clock = clock;
             this.startTime = startTime;
+        }
+
+        private boolean isPending() {
+            return state.get() == PENDING;
         }
 
         private boolean tryStart() {
