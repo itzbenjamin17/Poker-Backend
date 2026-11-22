@@ -16,6 +16,7 @@ import com.pokergame.util.MdcUtils.MdcScope;
 import com.pokergame.util.RoomCoordinator;
 import com.pokergame.util.SecurityUtils;
 import java.security.Principal;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.Map;
@@ -26,7 +27,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.task.TaskRejectedException;
@@ -56,34 +56,37 @@ public class WebSocketEventListener {
     private final TaskScheduler taskScheduler;
     private final RoomCoordinator roomCoordinator;
     private final RoomTimingProperties roomTimings;
+    private final Clock clock;
 
     private final ConcurrentMap<String, Set<String>> activeSessionsByUser = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PlayerPrincipal> sessionToPrincipal = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PendingDisconnect> pendingDisconnects = new ConcurrentHashMap<>();
 
     /**
-     * Creates the listener with the authoritative room, game, rate limit, and coordinator services.
+     * Creates the listener with the room, game, rate limit, scheduler, and coordinator services.
      *
-     * @param roomService              authoritative room registry
-     * @param gameLifecycleService     durable game and cleanup service
-     * @param rateLimitService         transient WebSocket rate-limit registry
-     * @param taskScheduler            runtime grace-period scheduler
-     * @param roomCoordinator          coordinator managing room-scoped concurrency boundaries
-     * @param roomTimings              room timing settings, including the allowed reconnect interval
+     * @param roomService          room registry
+     * @param gameLifecycleService game and cleanup service
+     * @param rateLimitService     transient WebSocket rate-limit registry
+     * @param taskScheduler        runtime grace-period scheduler
+     * @param roomCoordinator      coordinator managing room-scoped concurrency boundaries
+     * @param roomTimings          room timing settings, including the allowed reconnect interval
+     * @param clock                clock used for disconnect grace and cleanup timestamps
      */
-    @Autowired
     public WebSocketEventListener(RoomService roomService,
             GameLifecycleService gameLifecycleService,
             RateLimitService rateLimitService,
             @Qualifier("taskScheduler") TaskScheduler taskScheduler,
             RoomCoordinator roomCoordinator,
-            RoomTimingProperties roomTimings) {
+            RoomTimingProperties roomTimings,
+            Clock clock) {
         this.roomService = roomService;
         this.gameLifecycleService = gameLifecycleService;
         this.rateLimitService = rateLimitService;
         this.taskScheduler = taskScheduler;
         this.roomCoordinator = requireNonNull(roomCoordinator, "roomCoordinator cannot be null");
         this.roomTimings = roomTimings;
+        this.clock = requireNonNull(clock, "clock must not be null");
     }
     
     /**
@@ -137,11 +140,10 @@ public class WebSocketEventListener {
                     }
                 }
             }
-            // Registration and cleanup share this room boundary, so a reconnect that wins
-            // it cannot be evicted by an already-running grace timer.
-            registerActiveSession(playerPrincipal, sessionId);
-            // Reconcile room and game state inside the shared room boundary.
+            // Reconcile room and game state inside the shared room boundary before registering
+            // the active session so a failed reconnect does not block grace-expiry eviction.
             gameLifecycleService.markPlayerReconnected(roomId, playerName);
+            registerActiveSession(playerPrincipal, sessionId);
 
             PendingDisconnect pendingDisconnect = pendingDisconnects.remove(compositeName);
             if (pendingDisconnect != null) {
@@ -205,7 +207,7 @@ public class WebSocketEventListener {
                     return;
                 }
 
-                long disconnectDeadlineEpochMs = System.currentTimeMillis() + roomTimings.disconnectGracePeriodMs();
+                long disconnectDeadlineEpochMs = clock.millis() + roomTimings.disconnectGracePeriodMs();
                 Instant scheduleInstant = Instant.ofEpochMilli(disconnectDeadlineEpochMs);
 
                 Room room = roomService.getRoom(roomId);
@@ -308,7 +310,7 @@ public class WebSocketEventListener {
     public void scheduleRecoveredDisconnect(String roomId, String playerName, long deadlineEpochMs) {
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
         String compositeName = playerKey(principal);
-        long delay = Math.max(0, deadlineEpochMs - System.currentTimeMillis());
+        long delay = Math.max(0, deadlineEpochMs - clock.millis());
         logger.info("Scheduling recovered disconnect for player {} in room {} with delayMs={}", playerName, roomId, delay);
         try (MdcScope _ = MdcUtils.withMdc(roomId, playerName);
                 LockLease _ = acquireRoomLease(roomId)) {
@@ -519,8 +521,8 @@ public class WebSocketEventListener {
 
     /*
      * Runs transient-state cleanup on the scheduler so the publisher, which still holds
-     * the room lease while after-commit callbacks run, is not delayed by it. The cleanup
-     * takes the room lease itself and so runs once the publishing mutation has released it.
+     * the room lock while after-commit callbacks run, is not delayed by it. The cleanup
+     * takes the room lock itself and so runs once the publishing mutation has released it.
      * A rejected task (scheduler shut down) is dropped: this state is process-local and
      * disappears with the process.
      */
@@ -532,7 +534,7 @@ public class WebSocketEventListener {
                 } catch (Exception e) {
                     logger.warn("Error processing {} cleanup", description, e);
                 }
-            }, Instant.now());
+            }, clock.instant());
         } catch (TaskRejectedException e) {
             logger.warn("Scheduler rejected {} cleanup; dropping it", description);
         }

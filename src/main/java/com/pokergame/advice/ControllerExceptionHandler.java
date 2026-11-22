@@ -212,15 +212,15 @@ public class ControllerExceptionHandler {
     }
 
     /**
-     * Maps an unacceptable Accept header to HTTP 406. Logged at DEBUG.
+     * Maps an unacceptable Accept header to HTTP 406 with an empty body. Logged at DEBUG.
      *
      * @param ex not-acceptable failure
-     * @return structured not-acceptable response
+     * @return 406 Not Acceptable with no body
      */
     @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
-    public ResponseEntity<ProblemDetail> handleMediaTypeNotAcceptableException(HttpMediaTypeNotAcceptableException ex) {
+    public ResponseEntity<Void> handleMediaTypeNotAcceptableException(HttpMediaTypeNotAcceptableException ex) {
         logger.debug("Not acceptable media type: {}", ex.getMessage());
-        return errorResponse(HttpStatus.NOT_ACCEPTABLE, "Requested media type is not supported");
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE).build();
     }
 
     /**

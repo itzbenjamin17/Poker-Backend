@@ -29,6 +29,7 @@ import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.validation.BindException;
 import org.springframework.validation.method.MethodValidationException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -151,7 +152,7 @@ public class WebSocketExceptionHandler {
                 || throwable instanceof BindException
                 || throwable instanceof ValidationException
                 || throwable instanceof MethodValidationException
-                || (throwable != null && throwable.getClass().getName().contains("JacksonException"));
+                || throwable instanceof JacksonException;
     }
 
     private String extractValidationMessage(Throwable throwable) {
