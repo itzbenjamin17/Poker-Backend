@@ -12,11 +12,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import com.pokergame.config.GameTimingProperties;
-import com.pokergame.dto.internal.PlayerDecision;
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
-import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
@@ -143,27 +140,25 @@ class PlayerDepartureHandlerTest {
     }
 
     private void stubGameEndCapture() {
-        Answer<GameEndResponse> buildResponse = invocation -> {
+        Answer<PublicGameStateResponse> buildResponse = invocation -> {
             Game game = invocation.getArgument(0);
             Player winner = invocation.getArgument(1);
             boolean forfeit = invocation.getArgument(2);
             int maxPlayers = game != null ? game.getMaxPlayers() : 6;
-            List<PublicPlayerState> players = game != null && game.getPlayers() != null
+            List<PublicGameStateResponse.PlayerState> players = game != null && game.getPlayers() != null
                     ? game.getPlayers().stream()
-                    .map(p -> new PublicPlayerState(
+                    .map(p -> new PublicGameStateResponse.PlayerState(
                             p.getPlayerId(), p.getName(), p.getChips(), 0, "status", false, false, false,
                             false, false, null, List.of(), p.equals(winner), null, null, null, false))
                     .toList()
                     : List.of();
-            PublicGameStateResponse finalState = new PublicGameStateResponse(
+            PublicGameStateResponse.GameEnd gameEnd = PublicGameStateResponse.GameEnd.won(
+                    winner.getName(), winner.getChips(), forfeit, winner.getName() + " wins");
+            return new PublicGameStateResponse(
                     maxPlayers, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(),
                     players, null, null, List.of(winner.getName()), null, false, null, false, null,
                     false, null, true, null, List.of(), null, null, 1, ReadyGateState.CLOSED,
-                    mutableClock.millis(), game != null ? game.getStateRevision() : 1);
-            return new GameEndResponse(
-                    "GAME_END", game != null ? game.getGameId() : ROOM_ID,
-                    winner.getName(), winner.getChips(), forfeit,
-                    winner.getName() + " wins", finalState);
+                    mutableClock.millis(), game != null ? game.getStateRevision() : 1, null, null, gameEnd);
         };
         lenient().when(gameStateService.advanceRevisionAndBuildGameEnd(any(Game.class), any(Player.class), anyBoolean()))
                 .thenAnswer(buildResponse);
@@ -171,9 +166,14 @@ class PlayerDepartureHandlerTest {
                 .thenAnswer(buildResponse);
         lenient().when(gameStateService.advanceRevisionAndBuildAbandonment(any(Game.class))).thenAnswer(inv -> {
             Game game = inv.getArgument(0);
-            return new GameEndResponse(
-                    "GAME_END", game.getGameId(), null, null, false, true, "INACTIVITY",
-                    "Abandoned due to inactivity", null);
+            PublicGameStateResponse.GameEnd gameEnd = PublicGameStateResponse.GameEnd.abandoned(
+                    "INACTIVITY", "Abandoned due to inactivity");
+            return new PublicGameStateResponse(
+                    game.getMaxPlayers(), 0, List.of(), 0, game.getCurrentPhase(), 0, List.of(),
+                    List.of(), null, null, List.of(), null, false, null, false, null,
+                    false, null, true, null, List.of(), null, null, game.getHandNumber(),
+                    ReadyGateState.CLOSED, mutableClock.millis(), game.getStateRevision(),
+                    null, null, gameEnd);
         });
     }
 
@@ -319,7 +319,7 @@ class PlayerDepartureHandlerTest {
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of(playerToLeave)));
 
-            verify(gameStateService).sendGameEnd(any(GameEndResponse.class));
+            verify(gameStateService).sendGameEnd(eq(ROOM_ID), any(PublicGameStateResponse.class));
         }
 
         @Test
@@ -337,7 +337,7 @@ class PlayerDepartureHandlerTest {
             assertNotNull(getGameLocked(ROOM_ID));
             assertTrue(withRoomLock(ROOM_ID, () -> gameLifecycleService.playerExistsInGame(ROOM_ID, "Host")));
             verify(roomService, never()).destroyRoom(ROOM_ID);
-            verify(gameStateService, never()).sendGameEnd(any(GameEndResponse.class));
+            verify(gameStateService, never()).sendGameEnd(anyString(), any(PublicGameStateResponse.class));
         }
 
         @Test
@@ -353,7 +353,7 @@ class PlayerDepartureHandlerTest {
                 Player actor = game.getCurrentPlayer();
                 PlayerAction action = actor.getCurrentBet() < game.getCurrentHighestBet()
                         ? PlayerAction.CALL : PlayerAction.CHECK;
-                game.processPlayerDecision(actor, new PlayerDecision(action, 0, actor.getPlayerId()));
+                game.processPlayerDecision(actor, action, 0);
             }
             Player currentPlayer = game.getCurrentPlayer();
             Player playerToLeave = game.getPlayers().stream()
@@ -381,7 +381,7 @@ class PlayerDepartureHandlerTest {
             game.dealRiver();
             for (int i = 0; i < 2; i++) {
                 Player actor = game.getCurrentPlayer();
-                game.processPlayerDecision(actor, new PlayerDecision(PlayerAction.CHECK, 0, actor.getPlayerId()));
+                game.processPlayerDecision(actor, PlayerAction.CHECK, 0);
             }
             String lastToAct = game.getCurrentPlayer().getName();
             reset(gameStateService);
@@ -446,7 +446,8 @@ class PlayerDepartureHandlerTest {
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.removePlayers(ROOM_ID, List.of("Player2")));
 
-            verify(gameStateService).sendGameEnd(argThat(event -> event != null && event.winner().equals("Host")));
+            verify(gameStateService).sendGameEnd(eq(ROOM_ID),
+                    argThat(event -> event != null && event.gameEnd() != null && "Host".equals(event.gameEnd().winner())));
             assertTrue(game.isGameOver());
             assertTrue(game.getPlayers().stream().anyMatch(player -> player.getName().equals("Player2")));
         }
@@ -508,7 +509,7 @@ class PlayerDepartureHandlerTest {
                 assertTrue(game.getCommunityCards().isEmpty());
                 gameLifecycleService.abandonGameDueToInactivity(ROOM_ID);
                 assertTrue(game.isGameOver());
-                assertTrue(game.getGameEndResult().abandoned());
+                assertTrue(game.getGameEndResult().gameEnd().abandoned());
                 assertFalse(game.isFinalPotSettled());
             });
 
@@ -525,7 +526,7 @@ class PlayerDepartureHandlerTest {
                     .allMatch(p -> p.getHandRank() == HandRank.NO_HAND && p.getBestHand().isEmpty()));
             verifyNoInteractions(gameStateService);
             assertFalse(game.isFinalPotSettled());
-            assertTrue(game.getGameEndResult().abandoned());
+            assertTrue(game.getGameEndResult().gameEnd().abandoned());
         }
 
         @Test
@@ -663,7 +664,7 @@ class PlayerDepartureHandlerTest {
             assertEquals(potBefore, game.getPot());
             assertFalse(game.isGameOver());
             assertTrue(game.isPausedForDisconnectedSurvivor());
-            verify(gameStateService, never()).sendGameEnd(any(GameEndResponse.class));
+            verify(gameStateService, never()).sendGameEnd(anyString(), any(PublicGameStateResponse.class));
             verify(gameStateService, never()).broadcastGameState(any(Game.class));
 
             RoomSnapshotMapper mapper = new RoomSnapshotMapper(
@@ -685,10 +686,10 @@ class PlayerDepartureHandlerTest {
             assertEquals(BASE_EPOCH_MS + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
                     restored.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
             verify(taskScheduler, atLeastOnce()).schedule(any(Runnable.class), any(Instant.class));
-            verify(gameStateService, times(1)).sendGameEnd(any(GameEndResponse.class));
+            verify(gameStateService, times(1)).sendGameEnd(eq(ROOM_ID), any(PublicGameStateResponse.class));
 
             withRoomLock(ROOM_ID, () -> gameLifecycleService.markPlayerReconnected(ROOM_ID, restoredSurvivor.getName()));
-            verify(gameStateService, times(1)).sendGameEnd(any(GameEndResponse.class));
+            verify(gameStateService, times(1)).sendGameEnd(eq(ROOM_ID), any(PublicGameStateResponse.class));
             assertEquals(expectedSurvivorEndChips, restoredSurvivor.getChips());
         }
 
@@ -905,7 +906,7 @@ class PlayerDepartureHandlerTest {
                 departureHandler.handleTurnTimeout(inactiveGame);
             }
             assertTrue(inactiveGame.isGameOver());
-            assertTrue(inactiveGame.getGameEndResult().abandoned());
+            assertTrue(inactiveGame.getGameEndResult().gameEnd().abandoned());
             verify(roomService, never()).removeMembers(anyString(), anyList(), any());
         }
     }
@@ -929,15 +930,15 @@ class PlayerDepartureHandlerTest {
             reset(gameStateService);
             stubGameEndCapture();
 
-            GameEndResponse result = withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
-            assertEquals("GAME_END", result.type());
-            assertEquals("Host", result.winner());
-            assertTrue(result.isForfeit());
-            assertNotNull(result.finalState());
-            assertTrue(result.finalState().players().stream()
+            PublicGameStateResponse result = withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
+            assertNotNull(result.gameEnd());
+            assertEquals("Host", result.gameEnd().winner());
+            assertTrue(result.gameEnd().isForfeit());
+            assertTrue(result.players().stream()
                     .anyMatch(p -> p.name().equals("Host") && Boolean.TRUE.equals(p.isWinner())));
-            verify(gameStateService).sendGameEnd(
-                    argThat(event -> event != null && "Host".equals(event.winner()) && event.isForfeit()));
+            verify(gameStateService).sendGameEnd(eq(ROOM_ID),
+                    argThat(event -> event != null && event.gameEnd() != null
+                            && "Host".equals(event.gameEnd().winner()) && event.gameEnd().isForfeit()));
             verify(roomService, times(1)).removeMembers(eq(ROOM_ID), eq(List.of("Player2", "Player3")), any());
             verify(roomService, never()).leaveRoom(anyString(), anyString());
             verify(gameStateService).advanceRevisionAndBuildGameEnd(
@@ -955,9 +956,9 @@ class PlayerDepartureHandlerTest {
             assertNotNull(initialCleanup);
 
             reset(gameStateService);
-            GameEndResponse repeated = withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
+            PublicGameStateResponse repeated = withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
             assertSame(result, repeated);
-            verify(gameStateService, never()).sendGameEnd(any());
+            verify(gameStateService, never()).sendGameEnd(anyString(), any());
             assertEquals(initialCleanup, game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
 
             assertThrows(UnauthorisedActionException.class,
@@ -1006,17 +1007,15 @@ class PlayerDepartureHandlerTest {
 
                 Player actor = game.getCurrentPlayer();
                 if (!actor.equals(smallBlind)) {
-                    game.processPlayerDecision(actor, new PlayerDecision(
+                    game.processPlayerDecision(actor,
                             actor.getCurrentBet() < game.getCurrentHighestBet()
                                     ? PlayerAction.CALL : PlayerAction.CHECK,
-                            0, actor.getPlayerId()));
+                            0);
                 }
                 PlayerAction aggressiveAction = game.getCurrentPhase() == GamePhase.PRE_FLOP
                         ? PlayerAction.RAISE : PlayerAction.BET;
-                game.processPlayerDecision(smallBlind, new PlayerDecision(
-                        aggressiveAction, 500, smallBlind.getPlayerId()));
-                game.processPlayerDecision(bigBlind, new PlayerDecision(
-                        PlayerAction.CALL, 0, bigBlind.getPlayerId()));
+                game.processPlayerDecision(smallBlind, aggressiveAction, 500);
+                game.processPlayerDecision(bigBlind, PlayerAction.CALL, 0);
                 assertEquals(1020, game.getPot());
 
                 withRoomLock(gameId, () -> {
@@ -1038,15 +1037,16 @@ class PlayerDepartureHandlerTest {
 
                 ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
                 verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + gameId), captor.capture());
-                GameEndResponse result = captor.getAllValues().stream()
-                        .filter(GameEndResponse.class::isInstance)
-                        .map(GameEndResponse.class::cast)
+                PublicGameStateResponse result = captor.getAllValues().stream()
+                        .filter(PublicGameStateResponse.class::isInstance)
+                        .map(PublicGameStateResponse.class::cast)
+                        .filter(r -> r.gameEnd() != null)
                         .findFirst()
                         .orElseThrow();
-                assertEquals(1510, result.winnerChips(), "Unexpected payout for " + ending);
-                assertEquals(0, result.finalState().pot());
-                assertEquals(1510, result.finalState().players().stream()
-                        .filter(PublicPlayerState::isWinner).findFirst().orElseThrow().chips());
+                assertEquals(1510, result.gameEnd().winnerChips(), "Unexpected payout for " + ending);
+                assertEquals(0, result.pot());
+                assertEquals(1510, result.players().stream()
+                        .filter(PublicGameStateResponse.PlayerState::isWinner).findFirst().orElseThrow().chips());
                 assertNotNull(game.getScheduledTaskTime(ScheduledGameTask.CLEANUP),
                         "Cleanup deadline should be scheduled for " + ending);
 
@@ -1405,7 +1405,7 @@ class PlayerDepartureHandlerTest {
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertTrue(game.getCommunityCards().isEmpty());
             assertTrue(game.isGameOver());
-            assertTrue(game.getGameEndResult().abandoned());
+            assertTrue(game.getGameEndResult().gameEnd().abandoned());
             assertFalse(game.isFinalPotSettled());
 
             reset(gameStateService, roomService);
@@ -1422,7 +1422,7 @@ class PlayerDepartureHandlerTest {
                     .allMatch(p -> p.getHandRank() == HandRank.NO_HAND && p.getBestHand().isEmpty()));
             verifyNoInteractions(gameStateService);
             assertFalse(game.isFinalPotSettled());
-            assertTrue(game.getGameEndResult().abandoned());
+            assertTrue(game.getGameEndResult().gameEnd().abandoned());
         }
     }
 
@@ -1558,7 +1558,7 @@ class PlayerDepartureHandlerTest {
             assertEquals(1, stillActive.size());
             assertEquals(survivor.getName(), stillActive.getFirst().getName());
             assertNotNull(finalGame.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
-            verify(gameStateService, times(1)).sendGameEnd(any(GameEndResponse.class));
+            verify(gameStateService, times(1)).sendGameEnd(eq(ROOM_ID), any(PublicGameStateResponse.class));
         }
 
         @Test

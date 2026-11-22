@@ -3,8 +3,7 @@ package com.pokergame.service;
 import com.pokergame.util.RoomCoordinator;
 
 import com.pokergame.config.GameTimingProperties;
-import com.pokergame.dto.response.GameEndResponse;
-import com.pokergame.dto.response.PublicPlayerState;
+import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.ScheduledGameTask;
@@ -195,11 +194,11 @@ class GameCompletionHandlerTest {
 
             ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
             verify(messagingTemplate).convertAndSend(eq("/game/" + ROOM_ID), captor.capture());
-            GameEndResponse response = assertInstanceOf(GameEndResponse.class, captor.getValue());
-            assertEquals("GAME_END", response.type());
-            assertEquals("Player2", response.winner());
-            assertFalse(response.isForfeit());
-            assertFalse(response.abandoned());
+            PublicGameStateResponse response = assertInstanceOf(PublicGameStateResponse.class, captor.getValue());
+            assertNotNull(response.gameEnd());
+            assertEquals("Player2", response.gameEnd().winner());
+            assertFalse(response.gameEnd().isForfeit());
+            assertFalse(response.gameEnd().abandoned());
             assertTrue(game.isGameOver());
             assertTrue(testRoom.isFinished());
             assertNotNull(game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
@@ -223,9 +222,10 @@ class GameCompletionHandlerTest {
 
             ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
             verify(messagingTemplate).convertAndSend(eq("/game/" + ROOM_ID), captor.capture());
-            GameEndResponse response = assertInstanceOf(GameEndResponse.class, captor.getValue());
-            assertEquals("Host", response.winner());
-            assertTrue(response.isForfeit());
+            PublicGameStateResponse response = assertInstanceOf(PublicGameStateResponse.class, captor.getValue());
+            assertNotNull(response.gameEnd());
+            assertEquals("Host", response.gameEnd().winner());
+            assertTrue(response.gameEnd().isForfeit());
             assertSame(response, game.getGameEndResult());
             assertEquals(BASE_EPOCH_MS + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
                     game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
@@ -233,7 +233,7 @@ class GameCompletionHandlerTest {
         }
 
         @Test
-        @DisplayName("terminal carry-over flows once into frozen GameEndResponse and repeat call is idempotent")
+        @DisplayName("terminal carry-over flows once into frozen PublicGameStateResponse.GameEnd and repeat call is idempotent")
         void terminalCarryOver_FlowsIntoFrozenGameEndDtoOnce() {
             Player winner = Player.restoreBuilder().name("Host").playerId("host").chips(1000).holeCards(List.of())
                     .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false).allIn(false)
@@ -258,11 +258,12 @@ class GameCompletionHandlerTest {
 
             ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
             verify(messagingTemplate).convertAndSend(eq("/game/" + ROOM_ID), captor.capture());
-            GameEndResponse result = assertInstanceOf(GameEndResponse.class, captor.getValue());
-            assertEquals(1010, result.winnerChips());
-            assertEquals(0, result.finalState().pot());
-            assertEquals(1010, result.finalState().players().stream()
-                    .filter(PublicPlayerState::isWinner).findFirst().orElseThrow().chips());
+            PublicGameStateResponse result = assertInstanceOf(PublicGameStateResponse.class, captor.getValue());
+            assertNotNull(result.gameEnd());
+            assertEquals(1010, result.gameEnd().winnerChips());
+            assertEquals(0, result.pot());
+            assertEquals(1010, result.players().stream()
+                    .filter(PublicGameStateResponse.PlayerState::isWinner).findFirst().orElseThrow().chips());
             assertTrue(terminal.isFinalPotSettled());
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
@@ -342,8 +343,9 @@ class GameCompletionHandlerTest {
             assertTrue(game.isGameOver());
             assertTrue(testRoom.isFinished());
             assertNotNull(game.getGameEndResult());
-            assertTrue(game.getGameEndResult().abandoned());
-            assertEquals("INACTIVITY", game.getGameEndResult().reason());
+            assertNotNull(game.getGameEndResult().gameEnd());
+            assertTrue(game.getGameEndResult().gameEnd().abandoned());
+            assertEquals("INACTIVITY", game.getGameEndResult().gameEnd().reason());
             assertEquals(BASE_EPOCH_MS + 50_000L + DEFAULT_TIMINGS.gameEndDisplayDelayMs(),
                     game.getScheduledTaskTime(ScheduledGameTask.CLEANUP));
             verify(messagingTemplate).convertAndSend(eq("/game/" + ROOM_ID), eq(game.getGameEndResult()));
@@ -369,13 +371,13 @@ class GameCompletionHandlerTest {
             assertNull(game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT));
             assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
             assertThat(game.getTimerVersion(ScheduledGameTask.TURN_TIMEOUT)).isGreaterThan(timerVersionBefore);
-            verify(messagingTemplate, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(GameEndResponse.class));
+            verify(messagingTemplate, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(PublicGameStateResponse.class));
 
             // Repeat call is idempotent
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 completionHandler.abandonGameDueToInactivity(ROOM_ID);
             }
-            verify(messagingTemplate, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(GameEndResponse.class));
+            verify(messagingTemplate, times(1)).convertAndSend(eq("/game/" + ROOM_ID), any(PublicGameStateResponse.class));
         }
 
         @Test
@@ -399,7 +401,7 @@ class GameCompletionHandlerTest {
             assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
             assertTrue(game.getCommunityCards().isEmpty());
             assertTrue(game.isGameOver());
-            assertTrue(game.getGameEndResult().abandoned());
+            assertTrue(game.isAbandoned());
             assertFalse(game.isFinalPotSettled());
 
             clearInvocations(messagingTemplate, taskScheduler);
@@ -408,7 +410,7 @@ class GameCompletionHandlerTest {
             }
 
             assertFalse(game.isFinalPotSettled());
-            assertTrue(game.getGameEndResult().abandoned());
+            assertTrue(game.isAbandoned());
             verifyNoInteractions(messagingTemplate, taskScheduler);
         }
 
@@ -456,7 +458,7 @@ class GameCompletionHandlerTest {
 
                 completionHandler.handleGameEndWithForfeits(
                         ROOM_ID, game.getPlayers().getFirst(), Set.of("Player2", "Player3"));
-                GameEndResponse terminal = game.getGameEndResult();
+                PublicGameStateResponse terminal = game.getGameEndResult();
                 assertNotNull(terminal);
 
                 assertSame(terminal, completionHandler.getGameReview(ROOM_ID, "Host"));

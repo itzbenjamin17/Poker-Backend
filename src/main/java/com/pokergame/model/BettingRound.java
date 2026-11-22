@@ -1,20 +1,17 @@
 package com.pokergame.model;
 
-import com.pokergame.dto.internal.PlayerDecision;
-import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Tracks the current betting round for a {@link Game}: which actions a player may take,
@@ -99,23 +96,34 @@ final class BettingRound {
      * returning the resolved action, chip amount, and any player notification.
      *
      * @param player        acting player
-     * @param decision      requested action and bet amount
+     * @param action        requested poker action
+     * @param amount        requested wager amount (0 for non-wagering actions)
      * @param activePlayers active players in the hand
      * @param bigBlind      table big blind amount
-     * @return validated decision, chip amount to apply, and optional player notice
+     * @return validated action, chip amount to apply, and optional player notice
+     * @throws BadRequestException         when {@code action} is {@code null}, {@code amount < 0},
+     *                                     or betting rules reject the action
+     * @throws UnauthorisedActionException when {@code player} cannot act in the current hand
      */
-    ValidatedDecision validateDecision(Player player, PlayerDecision decision, List<Player> activePlayers, int bigBlind) {
+    ValidatedDecision validateDecision(
+            Player player, PlayerAction action, int amount, List<Player> activePlayers, int bigBlind) {
+        if (action == null) {
+            throw new BadRequestException("No action specified. Please select an action");
+        }
+        if (amount < 0) {
+            throw new BadRequestException("Amount must be positive");
+        }
         if (player == null || !player.canAct()) {
             throw new UnauthorisedActionException(
                     "Player cannot act in the current hand", "ACTION_NOT_AVAILABLE", "Player is not eligible to act");
         }
-        return switch (decision.action()) {
-            case FOLD -> new ValidatedDecision(decision, 0, null);
-            case CHECK -> validateCheck(player, decision);
-            case CALL -> validateCall(player, decision);
-            case BET -> validateBet(player, decision, activePlayers, bigBlind);
-            case RAISE -> validateRaise(player, decision, activePlayers, bigBlind);
-            case ALL_IN -> validateAllIn(player, decision, activePlayers, bigBlind);
+        return switch (action) {
+            case FOLD -> new ValidatedDecision(PlayerAction.FOLD, 0, null);
+            case CHECK -> validateCheck(player);
+            case CALL -> validateCall(player);
+            case BET -> validateBet(player, amount, activePlayers, bigBlind);
+            case RAISE -> validateRaise(player, amount, activePlayers, bigBlind);
+            case ALL_IN -> validateAllIn(player, activePlayers, bigBlind);
         };
     }
 
@@ -267,17 +275,17 @@ final class BettingRound {
                 .anyMatch(p -> p.canAct() && p.getCurrentBet() < highestBet);
     }
 
-    private ValidatedDecision validateCheck(Player player, PlayerDecision decision) {
+    private ValidatedDecision validateCheck(Player player) {
         int owed = amountOwed(player);
         if (owed > 0) {
             throw new UnauthorisedActionException(
                     "Cannot check when there is an active bet. You must call, raise, or fold.",
                     "CHECK_NOT_AVAILABLE", "To call: " + owed);
         }
-        return new ValidatedDecision(decision, 0, null);
+        return new ValidatedDecision(PlayerAction.CHECK, 0, null);
     }
 
-    private ValidatedDecision validateCall(Player player, PlayerDecision decision) {
+    private ValidatedDecision validateCall(Player player) {
         int owed = amountOwed(player);
         if (owed == 0) {
             throw new UnauthorisedActionException("There is no call amount owed", "CALL_NOT_AVAILABLE", "Call amount: 0");
@@ -285,15 +293,13 @@ final class BettingRound {
         if (owed > player.getChips()) {
             logger.info("Player {} attempted CALL for {} with only {} chips. Converting to ALL_IN",
                     player.getName(), owed, player.getChips());
-            PlayerDecision appliedDecision = new PlayerDecision(PlayerAction.ALL_IN, 0, decision.playerId());
-            return new ValidatedDecision(appliedDecision, 0,
+            return new ValidatedDecision(PlayerAction.ALL_IN, 0,
                     "Your call was converted to all-in because the call amount exceeded your available chips.");
         }
-        return new ValidatedDecision(decision, owed, null);
+        return new ValidatedDecision(PlayerAction.CALL, owed, null);
     }
 
-    private ValidatedDecision validateBet(Player player, PlayerDecision decision, List<Player> activePlayers, int bigBlind) {
-        int amount = decision.amount();
+    private ValidatedDecision validateBet(Player player, int amount, List<Player> activePlayers, int bigBlind) {
         requireOpponentWhoCanAct(player, activePlayers, PlayerAction.BET);
         if (currentHighestBet > 0) {
             throw new UnauthorisedActionException(
@@ -311,11 +317,10 @@ final class BettingRound {
             throw new BadRequestException("Bet amount must be at least the big blind of " + bigBlind,
                     "MIN_BET", "Min bet: " + bigBlind + "; yours: " + amount);
         }
-        return new ValidatedDecision(decision, amount, null);
+        return new ValidatedDecision(PlayerAction.BET, amount, null);
     }
 
-    private ValidatedDecision validateRaise(Player player, PlayerDecision decision, List<Player> activePlayers, int bigBlind) {
-        int amount = decision.amount();
+    private ValidatedDecision validateRaise(Player player, int amount, List<Player> activePlayers, int bigBlind) {
         if (currentHighestBet == 0) {
             throw new UnauthorisedActionException(
                     "There is no active wager to raise", "RAISE_NOT_AVAILABLE", "Use BET when no wager is active");
@@ -347,16 +352,16 @@ final class BettingRound {
                     "Raise increment must be at least " + fullRaise + ". You tried to raise by " + raiseIncrement,
                     "MIN_RAISE", "Min raise: " + minimumRaise + "; yours: " + amount);
         }
-        return new ValidatedDecision(decision, amount, null);
+        return new ValidatedDecision(PlayerAction.RAISE, amount, null);
     }
 
-    private ValidatedDecision validateAllIn(Player player, PlayerDecision decision, List<Player> activePlayers, int bigBlind) {
+    private ValidatedDecision validateAllIn(Player player, List<Player> activePlayers, int bigBlind) {
         int totalBetAfterAllIn = player.getCurrentBet() + player.getChips();
         if (totalBetAfterAllIn > currentHighestBet) {
             requireOpponentWhoCanAct(player, activePlayers, PlayerAction.ALL_IN);
             requirePlayerAllowedToRaise(player, bigBlind);
         }
-        return new ValidatedDecision(decision, 0, null);
+        return new ValidatedDecision(PlayerAction.ALL_IN, 0, null);
     }
 
     // A player cannot bet or raise when every remaining opponent is already all-in.
@@ -449,7 +454,7 @@ final class BettingRound {
         return Map.copyOf(previousBets);
     }
 
-    /** Validated player decision with the chip amount to apply and optional notice for the player. */
-    record ValidatedDecision(PlayerDecision decision, int amount, String playerActionNotice) {
+    /** Validated player action with the chip amount to apply and optional notice for the player. */
+    record ValidatedDecision(PlayerAction action, int amount, String playerActionNotice) {
     }
 }

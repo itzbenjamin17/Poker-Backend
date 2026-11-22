@@ -1,7 +1,7 @@
 package com.pokergame.service;
 
 import com.pokergame.config.GameTimingProperties;
-import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -110,13 +110,13 @@ class GameCompletionHandler {
         }
         game.abandonDueToInactivity();
         timerRegistry.cancelAllForGame(gameId, true);
-        GameEndResponse event = gameStateService.advanceRevisionAndBuildAbandonment(game);
+        PublicGameStateResponse event = gameStateService.advanceRevisionAndBuildAbandonment(game);
         game.setGameEndResult(event);
 
         if (room != null) {
             room.setFinished(true);
         }
-        gameStateService.sendGameEnd(event);
+        gameStateService.sendGameEnd(gameId, event);
         long displayDelayMs = timings.gameEndDisplayDelayMs();
         taskScheduler.scheduleGameCleanup(gameId, displayDelayMs);
         logger.info("Game {} abandoned due to inactivity; scheduled {}ms cleanup", gameId, displayDelayMs);
@@ -140,13 +140,13 @@ class GameCompletionHandler {
      *
      * @param gameId     the unique ID of the game
      * @param playerName the requesting player's name
-     * @return the final {@link GameEndResponse}
+     * @return the final {@link PublicGameStateResponse}
      * @throws ResourceNotFoundException   if the game does not exist or has expired
      * @throws ConflictException           if the game has not finished yet
      * @throws UnauthorisedActionException if {@code playerName} was not in the finished game
      * @throws IllegalStateException       if the finished game has no stored game end result
      */
-    GameEndResponse getGameReview(String gameId, String playerName) {
+    PublicGameStateResponse getGameReview(String gameId, String playerName) {
         Game game = activeGames.get(gameId);
         if (game == null || isGameExpired(game)) {
             throw new ResourceNotFoundException("Game not found");
@@ -155,7 +155,7 @@ class GameCompletionHandler {
             throw new ConflictException("Game has not finished");
         }
 
-        GameEndResponse result = game.getGameEndResult();
+        PublicGameStateResponse result = game.getGameEndResult();
         if (result == null) {
             throw new IllegalStateException("Finished game " + gameId + " has no stored game end result");
         }
@@ -233,19 +233,18 @@ class GameCompletionHandler {
             room.setFinished(true);
         }
 
-        GameEndResponse event = game.getGameEndResult();
+        PublicGameStateResponse event = game.getGameEndResult();
         if (event == null) {
             event = gameStateService.advanceRevisionAndBuildGameEnd(game, winner, isForfeit);
             game.setGameEndResult(event);
         }
-        gameStateService.sendGameEnd(event);
+        gameStateService.sendGameEnd(gameId, event);
         taskScheduler.scheduleGameCleanup(gameId, timings.gameEndDisplayDelayMs());
     }
 
-    private static boolean wasPlayerInGame(Game game, GameEndResponse result, String playerName) {
-        boolean inFinalState = result.finalState() != null
-                && result.finalState().players() != null
-                && result.finalState().players().stream().anyMatch(p -> p.name().equals(playerName));
+    private static boolean wasPlayerInGame(Game game, PublicGameStateResponse result, String playerName) {
+        boolean inFinalState = result.players() != null
+                && result.players().stream().anyMatch(p -> p.name().equals(playerName));
         boolean inGameRoster = game.getPlayers().stream().anyMatch(p -> p.getName().equals(playerName));
         return inFinalState || inGameRoster;
     }

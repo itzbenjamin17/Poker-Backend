@@ -1,7 +1,7 @@
 package com.pokergame.service;
 
 import com.pokergame.config.GameTimingProperties;
-import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.exception.BadRequestException;
@@ -174,12 +174,12 @@ class PlayerDepartureHandler {
      *
      * @param gameId     the unique ID of the game
      * @param playerName the claiming player's name
-     * @return the final {@link GameEndResponse}
+     * @return the final {@link PublicGameStateResponse}
      * @throws ResourceNotFoundException   if the game or room does not exist or has expired
      * @throws BadRequestException         if the game was already abandoned due to inactivity
      * @throws UnauthorisedActionException if {@code playerName} cannot claim a win right now
      */
-    GameEndResponse claimWin(String gameId, String playerName) {
+    PublicGameStateResponse claimWin(String gameId, String playerName) {
         Game game = activeGames.get(gameId);
         if (game == null || completionHandler.isGameExpired(game)) {
             throw new ResourceNotFoundException("Game not found");
@@ -191,8 +191,7 @@ class PlayerDepartureHandler {
 
         completionHandler.rejectExpiredActivity(gameId);
         if (game.isGameOver()) {
-            GameEndResponse retained = game.getGameEndResult();
-            if (retained != null && retained.abandoned()) {
+            if (game.isAbandoned()) {
                 throw new BadRequestException(
                         "Game was abandoned due to inactivity.",
                         "GAME_ABANDONED",

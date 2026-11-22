@@ -1,10 +1,10 @@
 package com.pokergame.service;
 
 import com.pokergame.config.GameTimingProperties;
-import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.model.Game;
+import com.pokergame.model.TurnOutcome;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -176,7 +176,6 @@ class HandProgressionService {
             case RIVER -> {
                 game.conductShowdown();
                 gameStateService.broadcastShowdownResults(game);
-                gameStateService.broadcastAutoAdvanceComplete(game);
                 yield true;
             }
             case SHOWDOWN -> throw new IllegalStateException(

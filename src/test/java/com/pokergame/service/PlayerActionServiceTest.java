@@ -1,30 +1,45 @@
 package com.pokergame.service;
 
-import com.pokergame.util.RoomCoordinator;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
-import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.GamePhase;
-import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
-import com.pokergame.enums.Rank;
-import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.ScheduledGameTask;
-import com.pokergame.enums.Suit;
 import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.model.*;
-import org.awaitility.Awaitility;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-
+import com.pokergame.model.Game;
+import com.pokergame.model.Player;
+import com.pokergame.model.TurnOutcome;
+import com.pokergame.util.LockLease;
+import com.pokergame.util.RoomCoordinator;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -39,11 +54,16 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-import com.pokergame.exception.ResourceNotFoundException;
-import com.pokergame.util.LockLease;
+import org.awaitility.Awaitility;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 /**
  * Unit tests for the PlayerActionService class.
@@ -144,7 +164,7 @@ class PlayerActionServiceTest {
                 () -> playerActionService.processPlayerAction(GAME_ID, request, "Player1"));
 
         assertEquals("This game has finished.", exception.getMessage());
-        verify(spyGame, never()).processPlayerDecision(any(), any());
+        verify(spyGame, never()).processPlayerDecision(any(), any(), anyInt());
     }
 
     @Test
@@ -365,7 +385,7 @@ class PlayerActionServiceTest {
         assertEquals(0, currentPlayer.getChips());
         assertTrue(currentPlayer.isAllIn());
         verify(gameStateService, atLeastOnce()).sendPrivatePlayerNotification(eq(GAME_ID), eq(currentPlayer.getName()),
-                contains("converted to all-in"), eq(ResponseMessage.PLAYER_NOTIFICATION));
+                contains("converted to all-in"));
     }
 
     // ==================== processPlayerAction - All-In Tests ====================
@@ -677,7 +697,7 @@ class PlayerActionServiceTest {
         assertTrue(raiser.getCurrentBet() > previousBet);
         assertEquals(raiser.getCurrentBet(), gameWithAllIn.getCurrentHighestBet());
         verify(gameStateService, never()).sendPrivatePlayerNotification(eq(GAME_ID), eq(raiser.getName()),
-                contains("converted to a call"), any());
+                contains("converted to a call"));
     }
 
     // ==================== Pot Updates Tests ====================
@@ -1040,7 +1060,7 @@ class PlayerActionServiceTest {
     void processPlayerAction_PostProcessingFails_ShouldPropagateWithoutRebroadcast() {
         Game spyGame = spy(testGame);
         when(activeGames.get(GAME_ID)).thenReturn(spyGame);
-        doReturn(outcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING)).when(spyGame).processPlayerDecision(any(), any());
+        doReturn(outcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING)).when(spyGame).processPlayerDecision(any(), any(), anyInt());
         doThrow(new IllegalStateException("scheduler unavailable")).when(readinessCoordinator)
                 .applyTurnOutcomeAndOpenReadyGateIfNeeded(eq(spyGame), any(TurnOutcome.class), eq(true));
 
@@ -1103,7 +1123,7 @@ class PlayerActionServiceTest {
 
         assertEquals("Actions are not allowed while the game is auto-advancing.", exception.getMessage());
         assertEquals("HAND_ADVANCING", exception.actionErrorCode());
-        verify(spyGame, never()).processPlayerDecision(any(), any());
+        verify(spyGame, never()).processPlayerDecision(any(), any(), anyInt());
         verifyNoInteractions(gameStateService);
     }
 
@@ -1170,7 +1190,7 @@ class PlayerActionServiceTest {
                 () -> playerActionService.processPlayerAction(GAME_ID, request, playerName));
 
         assertEquals("No action specified. Please select an action", exception.getMessage());
-        verify(spyGame, never()).processPlayerDecision(any(), any());
+        verify(spyGame, never()).processPlayerDecision(any(), any(), anyInt());
         verifyNoInteractions(gameStateService);
     }
 
@@ -1219,7 +1239,7 @@ class PlayerActionServiceTest {
     void processPlayerAction_CallWithZeroAmount_MatchesOutstandingBet() {
         // Finding 4: assert the observable betting outcome of a zero-amount CALL (the actor now
         // matches the highest bet, the pot grew by the owed call and the turn moved on) instead of
-        // peeking at the internal PlayerDecision amount. A real Game, not a spy, proves the effect.
+        // peeking at internal decision arguments. A real Game, not a spy, proves the effect.
         when(activeGames.get(GAME_ID)).thenReturn(testGame);
         Player currentPlayer = testGame.getCurrentPlayer();
         int highestBet = testGame.getCurrentHighestBet();

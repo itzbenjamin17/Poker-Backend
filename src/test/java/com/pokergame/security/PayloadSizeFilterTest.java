@@ -1,14 +1,13 @@
 package com.pokergame.security;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import tools.jackson.databind.ObjectMapper;
 
 import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletInputStream;
@@ -23,12 +22,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Unit tests for {@link PayloadSizeFilter}.
  */
 @Tag("unit")
-@ExtendWith(MockitoExtension.class)
 @DisplayName("PayloadSizeFilter")
 class PayloadSizeFilterTest {
 
-    @InjectMocks
     private PayloadSizeFilter filter;
+
+    @BeforeEach
+    void setUp() {
+        filter = new PayloadSizeFilter(new ObjectMapper());
+    }
 
     @Test
     @DisplayName("should allow request when Content-Length is equal to max limit (10,240 bytes)")

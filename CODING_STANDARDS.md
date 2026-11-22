@@ -5,7 +5,7 @@ Reviewers enforce these standards on every change. System architecture and runti
 ## Naming And Javadoc
 
 - **Plain-English identifiers:** Use clear verb phrases (`removePlayers`, `selectNextHost`, `deleteGameAndRoom`, `buildLiveGameState`, `PostSaveActions`).
-- **Domain terms:** Prefer plain-English terms from [GLOSSARY.md](GLOSSARY.md) (`RoomSnapshot`, `RecoveredRoom`, `RoomSnapshotMapper`, `GameResultState`, `pausedForDisconnectedSurvivor`, `timerVersion`, and plain *"room lock"*); avoid internal jargon (*durable mutation* outside `@DurableMutation`, *terminal result / terminal review / terminal room*, *cleanup intent*, *rehydrated*, *state image*, *authoritative mutation*, *room lease*, or *coordination lease*).
+- **Domain terms:** Prefer plain-English terms from [GLOSSARY.md](GLOSSARY.md) (`RoomSnapshot`, `RecoveredRoom`, `RoomSnapshotMapper`, `FinalGameState`, `GameEndState`, `pausedForDisconnectedSurvivor`, `timerVersion`, and plain *"room lock"*); avoid internal jargon (*durable mutation* outside `@DurableMutation`, *terminal result / terminal review / terminal room*, *cleanup intent*, *rehydrated*, *state image*, *authoritative mutation*, *room lease*, or *coordination lease*).
 - **Javadoc scope:** Document classes and non-`private` methods (`public`, `protected`, and package-private collaborator entry points) in plain English covering contract, side effects, and exceptions, with `@param`, `@return`, and `@throws` tags where relevant; leave trivial getters and setters undocumented.
 - **Private methods and inline comments:** Let descriptive `private` method names carry intent without Javadoc; add a short comment only to explain a non-obvious *why*, domain edge case, room-lock assumption, or ordering dependency.
 
@@ -30,10 +30,10 @@ Reviewers enforce these standards on every change. System architecture and runti
 
 ## Response Envelope
 
-- **Commands (`POST`) and `/room/{roomId}` broadcasts** return `ApiResponse<T>` (`message` + `data`).
-- **Queries (`GET`)** return the resource DTO directly at the top level as a bare DTO.
-- **Errors** use `ControllerExceptionHandler` (`application/problem+json`).
-- See [docs/ai/PROJECT.md](docs/ai/PROJECT.md#response-envelope-convention) for why (frontend decoder coupling).
+- **REST endpoints** return the resource DTO directly at the top level (`TokenResponse`, `RoomDataResponse`, `PublicGameStateResponse`, `PrivatePlayerState`) or `204 No Content` (`POST /api/room/{roomId}/leave`, `POST /api/room/{roomId}/start-game`).
+- **WebSocket broadcasts and private feedback** send bare DTOs directly (`RoomDataResponse` on `/room/{roomId}`, `PublicGameStateResponse` on `/game/{gameId}`, `PrivatePlayerState` and `PlayerFeedbackResponse` on `/user/queue/private`).
+- **Errors** return Spring `ProblemDetail` (`application/problem+json`) from `ControllerExceptionHandler` and security/rate/payload filters.
+- See [docs/ai/PROJECT.md](docs/ai/PROJECT.md#api-and-real-time-contracts) for frontend decoder coordination.
 
 ## Tests
 

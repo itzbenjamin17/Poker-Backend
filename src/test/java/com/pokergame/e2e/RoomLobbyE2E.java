@@ -45,7 +45,7 @@ class RoomLobbyE2E extends AbstractE2ESupport {
 
             assertThat(joinData.path("roomId").asText()).isEqualTo(roomId);
             assertThat(roomInfo.path("roomName").asText()).isEqualTo(roomName);
-            assertThat(roomInfo.path("currentPlayers").asInt()).isEqualTo(2);
+            assertThat(roomInfo.path("players")).hasSize(2);
             assertThat(roomInfo.path("canStartGame").asBoolean()).isTrue();
         }
 
@@ -58,12 +58,13 @@ class RoomLobbyE2E extends AbstractE2ESupport {
             String hostToken = createData.path("token").asText();
             String playerToken = joinRoom(roomName, "PlayerDelta").path("token").asText();
 
-            String leaveResponse = leaveRoom(roomId, playerToken);
+            int leaveStatus = leaveRoom(roomId, playerToken);
             JsonNode roomInfo = getRoomData(roomId, hostToken);
 
-            assertThat(leaveResponse).contains("Successfully left room");
-            assertThat(roomInfo.path("currentPlayers").asInt()).isEqualTo(1);
-            assertThat(roomInfo.path("hostName").asText()).isEqualTo("HostGamma");
+            assertThat(leaveStatus).isEqualTo(204);
+            assertThat(roomInfo.path("players")).hasSize(1);
+            assertThat(roomInfo.path("players").get(0).path("name").asText()).isEqualTo("HostGamma");
+            assertThat(roomInfo.path("players").get(0).path("isHost").asBoolean()).isTrue();
         }
 
         @Test
@@ -73,12 +74,12 @@ class RoomLobbyE2E extends AbstractE2ESupport {
             String roomId = createData.path("roomId").asText();
             String hostToken = createData.path("token").asText();
 
-            String leaveResponse = leaveRoom(roomId, hostToken);
+            int leaveStatus = leaveRoom(roomId, hostToken);
 
             HttpClientErrorException notFound = assertThrows(HttpClientErrorException.class,
                     () -> getRoomData(roomId, hostToken));
 
-            assertThat(leaveResponse).contains("Successfully left room");
+            assertThat(leaveStatus).isEqualTo(204);
             assertThat(notFound.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
 

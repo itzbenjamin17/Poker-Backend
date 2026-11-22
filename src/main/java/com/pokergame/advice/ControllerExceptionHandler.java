@@ -1,6 +1,5 @@
 package com.pokergame.advice;
 
-import com.pokergame.dto.response.ErrorResponse;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ConflictException;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -10,6 +9,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -24,7 +25,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * Global REST exception handler mapping domain, security, and Spring Web exceptions
- * to standardized {@link ErrorResponse} payloads.
+ * to standardized RFC 9457 {@link ProblemDetail} payloads.
  *
  * <p>Logging Strategy:
  * <ul>
@@ -46,7 +47,7 @@ public class ControllerExceptionHandler {
      * @return structured bad-request response
      */
     @ExceptionHandler(BadRequestException.class)
-    public ResponseEntity<ErrorResponse> handleBadRequestException(BadRequestException ex) {
+    public ResponseEntity<ProblemDetail> handleBadRequestException(BadRequestException ex) {
         logger.warn("Bad request: {}", ex.getMessage());
         return errorResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
     }
@@ -58,7 +59,7 @@ public class ControllerExceptionHandler {
      * @return structured not-found response
      */
     @ExceptionHandler(ResourceNotFoundException.class)
-    public ResponseEntity<ErrorResponse> handleNotFoundException(ResourceNotFoundException ex) {
+    public ResponseEntity<ProblemDetail> handleNotFoundException(ResourceNotFoundException ex) {
         logger.warn("Resource not found: {}", ex.getMessage());
         return errorResponse(HttpStatus.NOT_FOUND, ex.getMessage());
     }
@@ -70,7 +71,7 @@ public class ControllerExceptionHandler {
      * @return structured conflict response
      */
     @ExceptionHandler(ConflictException.class)
-    public ResponseEntity<ErrorResponse> handleConflictException(ConflictException ex) {
+    public ResponseEntity<ProblemDetail> handleConflictException(ConflictException ex) {
         logger.warn("Conflict: {}", ex.getMessage());
         return errorResponse(HttpStatus.CONFLICT, ex.getMessage());
     }
@@ -82,14 +83,15 @@ public class ControllerExceptionHandler {
      * @return structured too-many-requests response
      */
     @ExceptionHandler(TooManyRequestsException.class)
-    public ResponseEntity<ErrorResponse> handleTooManyRequestsException(TooManyRequestsException ex) {
+    public ResponseEntity<ProblemDetail> handleTooManyRequestsException(TooManyRequestsException ex) {
         logger.warn("Rate limit exceeded: {}", ex.getMessage());
-        ResponseEntity<ErrorResponse> response = errorResponse(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
+        ResponseEntity<ProblemDetail> response = errorResponse(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
         if (ex.getRetryAfterSeconds() <= 0) {
             return response;
         }
         return ResponseEntity.status(response.getStatusCode())
                 .header("Retry-After", Long.toString(ex.getRetryAfterSeconds()))
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
                 .body(response.getBody());
     }
 
@@ -101,7 +103,7 @@ public class ControllerExceptionHandler {
      * @return structured unauthorized response
      */
     @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ErrorResponse> handleAccessDeniedException(AccessDeniedException ex) {
+    public ResponseEntity<ProblemDetail> handleAccessDeniedException(AccessDeniedException ex) {
         logger.warn("Access denied: {}", ex.getMessage());
         return errorResponse(HttpStatus.UNAUTHORIZED, ex.getMessage());
     }
@@ -113,7 +115,7 @@ public class ControllerExceptionHandler {
      * @return structured forbidden response
      */
     @ExceptionHandler(UnauthorisedActionException.class)
-    public ResponseEntity<ErrorResponse> handleUnauthorizedActionException(UnauthorisedActionException ex) {
+    public ResponseEntity<ProblemDetail> handleUnauthorizedActionException(UnauthorisedActionException ex) {
         logger.warn("Unauthorized action: {}", ex.getMessage());
         return errorResponse(HttpStatus.FORBIDDEN, ex.getMessage());
     }
@@ -125,7 +127,7 @@ public class ControllerExceptionHandler {
      * @return structured forbidden response
      */
     @ExceptionHandler(SecurityException.class)
-    public ResponseEntity<ErrorResponse> handleSecurityException(SecurityException ex) {
+    public ResponseEntity<ProblemDetail> handleSecurityException(SecurityException ex) {
         logger.warn("Security exception: {}", ex.getMessage());
         return errorResponse(HttpStatus.FORBIDDEN, "Access denied");
     }
@@ -138,7 +140,7 @@ public class ControllerExceptionHandler {
      * @return structured bad-request response
      */
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalArgumentException(IllegalArgumentException ex) {
+    public ResponseEntity<ProblemDetail> handleIllegalArgumentException(IllegalArgumentException ex) {
         logger.warn("Illegal argument: {}", ex.getMessage());
         return errorResponse(HttpStatus.BAD_REQUEST, "Invalid request");
     }
@@ -150,7 +152,7 @@ public class ControllerExceptionHandler {
      * @return structured bad-request response
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorResponse> handleMethodArgumentNotValidException(MethodArgumentNotValidException ex) {
+    public ResponseEntity<ProblemDetail> handleMethodArgumentNotValidException(MethodArgumentNotValidException ex) {
         String message = ex.getBindingResult().getFieldErrors().stream()
                 .findFirst()
                 .map(DefaultMessageSourceResolvable::getDefaultMessage)
@@ -167,7 +169,7 @@ public class ControllerExceptionHandler {
      * @return structured bad-request response
      */
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<ErrorResponse> handleHttpMessageNotReadableException(HttpMessageNotReadableException ex) {
+    public ResponseEntity<ProblemDetail> handleHttpMessageNotReadableException(HttpMessageNotReadableException ex) {
         logger.warn("Malformed JSON request: {}", ex.getMessage());
         return errorResponse(HttpStatus.BAD_REQUEST, "Malformed JSON request payload");
     }
@@ -179,7 +181,7 @@ public class ControllerExceptionHandler {
      * @return structured bad-request response
      */
     @ExceptionHandler(MissingServletRequestParameterException.class)
-    public ResponseEntity<ErrorResponse> handleMissingServletRequestParameterException(MissingServletRequestParameterException ex) {
+    public ResponseEntity<ProblemDetail> handleMissingServletRequestParameterException(MissingServletRequestParameterException ex) {
         logger.warn("Missing request parameter: {}", ex.getMessage());
         return errorResponse(HttpStatus.BAD_REQUEST, "Required parameter '" + ex.getParameterName() + "' is missing");
     }
@@ -192,7 +194,7 @@ public class ControllerExceptionHandler {
      * @return structured method-not-allowed response
      */
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
-    public ResponseEntity<ErrorResponse> handleMethodNotSupportedException(HttpRequestMethodNotSupportedException ex) {
+    public ResponseEntity<ProblemDetail> handleMethodNotSupportedException(HttpRequestMethodNotSupportedException ex) {
         logger.debug("Method not allowed: {}", ex.getMessage());
         return errorResponse(HttpStatus.METHOD_NOT_ALLOWED, "HTTP method not supported for this endpoint");
     }
@@ -204,7 +206,7 @@ public class ControllerExceptionHandler {
      * @return structured unsupported-media-type response
      */
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
-    public ResponseEntity<ErrorResponse> handleMediaTypeNotSupportedException(HttpMediaTypeNotSupportedException ex) {
+    public ResponseEntity<ProblemDetail> handleMediaTypeNotSupportedException(HttpMediaTypeNotSupportedException ex) {
         logger.debug("Unsupported media type: {}", ex.getMessage());
         return errorResponse(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Content-Type not supported");
     }
@@ -216,7 +218,7 @@ public class ControllerExceptionHandler {
      * @return structured not-acceptable response
      */
     @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
-    public ResponseEntity<ErrorResponse> handleMediaTypeNotAcceptableException(HttpMediaTypeNotAcceptableException ex) {
+    public ResponseEntity<ProblemDetail> handleMediaTypeNotAcceptableException(HttpMediaTypeNotAcceptableException ex) {
         logger.debug("Not acceptable media type: {}", ex.getMessage());
         return errorResponse(HttpStatus.NOT_ACCEPTABLE, "Requested media type is not supported");
     }
@@ -241,12 +243,14 @@ public class ControllerExceptionHandler {
      * @return structured internal-server-error response
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleException(Exception ex) {
+    public ResponseEntity<ProblemDetail> handleException(Exception ex) {
         logger.error("Unexpected error", ex);
         return errorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred");
     }
 
-    private ResponseEntity<ErrorResponse> errorResponse(HttpStatus status, String message) {
-        return ResponseEntity.status(status).body(new ErrorResponse(status.value(), status.getReasonPhrase(), message));
+    private ResponseEntity<ProblemDetail> errorResponse(HttpStatus status, String message) {
+        return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(ProblemDetail.forStatusAndDetail(status, message));
     }
 }

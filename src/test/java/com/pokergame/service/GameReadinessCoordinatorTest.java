@@ -3,7 +3,6 @@ package com.pokergame.service;
 import com.pokergame.util.RoomCoordinator;
 
 import com.pokergame.config.GameTimingProperties;
-import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
@@ -12,6 +11,7 @@ import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
+import com.pokergame.model.TurnOutcome;
 import com.pokergame.testutil.MutableClock;
 import com.pokergame.testutil.TestTimings;
 import com.pokergame.util.LockLease;
@@ -165,7 +165,7 @@ class GameReadinessCoordinatorTest {
 
             assertTrue(game.isGameOver());
             verify(gameStateService).advanceRevisionAndBuildGameEnd(game, host, false);
-            verify(gameStateService).sendGameEnd(any());
+            verify(gameStateService).sendGameEnd(eq(GAME_ID), any());
         }
     }
 

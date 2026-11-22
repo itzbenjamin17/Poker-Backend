@@ -80,9 +80,10 @@ class ControllerExceptionHandlerMvcIT {
     void tooManyRequests_Returns429() throws Exception {
         mockMvc.perform(get("/probe/too-many-requests"))
                 .andExpect(status().isTooManyRequests())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.status").value(429))
-                .andExpect(jsonPath("$.error").value("Too Many Requests"))
-                .andExpect(jsonPath("$.message").value("Slow down"))
+                .andExpect(jsonPath("$.title").value("Too Many Requests"))
+                .andExpect(jsonPath("$.detail").value("Slow down"))
                 .andExpect(header().doesNotExist("Retry-After"));
     }
 
@@ -91,8 +92,9 @@ class ControllerExceptionHandlerMvcIT {
     void tooManyRequestsWithWait_Returns429WithRetryAfter() throws Exception {
         mockMvc.perform(get("/probe/too-many-requests-with-wait"))
                 .andExpect(status().isTooManyRequests())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(header().string("Retry-After", "42"))
-                .andExpect(jsonPath("$.message").value("Wait a bit"));
+                .andExpect(jsonPath("$.detail").value("Wait a bit"));
     }
 
     @Test
@@ -101,8 +103,8 @@ class ControllerExceptionHandlerMvcIT {
         mockMvc.perform(get("/probe/security"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403))
-                .andExpect(jsonPath("$.error").value("Forbidden"))
-                .andExpect(jsonPath("$.message").value("Access denied"))
+                .andExpect(jsonPath("$.title").value("Forbidden"))
+                .andExpect(jsonPath("$.detail").value("Access denied"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("internal policy"))));
     }
@@ -113,8 +115,8 @@ class ControllerExceptionHandlerMvcIT {
         mockMvc.perform(get("/probe/unauthorised"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403))
-                .andExpect(jsonPath("$.error").value("Forbidden"))
-                .andExpect(jsonPath("$.message").value("Action not permitted"));
+                .andExpect(jsonPath("$.title").value("Forbidden"))
+                .andExpect(jsonPath("$.detail").value("Action not permitted"));
     }
 
     @Test
@@ -123,8 +125,8 @@ class ControllerExceptionHandlerMvcIT {
         mockMvc.perform(get("/probe/illegal-argument"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400))
-                .andExpect(jsonPath("$.error").value("Bad Request"))
-                .andExpect(jsonPath("$.message").value("Invalid request"))
+                .andExpect(jsonPath("$.title").value("Bad Request"))
+                .andExpect(jsonPath("$.detail").value("Invalid request"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("delayMs"))));
     }
@@ -135,7 +137,7 @@ class ControllerExceptionHandlerMvcIT {
         mockMvc.perform(get("/probe/requires-param"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400))
-                .andExpect(jsonPath("$.message").value("Required parameter 'playerId' is missing"));
+                .andExpect(jsonPath("$.detail").value("Required parameter 'playerId' is missing"));
     }
 
     @Test
@@ -144,7 +146,7 @@ class ControllerExceptionHandlerMvcIT {
         mockMvc.perform(post("/probe/get-only"))
                 .andExpect(status().isMethodNotAllowed())
                 .andExpect(jsonPath("$.status").value(405))
-                .andExpect(jsonPath("$.message").value("HTTP method not supported for this endpoint"));
+                .andExpect(jsonPath("$.detail").value("HTTP method not supported for this endpoint"));
     }
 
     @Test
@@ -155,13 +157,13 @@ class ControllerExceptionHandlerMvcIT {
                         .content("plain"))
                 .andExpect(status().isUnsupportedMediaType())
                 .andExpect(jsonPath("$.status").value(415))
-                .andExpect(jsonPath("$.message").value("Content-Type not supported"));
+                .andExpect(jsonPath("$.detail").value("Content-Type not supported"));
     }
 
     @Test
     @DisplayName("Unacceptable Accept header maps to 406")
     void notAcceptableMediaType_Returns406() throws Exception {
-        // The client rejected JSON, so content negotiation cannot render the ErrorResponse body as
+        // The client rejected JSON, so content negotiation cannot render the ProblemDetail body as
         // JSON; the wire status still proves the @ExceptionHandler is registered and resolved.
         mockMvc.perform(get("/probe/produces-json").accept(MediaType.APPLICATION_XML))
                 .andExpect(status().isNotAcceptable());
@@ -173,8 +175,8 @@ class ControllerExceptionHandlerMvcIT {
         mockMvc.perform(get("/probe/boom"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.status").value(500))
-                .andExpect(jsonPath("$.error").value("Internal Server Error"))
-                .andExpect(jsonPath("$.message").value("An unexpected error occurred"))
+                .andExpect(jsonPath("$.title").value("Internal Server Error"))
+                .andExpect(jsonPath("$.detail").value("An unexpected error occurred"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("hunter2"))));
     }
@@ -185,8 +187,8 @@ class ControllerExceptionHandlerMvcIT {
         mockMvc.perform(get("/probe/illegal-state"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.status").value(500))
-                .andExpect(jsonPath("$.error").value("Internal Server Error"))
-                .andExpect(jsonPath("$.message").value("An unexpected error occurred"))
+                .andExpect(jsonPath("$.title").value("Internal Server Error"))
+                .andExpect(jsonPath("$.detail").value("An unexpected error occurred"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("internal invariant secret"))));
     }

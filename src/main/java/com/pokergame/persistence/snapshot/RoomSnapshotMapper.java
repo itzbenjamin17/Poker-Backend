@@ -1,8 +1,6 @@
 package com.pokergame.persistence.snapshot;
 
-import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
-import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.model.Card;
 import com.pokergame.model.Game;
 import com.pokergame.model.HandPayout;
@@ -174,7 +172,7 @@ public final class RoomSnapshotMapper {
             game.getBigBlindPlayerId(), snapshot.currentPlayerId(), toHandPayoutState(game.getLastHandPayout()),
             game.isFinalPotSettled(), game.getReadyGateState(), game.getHandNumber(),
             snapshot.timerVersions(), game.isPausedForDisconnectedSurvivor(), game.getStateRevision(),
-            toGameResultState(game.getGameEndResult()));
+            toFinalGameState(game.getGameEndResult()));
     }
 
     /**
@@ -288,22 +286,8 @@ public final class RoomSnapshotMapper {
                 .handNumber(state.handNumber())
                 .pausedForDisconnectedSurvivor(state.pausedForDisconnectedSurvivor())
                 .stateRevision(state.stateRevision())
-                .gameEndResult(fromGameResultState(state.gameEndResult()))
+                .gameEndResult(fromFinalGameState(state.gameEndResult()))
                 .build();
-    }
-
-    private RoomSnapshot.GameResultState toGameResultState(GameEndResponse response) {
-        if (response == null) return null;
-        return new RoomSnapshot.GameResultState(
-                response.type(),
-                response.gameId(),
-                response.winner(),
-                response.winnerChips(),
-                response.isForfeit(),
-                response.abandoned() ? Boolean.TRUE : null,
-                response.reason(),
-                response.message(),
-                toFinalGameState(response.finalState()));
     }
 
     private RoomSnapshot.FinalGameState toFinalGameState(PublicGameStateResponse finalState) {
@@ -335,10 +319,22 @@ public final class RoomSnapshotMapper {
                 finalState.handNumber(),
                 finalState.readyGateState(),
                 finalState.serverTimeEpochMs(),
-                finalState.stateRevision());
+                finalState.stateRevision(),
+                toGameEndState(finalState.gameEnd()));
     }
 
-    private RoomSnapshot.FinalPlayerState toFinalPlayerState(PublicPlayerState player) {
+    private RoomSnapshot.GameEndState toGameEndState(PublicGameStateResponse.GameEnd gameEnd) {
+        if (gameEnd == null) return null;
+        return new RoomSnapshot.GameEndState(
+                gameEnd.winner(),
+                gameEnd.winnerChips(),
+                gameEnd.isForfeit(),
+                gameEnd.abandoned() ? Boolean.TRUE : null,
+                gameEnd.reason(),
+                gameEnd.message());
+    }
+
+    private RoomSnapshot.FinalPlayerState toFinalPlayerState(PublicGameStateResponse.PlayerState player) {
         return new RoomSnapshot.FinalPlayerState(
                 player.id(),
                 player.name(),
@@ -357,20 +353,6 @@ public final class RoomSnapshotMapper {
                 cards(player.holeCards()),
                 player.disconnectDeadlineEpochMs(),
                 player.isReadyForNextHand());
-    }
-
-    private GameEndResponse fromGameResultState(RoomSnapshot.GameResultState state) {
-        if (state == null) return null;
-        return new GameEndResponse(
-                state.type(),
-                state.gameId(),
-                state.winner(),
-                state.winnerChips(),
-                state.isForfeit(),
-                Boolean.TRUE.equals(state.abandoned()),
-                state.reason(),
-                state.message(),
-                fromFinalGameState(state.finalState()));
     }
 
     private PublicGameStateResponse fromFinalGameState(RoomSnapshot.FinalGameState state) {
@@ -402,12 +384,26 @@ public final class RoomSnapshotMapper {
                 state.handNumber(),
                 state.readyGateState(),
                 state.serverTimeEpochMs(),
-                state.stateRevision());
+                state.stateRevision(),
+                null,
+                null,
+                fromGameEndState(state.gameEnd()));
     }
 
-    private PublicPlayerState fromFinalPlayerState(RoomSnapshot.FinalPlayerState state) {
+    private PublicGameStateResponse.GameEnd fromGameEndState(RoomSnapshot.GameEndState state) {
         if (state == null) return null;
-        return new PublicPlayerState(
+        return new PublicGameStateResponse.GameEnd(
+                state.winner(),
+                state.winnerChips(),
+                state.isForfeit(),
+                Boolean.TRUE.equals(state.abandoned()),
+                state.reason(),
+                state.message());
+    }
+
+    private PublicGameStateResponse.PlayerState fromFinalPlayerState(RoomSnapshot.FinalPlayerState state) {
+        if (state == null) return null;
+        return new PublicGameStateResponse.PlayerState(
                 state.id(),
                 state.name(),
                 state.chips(),

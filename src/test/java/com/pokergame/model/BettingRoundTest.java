@@ -1,7 +1,6 @@
 package com.pokergame.model;
 
-import com.pokergame.dto.internal.PlayerDecision;
-import com.pokergame.dto.internal.TurnOutcome.TurnOutcomeType;
+import com.pokergame.model.TurnOutcome.TurnOutcomeType;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.exception.ActionFeedbackException;
@@ -40,7 +39,7 @@ class BettingRoundTest {
                 .contains(PlayerAction.RAISE));
         assertEquals(50, shortRaiseRound.getMinimumRaiseAmount(alice, 20));
         ActionFeedbackException error = assertThrows(ActionFeedbackException.class, () ->
-                shortRaiseRound.validateDecision(alice, new PlayerDecision(PlayerAction.RAISE, 60, "a"),
+                shortRaiseRound.validateDecision(alice, PlayerAction.RAISE, 60,
                         players, 20));
         assertEquals("RAISE_NOT_REOPENED", error.actionErrorCode());
 
@@ -48,9 +47,9 @@ class BettingRoundTest {
                 40, false, Set.of("a"), 0, Map.of("a", 20));
         assertTrue(fullRaiseRound.legalActionsFor(alice, players, players, seating, GamePhase.FLOP, 20)
                 .contains(PlayerAction.RAISE));
-        var validated = fullRaiseRound.validateDecision(alice, new PlayerDecision(PlayerAction.RAISE, 60, "a"),
+        var validated = fullRaiseRound.validateDecision(alice, PlayerAction.RAISE, 60,
                 players, 20);
-        assertEquals(PlayerAction.RAISE, validated.decision().action());
+        assertEquals(PlayerAction.RAISE, validated.action());
     }
 
     @Test
@@ -71,7 +70,7 @@ class BettingRoundTest {
                 checkedPot.legalActionsFor(bob, players, players, seating, GamePhase.FLOP, 20));
 
         ActionFeedbackException error = assertThrows(ActionFeedbackException.class, () ->
-                checkedPot.validateDecision(alice, new PlayerDecision(PlayerAction.CHECK, 0, "a"),
+                checkedPot.validateDecision(alice, PlayerAction.CHECK, 0,
                         players, 20));
         assertEquals("CHECK_NOT_AVAILABLE", error.actionErrorCode());
     }
@@ -82,9 +81,9 @@ class BettingRoundTest {
         Player bob = new Player("Bob", "b", 100);
         BettingRound round = new BettingRound(20, false, Set.of(), 0, Map.of());
 
-        var result = round.validateDecision(alice, new PlayerDecision(PlayerAction.CALL, 0, "a"),
+        var result = round.validateDecision(alice, PlayerAction.CALL, 0,
                 List.of(alice, bob), 20);
-        assertEquals(PlayerAction.ALL_IN, result.decision().action());
+        assertEquals(PlayerAction.ALL_IN, result.action());
         assertEquals(0, result.amount());
         assertNotNull(result.playerActionNotice());
         assertEquals(10, alice.getChips());
@@ -168,13 +167,14 @@ class BettingRoundTest {
             Class<? extends ActionFeedbackException> expectedType,
             String expectedCode,
             Player actor,
-            PlayerDecision decision,
+            PlayerAction action,
+            int amount,
             List<Player> activePlayers,
             int highestBet,
             Map<String, Integer> previousBets) {
         BettingRound round = new BettingRound(highestBet, false, Set.of(), 0, previousBets);
         ActionFeedbackException error = assertThrows(expectedType, () ->
-                round.validateDecision(actor, decision, activePlayers, 20),
+                round.validateDecision(actor, action, amount, activePlayers, 20),
                 scenario);
         assertEquals(expectedCode, error.actionErrorCode(), scenario);
     }
@@ -195,50 +195,50 @@ class BettingRoundTest {
 
         return Stream.of(
                 Arguments.of("null player", UnauthorisedActionException.class, "ACTION_NOT_AVAILABLE",
-                        null, new PlayerDecision(PlayerAction.FOLD, 0, "a"), twoEligible, 0, Map.of()),
+                        null, PlayerAction.FOLD, 0, twoEligible, 0, Map.of()),
                 Arguments.of("folded player cannot act", UnauthorisedActionException.class, "ACTION_NOT_AVAILABLE",
-                        foldedActor, new PlayerDecision(PlayerAction.CHECK, 0, "f"),
+                        foldedActor, PlayerAction.CHECK, 0,
                         List.of(foldedActor, opponent), 0, Map.of()),
                 Arguments.of("all-in player cannot act", UnauthorisedActionException.class, "ACTION_NOT_AVAILABLE",
-                        allInActor, new PlayerDecision(PlayerAction.CHECK, 0, "ai"),
+                        allInActor, PlayerAction.CHECK, 0,
                         List.of(allInActor, opponent), 0, Map.of()),
                 Arguments.of("call with nothing owed", UnauthorisedActionException.class, "CALL_NOT_AVAILABLE",
-                        eligibleActor, new PlayerDecision(PlayerAction.CALL, 0, "a"), twoEligible, 0, Map.of()),
+                        eligibleActor, PlayerAction.CALL, 0, twoEligible, 0, Map.of()),
                 Arguments.of("raise with no active bet", UnauthorisedActionException.class, "RAISE_NOT_AVAILABLE",
-                        eligibleActor, new PlayerDecision(PlayerAction.RAISE, 40, "a"), twoEligible, 0, Map.of()),
+                        eligibleActor, PlayerAction.RAISE, 40, twoEligible, 0, Map.of()),
                 Arguments.of("uncontestable bet", UnauthorisedActionException.class, "BET_NOT_AVAILABLE",
-                        eligibleActor, new PlayerDecision(PlayerAction.BET, 20, "a"),
+                        eligibleActor, PlayerAction.BET, 20,
                         List.of(eligibleActor), 0, Map.of()),
                 Arguments.of("uncontestable raise", UnauthorisedActionException.class, "RAISE_NOT_AVAILABLE",
-                        eligibleActor, new PlayerDecision(PlayerAction.RAISE, 40, "a"),
+                        eligibleActor, PlayerAction.RAISE, 40,
                         List.of(eligibleActor, allInOpponent), 20, Map.of()),
                 Arguments.of("uncontestable all-in exceeding highest bet", UnauthorisedActionException.class, "RAISE_NOT_AVAILABLE",
-                        eligibleActor, new PlayerDecision(PlayerAction.ALL_IN, 0, "a"),
+                        eligibleActor, PlayerAction.ALL_IN, 0,
                         List.of(eligibleActor, allInOpponent), 20, Map.of()),
                 Arguments.of("raise not reopened", UnauthorisedActionException.class, "RAISE_NOT_REOPENED",
-                        eligibleActor, new PlayerDecision(PlayerAction.RAISE, 50, "a"),
+                        eligibleActor, PlayerAction.RAISE, 50,
                         twoEligible, 25, Map.of("a", 20)),
                 Arguments.of("all-in not reopened", UnauthorisedActionException.class, "RAISE_NOT_REOPENED",
-                        eligibleActor, new PlayerDecision(PlayerAction.ALL_IN, 0, "a"),
+                        eligibleActor, PlayerAction.ALL_IN, 0,
                         twoEligible, 25, Map.of("a", 20)),
                 Arguments.of("raise amount zero", BadRequestException.class, "RAISE_AMOUNT_REQUIRED",
-                        eligibleActor, new PlayerDecision(PlayerAction.RAISE, 0, "a"), twoEligible, 20, Map.of()),
+                        eligibleActor, PlayerAction.RAISE, 0, twoEligible, 20, Map.of()),
                 Arguments.of("raise exceeds chips", BadRequestException.class, "INSUFFICIENT_CHIPS",
-                        eligibleActor, new PlayerDecision(PlayerAction.RAISE, 101, "a"), twoEligible, 20, Map.of()),
+                        eligibleActor, PlayerAction.RAISE, 101, twoEligible, 20, Map.of()),
                 Arguments.of("raise total not above highest bet", BadRequestException.class, "MIN_RAISE",
-                        eligibleActor, new PlayerDecision(PlayerAction.RAISE, 10, "a"), twoEligible, 20, Map.of()),
+                        eligibleActor, PlayerAction.RAISE, 10, twoEligible, 20, Map.of()),
                 Arguments.of("raise increment below last full raise", BadRequestException.class, "MIN_RAISE",
-                        eligibleActor, new PlayerDecision(PlayerAction.RAISE, 30, "a"), twoEligible, 20, Map.of()),
+                        eligibleActor, PlayerAction.RAISE, 30, twoEligible, 20, Map.of()),
                 Arguments.of("bet when active bet exists", UnauthorisedActionException.class, "BET_NOT_AVAILABLE",
-                        eligibleActor, new PlayerDecision(PlayerAction.BET, 20, "a"), twoEligible, 20, Map.of()),
+                        eligibleActor, PlayerAction.BET, 20, twoEligible, 20, Map.of()),
                 Arguments.of("bet amount zero", BadRequestException.class, "BET_AMOUNT_REQUIRED",
-                        eligibleActor, new PlayerDecision(PlayerAction.BET, 0, "a"), twoEligible, 0, Map.of()),
+                        eligibleActor, PlayerAction.BET, 0, twoEligible, 0, Map.of()),
                 Arguments.of("bet exceeds chips", BadRequestException.class, "INSUFFICIENT_CHIPS",
-                        eligibleActor, new PlayerDecision(PlayerAction.BET, 101, "a"), twoEligible, 0, Map.of()),
+                        eligibleActor, PlayerAction.BET, 101, twoEligible, 0, Map.of()),
                 Arguments.of("bet below big blind", BadRequestException.class, "MIN_BET",
-                        eligibleActor, new PlayerDecision(PlayerAction.BET, 10, "a"), twoEligible, 0, Map.of()),
+                        eligibleActor, PlayerAction.BET, 10, twoEligible, 0, Map.of()),
                 Arguments.of("check with active bet owed", UnauthorisedActionException.class, "CHECK_NOT_AVAILABLE",
-                        eligibleActor, new PlayerDecision(PlayerAction.CHECK, 0, "a"), twoEligible, 20, Map.of())
+                        eligibleActor, PlayerAction.CHECK, 0, twoEligible, 20, Map.of())
         );
     }
 
@@ -252,7 +252,7 @@ class BettingRoundTest {
             Map<String, Integer> previousBets) {
         BettingRound round = new BettingRound(highestBet, false, Set.of(), 0, previousBets);
         ActionFeedbackException error = assertThrows(ActionFeedbackException.class, () ->
-                round.validateDecision(actor, new PlayerDecision(action, amount, "a"), players, 20));
+                round.validateDecision(actor, action, amount, players, 20));
         assertEquals(code, error.actionErrorCode());
     }
 
@@ -372,7 +372,7 @@ class BettingRoundTest {
 
     private static BettingRound.ValidatedDecision validateOnFlop(
             BettingRound round, Player actor, List<Player> players, PlayerAction action, int amount) {
-        return round.validateDecision(actor, new PlayerDecision(action, amount, actor.getPlayerId()),
+        return round.validateDecision(actor, action, amount,
                 players, 20);
     }
 
@@ -479,7 +479,7 @@ class BettingRoundTest {
         BettingRound round = roundOnFlop(20, 0, Set.of(), Map.of());
 
         assertEquals(40, round.getMinimumRaiseAmount(actor, 20));
-        assertEquals(PlayerAction.RAISE, validateOnFlop(round, actor, players, PlayerAction.RAISE, 40).decision().action());
+        assertEquals(PlayerAction.RAISE, validateOnFlop(round, actor, players, PlayerAction.RAISE, 40).action());
         assertEquals(40, validateOnFlop(round, actor, players, PlayerAction.RAISE, 40).amount());
         BadRequestException tooSmall = assertThrows(BadRequestException.class,
                 () -> validateOnFlop(round, actor, players, PlayerAction.RAISE, 39));
@@ -493,9 +493,9 @@ class BettingRoundTest {
         BettingRound facingFifty = roundOnFlop(50, 50, Set.of(), Map.of());
 
         assertEquals(PlayerAction.RAISE, validateOnFlop(facingFifty, belowMinRaise, players, PlayerAction.RAISE, 90)
-                .decision().action());
+                .action());
         assertEquals(PlayerAction.ALL_IN, validateOnFlop(facingFifty, belowMinRaise, players, PlayerAction.ALL_IN, 0)
-                .decision().action());
+                .action());
 
         Player tinyStack = new Player("Tiny", "t", 15);
         List<Player> tinyTable = List.of(tinyStack, new Player("Opponent", "b", 100));

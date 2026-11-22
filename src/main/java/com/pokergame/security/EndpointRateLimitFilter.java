@@ -6,13 +6,16 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
+import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
-
-import java.io.IOException;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Filter to enforce rate limits on sensitive REST endpoints using RateLimitService.
@@ -22,18 +25,22 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
     private static final Logger logger = LoggerFactory.getLogger(EndpointRateLimitFilter.class);
 
     private final RateLimitService rateLimitService;
+    private final ObjectMapper objectMapper;
+
     private final LogThrottler logThrottler = new LogThrottler(5000L);
 
     @Value("${poker.security.trust-proxy:false}")
     private boolean trustProxy;
 
     /**
-     * Creates the endpoint filter with its shared bucket service.
+     * Creates the endpoint filter with its shared bucket service and JSON mapper.
      *
      * @param rateLimitService REST rate limiter
+     * @param objectMapper     object mapper for problem detail responses
      */
-    public EndpointRateLimitFilter(RateLimitService rateLimitService) {
+    public EndpointRateLimitFilter(RateLimitService rateLimitService, ObjectMapper objectMapper) {
         this.rateLimitService = rateLimitService;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -75,10 +82,12 @@ public class EndpointRateLimitFilter extends OncePerRequestFilter {
     }
 
     private void sendRateLimitError(HttpServletResponse response, long retryAfterSeconds) throws IOException {
-        response.setStatus(429); // Too Many Requests
+        response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
         response.setHeader("Retry-After", Long.toString(retryAfterSeconds));
-        response.setContentType("application/json");
-        // The message is built from fixed text and a number, so it needs no JSON escaping.
-        response.getWriter().write("{\"message\": \"" + RateLimitService.tooManyRequestsMessage(retryAfterSeconds) + "\"}");
+        response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+        response.getWriter().write(objectMapper.writeValueAsString(
+                ProblemDetail.forStatusAndDetail(
+                        HttpStatus.TOO_MANY_REQUESTS,
+                        RateLimitService.tooManyRequestsMessage(retryAfterSeconds))));
     }
 }

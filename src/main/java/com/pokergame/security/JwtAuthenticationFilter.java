@@ -1,23 +1,23 @@
 package com.pokergame.security;
 
+import com.pokergame.util.MdcKeys;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.Collections;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import com.pokergame.util.MdcKeys;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
-
-import java.io.IOException;
-import java.util.Collections;
-
-import com.pokergame.dto.response.ErrorResponse;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -80,9 +80,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             } else {
                 logger.warn("Rejecting request with invalid or expired JWT");
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.setContentType("application/json");
+                response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
                 response.getWriter().write(objectMapper.writeValueAsString(
-                        new ErrorResponse(HttpServletResponse.SC_UNAUTHORIZED, "Unauthorized", "Session expired or invalid token")));
+                        ProblemDetail.forStatusAndDetail(
+                                HttpStatus.UNAUTHORIZED, "Session expired or invalid token")));
                 return;
             }
         }

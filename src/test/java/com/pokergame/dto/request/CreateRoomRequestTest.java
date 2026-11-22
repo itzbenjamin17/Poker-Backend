@@ -50,14 +50,14 @@ class CreateRoomRequestTest {
 
         assertTrue(validator.validate(request).isEmpty());
         assertTrue(request.hasPassword());
-        assertEquals("  secret  ", request.getPassword());
+        assertEquals("  secret  ", request.password());
     }
 
     @Test
     @DisplayName("Whitespace-only password normalizes to null and does not mark room password-protected")
     void blankPasswordNormalizesToNull() {
         CreateRoomRequest blank = validWithPassword("   \t ");
-        assertNull(blank.getPassword());
+        assertNull(blank.password());
         assertFalse(blank.hasPassword());
         assertTrue(blank.isPasswordWithinByteLimit());
     }

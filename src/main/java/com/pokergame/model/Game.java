@@ -1,8 +1,6 @@
 package com.pokergame.model;
 
-import com.pokergame.dto.internal.PlayerDecision;
-import com.pokergame.dto.internal.TurnOutcome;
-import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ReadyCountdownStartOutcome;
@@ -12,9 +10,6 @@ import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.PotCalculator.PotAllocations;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -23,6 +18,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Represents a live poker game: owns the deck, players, pot, and hand phase, and coordinates
@@ -55,7 +52,7 @@ public class Game {
     private boolean gameOver;
     private boolean finalPotSettled;
     private boolean pausedForDisconnectedSurvivor;
-    private GameEndResponse gameEndResult;
+    private PublicGameStateResponse gameEndResult;
 
     /**
      * Creates a new poker game with the specified table settings and seated players.
@@ -267,28 +264,23 @@ public class Game {
     }
 
     /**
-     * Validates and applies {@code player}'s betting decision and advances the turn, betting round, or showdown.
+     * Validates and applies {@code player}'s betting action and advances the turn, betting round, or showdown.
      *
-     * @param player   the acting player
-     * @param decision the requested action and chip amount
+     * @param player the acting player
+     * @param action the requested poker action
+     * @param amount the requested wager amount (0 for non-wagering actions)
      * @return a {@link TurnOutcome} describing the resulting progression
-     * @throws IllegalStateException       if {@code decision} is missing
-     * @throws BadRequestException         if the bet amount violates bet or raise sizing rules
+     * @throws BadRequestException         if the action is missing or the bet amount violates bet or raise sizing rules
      * @throws UnauthorisedActionException if the action is not available to {@code player}
      */
-    public TurnOutcome processPlayerDecision(Player player, PlayerDecision decision) {
-        if (decision == null) {
-            throw new IllegalStateException("Invalid player action");
-        }
-
+    public TurnOutcome processPlayerDecision(Player player, PlayerAction action, int amount) {
         BettingRound.ValidatedDecision validated = bettingRound.validateDecision(
-                player, decision, activePlayers, bigBlind);
-        PlayerDecision appliedDecision = validated.decision();
+                player, action, amount, activePlayers, bigBlind);
 
         int potBeforeDecision = this.pot;
         int highestBetBeforeDecision = bettingRound.getCurrentHighestBet();
 
-        this.pot += player.doAction(appliedDecision.action(), validated.amount());
+        this.pot += player.doAction(validated.action(), validated.amount());
 
         PotCalculator.trackContribution(handContributions, player, this.pot - potBeforeDecision);
         bettingRound.recordAppliedDecision(player, bigBlind, highestBetBeforeDecision);
@@ -1046,16 +1038,16 @@ public class Game {
         return currentPhase != GamePhase.SHOWDOWN || !isHandSettled();
     }
 
-    public GameEndResponse getGameEndResult() {
+    public PublicGameStateResponse getGameEndResult() {
         return gameEndResult;
     }
 
-    public void setGameEndResult(GameEndResponse gameEndResult) {
+    public void setGameEndResult(PublicGameStateResponse gameEndResult) {
         this.gameEndResult = gameEndResult;
     }
 
     public boolean isAbandoned() {
-        return gameEndResult != null && gameEndResult.abandoned();
+        return gameEndResult != null && gameEndResult.gameEnd() != null && gameEndResult.gameEnd().abandoned();
     }
 
     /**
@@ -1130,7 +1122,7 @@ public class Game {
         private ReadyGateState readyGateState = ReadyGateState.CLOSED;
         private long handNumber;
         private long stateRevision;
-        private GameEndResponse gameEndResult;
+        private PublicGameStateResponse gameEndResult;
         private boolean allPlayersHadInitialTurn;
         private Set<String> actedPlayersInRound;
         private Map<ScheduledGameTask, Long> scheduledTimes;
@@ -1279,7 +1271,7 @@ public class Game {
             return this;
         }
 
-        public GameRestoreBuilder gameEndResult(GameEndResponse value) {
+        public GameRestoreBuilder gameEndResult(PublicGameStateResponse value) {
             this.gameEndResult = value;
             return this;
         }

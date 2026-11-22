@@ -161,14 +161,12 @@ public abstract class AbstractE2ESupport {
 
         assertThat(body).isNotBlank();
         JsonNode response = objectMapper.readTree(body);
-        assertThat(response.path("message").asText()).isEqualTo("Room created successfully");
 
-        JsonNode data = response.path("data");
-        String roomId = data.path("roomId").asText();
+        String roomId = response.path("roomId").asText();
         assertThat(roomId).isNotBlank();
-        assertThat(data.path("token").asText()).isNotBlank();
+        assertThat(response.path("token").asText()).isNotBlank();
         trackedRoomIds.add(roomId);
-        return data;
+        return response;
     }
 
     protected JsonNode joinRoom(String roomName, String playerName) throws Exception {
@@ -182,23 +180,20 @@ public abstract class AbstractE2ESupport {
 
         assertThat(body).isNotBlank();
         JsonNode response = objectMapper.readTree(body);
-        assertThat(response.path("message").asText()).isEqualTo("Successfully joined room");
-
-        JsonNode data = response.path("data");
-        assertThat(data.path("roomId").asText()).isNotBlank();
-        assertThat(data.path("token").asText()).isNotBlank();
-        assertThat(data.path("playerName").asText()).isEqualTo(playerName);
-        return data;
+        assertThat(response.path("roomId").asText()).isNotBlank();
+        assertThat(response.path("token").asText()).isNotBlank();
+        assertThat(response.path("playerName").asText()).isEqualTo(playerName);
+        return response;
     }
 
-    protected JsonNode startGame(String roomId, String hostToken) throws Exception {
-        String body = restClient.post()
+    protected int startGame(String roomId, String hostToken) {
+        return restClient.post()
                 .uri("/api/room/" + roomId + "/start-game")
                 .header("Authorization", "Bearer " + hostToken)
                 .retrieve()
-                .body(String.class);
-        assertThat(body).isNotBlank();
-        return objectMapper.readTree(body);
+                .toBodilessEntity()
+                .getStatusCode()
+                .value();
     }
 
     protected JsonNode getRoomData(String roomId, String token) throws Exception {
@@ -211,12 +206,14 @@ public abstract class AbstractE2ESupport {
         return objectMapper.readTree(body);
     }
 
-    protected String leaveRoom(String roomId, String token) {
+    protected int leaveRoom(String roomId, String token) {
         return restClient.post()
                 .uri("/api/room/" + roomId + "/leave")
                 .header("Authorization", "Bearer " + token)
                 .retrieve()
-                .body(String.class);
+                .toBodilessEntity()
+                .getStatusCode()
+                .value();
     }
 
     protected JsonNode readGameState(String gameId, String token) throws Exception {

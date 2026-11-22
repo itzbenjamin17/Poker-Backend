@@ -3,13 +3,9 @@ package com.pokergame.service;
 import static java.util.Objects.requireNonNull;
 
 import com.pokergame.config.RoomTimingProperties;
-import com.pokergame.dto.internal.PlayerJoinInfo;
-import com.pokergame.dto.internal.RoomEntryResult;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
-import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.RoomDataResponse;
-import com.pokergame.enums.ResponseMessage;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.InvalidRoomPasswordException;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -105,22 +101,22 @@ public class RoomService {
      *                             or the blind/buy-in ratios are invalid
      */
     @DurableMutation
-    public RoomEntryResult createRoom(@RoomId String roomId, CreateRoomRequest request) {
+    public EntryResult createRoom(@RoomId String roomId, CreateRoomRequest request) {
         requireNonNull(roomId, "roomId must not be null");
         requireNonNull(request, "request must not be null");
-        RoomPasswordPolicy.validateLength(request.getPassword());
-        if (request.getSmallBlind() != null && request.getBigBlind() != null
-                && request.getBigBlind() < (long) Room.BIG_BLIND_MULTIPLE * request.getSmallBlind()) {
+        RoomPasswordPolicy.validateLength(request.password());
+        if (request.smallBlind() != null && request.bigBlind() != null
+                && request.bigBlind() < (long) Room.BIG_BLIND_MULTIPLE * request.smallBlind()) {
             throw new BadRequestException("Big blind must be at least twice the small blind.");
         }
-        if (request.getBigBlind() != null && request.getBuyIn() != null
-                && request.getBuyIn() < request.getBigBlind()) {
+        if (request.bigBlind() != null && request.buyIn() != null
+                && request.buyIn() < request.bigBlind()) {
             throw new BadRequestException("Buy-in must be at least the big blind amount.");
         }
-        String sanitizedRoomName = InputSanitizer.sanitize(request.getRoomName());
-        String sanitizedPlayerName = InputSanitizer.sanitize(request.getPlayerName());
+        String sanitizedRoomName = InputSanitizer.sanitize(request.roomName());
+        String sanitizedPlayerName = InputSanitizer.sanitize(request.playerName());
 
-        String rawPassword = request.getPassword();
+        String rawPassword = request.password();
         String passwordToStore = (rawPassword != null && !rawPassword.trim().isEmpty())
                 ? passwordEncoder.encode(rawPassword)
                 : null;
@@ -128,10 +124,10 @@ public class RoomService {
                 roomId,
                 sanitizedRoomName,
                 sanitizedPlayerName,
-                request.getMaxPlayers(),
-                request.getSmallBlind(),
-                request.getBigBlind(),
-                request.getBuyIn(),
+                request.maxPlayers(),
+                request.smallBlind(),
+                request.bigBlind(),
+                request.buyIn(),
                 passwordToStore,
                 clock);
 
@@ -148,10 +144,10 @@ public class RoomService {
         String membershipId = registerMember(room, sanitizedPlayerName, now);
         extendLobbyInactivity(room, now);
 
-        broadcastRoomEvent(roomId, ResponseMessage.ROOM_CREATED, getRoomData(roomId));
+        broadcastRoomState(roomId, buildRoomData(room, null));
 
         logger.info("Room created: {} (ID: {}) by host: {}", sanitizedRoomName, roomId, sanitizedPlayerName);
-        return new RoomEntryResult(roomId, sanitizedPlayerName, membershipId);
+        return new EntryResult(roomId, sanitizedPlayerName, membershipId);
     }
 
     /**
@@ -167,7 +163,7 @@ public class RoomService {
      *                                   (compared ignoring case)
      */
     @DurableMutation
-    public RoomEntryResult joinRoom(@RoomId String roomId, JoinRoomRequest joinRequest) {
+    public EntryResult joinRoom(@RoomId String roomId, JoinRoomRequest joinRequest) {
         requireNonNull(roomId, "roomId must not be null");
         requireNonNull(joinRequest, "joinRequest must not be null");
         RoomPasswordPolicy.validateLength(joinRequest.password());
@@ -207,13 +203,13 @@ public class RoomService {
         extendLobbyInactivity(room, now);
 
         logger.info("Player {} joined room: {}", sanitizedPlayerName, room.getRoomName());
-        broadcastRoomEvent(roomId, ResponseMessage.PLAYER_JOINED, getRoomData(roomId));
+        broadcastRoomState(roomId, buildRoomData(room, null));
 
-        return new RoomEntryResult(roomId, sanitizedPlayerName, membershipId);
+        return new EntryResult(roomId, sanitizedPlayerName, membershipId);
     }
 
     /**
-     * Closes a lobby room because its host left: broadcasts {@code ROOM_CLOSED} and destroys the
+     * Closes a lobby room because its host left: broadcasts the closed room state and destroys the
      * room. The other members need no separate removal.
      *
      * @param roomId     the unique ID of the room
@@ -232,7 +228,7 @@ public class RoomService {
 
         logger.info("Host {} leaving room {} during lobby phase, destroying room",
                 playerName, room.getRoomName());
-        broadcastRoomEvent(roomId, ResponseMessage.ROOM_CLOSED, null);
+        broadcastRoomState(roomId, buildRoomData(room, "HOST_LEFT"));
         destroyRoom(roomId);
     }
 
@@ -274,7 +270,7 @@ public class RoomService {
 
         if (room.getPlayers().isEmpty()) {
             cancelLobbyInactivity(roomId);
-            broadcastRoomEvent(roomId, ResponseMessage.ROOM_CLOSED, null);
+            broadcastRoomState(roomId, buildRoomData(room, "HOST_LEFT"));
             if (!room.isFinished()) {
                 destroyRoom(roomId);
             }
@@ -288,7 +284,7 @@ public class RoomService {
             room.setHostName(nextHost);
         }
 
-        broadcastRoomEvent(roomId, ResponseMessage.PLAYER_LEFT, getRoomData(roomId));
+        broadcastRoomState(roomId, buildRoomData(room, null));
     }
 
     /**
@@ -300,7 +296,7 @@ public class RoomService {
     public void broadcastGameStarted(String roomId) {
         requireNonNull(roomId, "roomId must not be null");
         roomCoordinator.assertHeldByCurrentThread(roomId);
-        broadcastRoomEvent(roomId, ResponseMessage.GAME_STARTED, getRoomData(roomId));
+        broadcastRoomState(roomId, getRoomData(roomId));
     }
 
     /**
@@ -321,28 +317,7 @@ public class RoomService {
             throw new ResourceNotFoundException("Room not found");
         }
 
-        String currentHost = room.getHostName();
-        List<PlayerJoinInfo> playerObjects = room.getPlayers().stream()
-                .map(playerName -> new PlayerJoinInfo(
-                        playerName,
-                        currentHost != null && currentHost.equals(playerName)))
-                .toList();
-
-        return new RoomDataResponse(
-                roomId,
-                room.getRoomName(),
-                room.getMaxPlayers(),
-                room.getBuyIn(),
-                room.getSmallBlind(),
-                room.getBigBlind(),
-                room.getCreatedAt(),
-                currentHost,
-                playerObjects,
-                playerObjects.size(),
-                !room.isGameStarted() && playerObjects.size() >= Room.MIN_PLAYERS,
-                room.isGameStarted(),
-                room.getInactivityDeadlineEpochMs(),
-                clock.millis());
+        return buildRoomData(room, null);
     }
 
     /**
@@ -441,9 +416,9 @@ public class RoomService {
     }
 
     /**
-     * Closes an expired unstarted lobby room, broadcasts {@code ROOM_CLOSED}, and publishes
-     * {@link RoomDestroyed} after save. Does nothing if the room is gone, started, or not yet
-     * past its current deadline.
+     * Closes an expired unstarted lobby room, broadcasts the closed room state with
+     * {@code "INACTIVITY"}, and publishes {@link RoomDestroyed} after save. Does nothing if the
+     * room is gone, started, or not yet past its current deadline.
      *
      * @param roomId the unique ID of the room
      */
@@ -462,7 +437,7 @@ public class RoomService {
         }
 
         logger.info("Lobby {} closed due to inactivity after deadline {}", roomId, currentDeadline);
-        broadcastRoomEvent(roomId, ResponseMessage.ROOM_CLOSED, Map.of("roomId", roomId, "reason", "INACTIVITY"));
+        broadcastRoomState(roomId, buildRoomData(room, "INACTIVITY"));
         destroyRoom(roomId);
     }
 
@@ -500,8 +475,44 @@ public class RoomService {
         scheduleLobbyInactivity(room.getRoomId(), deadlineEpochMs);
     }
 
-    private void broadcastRoomEvent(String roomId, ResponseMessage message, Object payload) {
-        PostSaveActions.runAfterSave(() -> messagingTemplate.convertAndSend(
-                "/room/" + roomId, new ApiResponse<>(message.getMessage(), payload)));
+    private RoomDataResponse buildRoomData(Room room, String closedReason) {
+        String currentHost = room.getHostName();
+        List<RoomDataResponse.RoomPlayer> playerObjects = room.getPlayers().stream()
+                .map(playerName -> new RoomDataResponse.RoomPlayer(
+                        playerName,
+                        currentHost != null && currentHost.equals(playerName)))
+                .toList();
+
+        return new RoomDataResponse(
+                room.getRoomId(),
+                room.getRoomName(),
+                room.getMaxPlayers(),
+                room.getBuyIn(),
+                room.getSmallBlind(),
+                room.getBigBlind(),
+                playerObjects,
+                !room.isGameStarted() && playerObjects.size() >= Room.MIN_PLAYERS,
+                room.isGameStarted(),
+                room.getInactivityDeadlineEpochMs(),
+                clock.millis(),
+                closedReason);
+    }
+
+    private void broadcastRoomState(String roomId, RoomDataResponse state) {
+        PostSaveActions.runAfterSave(() -> messagingTemplate.convertAndSend("/room/" + roomId, state));
+    }
+
+    /**
+     * Result of a room entry command (create or join), carrying the target room identity,
+     * the canonical (sanitized) player name stored in the room, and the assigned membership ID.
+     *
+     * @param roomId              identity of the created or joined room
+     * @param canonicalPlayerName sanitized player name as stored in the room
+     * @param membershipId        membership admitted by this command
+     */
+    public record EntryResult(
+            String roomId,
+            String canonicalPlayerName,
+            String membershipId) {
     }
 }

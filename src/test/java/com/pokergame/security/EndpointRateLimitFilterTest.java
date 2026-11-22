@@ -1,16 +1,17 @@
 package com.pokergame.security;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.util.ReflectionTestUtils;
+import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -29,8 +30,12 @@ class EndpointRateLimitFilterTest {
     @Mock
     private RateLimitService rateLimitService;
 
-    @InjectMocks
     private EndpointRateLimitFilter filter;
+
+    @BeforeEach
+    void setUp() {
+        filter = new EndpointRateLimitFilter(rateLimitService, new ObjectMapper());
+    }
 
     @Test
     @DisplayName("should use remote address when trustProxy is false")

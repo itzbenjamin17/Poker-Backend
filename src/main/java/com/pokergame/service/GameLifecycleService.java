@@ -3,7 +3,7 @@ package com.pokergame.service;
 import static java.util.Objects.requireNonNull;
 
 import com.pokergame.config.GameTimingProperties;
-import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -340,10 +340,10 @@ public class GameLifecycleService {
      *
      * @param gameId     the unique ID of the game
      * @param playerName the claiming player's name
-     * @return the final {@link GameEndResponse}
+     * @return the final {@link PublicGameStateResponse}
      */
     @DurableMutation
-    public GameEndResponse claimWin(@GameId String gameId, String playerName) {
+    public PublicGameStateResponse claimWin(@GameId String gameId, String playerName) {
         return departureHandler.claimWin(gameId, playerName);
     }
 
@@ -353,9 +353,9 @@ public class GameLifecycleService {
      *
      * @param gameId     the unique ID of the game
      * @param playerName the requesting player's name
-     * @return the final {@link GameEndResponse}
+     * @return the final {@link PublicGameStateResponse}
      */
-    public GameEndResponse getGameReview(String gameId, String playerName) {
+    public PublicGameStateResponse getGameReview(String gameId, String playerName) {
         roomCoordinator.assertHeldByCurrentThread(gameId);
         return completionHandler.getGameReview(gameId, playerName);
     }

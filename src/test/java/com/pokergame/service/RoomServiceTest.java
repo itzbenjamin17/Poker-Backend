@@ -21,12 +21,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.pokergame.dto.internal.RoomEntryResult;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
-import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.RoomDataResponse;
-import com.pokergame.enums.ResponseMessage;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.InvalidRoomPasswordException;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -137,12 +134,12 @@ class RoomServiceTest {
         return service;
     }
 
-    private RoomEntryResult createRoom(RoomService service, CreateRoomRequest request) {
+    private RoomService.EntryResult createRoom(RoomService service, CreateRoomRequest request) {
         String roomId = UUID.randomUUID().toString();
         return withRoomLock(roomId, () -> service.createRoom(roomId, request));
     }
 
-    private RoomEntryResult joinByName(RoomService service, JoinRoomRequest request) {
+    private RoomService.EntryResult joinByName(RoomService service, JoinRoomRequest request) {
         String roomId = service.resolveRoomIdByName(request.roomName());
         return withRoomLock(roomId, () -> service.joinRoom(roomId, request));
     }
@@ -211,7 +208,7 @@ class RoomServiceTest {
         @Test
         @DisplayName("should create a room and add the host as the first player")
         void givenValidRequest_whenCreateRoom_thenReturnPersistedRoomId() {
-            RoomEntryResult result = createRoom(roomService, validCreateRequest);
+            RoomService.EntryResult result = createRoom(roomService, validCreateRequest);
             String roomId = result.roomId();
 
             Room room = coordinatedGetRoom(roomId);
@@ -528,7 +525,6 @@ class RoomServiceTest {
                 assertThat(roomService.isRoomHost(roomId, "Player2")).isTrue();
                 assertThat(roomService.isRoomHost(roomId, "Player3")).isFalse();
             });
-            assertThat(roomData.hostName()).isEqualTo("Player2");
             assertThat(roomData.players())
                     .filteredOn(player -> player.name().equals("Player2"))
                     .singleElement()
@@ -537,7 +533,7 @@ class RoomServiceTest {
         }
 
         @Test
-        @DisplayName("keeps a finished room registered and broadcasts ROOM_CLOSED when the last members leave")
+        @DisplayName("keeps a finished room registered and broadcasts closed RoomDataResponse when the last members leave")
         void givenFinishedRoom_whenLastMembersRemoved_thenRoomContainerIsPreserved() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
             withRoomLock(roomId, () -> {
@@ -550,12 +546,16 @@ class RoomServiceTest {
             Room room = coordinatedGetRoom(roomId);
             assertThat(room).isNotNull();
             assertThat(room.getPlayers()).isEmpty();
-            verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
-                    eq(new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null)));
+            ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+            verify(messagingTemplate).convertAndSend(eq("/room/" + roomId), captor.capture());
+            assertThat(captor.getValue()).isInstanceOfSatisfying(RoomDataResponse.class, data -> {
+                assertThat(data.closedReason()).isEqualTo("HOST_LEFT");
+                assertThat(data.players()).isEmpty();
+            });
         }
 
         @Test
-        @DisplayName("destroys an unfinished room and broadcasts ROOM_CLOSED when the last members leave")
+        @DisplayName("destroys an unfinished room and broadcasts closed RoomDataResponse when the last members leave")
         void givenUnfinishedRoom_whenLastMembersRemoved_thenRoomIsDestroyed() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
             withRoomLock(roomId, () -> {
@@ -565,8 +565,12 @@ class RoomServiceTest {
             });
 
             assertThat(coordinatedGetRoom(roomId)).isNull();
-            verify(messagingTemplate).convertAndSend(eq("/room/" + roomId),
-                    eq(new ApiResponse<>(ResponseMessage.ROOM_CLOSED.getMessage(), null)));
+            ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+            verify(messagingTemplate).convertAndSend(eq("/room/" + roomId), captor.capture());
+            assertThat(captor.getValue()).isInstanceOfSatisfying(RoomDataResponse.class, data -> {
+                assertThat(data.closedReason()).isEqualTo("HOST_LEFT");
+                assertThat(data.players()).isEmpty();
+            });
         }
 
         @Test
@@ -660,10 +664,9 @@ class RoomServiceTest {
 
             assertThat(roomData.roomId()).isEqualTo(roomId);
             assertThat(roomData.roomName()).isEqualTo("Test Room");
-            assertThat(roomData.hostName()).isEqualTo("HostPlayer");
-            assertThat(roomData.currentPlayers()).isEqualTo(2);
             assertThat(roomData.canStartGame()).isTrue();
             assertThat(roomData.gameStarted()).isFalse();
+            assertThat(roomData.closedReason()).isNull();
             assertThat(roomData.players())
                     .extracting(player -> player.name() + ":" + player.isHost())
                     .containsExactly("HostPlayer:true", "Player2:false");
@@ -1254,8 +1257,8 @@ class RoomServiceTest {
             ArgumentCaptor<Object> payloads = ArgumentCaptor.forClass(Object.class);
             verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/room/" + roomId), payloads.capture());
             assertThat(payloads.getAllValues()).anySatisfy(payload ->
-                    assertThat(payload).isInstanceOfSatisfying(ApiResponse.class, response ->
-                            assertThat(response.message()).isEqualTo(ResponseMessage.ROOM_CLOSED.getMessage())));
+                    assertThat(payload).isInstanceOfSatisfying(RoomDataResponse.class, response ->
+                            assertThat(response.closedReason()).isEqualTo("INACTIVITY")));
             verify(eventPublisher).publishEvent(new RoomDestroyed(roomId));
         }
 

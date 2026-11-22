@@ -1,8 +1,6 @@
 package com.pokergame.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.pokergame.dto.internal.PlayerJoinInfo;
-import com.pokergame.dto.internal.RoomEntryResult;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.response.RoomDataResponse;
@@ -30,7 +28,6 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
-import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 
@@ -157,20 +154,19 @@ class RoomControllerIT {
         CreateRoomRequest request = new CreateRoomRequest("Room1", "Player1", 6, 10, 20, 1000, null);
         String roomId = "room-123";
         when(roomService.createRoom(anyString(), any(CreateRoomRequest.class)))
-                .thenReturn(new RoomEntryResult(roomId, "Player1"));
-        when(jwtService.generateToken("Player1", roomId)).thenReturn("mock-token");
+                .thenReturn(new RoomService.EntryResult(roomId, "Player1", "mem-1"));
+        when(jwtService.generateToken("Player1", roomId, "mem-1")).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/create")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Room created successfully"))
-                .andExpect(jsonPath("$.data.token").value("mock-token"))
-                .andExpect(jsonPath("$.data.roomId").value(roomId))
-                .andExpect(jsonPath("$.data.playerName").value("Player1"));
+                .andExpect(jsonPath("$.token").value("mock-token"))
+                .andExpect(jsonPath("$.roomId").value(roomId))
+                .andExpect(jsonPath("$.playerName").value("Player1"));
 
         verify(roomService).createRoom(anyString(), any(CreateRoomRequest.class));
-        verify(jwtService).generateToken("Player1", roomId);
+        verify(jwtService).generateToken("Player1", roomId, "mem-1");
     }
 
     /**
@@ -183,22 +179,21 @@ class RoomControllerIT {
         String roomId = "room-123";
         when(roomService.resolveRoomIdByName("Room1")).thenReturn(roomId);
         when(roomService.joinRoom(eq(roomId), any(JoinRoomRequest.class)))
-                .thenReturn(new RoomEntryResult(roomId, "Player2"));
-        when(jwtService.generateToken("Player2", roomId)).thenReturn("mock-token");
+                .thenReturn(new RoomService.EntryResult(roomId, "Player2", "mem-2"));
+        when(jwtService.generateToken("Player2", roomId, "mem-2")).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/join")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Successfully joined room"))
-                .andExpect(jsonPath("$.data.token").value("mock-token"))
-                .andExpect(jsonPath("$.data.roomId").value(roomId))
-                .andExpect(jsonPath("$.data.playerName").value("Player2"));
+                .andExpect(jsonPath("$.token").value("mock-token"))
+                .andExpect(jsonPath("$.roomId").value(roomId))
+                .andExpect(jsonPath("$.playerName").value("Player2"));
 
         verify(roomService).resolveRoomIdByName("Room1");
         verify(roomService).closeLobbyIfExpired(roomId);
         verify(roomService).joinRoom(eq(roomId), any(JoinRoomRequest.class));
-        verify(jwtService).generateToken("Player2", roomId);
+        verify(jwtService).generateToken("Player2", roomId, "mem-2");
     }
 
     @Test
@@ -213,7 +208,7 @@ class RoomControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Room has expired due to inactivity."));
+                .andExpect(jsonPath("$.detail").value("Room has expired due to inactivity."));
 
         verify(roomService).closeLobbyIfExpired(roomId);
         verify(roomService, never()).joinRoom(anyString(), any(JoinRoomRequest.class));
@@ -233,8 +228,7 @@ class RoomControllerIT {
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
                 .principal(auth))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Successfully left room"));
+                .andExpect(status().isNoContent());
 
         verify(gameLifecycleService).removePlayers(roomId, List.of(playerName));
     }
@@ -250,7 +244,7 @@ class RoomControllerIT {
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
                 .principal(auth))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message").value("Room not found"));
+                .andExpect(jsonPath("$.detail").value("Room not found"));
 
         verify(roomService).closeLobbyIfExpired(roomId);
         verifyNoInteractions(gameLifecycleService);
@@ -269,8 +263,7 @@ class RoomControllerIT {
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
                 .principal(auth))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Successfully left room"));
+                .andExpect(status().isNoContent());
 
         verify(gameLifecycleService).removePlayers(roomId, List.of(playerName));
     }
@@ -288,8 +281,7 @@ class RoomControllerIT {
 
         mockMvc.perform(post("/api/room/{roomId}/leave", roomId)
                 .principal(auth))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Successfully left room"));
+                .andExpect(status().isNoContent());
 
         verify(gameLifecycleService).removePlayers(roomId, List.of(playerName));
     }
@@ -309,8 +301,9 @@ class RoomControllerIT {
         room.addPlayer(playerName);
         when(roomService.getRoom(roomId)).thenReturn(room);
 
-        PlayerJoinInfo pInfo = new PlayerJoinInfo(playerName, true);
-        RoomDataResponse roomData = new RoomDataResponse(roomId, "Room1", 6, 1000, 10, 20, LocalDateTime.now(), playerName, List.of(pInfo), 1, true, false);
+        RoomDataResponse.RoomPlayer pInfo = new RoomDataResponse.RoomPlayer(playerName, true);
+        RoomDataResponse roomData = new RoomDataResponse(
+                roomId, "Room1", 6, 1000, 10, 20, List.of(pInfo), true, false, null, null, null);
         when(roomService.getRoomData(roomId)).thenReturn(roomData);
 
         mockMvc.perform(get("/api/room/{roomId}", roomId)
@@ -318,7 +311,8 @@ class RoomControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.roomId").value(roomId))
                 .andExpect(jsonPath("$.roomName").value("Room1"))
-                .andExpect(jsonPath("$.hostName").value(playerName));
+                .andExpect(jsonPath("$.players[0].name").value(playerName))
+                .andExpect(jsonPath("$.players[0].isHost").value(true));
     }
 
     /**
@@ -367,8 +361,8 @@ class RoomControllerIT {
         mockMvc.perform(get("/api/room/{roomId}", roomId)
                 .principal(auth))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error").value("Forbidden"))
-                .andExpect(jsonPath("$.message").value("Token is not valid for this room."));
+                .andExpect(jsonPath("$.title").value("Forbidden"))
+                .andExpect(jsonPath("$.detail").value("Token is not valid for this room."));
 
         verify(roomService, never()).getRoom(anyString());
         verify(roomService, never()).getRoomData(anyString());
@@ -391,8 +385,8 @@ class RoomControllerIT {
         mockMvc.perform(get("/api/room/{roomId}", roomId)
                 .principal(auth))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error").value("Forbidden"))
-                .andExpect(jsonPath("$.message").value("You are not a member of this room."));
+                .andExpect(jsonPath("$.title").value("Forbidden"))
+                .andExpect(jsonPath("$.detail").value("You are not a member of this room."));
 
         verify(roomService, never()).getRoomData(anyString());
     }
@@ -409,7 +403,7 @@ class RoomControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Room name must be 50 characters or less"));
+                .andExpect(jsonPath("$.detail").value("Room name must be 50 characters or less"));
     }
 
     /**
@@ -424,7 +418,7 @@ class RoomControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Room name cannot contain control characters"));
+                .andExpect(jsonPath("$.detail").value("Room name cannot contain control characters"));
     }
 
     /**
@@ -491,8 +485,8 @@ class RoomControllerIT {
     void createRoom_WhitespaceOnlyPassword_TreatedAsAbsent() throws Exception {
         ArgumentCaptor<CreateRoomRequest> captor = ArgumentCaptor.forClass(CreateRoomRequest.class);
         when(roomService.createRoom(anyString(), any(CreateRoomRequest.class)))
-                .thenReturn(new RoomEntryResult("room-123", "Player1"));
-        when(jwtService.generateToken("Player1", "room-123")).thenReturn("mock-token");
+                .thenReturn(new RoomService.EntryResult("room-123", "Player1", "mem-1"));
+        when(jwtService.generateToken("Player1", "room-123", "mem-1")).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/create")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -500,7 +494,7 @@ class RoomControllerIT {
                 .andExpect(status().isOk());
 
         verify(roomService).createRoom(anyString(), captor.capture());
-        assertThat(captor.getValue().getPassword()).isNull();
+        assertThat(captor.getValue().password()).isNull();
         assertThat(captor.getValue().hasPassword()).isFalse();
     }
 
@@ -512,8 +506,8 @@ class RoomControllerIT {
     void createRoom_PasswordPreservesSpaces() throws Exception {
         ArgumentCaptor<CreateRoomRequest> captor = ArgumentCaptor.forClass(CreateRoomRequest.class);
         when(roomService.createRoom(anyString(), any(CreateRoomRequest.class)))
-                .thenReturn(new RoomEntryResult("room-123", "Player1"));
-        when(jwtService.generateToken("Player1", "room-123")).thenReturn("mock-token");
+                .thenReturn(new RoomService.EntryResult("room-123", "Player1", "mem-1"));
+        when(jwtService.generateToken("Player1", "room-123", "mem-1")).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/create")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -521,7 +515,7 @@ class RoomControllerIT {
                 .andExpect(status().isOk());
 
         verify(roomService).createRoom(anyString(), captor.capture());
-        assertThat(captor.getValue().getPassword()).isEqualTo("  secret123  ");
+        assertThat(captor.getValue().password()).isEqualTo("  secret123  ");
         assertThat(captor.getValue().hasPassword()).isTrue();
     }
 
@@ -537,7 +531,7 @@ class RoomControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Minimum 2 players required"));
+                .andExpect(jsonPath("$.detail").value("Minimum 2 players required"));
     }
 
     /**
@@ -552,7 +546,7 @@ class RoomControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Player name must be 30 characters or less"));
+                .andExpect(jsonPath("$.detail").value("Player name must be 30 characters or less"));
     }
 
     /**
@@ -620,8 +614,8 @@ class RoomControllerIT {
         ArgumentCaptor<JoinRoomRequest> captor = ArgumentCaptor.forClass(JoinRoomRequest.class);
         when(roomService.resolveRoomIdByName("Room1")).thenReturn("room-123");
         when(roomService.joinRoom(eq("room-123"), any(JoinRoomRequest.class)))
-                .thenReturn(new RoomEntryResult("room-123", "Player2"));
-        when(jwtService.generateToken("Player2", "room-123")).thenReturn("mock-token");
+                .thenReturn(new RoomService.EntryResult("room-123", "Player2", "mem-2"));
+        when(jwtService.generateToken("Player2", "room-123", "mem-2")).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/join")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -641,8 +635,8 @@ class RoomControllerIT {
         ArgumentCaptor<JoinRoomRequest> captor = ArgumentCaptor.forClass(JoinRoomRequest.class);
         when(roomService.resolveRoomIdByName("Room1")).thenReturn("room-123");
         when(roomService.joinRoom(eq("room-123"), any(JoinRoomRequest.class)))
-                .thenReturn(new RoomEntryResult("room-123", "Player2"));
-        when(jwtService.generateToken("Player2", "room-123")).thenReturn("mock-token");
+                .thenReturn(new RoomService.EntryResult("room-123", "Player2", "mem-2"));
+        when(jwtService.generateToken("Player2", "room-123", "mem-2")).thenReturn("mock-token");
 
         mockMvc.perform(post("/api/room/join")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -663,7 +657,7 @@ class RoomControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{ \"roomName\": \"Room1\", \"maxPlayers\": \"not-a-number\" }"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Malformed JSON request payload"));
+                .andExpect(jsonPath("$.detail").value("Malformed JSON request payload"));
     }
 
     /**
@@ -683,7 +677,7 @@ class RoomControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(largeBody))
                 .andExpect(status().isContentTooLarge())
-                .andExpect(jsonPath("$.message").value("Request payload too large. Maximum allowed is 10KB."));
+                .andExpect(jsonPath("$.detail").value("Request payload too large. Maximum allowed is 10KB."));
     }
 
     /**
@@ -696,7 +690,7 @@ class RoomControllerIT {
 
         // We don't need to simulate failures because the rate limit applies to successful requests too.
         when(roomService.createRoom(anyString(), any()))
-                .thenReturn(new RoomEntryResult("room-123", "Player1"));
+                .thenReturn(new RoomService.EntryResult("room-123", "Player1", "mem-1"));
 
         for (int i = 0; i < RateLimitService.REST_CAPACITY; i++) {
             mockMvc.perform(post("/api/room/create")
@@ -711,7 +705,7 @@ class RoomControllerIT {
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isTooManyRequests())
                 .andExpect(header().string("Retry-After", matchesPattern("[1-3]")))
-                .andExpect(jsonPath("$.message").value(
+                .andExpect(jsonPath("$.detail").value(
                         matchesPattern("Too many requests\\. Please try again in [1-3] seconds?\\.")));
     }
 
@@ -727,20 +721,20 @@ class RoomControllerIT {
         when(roomService.joinRoom(eq("room-locked"), any(JoinRoomRequest.class)))
                 .thenThrow(new InvalidRoomPasswordException());
         when(roomService.joinRoom(eq("room-other"), any(JoinRoomRequest.class)))
-                .thenReturn(new RoomEntryResult("room-other", "Guest"));
+                .thenReturn(new RoomService.EntryResult("room-other", "Guest", "mem-2"));
 
         for (int i = 0; i < RateLimitService.JOIN_PASSWORD_FAILURES; i++) {
             mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(new JoinRoomRequest("Locked", "Bot" + i, "guess" + i))))
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.message").value("Invalid password"));
+                    .andExpect(jsonPath("$.detail").value("Invalid password"));
         }
 
         mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new JoinRoomRequest("Locked", "Fresh", "right"))))
                 .andExpect(status().isTooManyRequests())
                 .andExpect(header().exists("Retry-After"))
-                .andExpect(jsonPath("$.message").value(
+                .andExpect(jsonPath("$.detail").value(
                         startsWith("Too many requests. Please try again in ")));
 
         mockMvc.perform(post("/api/room/join").contentType(MediaType.APPLICATION_JSON)
@@ -753,7 +747,7 @@ class RoomControllerIT {
      */
     @Test
     @DisplayName("POST /api/room/{roomId}/start-game - Success (Host)")
-    void startGame_Host_ShouldReturnGameId() throws Exception {
+    void startGame_Host_ShouldReturnNoContent() throws Exception {
         String roomId = "room-123";
         String playerName = "HostPlayer";
         PlayerPrincipal principal = new PlayerPrincipal(playerName, roomId);
@@ -763,9 +757,7 @@ class RoomControllerIT {
 
         mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
                 .principal(auth))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Game started successfully"))
-                .andExpect(jsonPath("$.data").value("game-123"));
+                .andExpect(status().isNoContent());
 
         verify(gameLifecycleService).createGameFromRoom(roomId);
     }
@@ -781,7 +773,7 @@ class RoomControllerIT {
         mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
                 .principal(auth))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message").value("Room not found"));
+                .andExpect(jsonPath("$.detail").value("Room not found"));
 
         verify(roomService).closeLobbyIfExpired(roomId);
         verifyNoInteractions(gameLifecycleService);
@@ -802,8 +794,8 @@ class RoomControllerIT {
         mockMvc.perform(post("/api/room/{roomId}/start-game", roomId)
                 .principal(auth))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error").value("Forbidden"))
-                .andExpect(jsonPath("$.message").value("Only the room host can start the game. Please ask the host to start."));
+                .andExpect(jsonPath("$.title").value("Forbidden"))
+                .andExpect(jsonPath("$.detail").value("Only the room host can start the game. Please ask the host to start."));
 
         verify(gameLifecycleService, never()).createGameFromRoom(anyString());
     }
@@ -817,7 +809,7 @@ class RoomControllerIT {
         String expectedMembershipId = room.addPlayer("HostAlice");
 
         when(roomService.createRoom(anyString(), any(CreateRoomRequest.class)))
-                .thenReturn(new RoomEntryResult(roomId, "HostAlice", expectedMembershipId));
+                .thenReturn(new RoomService.EntryResult(roomId, "HostAlice", expectedMembershipId));
         room.removePlayer("HostAlice");
         room.addPlayer("HostAlice");
         when(jwtService.generateToken("HostAlice", roomId, expectedMembershipId)).thenReturn("token-with-mid");
@@ -826,9 +818,9 @@ class RoomControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.token").value("token-with-mid"))
-                .andExpect(jsonPath("$.data.roomId").value(roomId))
-                .andExpect(jsonPath("$.data.playerName").value("HostAlice"));
+                .andExpect(jsonPath("$.token").value("token-with-mid"))
+                .andExpect(jsonPath("$.roomId").value(roomId))
+                .andExpect(jsonPath("$.playerName").value("HostAlice"));
 
         verify(jwtService).generateToken("HostAlice", roomId, expectedMembershipId);
     }
@@ -844,7 +836,7 @@ class RoomControllerIT {
 
         when(roomService.resolveRoomIdByName("RoomMem")).thenReturn(roomId);
         when(roomService.joinRoom(eq(roomId), any(JoinRoomRequest.class)))
-                .thenReturn(new RoomEntryResult(roomId, "Bob", expectedMembershipId));
+                .thenReturn(new RoomService.EntryResult(roomId, "Bob", expectedMembershipId));
         room.removePlayer("Bob");
         room.addPlayer("Bob");
         when(jwtService.generateToken("Bob", roomId, expectedMembershipId)).thenReturn("token-with-mid-bob");
@@ -853,9 +845,9 @@ class RoomControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.token").value("token-with-mid-bob"))
-                .andExpect(jsonPath("$.data.roomId").value(roomId))
-                .andExpect(jsonPath("$.data.playerName").value("Bob"));
+                .andExpect(jsonPath("$.token").value("token-with-mid-bob"))
+                .andExpect(jsonPath("$.roomId").value(roomId))
+                .andExpect(jsonPath("$.playerName").value("Bob"));
 
         verify(jwtService).generateToken("Bob", roomId, expectedMembershipId);
     }
@@ -875,8 +867,8 @@ class RoomControllerIT {
                 .principal(auth))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.status").value(401))
-                .andExpect(jsonPath("$.error").value("Unauthorized"))
-                .andExpect(jsonPath("$.message").value("Token membership is stale or invalid."));
+                .andExpect(jsonPath("$.title").value("Unauthorized"))
+                .andExpect(jsonPath("$.detail").value("Token membership is stale or invalid."));
 
         verify(roomService, never()).getRoomData(anyString());
     }

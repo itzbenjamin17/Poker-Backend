@@ -110,24 +110,21 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
             String bigBlindPlayerId, String currentPlayerId, HandPayoutState lastHandPayout,
             boolean finalPotSettled, ReadyGateState readyGateState, long handNumber,
             Map<ScheduledGameTask, Long> timerVersions, boolean pausedForDisconnectedSurvivor, long stateRevision,
-            GameResultState gameEndResult) {
+            FinalGameState gameEndResult) {
     }
 
     /** Plain persisted form of the immutable hand payout. */
     public record HandPayoutState(Map<String, Integer> potWinnings, Map<String, Integer> refunds,
             Set<String> winnerIds, int remainder, boolean wentToShowdown) { }
 
-    /** Plain persisted form of the immutable game result. */
-    public record GameResultState(
-            String type,
-            String gameId,
+    /** Plain persisted form of the immutable game-end summary on a completed {@link FinalGameState}. */
+    public record GameEndState(
             String winner,
             Integer winnerChips,
             boolean isForfeit,
             Boolean abandoned,
             String reason,
-            String message,
-            FinalGameState finalState) {
+            String message) {
     }
 
     /** Plain persisted form of the complete final game state projection. */
@@ -158,7 +155,8 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
             long handNumber,
             ReadyGateState readyGateState,
             long serverTimeEpochMs,
-            long stateRevision) {
+            long stateRevision,
+            GameEndState gameEnd) {
     }
 
     /** Plain persisted form of a player's public state in the game result projection. */

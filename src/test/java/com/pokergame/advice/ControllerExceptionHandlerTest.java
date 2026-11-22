@@ -1,13 +1,12 @@
 package com.pokergame.advice;
 
 import com.pokergame.exception.ResourceNotFoundException;
-
-import com.pokergame.dto.response.ErrorResponse;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindingResult;
@@ -37,13 +36,9 @@ class ControllerExceptionHandlerTest {
         HttpMessageNotReadableException ex = mock(HttpMessageNotReadableException.class);
         when(ex.getMessage()).thenReturn("JSON parse error: Unexpected character");
 
-        ResponseEntity<ErrorResponse> response = handler.handleHttpMessageNotReadableException(ex);
+        ResponseEntity<ProblemDetail> response = handler.handleHttpMessageNotReadableException(ex);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().status()).isEqualTo(400);
-        assertThat(response.getBody().error()).isEqualTo("Bad Request");
-        assertThat(response.getBody().message()).isEqualTo("Malformed JSON request payload");
+        assertProblemDetail(response, HttpStatus.BAD_REQUEST, "Malformed JSON request payload");
     }
 
     @Test
@@ -56,13 +51,9 @@ class ControllerExceptionHandlerTest {
         when(bindingResult.getFieldErrors()).thenReturn(List.of(fieldError));
         when(ex.getBindingResult()).thenReturn(bindingResult);
 
-        ResponseEntity<ErrorResponse> response = handler.handleMethodArgumentNotValidException(ex);
+        ResponseEntity<ProblemDetail> response = handler.handleMethodArgumentNotValidException(ex);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().status()).isEqualTo(400);
-        assertThat(response.getBody().error()).isEqualTo("Bad Request");
-        assertThat(response.getBody().message()).isEqualTo("Room name is required");
+        assertProblemDetail(response, HttpStatus.BAD_REQUEST, "Room name is required");
     }
 
     @Test
@@ -74,13 +65,9 @@ class ControllerExceptionHandlerTest {
         when(bindingResult.getFieldErrors()).thenReturn(Collections.emptyList());
         when(ex.getBindingResult()).thenReturn(bindingResult);
 
-        ResponseEntity<ErrorResponse> response = handler.handleMethodArgumentNotValidException(ex);
+        ResponseEntity<ProblemDetail> response = handler.handleMethodArgumentNotValidException(ex);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().status()).isEqualTo(400);
-        assertThat(response.getBody().error()).isEqualTo("Bad Request");
-        assertThat(response.getBody().message()).isEqualTo("Invalid request payload");
+        assertProblemDetail(response, HttpStatus.BAD_REQUEST, "Invalid request payload");
     }
 
     @Test
@@ -88,13 +75,9 @@ class ControllerExceptionHandlerTest {
     void givenResourceNotFoundException_whenHandle_thenReturnNotFound() {
         ResourceNotFoundException ex = new ResourceNotFoundException("Room not found with ID: room-abc-123");
 
-        ResponseEntity<ErrorResponse> response = handler.handleNotFoundException(ex);
+        ResponseEntity<ProblemDetail> response = handler.handleNotFoundException(ex);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().status()).isEqualTo(404);
-        assertThat(response.getBody().error()).isEqualTo("Not Found");
-        assertThat(response.getBody().message()).isEqualTo("Room not found with ID: room-abc-123");
+        assertProblemDetail(response, HttpStatus.NOT_FOUND, "Room not found with ID: room-abc-123");
     }
 
     // TooManyRequestsException (429), SecurityException (403), IllegalArgumentException (400),
@@ -116,17 +99,17 @@ class ControllerExceptionHandlerTest {
     @Test
     @DisplayName("should map unexpected Exception to 500 Internal Server Error without leaking details")
     void givenUnexpectedException_whenHandle_thenReturnInternalServerErrorWithGenericMessage() {
-        ResponseEntity<ErrorResponse> response = handler.handleException(
+        ResponseEntity<ProblemDetail> response = handler.handleException(
                 new RuntimeException("database password is hunter2"));
 
-        assertErrorResponse(response, HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred");
+        assertProblemDetail(response, HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred");
     }
 
-    private static void assertErrorResponse(ResponseEntity<ErrorResponse> response, HttpStatus status, String message) {
+    private static void assertProblemDetail(ResponseEntity<ProblemDetail> response, HttpStatus status, String detail) {
         assertThat(response.getStatusCode()).isEqualTo(status);
         assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().status()).isEqualTo(status.value());
-        assertThat(response.getBody().error()).isEqualTo(status.getReasonPhrase());
-        assertThat(response.getBody().message()).isEqualTo(message);
+        assertThat(response.getBody().getStatus()).isEqualTo(status.value());
+        assertThat(response.getBody().getTitle()).isEqualTo(status.getReasonPhrase());
+        assertThat(response.getBody().getDetail()).isEqualTo(detail);
     }
 }

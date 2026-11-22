@@ -3,7 +3,6 @@ package com.pokergame.service;
 import com.pokergame.util.RoomCoordinator;
 
 import com.pokergame.config.GameTimingProperties;
-import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.ScheduledGameTask;
@@ -13,6 +12,7 @@ import com.pokergame.model.Game;
 import com.pokergame.model.HandPayout;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
+import com.pokergame.model.TurnOutcome;
 import com.pokergame.util.LockLease;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -178,7 +178,7 @@ class HandProgressionServiceTest {
                 assertFalse(progression.startNewHand(GAME_ID));
                 assertTrue(game.isFinalPotSettled());
                 verify(gameStateService).advanceRevisionAndBuildGameEnd(eq(game), any(Player.class), eq(false));
-                verify(gameStateService).sendGameEnd(any());
+                verify(gameStateService).sendGameEnd(eq(GAME_ID), any());
             }
         }
 
@@ -198,7 +198,7 @@ class HandProgressionServiceTest {
             assertFalse(openReadyGate);
             assertTrue(game.isGameOver());
             verify(gameStateService).advanceRevisionAndBuildGameEnd(game, p1, false);
-            verify(gameStateService).sendGameEnd(any());
+            verify(gameStateService).sendGameEnd(eq(GAME_ID), any());
         }
     }
 
@@ -326,7 +326,6 @@ class HandProgressionServiceTest {
                 assertEquals(FIXED_NOW.toEpochMilli() + 4_000L,
                         game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
                 verify(gameStateService).broadcastShowdownResults(game);
-                verify(gameStateService).broadcastAutoAdvanceComplete(game);
             }
         }
 

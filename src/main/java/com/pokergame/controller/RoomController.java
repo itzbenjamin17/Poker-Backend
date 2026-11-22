@@ -2,10 +2,8 @@ package com.pokergame.controller;
 
 import static java.util.Objects.requireNonNull;
 
-import com.pokergame.dto.internal.RoomEntryResult;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
-import com.pokergame.dto.response.ApiResponse;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.dto.response.TokenResponse;
 import com.pokergame.exception.BadRequestException;
@@ -76,27 +74,22 @@ public class RoomController {
      * @return room ID and JWT token
      */
     @PostMapping("/create")
-    public ResponseEntity<ApiResponse<TokenResponse>> createRoom(
+    public ResponseEntity<TokenResponse> createRoom(
             @Valid @RequestBody CreateRoomRequest createRequest,
             HttpServletRequest request) {
         logger.info("Creating new room with request: {}", createRequest);
 
         // Sanitization is owned by the room service; it returns the canonical player
         // name so the token binds to exactly the name that was stored.
-        RoomEntryResult entry = roomService.createRoom(UUID.randomUUID().toString(), createRequest);
+        RoomService.EntryResult entry = roomService.createRoom(UUID.randomUUID().toString(), createRequest);
         String roomId = entry.roomId();
         String canonicalPlayerName = entry.canonicalPlayerName();
 
-        String membershipId = entry.membershipId();
-
         // Generate JWT token for this player, bound to this room and membership
-        String token = membershipId != null
-                ? jwtService.generateToken(canonicalPlayerName, roomId, membershipId)
-                : jwtService.generateToken(canonicalPlayerName, roomId);
+        String token = jwtService.generateToken(canonicalPlayerName, roomId, entry.membershipId());
 
         logger.info("Room created successfully with ID: {}", roomId);
-        TokenResponse tokenResponse = new TokenResponse(token, roomId, canonicalPlayerName);
-        return ResponseEntity.ok(ApiResponse.success("Room created successfully", tokenResponse));
+        return ResponseEntity.ok(new TokenResponse(token, roomId, canonicalPlayerName));
     }
 
     /**
@@ -111,7 +104,7 @@ public class RoomController {
      * @throws InvalidRoomPasswordException if the password is wrong (and records the failure)
      */
     @PostMapping("/join")
-    public ResponseEntity<ApiResponse<TokenResponse>> joinRoom(
+    public ResponseEntity<TokenResponse> joinRoom(
             @Valid @RequestBody JoinRoomRequest joinRequest,
             HttpServletRequest request) {
         logger.info("Player {} attempting to join room: {}", joinRequest.playerName(), joinRequest.roomName());
@@ -129,7 +122,7 @@ public class RoomController {
                     RateLimitService.tooManyRequestsMessage(attempt.retryAfterSeconds()), attempt.retryAfterSeconds());
         }
 
-        RoomEntryResult entry;
+        RoomService.EntryResult entry;
         try (LockLease _ = roomCoordinator.acquire(targetRoomId)) {
             if (roomService.closeLobbyIfExpired(targetRoomId)) {
                 throw new BadRequestException("Room has expired due to inactivity.");
@@ -142,16 +135,11 @@ public class RoomController {
         String roomId = entry.roomId();
         String canonicalPlayerName = entry.canonicalPlayerName();
 
-        String membershipId = entry.membershipId();
-
         // Generate JWT token for this player, bound to this room and membership
-        String token = membershipId != null
-                ? jwtService.generateToken(canonicalPlayerName, roomId, membershipId)
-                : jwtService.generateToken(canonicalPlayerName, roomId);
+        String token = jwtService.generateToken(canonicalPlayerName, roomId, entry.membershipId());
 
         logger.info("Player {} successfully joined room: {}", canonicalPlayerName, joinRequest.roomName());
-        TokenResponse tokenResponse = new TokenResponse(token, roomId, canonicalPlayerName);
-        return ResponseEntity.ok(ApiResponse.success("Successfully joined room", tokenResponse));
+        return ResponseEntity.ok(new TokenResponse(token, roomId, canonicalPlayerName));
     }
 
     /**
@@ -160,10 +148,10 @@ public class RoomController {
      *
      * @param roomId    room identifier
      * @param playerPrincipal authenticated player principal
-     * @return success confirmation
+     * @return empty 204 response
      */
     @PostMapping("/{roomId}/leave")
-    public ResponseEntity<ApiResponse<Void>> leaveRoom(
+    public ResponseEntity<Void> leaveRoom(
             @PathVariable String roomId,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
@@ -178,7 +166,7 @@ public class RoomController {
             gameLifecycleService.validatePlayerMembership(roomId, playerName, playerPrincipal.membershipId());
             gameLifecycleService.removePlayers(roomId, List.of(playerName));
             logger.info("Player {} successfully left room {}", playerName, roomId);
-            return ResponseEntity.ok(ApiResponse.success("Successfully left room"));
+            return ResponseEntity.noContent().build();
         }
     }
 
@@ -224,11 +212,11 @@ public class RoomController {
      *
      * @param roomId    room identifier
      * @param playerPrincipal authenticated player principal (must be host)
-     * @return created game ID
+     * @return empty 204 response
      * @throws UnauthorisedActionException if the player is not the room host
      */
     @PostMapping("/{roomId}/start-game")
-    public ResponseEntity<ApiResponse<String>> startGame(
+    public ResponseEntity<Void> startGame(
             @PathVariable String roomId,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         String playerName = playerPrincipal.playerName();
@@ -252,7 +240,7 @@ public class RoomController {
             String gameId = gameLifecycleService.createGameFromRoom(roomId);
             logger.info("Game {} created successfully from room {}", gameId, roomId);
 
-            return ResponseEntity.ok(ApiResponse.success("Game started successfully", gameId));
+            return ResponseEntity.noContent().build();
         }
     }
 }

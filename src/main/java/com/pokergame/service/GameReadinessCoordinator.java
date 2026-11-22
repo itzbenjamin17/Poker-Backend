@@ -1,11 +1,11 @@
 package com.pokergame.service;
 
 import com.pokergame.config.GameTimingProperties;
-import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
+import com.pokergame.model.TurnOutcome;
 import com.pokergame.service.GameTaskScheduler.ScheduledTimer;
 import java.time.Clock;
 import org.slf4j.Logger;

@@ -1,7 +1,6 @@
 package com.pokergame.service;
 
 import com.pokergame.dto.response.PublicGameStateResponse;
-import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ReadyGateState;
@@ -25,7 +24,7 @@ final class PublicGameStateBuilder {
     private GamePhase phase;
     private int currentBet;
     private List<Card> communityCards;
-    private List<PublicPlayerState> players;
+    private List<PublicGameStateResponse.PlayerState> players;
     private String currentPlayerName;
     private String currentPlayerId;
     private List<String> winners;
@@ -47,6 +46,7 @@ final class PublicGameStateBuilder {
     private long stateRevision;
     private Long turnDeadlineEpochMs;
     private Long inactivityDeadlineEpochMs;
+    private PublicGameStateResponse.GameEnd gameEnd;
 
     private PublicGameStateBuilder() {
     }
@@ -74,7 +74,7 @@ final class PublicGameStateBuilder {
         return builder;
     }
 
-    PublicGameStateBuilder players(List<PublicPlayerState> players) {
+    PublicGameStateBuilder players(List<PublicGameStateResponse.PlayerState> players) {
         this.players = players;
         return this;
     }
@@ -153,6 +153,11 @@ final class PublicGameStateBuilder {
         return this;
     }
 
+    PublicGameStateBuilder gameEnd(PublicGameStateResponse.GameEnd gameEnd) {
+        this.gameEnd = gameEnd;
+        return this;
+    }
+
     PublicGameStateResponse build() {
         return new PublicGameStateResponse(
                 maxPlayers,
@@ -183,6 +188,7 @@ final class PublicGameStateBuilder {
                 serverTimeEpochMs,
                 stateRevision,
                 turnDeadlineEpochMs,
-                inactivityDeadlineEpochMs);
+                inactivityDeadlineEpochMs,
+                gameEnd);
     }
 }

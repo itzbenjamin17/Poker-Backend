@@ -3,8 +3,6 @@ package com.pokergame.controller;
 import static java.util.Objects.requireNonNull;
 
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.dto.response.ApiResponse;
-import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -185,10 +183,10 @@ public class GameController {
      *
      * @param gameId          game identifier
      * @param playerPrincipal authenticated player principal
-     * @return direct GameEndResponse
+     * @return direct completed {@link PublicGameStateResponse}
      */
     @GetMapping("/{gameId}/review")
-    public ResponseEntity<GameEndResponse> getGameReview(
+    public ResponseEntity<PublicGameStateResponse> getGameReview(
             @PathVariable String gameId,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         if (playerPrincipal == null) {
@@ -214,10 +212,10 @@ public class GameController {
      *
      * @param gameId    game identifier
      * @param playerPrincipal authenticated player principal
-     * @return final game result confirmation
+     * @return completed {@link PublicGameStateResponse}
      */
     @PostMapping("/{gameId}/claim-win")
-    public ResponseEntity<ApiResponse<GameEndResponse>> claimWin(
+    public ResponseEntity<PublicGameStateResponse> claimWin(
             @PathVariable String gameId,
             @AuthenticationPrincipal PlayerPrincipal playerPrincipal) {
         if (playerPrincipal == null) {
@@ -232,9 +230,9 @@ public class GameController {
 
         try (LockLease _ = roomCoordinator.acquire(gameId)) {
             gameLifecycleService.validatePlayerMembership(gameId, playerName, playerPrincipal.membershipId());
-            GameEndResponse result = gameLifecycleService.claimWin(gameId, playerName);
+            PublicGameStateResponse result = gameLifecycleService.claimWin(gameId, playerName);
             logger.info("Player {} successfully claimed win in game {}", playerName, gameId);
-            return ResponseEntity.ok(ApiResponse.success("Win claimed successfully", result));
+            return ResponseEntity.ok(result);
         }
     }
 

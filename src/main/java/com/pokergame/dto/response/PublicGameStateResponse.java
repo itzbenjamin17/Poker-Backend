@@ -1,339 +1,177 @@
 package com.pokergame.dto.response;
 
-import com.pokergame.model.Card;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.pokergame.enums.GamePhase;
-import com.pokergame.enums.ReadyGateState;
-
-import java.util.List;
+import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.ReadyGateState;
+import com.pokergame.model.Card;
+import java.util.List;
 
 /**
- * Represents the public state of a game.
- * 
- * @param turnDeadlineEpochMs            Absolute deadline for the current decision, null when none.
- * @param maxPlayers                    The maximum number of players in the
- *                                      game.
- * @param pot                           The total pot size.
- * @param pots                          The pot sizes for each pot. (For side
- *                                      pots)
- * @param uncalledAmount                The uncalled amount. (Total amount of
- *                                      chips only one player has ability to
- *                                      win, usually in split pot scenarios)
- * @param phase                         The current game phase.
- * @param currentBet                    The current bet amount.
- * @param communityCards                The community cards.
- * @param players                       The list of public player states.
- * @param currentPlayerName             The name of the current player.
- * @param currentPlayerId               The ID of the current player.
- * @param winners                       The list of winners.
- * @param winningsPerPlayer             The winnings per player.
- * @param isAutoAdvancing               Whether the game is auto advancing.
- * @param autoAdvanceMessage            The auto advance message.
- * @param isReadyCountdownActive        Whether the post-round ready countdown
- *                                      is active.
- * @param readyCountdownDeadlineEpochMs The UTC epoch ms when ready countdown
- *                                      expires.
- * @param claimWinAvailable             Whether claim win is available.
- * @param claimWinPlayerName            The name of the player who can claim
- *                                      win.
- * @param handSettled                   Whether retained settlement metadata proves this hand completed; an empty
- *                                      winner list can describe a void hand with carried-over chips.
- * @param carryOverAmount               The explicit unresolved chip amount retained for a later hand or final payout.
- * @param legalActions                  Authoritative actions for the current actor; empty means no actor can act.
- * @param minimumBetAmount              Minimum bet in incremental chip units, nullable when no actor can bet.
- * @param minimumRaiseAmount            Full minimum raise in incremental chip units, including the call amount; a
- *                                      short whole-stack all-in may still be legal below this amount.
- * @param handNumber                    The sequence number of the current hand.
- * @param readyGateState                The state of the ready gate between hands.
- * @param serverTimeEpochMs             The current server time in UTC epoch ms.
- * @param stateRevision                 The monotonically increasing state revision number.
- * @param inactivityDeadlineEpochMs     The absolute deadline for active-game inactivity abandonment in UTC epoch ms, null when none.
+ * Public snapshot of a poker game returned by {@code GET /api/game/{gameId}/state},
+ * {@code GET /api/game/{gameId}/review}, and {@code POST /api/game/{gameId}/claim-win}, and
+ * broadcast to {@code /game/{gameId}} for live play, showdowns, auto-advance, and game completion.
+ *
+ * @param maxPlayers                    maximum number of players in the game
+ * @param pot                           total pot size
+ * @param pots                          main and side-pot sizes
+ * @param uncalledAmount                chips eligible only to a single player
+ * @param phase                         current game phase
+ * @param currentBet                    current highest bet in the round
+ * @param communityCards                shared board cards
+ * @param players                       public state of each seated player
+ * @param currentPlayerName             current acting player's display name, or {@code null}
+ * @param currentPlayerId               current acting player's stable ID, or {@code null}
+ * @param winners                       winning player names for a settled hand or completed match
+ * @param winningsPerPlayer             equal chip award per winner when all winners won the same amount
+ * @param isAutoAdvancing               whether the game is auto-advancing all-in streets
+ * @param autoAdvanceMessage            status banner shown during auto-advance
+ * @param isReadyCountdownActive        whether the post-hand ready countdown is active
+ * @param readyCountdownDeadlineEpochMs UTC epoch ms when the ready countdown expires
+ * @param claimWinAvailable             whether an immediate disconnect win claim is available
+ * @param claimWinPlayerName            player currently eligible to claim win
+ * @param handSettled                   whether retained settlement metadata confirms this hand completed
+ * @param carryOverAmount               unresolved chip amount carried to a later hand or final payout
+ * @param legalActions                  authoritative legal actions for the current actor
+ * @param minimumBetAmount              minimum incremental bet, or {@code null} when no actor can bet
+ * @param minimumRaiseAmount            minimum incremental full raise, or {@code null} when no actor can raise
+ * @param handNumber                    sequence number of the current hand
+ * @param readyGateState                state of the between-hand ready gate
+ * @param serverTimeEpochMs             server clock timestamp in UTC epoch ms
+ * @param stateRevision                 monotonically increasing revision number within the hand
+ * @param turnDeadlineEpochMs           absolute deadline for the current turn, or {@code null}
+ * @param inactivityDeadlineEpochMs     absolute deadline for game inactivity abandonment, or {@code null}
+ * @param gameEnd                       final match summary when the game has finished or been abandoned,
+ *                                      otherwise {@code null}
  */
 public record PublicGameStateResponse(
-                int maxPlayers,
-                int pot,
-                List<Integer> pots,
-                Integer uncalledAmount,
-                GamePhase phase,
-                int currentBet,
-                List<Card> communityCards,
-                List<PublicPlayerState> players,
-                String currentPlayerName,
-                String currentPlayerId,
-                // For showdowns
-                List<String> winners,
-                // These use objects so they can be null
-                Integer winningsPerPlayer,
-                // For auto advancing
-                Boolean isAutoAdvancing,
-                String autoAdvanceMessage,
-                // Ready-countdown metadata
-                Boolean isReadyCountdownActive,
-                Long readyCountdownDeadlineEpochMs,
-                // Claim-win metadata
-                Boolean claimWinAvailable,
-                String claimWinPlayerName,
-                Boolean handSettled,
-                Integer carryOverAmount,
-                List<PlayerAction> legalActions,
-                Integer minimumBetAmount,
-                Integer minimumRaiseAmount,
-                long handNumber,
-                ReadyGateState readyGateState,
-                long serverTimeEpochMs,
-                long stateRevision,
-                Long turnDeadlineEpochMs,
-                @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Long inactivityDeadlineEpochMs) {
+        int maxPlayers,
+        int pot,
+        List<Integer> pots,
+        Integer uncalledAmount,
+        GamePhase phase,
+        int currentBet,
+        List<Card> communityCards,
+        List<PlayerState> players,
+        String currentPlayerName,
+        String currentPlayerId,
+        List<String> winners,
+        Integer winningsPerPlayer,
+        Boolean isAutoAdvancing,
+        String autoAdvanceMessage,
+        Boolean isReadyCountdownActive,
+        Long readyCountdownDeadlineEpochMs,
+        Boolean claimWinAvailable,
+        String claimWinPlayerName,
+        Boolean handSettled,
+        Integer carryOverAmount,
+        List<PlayerAction> legalActions,
+        Integer minimumBetAmount,
+        Integer minimumRaiseAmount,
+        long handNumber,
+        ReadyGateState readyGateState,
+        long serverTimeEpochMs,
+        long stateRevision,
+        Long turnDeadlineEpochMs,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Long inactivityDeadlineEpochMs,
+        @JsonInclude(JsonInclude.Include.NON_NULL) GameEnd gameEnd) {
 
-        public PublicGameStateResponse {
-                pots = pots == null ? null : List.copyOf(pots);
-                communityCards = communityCards == null ? null : List.copyOf(communityCards);
-                players = players == null ? null : List.copyOf(players);
-                winners = winners == null ? null : List.copyOf(winners);
-                legalActions = legalActions == null ? null : List.copyOf(legalActions);
+    public PublicGameStateResponse {
+        pots = pots == null ? null : List.copyOf(pots);
+        communityCards = communityCards == null ? null : List.copyOf(communityCards);
+        players = players == null ? null : List.copyOf(players);
+        winners = winners == null ? null : List.copyOf(winners);
+        legalActions = legalActions == null ? null : List.copyOf(legalActions);
+    }
+
+    /**
+     * Public state of a single seated player inside {@link PublicGameStateResponse}.
+     *
+     * @param id                        stable player identifier
+     * @param name                      player display name
+     * @param chips                     remaining chip stack
+     * @param currentBet                chips bet in the current round
+     * @param status                    public player status string
+     * @param isAllIn                   whether the player is all-in
+     * @param isCurrentPlayer           whether it is this player's turn
+     * @param hasFolded                 whether the player folded this hand
+     * @param isSmallBlind              whether the player posted the small blind
+     * @param isBigBlind                whether the player posted the big blind
+     * @param handRank                  evaluated hand rank at showdown, or {@code null}
+     * @param bestHand                  best 5-card hand at showdown, or {@code null}
+     * @param isWinner                  whether the player won the settled hand or match, or {@code null}
+     * @param chipsWon                  chips won in the settled hand, or {@code null}
+     * @param holeCards                 revealed hole cards at a contested showdown, or {@code null}
+     * @param disconnectDeadlineEpochMs UTC epoch ms when reconnect grace expires, or {@code null}
+     * @param isReadyForNextHand        whether the player confirmed ready for the next hand
+     */
+    public record PlayerState(
+            String id,
+            String name,
+            int chips,
+            int currentBet,
+            String status,
+            boolean isAllIn,
+            boolean isCurrentPlayer,
+            boolean hasFolded,
+            boolean isSmallBlind,
+            boolean isBigBlind,
+            HandRank handRank,
+            List<Card> bestHand,
+            Boolean isWinner,
+            Integer chipsWon,
+            List<Card> holeCards,
+            Long disconnectDeadlineEpochMs,
+            Boolean isReadyForNextHand) {
+
+        public PlayerState {
+            bestHand = bestHand == null ? null : List.copyOf(bestHand);
+            holeCards = holeCards == null ? null : List.copyOf(holeCards);
         }
+    }
 
-        /** Backward-compatible constructor for callers predating active game inactivity deadlines. */
-        public PublicGameStateResponse(int maxPlayers, int pot, List<Integer> pots, Integer uncalledAmount,
-                        GamePhase phase, int currentBet, List<Card> communityCards, List<PublicPlayerState> players,
-                        String currentPlayerName, String currentPlayerId, List<String> winners,
-                        Integer winningsPerPlayer, Boolean isAutoAdvancing, String autoAdvanceMessage,
-                        Boolean isReadyCountdownActive, Long readyCountdownDeadlineEpochMs,
-                        Boolean claimWinAvailable, String claimWinPlayerName, Boolean handSettled,
-                        Integer carryOverAmount, List<PlayerAction> legalActions, Integer minimumBetAmount,
-                        Integer minimumRaiseAmount, long handNumber, ReadyGateState readyGateState,
-                        long serverTimeEpochMs, long stateRevision, Long turnDeadlineEpochMs) {
-                this(maxPlayers, pot, pots, uncalledAmount, phase, currentBet, communityCards, players,
-                        currentPlayerName, currentPlayerId, winners, winningsPerPlayer, isAutoAdvancing,
-                        autoAdvanceMessage, isReadyCountdownActive, readyCountdownDeadlineEpochMs,
-                        claimWinAvailable, claimWinPlayerName, handSettled, carryOverAmount,
-                        legalActions, minimumBetAmount, minimumRaiseAmount, handNumber, readyGateState,
-                        serverTimeEpochMs, stateRevision, turnDeadlineEpochMs, null);
-        }
+    /**
+     * Final match summary embedded in {@link PublicGameStateResponse#gameEnd()} when the match
+     * completes with a winner or is abandoned due to inactivity.
+     *
+     * @param winner      winning player's name, or {@code null} when abandoned
+     * @param winnerChips winner's final chip stack, or {@code null} when abandoned
+     * @param isForfeit   {@code true} when the match ended by opponent departure or disconnect claim
+     * @param abandoned   {@code true} when the match ended without a winner
+     * @param reason      abandonment reason (e.g. {@code "INACTIVITY"}), or {@code null}
+     * @param message     human-readable summary of the final result
+     */
+    public record GameEnd(
+            String winner,
+            @JsonInclude(JsonInclude.Include.NON_NULL) Integer winnerChips,
+            boolean isForfeit,
+            @JsonInclude(JsonInclude.Include.NON_DEFAULT) boolean abandoned,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String reason,
+            String message) {
 
-        /** Backward-compatible constructor for callers predating turn deadlines. */
-        public PublicGameStateResponse(int maxPlayers, int pot, List<Integer> pots, Integer uncalledAmount,
-                        GamePhase phase, int currentBet, List<Card> communityCards, List<PublicPlayerState> players,
-                        String currentPlayerName, String currentPlayerId, List<String> winners,
-                        Integer winningsPerPlayer, Boolean isAutoAdvancing, String autoAdvanceMessage,
-                        Boolean isReadyCountdownActive, Long readyCountdownDeadlineEpochMs,
-                        Boolean claimWinAvailable, String claimWinPlayerName, Boolean handSettled,
-                        Integer carryOverAmount, List<PlayerAction> legalActions, Integer minimumBetAmount,
-                        Integer minimumRaiseAmount, long handNumber, ReadyGateState readyGateState,
-                        long serverTimeEpochMs, long stateRevision) {
-                this(maxPlayers, pot, pots, uncalledAmount, phase, currentBet, communityCards, players,
-                        currentPlayerName, currentPlayerId, winners, winningsPerPlayer, isAutoAdvancing,
-                        autoAdvanceMessage, isReadyCountdownActive, readyCountdownDeadlineEpochMs,
-                        claimWinAvailable, claimWinPlayerName, handSettled, carryOverAmount,
-                        legalActions, minimumBetAmount, minimumRaiseAmount, handNumber, readyGateState,
-                        serverTimeEpochMs, stateRevision, null);
-        }
-
-        /** Backward-compatible constructor for callers predating stateRevision. */
-        public PublicGameStateResponse(int maxPlayers, int pot, List<Integer> pots, Integer uncalledAmount,
-                        GamePhase phase, int currentBet, List<Card> communityCards, List<PublicPlayerState> players,
-                        String currentPlayerName, String currentPlayerId, List<String> winners,
-                        Integer winningsPerPlayer, Boolean isAutoAdvancing, String autoAdvanceMessage,
-                        Boolean isReadyCountdownActive, Long readyCountdownDeadlineEpochMs,
-                        Boolean claimWinAvailable, String claimWinPlayerName, Boolean handSettled,
-                        Integer carryOverAmount, List<PlayerAction> legalActions, Integer minimumBetAmount,
-                        Integer minimumRaiseAmount, long handNumber, ReadyGateState readyGateState,
-                        long serverTimeEpochMs) {
-                this(maxPlayers, pot, pots, uncalledAmount, phase, currentBet, communityCards, players,
-                        currentPlayerName, currentPlayerId, winners, winningsPerPlayer, isAutoAdvancing,
-                        autoAdvanceMessage, isReadyCountdownActive, readyCountdownDeadlineEpochMs,
-                        claimWinAvailable, claimWinPlayerName, handSettled, carryOverAmount,
-                        legalActions, minimumBetAmount, minimumRaiseAmount, handNumber, readyGateState,
-                        serverTimeEpochMs, 0L);
-        }
-
-        /** Backward-compatible constructor for callers predating lifecycle metadata. */
-        public PublicGameStateResponse(int maxPlayers, int pot, List<Integer> pots, Integer uncalledAmount,
-                        GamePhase phase, int currentBet, List<Card> communityCards, List<PublicPlayerState> players,
-                        String currentPlayerName, String currentPlayerId, List<String> winners,
-                        Integer winningsPerPlayer, Boolean isAutoAdvancing, String autoAdvanceMessage,
-                        Boolean isReadyCountdownActive, Long readyCountdownDeadlineEpochMs,
-                        Boolean claimWinAvailable, String claimWinPlayerName, Boolean handSettled,
-                        Integer carryOverAmount, List<PlayerAction> legalActions, Integer minimumBetAmount,
-                        Integer minimumRaiseAmount) {
-                this(maxPlayers, pot, pots, uncalledAmount, phase, currentBet, communityCards, players,
-                        currentPlayerName, currentPlayerId, winners, winningsPerPlayer, isAutoAdvancing,
-                        autoAdvanceMessage, isReadyCountdownActive, readyCountdownDeadlineEpochMs,
-                        claimWinAvailable, claimWinPlayerName, handSettled, carryOverAmount,
-                        legalActions, minimumBetAmount, minimumRaiseAmount, 0, ReadyGateState.CLOSED,
-                        System.currentTimeMillis(), 0L);
-        }
-
-        /** Backward-compatible constructor for snapshots before legal-action metadata. */
-        public PublicGameStateResponse(int maxPlayers, int pot, List<Integer> pots, Integer uncalledAmount,
-                        GamePhase phase, int currentBet, List<Card> communityCards, List<PublicPlayerState> players,
-                        String currentPlayerName, String currentPlayerId, List<String> winners,
-                        Integer winningsPerPlayer, Boolean isAutoAdvancing, String autoAdvanceMessage,
-                        Boolean isReadyCountdownActive, Long readyCountdownDeadlineEpochMs,
-                        Boolean claimWinAvailable, String claimWinPlayerName, Boolean handSettled,
-                        Integer carryOverAmount) {
-                this(maxPlayers, pot, pots, uncalledAmount, phase, currentBet, communityCards, players,
-                                currentPlayerName, currentPlayerId, winners, winningsPerPlayer, isAutoAdvancing,
-                                autoAdvanceMessage, isReadyCountdownActive, readyCountdownDeadlineEpochMs,
-                                claimWinAvailable, claimWinPlayerName, handSettled, carryOverAmount, null, null, null);
-        }
-
-        /** Backward-compatible full constructor for snapshots predating settlement metadata. */
-        public PublicGameStateResponse(int maxPlayers, int pot, List<Integer> pots, Integer uncalledAmount,
-                        GamePhase phase, int currentBet, List<Card> communityCards, List<PublicPlayerState> players,
-                        String currentPlayerName, String currentPlayerId, List<String> winners,
-                        Integer winningsPerPlayer, Boolean isAutoAdvancing, String autoAdvanceMessage,
-                        Boolean isReadyCountdownActive, Long readyCountdownDeadlineEpochMs,
-                        Boolean claimWinAvailable, String claimWinPlayerName) {
-                this(maxPlayers, pot, pots, uncalledAmount, phase, currentBet, communityCards, players,
-                                currentPlayerName, currentPlayerId, winners, winningsPerPlayer, isAutoAdvancing,
-                                autoAdvanceMessage, isReadyCountdownActive, readyCountdownDeadlineEpochMs,
-                                claimWinAvailable, claimWinPlayerName, null, null);
+        /**
+         * Creates a won-game summary.
+         *
+         * @param winner      winning player's name
+         * @param winnerChips winner's final chip stack
+         * @param isForfeit   {@code true} when the match ended by forfeit
+         * @param message     human-readable summary of the result
+         * @return won-game summary
+         */
+        public static GameEnd won(String winner, int winnerChips, boolean isForfeit, String message) {
+            return new GameEnd(winner, winnerChips, isForfeit, false, null, message);
         }
 
         /**
-         * Creates a normal in-hand projection without showdown, countdown, or
-         * claim-win metadata.
+         * Creates an abandoned-game summary.
          *
-         * @param maxPlayers maximum game capacity
-         * @param pot total committed chips
-         * @param pots main and side-pot amounts
-         * @param uncalledAmount chips refundable to the sole eligible player
-         * @param phase current game phase
-         * @param currentBet current table bet
-         * @param communityCards public board cards
-         * @param players public player projections
-         * @param currentPlayerName current player's display name
-         * @param currentPlayerId current player's stable identifier
+         * @param reason  abandonment reason code
+         * @param message human-readable summary of the abandonment
+         * @return abandoned-game summary
          */
-        public PublicGameStateResponse(int maxPlayers,
-                        int pot,
-                        List<Integer> pots,
-                        Integer uncalledAmount,
-                        GamePhase phase,
-                        int currentBet,
-                        List<Card> communityCards,
-                        List<PublicPlayerState> players,
-                        String currentPlayerName,
-                        String currentPlayerId) {
-                this(
-                                maxPlayers,
-                                pot,
-                                pots,
-                                uncalledAmount,
-                                phase,
-                                currentBet,
-                                communityCards,
-                                players,
-                                currentPlayerName,
-                                currentPlayerId,
-                                null,
-                                null,
-                                null,
-                                null,
-                                null,
-                                null,
-                                null,
-                                null);
-
+        public static GameEnd abandoned(String reason, String message) {
+            return new GameEnd(null, null, false, true, reason, message);
         }
-
-        /**
-         * Creates a normal in-hand projection with disconnect claim-win metadata.
-         *
-         * @param maxPlayers maximum game capacity
-         * @param pot total committed chips
-         * @param pots main and side-pot amounts
-         * @param uncalledAmount chips refundable to the sole eligible player
-         * @param phase current game phase
-         * @param currentBet current table bet
-         * @param communityCards public board cards
-         * @param players public player projections
-         * @param currentPlayerName current player's display name
-         * @param currentPlayerId current player's stable identifier
-         * @param claimWinAvailable whether an immediate disconnect win is available
-         * @param claimWinPlayerName player currently eligible to claim
-         */
-        public PublicGameStateResponse(int maxPlayers,
-                        int pot,
-                        List<Integer> pots,
-                        Integer uncalledAmount,
-                        GamePhase phase,
-                        int currentBet,
-                        List<Card> communityCards,
-                        List<PublicPlayerState> players,
-                        String currentPlayerName,
-                        String currentPlayerId,
-                        Boolean claimWinAvailable,
-                        String claimWinPlayerName) {
-                this(
-                                maxPlayers,
-                                pot,
-                                pots,
-                                uncalledAmount,
-                                phase,
-                                currentBet,
-                                communityCards,
-                                players,
-                                currentPlayerName,
-                                currentPlayerId,
-                                null,
-                                null,
-                                null,
-                                null,
-                                null,
-                                null,
-                                claimWinAvailable,
-                                claimWinPlayerName);
-
-        }
-        /**
-         * Creates a showdown projection with winner information.
-         *
-         * @param maxPlayers maximum game capacity
-         * @param pot total committed chips
-         * @param pots main and side-pot amounts
-         * @param uncalledAmount chips refundable to the sole eligible player
-         * @param phase current game phase
-         * @param currentBet current table bet
-         * @param communityCards public board cards
-         * @param players public player projections
-         * @param currentPlayerName current player's display name
-         * @param currentPlayerId current player's stable identifier
-         * @param winners winning player names
-         * @param winningsPerPlayer equal winnings represented by this legacy projection
-         */
-        public PublicGameStateResponse(int maxPlayers,
-                        int pot,
-                        List<Integer> pots,
-                        Integer uncalledAmount,
-                        GamePhase phase,
-                        int currentBet,
-                        List<Card> communityCards,
-                        List<PublicPlayerState> players,
-                        String currentPlayerName,
-                        String currentPlayerId,
-                        List<String> winners,
-                        Integer winningsPerPlayer) {
-                this(
-                                maxPlayers,
-                                pot,
-                                pots,
-                                uncalledAmount,
-                                phase,
-                                currentBet,
-                                communityCards,
-                                players,
-                                currentPlayerName,
-                                currentPlayerId,
-                                winners,
-                                winningsPerPlayer,
-                                null,
-                                null,
-                                null,
-                                null,
-                                null,
-                                null);
-
-        }
+    }
 }

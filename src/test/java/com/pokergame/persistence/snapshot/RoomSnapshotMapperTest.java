@@ -18,10 +18,7 @@ import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.model.HandPayout;
-import com.pokergame.dto.internal.PlayerDecision;
-import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
-import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ReadyGateState;
@@ -220,20 +217,19 @@ class RoomSnapshotMapperTest {
                         .handRank(HandRank.NO_HAND)
                         .hasFolded(false).allIn(false).out(true).disconnected(false).readyForNextHand(false).build());
 
-        PublicGameStateResponse finalState = new PublicGameStateResponse(
+        PublicGameStateResponse terminalResult = new PublicGameStateResponse(
                 6, 0, List.of(), 0, GamePhase.SHOWDOWN, 0,
                 List.of(new Card(Rank.TEN, Suit.CLUBS)),
                 List.of(
-                        new PublicPlayerState("a", "Alice", 2000, 0, "ACTIVE", false, false, false, true, false,
+                        new PublicGameStateResponse.PlayerState("a", "Alice", 2000, 0, "ACTIVE", false, false, false, true, false,
                                 HandRank.HIGH_CARD, List.of(new Card(Rank.ACE, Suit.SPADES)),
                                 true, null, List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)), null, false),
-                        new PublicPlayerState("b", "Bob", 0, 0, "OUT", false, false, false, false, true,
+                        new PublicGameStateResponse.PlayerState("b", "Bob", 0, 0, "OUT", false, false, false, false, true,
                                 null, List.of(), false, null, null, null, true)),
                 null, null, List.of("Alice"), null, false, null, false, null, false, null,
-                true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, 123456789L, 42);
-
-        GameEndResponse terminalResult = new GameEndResponse("GAME_END", "room-terminal", "Alice", 2000, false,
-                "ðŸ† Alice wins the game with 2000 chips!", finalState);
+                true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, 123456789L, 42,
+                null, null, PublicGameStateResponse.GameEnd.won(
+                        "Alice", 2000, false, "Alice wins the game with 2000 chips!"));
 
         Game game = Game.restoreBuilder().gameId("room-terminal").players(players).activePlayerIds(List.of("a", "b"))
                 .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
@@ -263,18 +259,16 @@ class RoomSnapshotMapperTest {
 
         Game restored = mapper.deserialize(snapshot).game();
         assertNotNull(restored.getGameEndResult());
-        GameEndResponse restoredResult = restored.getGameEndResult();
-        assertEquals("GAME_END", restoredResult.type());
-        assertEquals("room-terminal", restoredResult.gameId());
-        assertEquals("Alice", restoredResult.winner());
-        assertEquals(2000, restoredResult.winnerChips());
-        assertFalse(restoredResult.isForfeit());
-        assertEquals("ðŸ† Alice wins the game with 2000 chips!", restoredResult.message());
-        assertNotNull(restoredResult.finalState());
-        assertEquals(42, restoredResult.finalState().stateRevision());
-        assertEquals(2, restoredResult.finalState().players().size());
-        assertEquals("Alice", restoredResult.finalState().players().get(0).name());
-        assertEquals("Bob", restoredResult.finalState().players().get(1).name());
+        PublicGameStateResponse restoredResult = restored.getGameEndResult();
+        assertNotNull(restoredResult.gameEnd());
+        assertEquals("Alice", restoredResult.gameEnd().winner());
+        assertEquals(2000, restoredResult.gameEnd().winnerChips());
+        assertFalse(restoredResult.gameEnd().isForfeit());
+        assertEquals("Alice wins the game with 2000 chips!", restoredResult.gameEnd().message());
+        assertEquals(42, restoredResult.stateRevision());
+        assertEquals(2, restoredResult.players().size());
+        assertEquals("Alice", restoredResult.players().get(0).name());
+        assertEquals("Bob", restoredResult.players().get(1).name());
     }
 
     @Test
@@ -303,15 +297,15 @@ class RoomSnapshotMapperTest {
         assertEquals(150, restored.getMinimumRaiseAmount(initialA));
         assertFalse(restored.getLegalActionsFor(initialA).contains(PlayerAction.RAISE));
         assertThrows(UnauthorisedActionException.class,
-                () -> restored.processPlayerDecision(initialA, new PlayerDecision(PlayerAction.RAISE, 150, "a")));
+                () -> restored.processPlayerDecision(initialA, PlayerAction.RAISE, 150));
         Player restoredShort = restored.getPlayers().get(3);
-        restored.processPlayerDecision(restoredShort, new PlayerDecision(PlayerAction.ALL_IN, 0, "s2"));
-        restored.processPlayerDecision(restored.getPlayers().get(1), new PlayerDecision(PlayerAction.CALL, 0, "b"));
+        restored.processPlayerDecision(restoredShort, PlayerAction.ALL_IN, 0);
+        restored.processPlayerDecision(restored.getPlayers().get(1), PlayerAction.CALL, 0);
         Game reopened = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, restored))).game();
         Player reopenedA = reopened.getPlayers().getFirst();
         assertEquals(200, reopened.getMinimumRaiseAmount(reopenedA));
         assertTrue(reopened.getLegalActionsFor(reopenedA).contains(PlayerAction.RAISE));
-        reopened.processPlayerDecision(reopenedA, new PlayerDecision(PlayerAction.RAISE, 200, "a"));
+        reopened.processPlayerDecision(reopenedA, PlayerAction.RAISE, 200);
         assertEquals(300, reopened.getCurrentHighestBet());
     }
 
@@ -618,20 +612,20 @@ class RoomSnapshotMapperTest {
                         .handRank(HandRank.NO_HAND)
                         .hasFolded(false).allIn(false).out(true).disconnected(false).readyForNextHand(false).build());
 
-        PublicGameStateResponse finalState = new PublicGameStateResponse(
+        PublicGameStateResponse terminalResult = new PublicGameStateResponse(
                 6, 0, List.of(), 0, GamePhase.SHOWDOWN, 0,
                 List.of(new Card(Rank.TEN, Suit.CLUBS)),
                 List.of(
-                        new PublicPlayerState("a", "Alice", 2000, 0, "ACTIVE", false, false, false, true, false,
+                        new PublicGameStateResponse.PlayerState("a", "Alice", 2000, 0, "ACTIVE", false, false, false, true, false,
                                 HandRank.HIGH_CARD, List.of(new Card(Rank.ACE, Suit.SPADES)),
                                 true, null, List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)),
                                 null, false),
-                        new PublicPlayerState("b", "Bob", 0, 0, "OUT", false, false, false, false, true,
+                        new PublicGameStateResponse.PlayerState("b", "Bob", 0, 0, "OUT", false, false, false, false, true,
                                 null, List.of(), false, null, null, null, true)),
                 null, null, List.of("Alice"), null, false, null, false, null, false, null,
-                true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, 123456789L, 42);
-        GameEndResponse terminalResult = new GameEndResponse("GAME_END", TERMINAL_ROOM_ID, "Alice", 2000, false,
-                "Alice wins the game with 2000 chips!", finalState);
+                true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, 123456789L, 42,
+                null, null, PublicGameStateResponse.GameEnd.won(
+                        "Alice", 2000, false, "Alice wins the game with 2000 chips!"));
 
         Game game = Game.restoreBuilder().gameId(TERMINAL_ROOM_ID).players(players).activePlayerIds(List.of("a", "b"))
                 .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
@@ -679,7 +673,7 @@ class RoomSnapshotMapperTest {
     }
 
     private static ObjectNode playerOf(ObjectNode terminal, int index) {
-        return (ObjectNode) ((ArrayNode) terminal.get("finalState").get("players")).get(index);
+        return (ObjectNode) ((ArrayNode) terminal.get("players")).get(index);
     }
 
     /** Builds a JSON array of cards; a {@code null} element becomes a JSON null entry. */
@@ -700,11 +694,11 @@ class RoomSnapshotMapperTest {
     void deserialize_ValidRetainedTerminalResult_Restores() {
         ObjectNode snapshot = validTerminalSnapshotTree();
         assertEquals("Alice", newMapper().deserialize(JSON.writeValueAsBytes(snapshot))
-                .game().getGameEndResult().winner());
+                .game().getGameEndResult().gameEnd().winner());
 
         playerOf((ObjectNode) snapshot.at("/game/gameEndResult"), 1).set("holeCards", cardArray());
         RecoveredRoom recovered = newMapper().deserialize(JSON.writeValueAsBytes(snapshot));
-        assertEquals(List.of(), recovered.game().getGameEndResult().finalState().players().get(1).holeCards());
+        assertEquals(List.of(), recovered.game().getGameEndResult().players().get(1).holeCards());
     }
 
     @Test
@@ -737,18 +731,19 @@ class RoomSnapshotMapperTest {
                 Mockito.mock(RoomService.class),
                 Mockito.mock(SimpMessagingTemplate.class),
                 Clock.systemUTC());
-        GameEndResponse result = projections.buildAbandonmentResponse(game);
+        PublicGameStateResponse result = projections.buildAbandonmentResponse(game);
         game.setGameEndResult(result);
         RoomSnapshotMapper mapper = new RoomSnapshotMapper(JSON);
 
-        GameEndResponse restored = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, game)))
+        PublicGameStateResponse restored = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, game)))
                 .game().getGameEndResult();
 
         assertEquals(result, restored);
-        assertTrue(restored.abandoned());
-        assertNull(restored.winner());
-        assertNull(restored.winnerChips());
-        assertTrue(restored.finalState().winners().isEmpty());
+        assertNotNull(restored.gameEnd());
+        assertTrue(restored.gameEnd().abandoned());
+        assertNull(restored.gameEnd().winner());
+        assertNull(restored.gameEnd().winnerChips());
+        assertTrue(restored.winners().isEmpty());
     }
 
     static Stream<Arguments> corruptGames() {
@@ -1011,7 +1006,7 @@ class RoomSnapshotMapperTest {
 
             // Action continuity: Current player calls on restored instance
             Player current = restored.getCurrentPlayer();
-            restored.processPlayerDecision(current, new PlayerDecision(PlayerAction.CALL, 0, current.getPlayerId()));
+            restored.processPlayerDecision(current, PlayerAction.CALL, 0);
             assertEquals(50, restored.getPot(), "Pot must increase to 50 following call on restored game");
         }
 
@@ -1223,7 +1218,7 @@ class RoomSnapshotMapperTest {
             foldWin.dealHoleCards();
             foldWin.postBlinds();
             Player folder = foldWin.getCurrentPlayer();
-            foldWin.processPlayerDecision(folder, new PlayerDecision(PlayerAction.FOLD, 0, folder.getPlayerId()));
+            foldWin.processPlayerDecision(folder, PlayerAction.FOLD, 0);
             assertTrue(foldWin.isHandSettled());
             assertFalse(foldWin.wasContestedShowdown());
 

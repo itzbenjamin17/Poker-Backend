@@ -1,12 +1,8 @@
 package com.pokergame.service;
 
-import com.pokergame.dto.internal.PlayerDecision;
-import com.pokergame.dto.response.ActionErrorResponse;
-import com.pokergame.dto.response.GameEndResponse;
-import com.pokergame.dto.response.PlayerNotificationResponse;
+import com.pokergame.dto.response.PlayerFeedbackResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
-import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
@@ -14,7 +10,6 @@ import com.pokergame.enums.Rank;
 import com.pokergame.enums.ReadyCountdownStartOutcome;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.RejectedAction;
-import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
 import com.pokergame.exception.ResourceNotFoundException;
@@ -244,7 +239,7 @@ class GameStateServiceTest {
         assertInstanceOf(PublicGameStateResponse.class, payload);
 
         PublicGameStateResponse response = (PublicGameStateResponse) payload;
-        PublicPlayerState disconnectedPlayer = response.players().stream()
+        PublicGameStateResponse.PlayerState disconnectedPlayer = response.players().stream()
                 .filter(player -> player.name().equals("Player2"))
                 .findFirst()
                 .orElseThrow();
@@ -379,7 +374,7 @@ class GameStateServiceTest {
 
         assertNull(response.currentPlayerId());
         assertNull(response.currentPlayerName());
-        assertTrue(response.players().stream().noneMatch(PublicPlayerState::isCurrentPlayer));
+        assertTrue(response.players().stream().noneMatch(PublicGameStateResponse.PlayerState::isCurrentPlayer));
     }
 
     // ==================== broadcastGameStateWithAutoAdvance Tests
@@ -435,30 +430,7 @@ class GameStateServiceTest {
         assertTrue(state.isAutoAdvancing());
         assertNull(state.currentPlayerId());
         assertTrue(state.legalActions().isEmpty());
-        assertTrue(state.players().stream().noneMatch(PublicPlayerState::isCurrentPlayer));
-    }
-
-    // ==================== broadcastAutoAdvanceComplete Tests ====================
-
-    /**
-     * Protects the contract that broadcast auto advance complete rejects a null game.
-     */
-    @Test
-    void broadcastAutoAdvanceComplete_WithNullGame_ThrowsNullPointerException() {
-        assertThrows(NullPointerException.class,
-                () -> gameStateService.broadcastAutoAdvanceComplete(null));
-
-        verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
-    }
-
-    /**
-     * Protects the contract that broadcast auto advance complete with valid game should broadcast.
-     */
-    @Test
-    void broadcastAutoAdvanceComplete_WithValidGame_ShouldBroadcast() {
-        gameStateService.broadcastAutoAdvanceComplete(testGame);
-
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
+        assertTrue(state.players().stream().noneMatch(PublicGameStateResponse.PlayerState::isCurrentPlayer));
     }
 
     // ==================== Private Notification & Action Error Tests ====================
@@ -470,16 +442,16 @@ class GameStateServiceTest {
     void sendPrivatePlayerNotification_ShouldSendToPlayerPrivateQueue() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
-        gameStateService.sendPrivatePlayerNotification(
-                GAME_ID, "Player1", "Test message", ResponseMessage.PLAYER_NOTIFICATION);
+        gameStateService.sendPrivatePlayerNotification(GAME_ID, "Player1", "Test message");
 
         String expectedUser = "Player1:" + GAME_ID + ":" + testRoom.getMembershipId("Player1");
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(messagingTemplate).convertAndSendToUser(eq(expectedUser), eq("/queue/private"), captor.capture());
-        PlayerNotificationResponse response = assertInstanceOf(PlayerNotificationResponse.class, captor.getValue());
+        PlayerFeedbackResponse response = assertInstanceOf(PlayerFeedbackResponse.class, captor.getValue());
         assertEquals("Test message", response.message());
-        assertEquals(ResponseMessage.PLAYER_NOTIFICATION, response.type());
-        assertEquals("Player1", response.playerName());
+        assertEquals(PlayerFeedbackResponse.Type.PLAYER_NOTIFICATION, response.type());
+        assertNull(response.code());
+        assertNull(response.action());
     }
 
     /**
@@ -489,19 +461,20 @@ class GameStateServiceTest {
     void sendPrivatePlayerNotificationAndActionError_WithOriginPrincipal_ShouldTargetOriginSession() {
         PlayerPrincipal origin = new PlayerPrincipal("Player1", GAME_ID, "origin-membership");
 
-        gameStateService.sendPrivatePlayerNotification(origin, "Welcome back", ResponseMessage.PLAYER_NOTIFICATION);
+        gameStateService.sendPrivatePlayerNotification(origin, "Welcome back");
         gameStateService.sendActionError(origin, "INVALID_ACTION", RejectedAction.BET, "Minimum bet is 10");
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(messagingTemplate, times(2)).convertAndSendToUser(
                 eq(origin.getName()), eq("/queue/private"), captor.capture());
-        PlayerNotificationResponse notification = assertInstanceOf(
-                PlayerNotificationResponse.class, captor.getAllValues().get(0));
+        PlayerFeedbackResponse notification = assertInstanceOf(
+                PlayerFeedbackResponse.class, captor.getAllValues().get(0));
         assertEquals("Welcome back", notification.message());
-        assertEquals(ResponseMessage.PLAYER_NOTIFICATION, notification.type());
+        assertEquals(PlayerFeedbackResponse.Type.PLAYER_NOTIFICATION, notification.type());
 
-        ActionErrorResponse actionError = assertInstanceOf(
-                ActionErrorResponse.class, captor.getAllValues().get(1));
+        PlayerFeedbackResponse actionError = assertInstanceOf(
+                PlayerFeedbackResponse.class, captor.getAllValues().get(1));
+        assertEquals(PlayerFeedbackResponse.Type.ACTION_ERROR, actionError.type());
         assertEquals("INVALID_ACTION", actionError.code());
         assertEquals(RejectedAction.BET, actionError.action());
         assertEquals("Minimum bet is 10", actionError.message());
@@ -517,17 +490,16 @@ class GameStateServiceTest {
         Player winner = testPlayers.getFirst();
         winner.addChips(50);
 
-        GameEndResponse recorded = gameStateService.advanceRevisionAndBuildGameEnd(testGame, winner, false);
-        gameStateService.sendGameEnd(recorded);
+        PublicGameStateResponse recorded = gameStateService.advanceRevisionAndBuildGameEnd(testGame, winner, false);
+        gameStateService.sendGameEnd(GAME_ID, recorded);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
 
-        GameEndResponse gameEndResponse = assertInstanceOf(GameEndResponse.class, captor.getValue());
-        assertEquals("GAME_END", gameEndResponse.type());
-        assertEquals(winner.getName(), gameEndResponse.winner());
-        assertEquals(winner.getChips(), gameEndResponse.winnerChips());
-        assertEquals(GAME_ID, gameEndResponse.gameId());
+        PublicGameStateResponse gameEndResponse = assertInstanceOf(PublicGameStateResponse.class, captor.getValue());
+        assertNotNull(gameEndResponse.gameEnd());
+        assertEquals(winner.getName(), gameEndResponse.gameEnd().winner());
+        assertEquals(winner.getChips(), gameEndResponse.gameEnd().winnerChips());
         assertEquals(1L, testGame.getStateRevision());
     }
 
@@ -538,9 +510,10 @@ class GameStateServiceTest {
     void buildGameEndResponse_MessageShouldContainWinnerName() {
         Player winner = testPlayers.getFirst();
 
-        GameEndResponse gameEndResponse = gameStateService.buildGameEndResponse(testGame, winner, false);
+        PublicGameStateResponse gameEndResponse = gameStateService.buildGameEndResponse(testGame, winner, false);
 
-        String message = gameEndResponse.message();
+        assertNotNull(gameEndResponse.gameEnd());
+        String message = gameEndResponse.gameEnd().message();
         assertTrue(message.contains(winner.getName()));
         assertTrue(message.contains("wins"));
     }
@@ -556,7 +529,7 @@ class GameStateServiceTest {
         assertThrows(NullPointerException.class, () -> gameStateService.advanceRevisionAndBuildGameEnd(testGame, null, false));
         assertThrows(NullPointerException.class, () -> gameStateService.buildGameEndResponse(null, winner, false));
         assertThrows(NullPointerException.class, () -> gameStateService.buildGameEndResponse(testGame, null, false));
-        assertDoesNotThrow(() -> gameStateService.sendGameEnd(null));
+        assertDoesNotThrow(() -> gameStateService.sendGameEnd(GAME_ID, null));
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
 
@@ -569,11 +542,11 @@ class GameStateServiceTest {
         Player loser = testPlayers.get(1);
         loser.setIsOut();
 
-        GameEndResponse gameEndResponse = gameStateService.advanceRevisionAndBuildGameEnd(testGame, winner, false);
-        PublicGameStateResponse finalState = gameEndResponse.finalState();
+        PublicGameStateResponse finalState = gameStateService.advanceRevisionAndBuildGameEnd(testGame, winner, false);
         assertNotNull(finalState);
+        assertNotNull(finalState.gameEnd());
 
-        PublicPlayerState winnerState = finalState.players().stream()
+        PublicGameStateResponse.PlayerState winnerState = finalState.players().stream()
                 .filter(p -> p.name().equals(winner.getName()))
                 .findFirst()
                 .orElseThrow();
@@ -608,9 +581,9 @@ class GameStateServiceTest {
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .build();
 
-        GameEndResponse event = gameStateService.advanceRevisionAndBuildGameEnd(contested, winner, false);
+        PublicGameStateResponse event = gameStateService.advanceRevisionAndBuildGameEnd(contested, winner, false);
 
-        assertNotNull(event.finalState().players().stream().filter(player -> player.name().equals(winner.getName()))
+        assertNotNull(event.players().stream().filter(player -> player.name().equals(winner.getName()))
                 .findFirst().orElseThrow().holeCards());
     }
 
@@ -622,9 +595,9 @@ class GameStateServiceTest {
         game.dealHoleCards();
         game.postBlinds();
         Player firstActor = game.getCurrentPlayer();
-        game.processPlayerDecision(firstActor, new PlayerDecision(PlayerAction.CALL, 0, firstActor.getPlayerId()));
+        game.processPlayerDecision(firstActor, PlayerAction.CALL, 0);
         Player secondActor = game.getCurrentPlayer();
-        game.processPlayerDecision(secondActor, new PlayerDecision(PlayerAction.CHECK, 0, secondActor.getPlayerId()));
+        game.processPlayerDecision(secondActor, PlayerAction.CHECK, 0);
         game.dealTurn();
         game.dealRiver();
 
@@ -641,14 +614,14 @@ class GameStateServiceTest {
         assertTrue(game.isReadyCountdownActive());
 
         Player gameWinner = game.settleGameEnd(showdownWinner, Set.of(showdownLoser.getName()));
-        GameEndResponse endResponse = gameStateService.advanceRevisionAndBuildGameEnd(game, gameWinner, true);
+        PublicGameStateResponse endResponse = gameStateService.advanceRevisionAndBuildGameEnd(game, gameWinner, true);
 
-        assertTrue(endResponse.isForfeit());
-        PublicPlayerState winnerState = endResponse.finalState().players().stream()
+        assertTrue(endResponse.gameEnd().isForfeit());
+        PublicGameStateResponse.PlayerState winnerState = endResponse.players().stream()
                 .filter(p -> p.id().equals(showdownWinner.getPlayerId()))
                 .findFirst()
                 .orElseThrow();
-        PublicPlayerState loserState = endResponse.finalState().players().stream()
+        PublicGameStateResponse.PlayerState loserState = endResponse.players().stream()
                 .filter(p -> p.id().equals(showdownLoser.getPlayerId()))
                 .findFirst()
                 .orElseThrow();
@@ -667,7 +640,7 @@ class GameStateServiceTest {
 
         Player foldingPlayer = game.getCurrentPlayer();
         Player winner = foldingPlayer.equals(p1) ? p2 : p1;
-        game.processPlayerDecision(foldingPlayer, new PlayerDecision(PlayerAction.FOLD, 0, foldingPlayer.getPlayerId()));
+        game.processPlayerDecision(foldingPlayer, PlayerAction.FOLD, 0);
         assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
         assertTrue(game.isHandSettled());
 
@@ -691,8 +664,8 @@ class GameStateServiceTest {
         assertTrue(liveSnapshotView.players().stream().allMatch(p -> p.holeCards() == null),
                 "Live snapshot must not reveal hole cards on a fold win");
 
-        GameEndResponse endResponse = gameStateService.advanceRevisionAndBuildGameEnd(game, winner, false);
-        assertTrue(endResponse.finalState().players().stream().allMatch(p -> p.holeCards() == null),
+        PublicGameStateResponse endResponse = gameStateService.advanceRevisionAndBuildGameEnd(game, winner, false);
+        assertTrue(endResponse.players().stream().allMatch(p -> p.holeCards() == null),
                 "Final game state must not reveal hole cards on a fold win");
     }
 
@@ -715,16 +688,17 @@ class GameStateServiceTest {
                 .scheduledTimes(Map.of()).build();
         terminal.settleGameEnd(bb, Set.of());
 
-        GameEndResponse result = gameStateService.advanceRevisionAndBuildGameEnd(terminal, bb, true);
-        gameStateService.sendGameEnd(result);
+        PublicGameStateResponse result = gameStateService.advanceRevisionAndBuildGameEnd(terminal, bb, true);
+        gameStateService.sendGameEnd(GAME_ID, result);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
 
-        GameEndResponse sent = assertInstanceOf(GameEndResponse.class, captor.getValue());
-        assertEquals(1010, sent.winnerChips());
-        assertEquals(0, sent.finalState().pot());
-        assertEquals(1010, sent.finalState().players().stream().filter(PublicPlayerState::isWinner)
+        PublicGameStateResponse sent = assertInstanceOf(PublicGameStateResponse.class, captor.getValue());
+        assertNotNull(sent.gameEnd());
+        assertEquals(1010, sent.gameEnd().winnerChips());
+        assertEquals(0, sent.pot());
+        assertEquals(1010, sent.players().stream().filter(PublicGameStateResponse.PlayerState::isWinner)
                 .findFirst().orElseThrow().chips());
         terminal.settleGameEnd(bb, Set.of());
         assertEquals(1010, bb.getChips());
@@ -803,11 +777,11 @@ class GameStateServiceTest {
         assertNull(response.currentPlayerName());
         assertEquals(List.of(), response.legalActions());
         assertEquals(Map.of("main", 200, "side1", 150, "side2", 100), response.players().stream()
-                .filter(PublicPlayerState::isWinner)
-                .collect(Collectors.toMap(PublicPlayerState::id, PublicPlayerState::chipsWon)));
+                .filter(PublicGameStateResponse.PlayerState::isWinner)
+                .collect(Collectors.toMap(PublicGameStateResponse.PlayerState::id, PublicGameStateResponse.PlayerState::chipsWon)));
         assertTrue(response.players().stream().noneMatch(p -> p.isCurrentPlayer()));
-        PublicPlayerState initialMain = initial.players().stream().filter(p -> p.id().equals("main")).findFirst().orElseThrow();
-        PublicPlayerState readyMain = response.players().stream().filter(p -> p.id().equals("main")).findFirst().orElseThrow();
+        PublicGameStateResponse.PlayerState initialMain = initial.players().stream().filter(p -> p.id().equals("main")).findFirst().orElseThrow();
+        PublicGameStateResponse.PlayerState readyMain = response.players().stream().filter(p -> p.id().equals("main")).findFirst().orElseThrow();
         assertEquals(initialMain.handRank(), readyMain.handRank());
         assertEquals(initialMain.bestHand(), readyMain.bestHand());
         assertEquals(initialMain.holeCards(), readyMain.holeCards());
@@ -936,7 +910,7 @@ class GameStateServiceTest {
         assertNull(response.currentPlayerName(), "currentPlayerName must be null during SHOWDOWN phase");
         assertNull(response.currentPlayerId(), "currentPlayerId must be null during SHOWDOWN phase");
         assertTrue(response.legalActions().isEmpty(), "legalActions must be empty during SHOWDOWN phase");
-        assertTrue(response.players().stream().noneMatch(PublicPlayerState::isCurrentPlayer),
+        assertTrue(response.players().stream().noneMatch(PublicGameStateResponse.PlayerState::isCurrentPlayer),
                 "No player must be marked isCurrentPlayer == true during SHOWDOWN phase");
     }
 
@@ -973,7 +947,7 @@ class GameStateServiceTest {
         assertNull(response.currentPlayerName(), "currentPlayerName must be null during ready countdown");
         assertNull(response.currentPlayerId(), "currentPlayerId must be null during ready countdown");
         assertTrue(response.legalActions().isEmpty(), "legalActions must be empty during ready countdown");
-        assertTrue(response.players().stream().noneMatch(PublicPlayerState::isCurrentPlayer),
+        assertTrue(response.players().stream().noneMatch(PublicGameStateResponse.PlayerState::isCurrentPlayer),
                 "No player must be marked isCurrentPlayer == true during ready countdown");
     }
 
@@ -1014,7 +988,7 @@ class GameStateServiceTest {
         assertNull(response.currentPlayerName(), "currentPlayerName must be null during showdown ready countdown broadcast");
         assertNull(response.currentPlayerId(), "currentPlayerId must be null during showdown ready countdown broadcast");
         assertTrue(response.legalActions().isEmpty(), "legalActions must be empty during showdown ready countdown broadcast");
-        assertTrue(response.players().stream().noneMatch(PublicPlayerState::isCurrentPlayer),
+        assertTrue(response.players().stream().noneMatch(PublicGameStateResponse.PlayerState::isCurrentPlayer),
                 "No player must be marked isCurrentPlayer == true during showdown ready countdown broadcast");
     }
 
@@ -1085,9 +1059,9 @@ class GameStateServiceTest {
         assertNull(response.currentPlayerName());
         assertNull(response.currentPlayerId());
 
-        PublicPlayerState winnerState = response.players().stream()
+        PublicGameStateResponse.PlayerState winnerState = response.players().stream()
                 .filter(p -> p.id().equals(winner.getPlayerId())).findFirst().orElseThrow();
-        PublicPlayerState loserState = response.players().stream()
+        PublicGameStateResponse.PlayerState loserState = response.players().stream()
                 .filter(p -> p.id().equals(loser.getPlayerId())).findFirst().orElseThrow();
 
         assertTrue(winnerState.isWinner());
@@ -1117,7 +1091,7 @@ class GameStateServiceTest {
         assertEquals(200, unreadyResponse.winningsPerPlayer());
         assertTrue(unreadyResponse.handSettled());
 
-        PublicPlayerState unreadyWinner = unreadyResponse.players().stream()
+        PublicGameStateResponse.PlayerState unreadyWinner = unreadyResponse.players().stream()
                 .filter(p -> p.id().equals(winner.getPlayerId())).findFirst().orElseThrow();
         assertFalse(unreadyWinner.isReadyForNextHand());
         assertTrue(unreadyWinner.isWinner());
@@ -1184,9 +1158,9 @@ class GameStateServiceTest {
         assertNull(response.currentPlayerId());
         assertTrue(response.legalActions().isEmpty());
 
-        PublicPlayerState p1 = response.players().stream()
+        PublicGameStateResponse.PlayerState p1 = response.players().stream()
                 .filter(p -> p.id().equals(winner.getPlayerId())).findFirst().orElseThrow();
-        PublicPlayerState p2 = response.players().stream()
+        PublicGameStateResponse.PlayerState p2 = response.players().stream()
                 .filter(p -> p.id().equals(loser.getPlayerId())).findFirst().orElseThrow();
 
         assertTrue(p1.isWinner());
@@ -1248,10 +1222,9 @@ class GameStateServiceTest {
     void advanceRevisionAndBuildGameEnd_ForfeitPath_ShouldNotRevealHoleCards() {
         Player winner = testPlayers.getFirst();
 
-        GameEndResponse gameEndResponse = gameStateService.advanceRevisionAndBuildGameEnd(testGame, winner, true);
-        assertTrue(gameEndResponse.isForfeit());
-        PublicGameStateResponse finalState = gameEndResponse.finalState();
-        assertNotNull(finalState);
+        PublicGameStateResponse finalState = gameStateService.advanceRevisionAndBuildGameEnd(testGame, winner, true);
+        assertNotNull(finalState.gameEnd());
+        assertTrue(finalState.gameEnd().isForfeit());
 
         assertTrue(finalState.players().stream().allMatch(p -> p.holeCards() == null));
     }
@@ -1324,8 +1297,8 @@ class GameStateServiceTest {
         assertInstanceOf(PublicGameStateResponse.class, payload);
 
         PublicGameStateResponse response = (PublicGameStateResponse) payload;
-        long smallBlindCount = response.players().stream().filter(PublicPlayerState::isSmallBlind).count();
-        long bigBlindCount = response.players().stream().filter(PublicPlayerState::isBigBlind).count();
+        long smallBlindCount = response.players().stream().filter(PublicGameStateResponse.PlayerState::isSmallBlind).count();
+        long bigBlindCount = response.players().stream().filter(PublicGameStateResponse.PlayerState::isBigBlind).count();
 
         assertEquals(1, smallBlindCount);
         assertEquals(1, bigBlindCount);
@@ -1366,8 +1339,8 @@ class GameStateServiceTest {
         assertInstanceOf(PublicGameStateResponse.class, payload);
 
         PublicGameStateResponse response = (PublicGameStateResponse) payload;
-        long smallBlindCount = response.players().stream().filter(PublicPlayerState::isSmallBlind).count();
-        long bigBlindCount = response.players().stream().filter(PublicPlayerState::isBigBlind).count();
+        long smallBlindCount = response.players().stream().filter(PublicGameStateResponse.PlayerState::isSmallBlind).count();
+        long bigBlindCount = response.players().stream().filter(PublicGameStateResponse.PlayerState::isBigBlind).count();
 
         assertEquals(1, smallBlindCount);
         assertEquals(1, bigBlindCount);
@@ -1437,7 +1410,7 @@ class GameStateServiceTest {
         testGame.getPlayers().set(0, player);
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
-        PublicPlayerState p1State = response.players().stream()
+        PublicGameStateResponse.PlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();
 
@@ -1459,7 +1432,7 @@ class GameStateServiceTest {
         testGame.getPlayers().set(0, player);
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
-        PublicPlayerState p1State = response.players().stream()
+        PublicGameStateResponse.PlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();
 
@@ -1481,7 +1454,7 @@ class GameStateServiceTest {
         testGame.getPlayers().set(0, player);
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
-        PublicPlayerState p1State = response.players().stream()
+        PublicGameStateResponse.PlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();
 
@@ -1503,7 +1476,7 @@ class GameStateServiceTest {
         testGame.getPlayers().set(0, player);
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
-        PublicPlayerState p1State = response.players().stream()
+        PublicGameStateResponse.PlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();
 
@@ -1524,7 +1497,7 @@ class GameStateServiceTest {
         testGame.getPlayers().set(0, player);
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
-        PublicPlayerState p1State = response.players().stream()
+        PublicGameStateResponse.PlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();
 
@@ -1544,7 +1517,7 @@ class GameStateServiceTest {
         testGame.getPlayers().set(0, player);
 
         PublicGameStateResponse response = gameStateService.getPublicGameStateSnapshot(testGame);
-        PublicPlayerState p1State = response.players().stream()
+        PublicGameStateResponse.PlayerState p1State = response.players().stream()
                 .filter(p -> p.id().equals(player.getPlayerId()))
                 .findFirst().orElseThrow();
 
@@ -1647,8 +1620,8 @@ class GameStateServiceTest {
                     .scheduledTimes(Map.of())
                     .build();
 
-            GameEndResponse response = gameStateService.buildGameEndResponse(restored, winner, false);
-            assertEquals(validCapacity, response.finalState().maxPlayers());
+            PublicGameStateResponse response = gameStateService.buildGameEndResponse(restored, winner, false);
+            assertEquals(validCapacity, response.maxPlayers());
         }
 
         Game validCapacityGame = new Game("four-player-game", List.of(
@@ -1656,9 +1629,9 @@ class GameStateServiceTest {
                 new Player("P2", "id-2", 100),
                 new Player("P3", "id-3", 100),
                 new Player("P4", "id-4", 100)), 8, 5, 10);
-        GameEndResponse response = gameStateService.advanceRevisionAndBuildGameEnd(validCapacityGame, validCapacityGame.getPlayers().getFirst(), false);
-        assertEquals(8, response.finalState().maxPlayers());
-        assertEquals(FIXED_INSTANT.toEpochMilli(), response.finalState().serverTimeEpochMs());
+        PublicGameStateResponse response = gameStateService.advanceRevisionAndBuildGameEnd(validCapacityGame, validCapacityGame.getPlayers().getFirst(), false);
+        assertEquals(8, response.maxPlayers());
+        assertEquals(FIXED_INSTANT.toEpochMilli(), response.serverTimeEpochMs());
     }
 
     @Test
@@ -1668,34 +1641,36 @@ class GameStateServiceTest {
         Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 100), Set.of(winner.getPlayerId()));
 
         long revisionBefore = settled.getStateRevision();
-        GameEndResponse projected = gameStateService.buildGameEndResponse(settled, winner, false);
+        PublicGameStateResponse projected = gameStateService.buildGameEndResponse(settled, winner, false);
         assertNotNull(projected);
         assertEquals(revisionBefore, settled.getStateRevision(), "buildGameEndResponse must not increment stateRevision");
-        assertEquals(revisionBefore, projected.finalState().stateRevision());
+        assertEquals(revisionBefore, projected.stateRevision());
 
-        GameEndResponse recorded = gameStateService.advanceRevisionAndBuildGameEnd(settled, winner, false);
+        PublicGameStateResponse recorded = gameStateService.advanceRevisionAndBuildGameEnd(settled, winner, false);
         assertNotNull(recorded);
         assertEquals(revisionBefore + 1, settled.getStateRevision(), "advanceRevisionAndBuildGameEnd must increment stateRevision");
-        assertEquals(revisionBefore + 1, recorded.finalState().stateRevision());
+        assertEquals(revisionBefore + 1, recorded.stateRevision());
     }
 
     @Test
     @DisplayName("advanceRevisionAndBuildAbandonment and buildAbandonmentResponse build INACTIVITY closure and increment revision only on record")
     void advanceRevisionAndBuildAbandonment_AndBuildAbandonmentResponse_IncrementRevisionOnlyOnRecord() {
         long revisionBefore = testGame.getStateRevision();
-        GameEndResponse preview = gameStateService.buildAbandonmentResponse(testGame);
+        PublicGameStateResponse preview = gameStateService.buildAbandonmentResponse(testGame);
         assertEquals(revisionBefore, testGame.getStateRevision());
-        assertTrue(preview.abandoned());
-        assertEquals("INACTIVITY", preview.reason());
-        assertNull(preview.winner());
+        assertNotNull(preview.gameEnd());
+        assertTrue(preview.gameEnd().abandoned());
+        assertEquals("INACTIVITY", preview.gameEnd().reason());
+        assertNull(preview.gameEnd().winner());
 
-        GameEndResponse recorded = gameStateService.advanceRevisionAndBuildAbandonment(testGame);
+        PublicGameStateResponse recorded = gameStateService.advanceRevisionAndBuildAbandonment(testGame);
         assertEquals(revisionBefore + 1, testGame.getStateRevision());
-        assertEquals(revisionBefore + 1, recorded.finalState().stateRevision());
-        assertTrue(recorded.abandoned());
-        assertEquals("INACTIVITY", recorded.reason());
+        assertEquals(revisionBefore + 1, recorded.stateRevision());
+        assertNotNull(recorded.gameEnd());
+        assertTrue(recorded.gameEnd().abandoned());
+        assertEquals("INACTIVITY", recorded.gameEnd().reason());
 
-        gameStateService.sendGameEnd(recorded);
+        gameStateService.sendGameEnd(GAME_ID, recorded);
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), eq(recorded));
     }
 
@@ -1765,9 +1740,9 @@ class GameStateServiceTest {
             assertEquals(List.of("Alice"), snapshot.winners(), "Iteration " + i + ": winners must remain [Alice]");
             assertEquals(450, snapshot.winningsPerPlayer(), "Iteration " + i + ": winningsPerPlayer must remain 450");
 
-            PublicPlayerState pubP1 = snapshot.players().stream().filter(p -> p.id().equals("p-1")).findFirst().orElseThrow();
-            PublicPlayerState pubP2 = snapshot.players().stream().filter(p -> p.id().equals("p-2")).findFirst().orElseThrow();
-            PublicPlayerState pubP3 = snapshot.players().stream().filter(p -> p.id().equals("p-3")).findFirst().orElseThrow();
+            PublicGameStateResponse.PlayerState pubP1 = snapshot.players().stream().filter(p -> p.id().equals("p-1")).findFirst().orElseThrow();
+            PublicGameStateResponse.PlayerState pubP2 = snapshot.players().stream().filter(p -> p.id().equals("p-2")).findFirst().orElseThrow();
+            PublicGameStateResponse.PlayerState pubP3 = snapshot.players().stream().filter(p -> p.id().equals("p-3")).findFirst().orElseThrow();
 
             assertFalse(pubP1.isCurrentPlayer());
             assertFalse(pubP2.isCurrentPlayer());
@@ -2005,7 +1980,7 @@ class GameStateServiceTest {
                                 false, true, null, null, null, null, null)),
                 current.getName(), current.getPlayerId(), null, null, false, null, false, null, false, null,
                 false, null, game.getLegalActionsFor(current), 10, game.getMinimumRaiseAmount(current),
-                3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision(), 5_000L, 9_000L), actual);
+                3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision(), 5_000L, 9_000L, null), actual);
     }
 
     /**
@@ -2029,7 +2004,7 @@ class GameStateServiceTest {
                                 null, null, null, null, null)),
                 null, null, null, null, true, "Auto-advancing...", false, null, false, null, false, null,
                 List.of(), null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision(), null,
-                9_000L), actual);
+                9_000L, null), actual);
     }
 
     /**
@@ -2055,7 +2030,7 @@ class GameStateServiceTest {
                                 HandRank.HIGH_CARD, List.of(VIEW_TWO, VIEW_THREE), false, 0, List.of(VIEW_TWO, VIEW_THREE))),
                 null, null, List.of("Alice"), 30, false, null, true, 12_345L, false, null, true, 4,
                 List.of(), null, null, 3L, ReadyGateState.COUNTING_DOWN, VIEW_NOW_MS, game.getStateRevision(),
-                null, 9_000L), actual);
+                null, 9_000L, null), actual);
     }
 
     /**
@@ -2111,7 +2086,8 @@ class GameStateServiceTest {
                         viewState("b", "Bob", 80, 20, "FOLDED", false, false, true, false, true,
                                 null, List.of(), false, 0, null)),
                 null, null, List.of("Alice"), 30, null, null, true, 12_345L, null, null, true, 4,
-                null, null, null, 3L, ReadyGateState.COUNTING_DOWN, VIEW_NOW_MS, game.getStateRevision()),
+                null, null, null, 3L, ReadyGateState.COUNTING_DOWN, VIEW_NOW_MS, game.getStateRevision(),
+                null, null, null),
                 capturePublicBroadcast());
     }
 
@@ -2135,7 +2111,8 @@ class GameStateServiceTest {
                         viewState("b", "Bob", 80, 20, "ALL_IN", true, false, false, false, true,
                                 HandRank.HIGH_CARD, List.of(), null, null, null)),
                 null, null, null, null, true, "Banner", false, null, null, null, null, null, List.of(),
-                null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision()),
+                null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision(),
+                null, null, null),
                 capturePublicBroadcast());
     }
 
@@ -2168,11 +2145,9 @@ class GameStateServiceTest {
                 Map.of(), viewPlayers(false), true);
         Player winner = game.findPlayerByName("Alice");
 
-        GameEndResponse response = gameStateService.buildGameEndResponse(game, winner, false);
+        PublicGameStateResponse response = gameStateService.buildGameEndResponse(game, winner, false);
 
-        assertEquals(new GameEndResponse(ResponseMessage.GAME_END.getMessage(), GAME_ID, "Alice", 90, false,
-                "Alice wins the game with 90 chips!",
-                new PublicGameStateResponse(
+        assertEquals(new PublicGameStateResponse(
                         6, game.getPot(), game.getPotBreakdown(), game.getUncalledAmount(),
                         GamePhase.SHOWDOWN, game.getCurrentHighestBet(), VIEW_BOARD,
                         List.of(viewState("a", "Alice", 90, 10, "ACTIVE", false, false, false, true, false,
@@ -2182,7 +2157,9 @@ class GameStateServiceTest {
                                         HandRank.HIGH_CARD, List.of(VIEW_TWO, VIEW_THREE), false, null,
                                         List.of(VIEW_TWO, VIEW_THREE))),
                         null, null, List.of("Alice"), null, false, null, false, null, false, null, true, null,
-                        List.of(), null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision())),
+                        List.of(), null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision(),
+                        null, null, PublicGameStateResponse.GameEnd.won(
+                                "Alice", 90, false, "Alice wins the game with 90 chips!")),
                 response);
     }
 
@@ -2194,11 +2171,9 @@ class GameStateServiceTest {
         Game game = viewGame(GamePhase.FLOP, null, false, ReadyGateState.CLOSED,
                 Map.of(), viewPlayers(false), false);
 
-        GameEndResponse response = gameStateService.buildAbandonmentResponse(game);
+        PublicGameStateResponse response = gameStateService.buildAbandonmentResponse(game);
 
-        assertEquals(new GameEndResponse(ResponseMessage.GAME_END.getMessage(), GAME_ID, null, null, false,
-                true, "INACTIVITY", "Game abandoned due to inactivity.",
-                new PublicGameStateResponse(
+        assertEquals(new PublicGameStateResponse(
                         6, game.getPot(), game.getPotBreakdown(), game.getUncalledAmount(), GamePhase.FLOP,
                         game.getCurrentHighestBet(), VIEW_BOARD,
                         List.of(viewState("a", "Alice", 90, 10, "ACTIVE", false, false, false, true, false,
@@ -2206,7 +2181,9 @@ class GameStateServiceTest {
                                 viewState("b", "Bob", 80, 20, "ACTIVE", false, false, false, false, true,
                                         null, List.of(), false, null, null)),
                         null, null, List.of(), null, false, null, false, null, false, null, false, null,
-                        List.of(), null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision())),
+                        List.of(), null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision(),
+                        null, null, PublicGameStateResponse.GameEnd.abandoned(
+                                "INACTIVITY", "Game abandoned due to inactivity.")),
                 response);
     }
 
@@ -2216,10 +2193,10 @@ class GameStateServiceTest {
         return (PublicGameStateResponse) captor.getValue();
     }
 
-    private static PublicPlayerState viewState(String id, String name, int chips, int bet, String status,
+    private static PublicGameStateResponse.PlayerState viewState(String id, String name, int chips, int bet, String status,
             boolean allIn, boolean current, boolean folded, boolean smallBlind, boolean bigBlind,
             HandRank rank, List<Card> best, Boolean winner, Integer won, List<Card> hole) {
-        return new PublicPlayerState(id, name, chips, bet, status, allIn, current, folded, smallBlind,
+        return new PublicGameStateResponse.PlayerState(id, name, chips, bet, status, allIn, current, folded, smallBlind,
                 bigBlind, rank, best, winner, won, hole, null, false);
     }
 

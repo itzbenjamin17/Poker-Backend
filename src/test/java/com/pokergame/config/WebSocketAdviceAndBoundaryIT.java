@@ -6,10 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.dto.response.ActionErrorResponse;
+import com.pokergame.dto.response.PlayerFeedbackResponse;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.RejectedAction;
-import com.pokergame.enums.ResponseMessage;
 import com.pokergame.model.Game;
 import com.pokergame.model.Room;
 import com.pokergame.security.JwtService;
@@ -204,18 +203,18 @@ class WebSocketAdviceAndBoundaryIT {
         return session;
     }
 
-    private CompletableFuture<ActionErrorResponse> subscribePrivateErrors(StompSession session) {
-        CompletableFuture<ActionErrorResponse> errorFuture = new CompletableFuture<>();
+    private CompletableFuture<PlayerFeedbackResponse> subscribePrivateErrors(StompSession session) {
+        CompletableFuture<PlayerFeedbackResponse> errorFuture = new CompletableFuture<>();
         session.subscribe("/user/queue/private", new StompFrameHandler() {
             @Override
             public @NonNull Type getPayloadType(@NonNull StompHeaders headers) {
-                return ActionErrorResponse.class;
+                return PlayerFeedbackResponse.class;
             }
 
             @Override
             public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                if (payload instanceof ActionErrorResponse response
-                        && response.type() == ResponseMessage.ACTION_ERROR
+                if (payload instanceof PlayerFeedbackResponse response
+                        && response.type() == PlayerFeedbackResponse.Type.ACTION_ERROR
                         && !errorFuture.isDone()) {
                     errorFuture.complete(response);
                 }
@@ -260,15 +259,15 @@ class WebSocketAdviceAndBoundaryIT {
             int potBefore = stateBefore.path("pot").asInt();
 
             StompSession session = connectRawBytesSession(actingToken);
-            CompletableFuture<ActionErrorResponse> errorFuture = subscribePrivateErrors(session);
+            CompletableFuture<PlayerFeedbackResponse> errorFuture = subscribePrivateErrors(session);
 
             StompHeaders headers = new StompHeaders();
             headers.setDestination("/app/" + gameSession.roomId() + "/action");
             headers.setContentType(MimeTypeUtils.APPLICATION_JSON);
             session.send(headers, rawJson.getBytes(StandardCharsets.UTF_8));
 
-            ActionErrorResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
+            PlayerFeedbackResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            assertThat(error.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
             assertThat(error.code()).as(label).isEqualTo(expectedCode);
             assertThat(error.message()).as(label).isEqualTo(expectedMessage);
 
@@ -286,15 +285,15 @@ class WebSocketAdviceAndBoundaryIT {
             String actingToken = HOST_NAME.equals(currentPlayer) ? gameSession.hostToken() : gameSession.otherToken();
 
             StompSession session = connectRawBytesSession(actingToken);
-            CompletableFuture<ActionErrorResponse> errorFuture = subscribePrivateErrors(session);
+            CompletableFuture<PlayerFeedbackResponse> errorFuture = subscribePrivateErrors(session);
 
             StompHeaders headers = new StompHeaders();
             headers.setDestination("/app/" + gameSession.roomId() + "/action");
             headers.setContentType(MimeTypeUtils.APPLICATION_JSON);
             session.send(headers, "{\"action\":\"RAISE\",\"amount\":\"not-a-number\"}".getBytes(StandardCharsets.UTF_8));
 
-            ActionErrorResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
+            PlayerFeedbackResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            assertThat(error.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
             assertThat(error.code()).isEqualTo("INVALID_ACTION_FORMAT");
             assertThat(error.action()).isEqualTo(RejectedAction.RAISE);
         }
@@ -304,12 +303,12 @@ class WebSocketAdviceAndBoundaryIT {
         void readinessRejectionYieldsActionRejectedOnPrivateQueue() throws Exception {
             StartedGameSession gameSession = createStartedGame();
             StompSession session = connectJsonSession(gameSession.hostToken());
-            CompletableFuture<ActionErrorResponse> errorFuture = subscribePrivateErrors(session);
+            CompletableFuture<PlayerFeedbackResponse> errorFuture = subscribePrivateErrors(session);
 
             session.send("/app/" + gameSession.roomId() + "/ready", "");
 
-            ActionErrorResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
+            PlayerFeedbackResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            assertThat(error.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
             assertThat(error.code()).isEqualTo("ACTION_REJECTED");
             assertThat(error.action()).isEqualTo(RejectedAction.READY);
             assertThat(error.message()).isEqualTo("Ready countdown is not active.");
@@ -329,13 +328,13 @@ class WebSocketAdviceAndBoundaryIT {
             String otherToken = HOST_NAME.equals(currentPlayer) ? gameSession.otherToken() : gameSession.hostToken();
 
             StompSession session = connectJsonSession(otherToken);
-            CompletableFuture<ActionErrorResponse> errorFuture = subscribePrivateErrors(session);
+            CompletableFuture<PlayerFeedbackResponse> errorFuture = subscribePrivateErrors(session);
 
             Integer amount = action == PlayerAction.BET || action == PlayerAction.RAISE ? 100 : 0;
             session.send("/app/" + gameSession.roomId() + "/action", new PlayerActionRequest(action, amount));
 
-            ActionErrorResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
+            PlayerFeedbackResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            assertThat(error.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
             assertThat(error.code()).isEqualTo("NOT_YOUR_TURN");
             assertThat(error.action()).isEqualTo(RejectedAction.from(action));
             assertThat(error.message()).isEqualTo("Wait for your turn");
@@ -349,12 +348,12 @@ class WebSocketAdviceAndBoundaryIT {
             String actingToken = HOST_NAME.equals(currentPlayer) ? gameSession.hostToken() : gameSession.otherToken();
 
             StompSession session = connectJsonSession(actingToken);
-            CompletableFuture<ActionErrorResponse> errorFuture = subscribePrivateErrors(session);
+            CompletableFuture<PlayerFeedbackResponse> errorFuture = subscribePrivateErrors(session);
 
             session.send("/app/" + gameSession.roomId() + "/action", new PlayerActionRequest(PlayerAction.RAISE, 2000));
 
-            ActionErrorResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
+            PlayerFeedbackResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            assertThat(error.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
             assertThat(error.code()).isEqualTo("INSUFFICIENT_CHIPS");
             assertThat(error.action()).isEqualTo(RejectedAction.RAISE);
             assertThat(error.message()).contains("Available:").contains("yours: 2000");
@@ -368,13 +367,13 @@ class WebSocketAdviceAndBoundaryIT {
             String actingToken = HOST_NAME.equals(currentPlayer) ? gameSession.hostToken() : gameSession.otherToken();
 
             StompSession session = connectJsonSession(actingToken);
-            CompletableFuture<ActionErrorResponse> errorFuture = subscribePrivateErrors(session);
+            CompletableFuture<PlayerFeedbackResponse> errorFuture = subscribePrivateErrors(session);
 
             session.send("/app/" + gameSession.roomId() + "/action",
                     new PlayerActionRequest(PlayerAction.RAISE, 10_000_001));
 
-            ActionErrorResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
+            PlayerFeedbackResponse error = errorFuture.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            assertThat(error.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
             assertThat(error.code()).isEqualTo("INVALID_ACTION_FORMAT");
             assertThat(error.action()).isEqualTo(RejectedAction.RAISE);
             assertThat(error.message()).isEqualTo("Amount cannot exceed 10,000,000");

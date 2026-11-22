@@ -9,13 +9,16 @@ import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
-
-import java.io.IOException;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Filter to reject requests with excessively large payloads to prevent DoS attacks.
@@ -31,10 +34,21 @@ public class PayloadSizeFilter extends OncePerRequestFilter {
     private static final Logger logger = LoggerFactory.getLogger(PayloadSizeFilter.class);
     private static final long MAX_PAYLOAD_SIZE = 10_240; // 10KB
 
+    private final ObjectMapper objectMapper;
+
     @Value("${poker.security.trust-proxy:false}")
     private boolean trustProxy;
 
     private final LogThrottler logThrottler = new LogThrottler(5000L);
+
+    /**
+     * Creates the payload size filter with the JSON mapper for problem detail errors.
+     *
+     * @param objectMapper object mapper for problem detail responses
+     */
+    public PayloadSizeFilter(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     /**
      * Rejects payloads larger than 10 KiB, whether the length is declared up front or only
@@ -80,9 +94,12 @@ public class PayloadSizeFilter extends OncePerRequestFilter {
         logThrottler.throttle(key, () -> logger.warn(
                 "Payload size limit exceeded (413): method={}, path={}, clientIp={}, size={} bytes, limit={} bytes",
                 request.getMethod(), path, clientIp, size, MAX_PAYLOAD_SIZE));
-        response.setStatus(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE);
-        response.setContentType("application/json");
-        response.getWriter().write("{\"message\": \"Request payload too large. Maximum allowed is 10KB.\"}");
+        response.setStatus(HttpStatus.CONTENT_TOO_LARGE.value());
+        response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+        response.getWriter().write(objectMapper.writeValueAsString(
+                ProblemDetail.forStatusAndDetail(
+                        HttpStatus.CONTENT_TOO_LARGE,
+                        "Request payload too large. Maximum allowed is 10KB.")));
     }
 
     private static final class PayloadTooLargeException extends IOException {

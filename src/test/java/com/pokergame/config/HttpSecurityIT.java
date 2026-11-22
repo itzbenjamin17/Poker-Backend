@@ -119,7 +119,7 @@ class HttpSecurityIT {
                 .body(new CreateRoomRequest(roomName, hostName, maxPlayers, 10, 20, 1000, null))
                 .retrieve()
                 .body(String.class);
-        JsonNode data = objectMapper.readTree(body).path("data");
+        JsonNode data = objectMapper.readTree(body);
         String roomId = data.path("roomId").asText();
         if (!roomId.isBlank()) {
             trackedRoomIds.add(roomId);
@@ -134,16 +134,17 @@ class HttpSecurityIT {
                 .body(new JoinRoomRequest(roomName, playerName, null))
                 .retrieve()
                 .body(String.class);
-        return objectMapper.readTree(body).path("data");
+        return objectMapper.readTree(body);
     }
 
-    private JsonNode startGame(String roomId, String hostToken) throws Exception {
-        String body = restClient.post()
+    private int startGame(String roomId, String hostToken) {
+        return restClient.post()
                 .uri("/api/room/" + roomId + "/start-game")
                 .header("Authorization", "Bearer " + hostToken)
                 .retrieve()
-                .body(String.class);
-        return objectMapper.readTree(body);
+                .toBodilessEntity()
+                .getStatusCode()
+                .value();
     }
 
     private JsonNode getRoomData(String roomId, String token) throws Exception {
@@ -169,36 +170,37 @@ class HttpSecurityIT {
     class PublicAndProtectedEndpoints {
 
         @Test
-        @DisplayName("anonymous create and join return room payloads and JWTs")
+        @DisplayName("anonymous create and join return bare TokenResponse payloads and JWTs")
         void anonymousCreateAndJoinIssueJwt() throws Exception {
             String roomName = uniqueName("PublicHttpRoom");
 
-            JsonNode createEnvelope = objectMapper.readTree(restClient.post()
+            JsonNode createBody = objectMapper.readTree(restClient.post()
                     .uri("/api/room/create")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(new CreateRoomRequest(roomName, "NewPlayer", 6, 10, 20, 1000, null))
                     .retrieve()
                     .body(String.class));
-            String roomId = createEnvelope.path("data").path("roomId").asText();
+            String roomId = createBody.path("roomId").asText();
             trackedRoomIds.add(roomId);
 
-            assertThat(createEnvelope.path("message").asText()).isEqualTo("Room created successfully");
-            assertThat(createEnvelope.path("data").path("token").asText()).isNotBlank();
+            assertThat(createBody.path("token").asText()).isNotBlank();
+            assertThat(createBody.path("playerName").asText()).isEqualTo("NewPlayer");
             assertThat(roomId).isNotBlank();
 
-            JsonNode joinEnvelope = objectMapper.readTree(restClient.post()
+            JsonNode joinBody = objectMapper.readTree(restClient.post()
                     .uri("/api/room/join")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(new JoinRoomRequest(roomName, "JoiningPlayer", null))
                     .retrieve()
                     .body(String.class));
 
-            assertThat(joinEnvelope.path("message").asText()).isEqualTo("Successfully joined room");
-            assertThat(joinEnvelope.path("data").path("token").asText()).isNotBlank();
+            assertThat(joinBody.path("roomId").asText()).isEqualTo(roomId);
+            assertThat(joinBody.path("playerName").asText()).isEqualTo("JoiningPlayer");
+            assertThat(joinBody.path("token").asText()).isNotBlank();
         }
 
         @Test
-        @DisplayName("missing or invalid bearer token returns 401 ErrorResponse JSON")
+        @DisplayName("missing or invalid bearer token returns 401 ProblemDetail JSON")
         void missingAndInvalidTokensReturn401ErrorJson() throws Exception {
             HttpClientErrorException missing = assertThrows(HttpClientErrorException.class, () ->
                     restClient.get()
@@ -208,8 +210,8 @@ class HttpSecurityIT {
             assertThat(missing.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
             JsonNode missingBody = objectMapper.readTree(missing.getResponseBodyAsString());
             assertThat(missingBody.path("status").asInt()).isEqualTo(401);
-            assertThat(missingBody.path("error").asText()).isEqualTo("Unauthorized");
-            assertThat(missingBody.path("message").asText()).isEqualTo("Session expired or invalid token");
+            assertThat(missingBody.path("title").asText()).isEqualTo("Unauthorized");
+            assertThat(missingBody.path("detail").asText()).isEqualTo("Session expired or invalid token");
 
             HttpClientErrorException invalid = assertThrows(HttpClientErrorException.class, () ->
                     restClient.get()
@@ -220,8 +222,8 @@ class HttpSecurityIT {
             assertThat(invalid.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
             JsonNode invalidBody = objectMapper.readTree(invalid.getResponseBodyAsString());
             assertThat(invalidBody.path("status").asInt()).isEqualTo(401);
-            assertThat(invalidBody.path("error").asText()).isEqualTo("Unauthorized");
-            assertThat(invalidBody.path("message").asText()).isEqualTo("Session expired or invalid token");
+            assertThat(invalidBody.path("title").asText()).isEqualTo("Unauthorized");
+            assertThat(invalidBody.path("detail").asText()).isEqualTo("Session expired or invalid token");
         }
 
         @Test
@@ -280,12 +282,12 @@ class HttpSecurityIT {
                     .body(String.class));
             assertThat(invalid.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 
-            String response = restClient.post()
+            var leaveResponse = restClient.post()
                     .uri("/api/room/" + roomId + "/leave")
                     .header("Authorization", "Bearer " + validToken)
                     .retrieve()
-                    .body(String.class);
-            assertThat(response).contains("\"message\":\"Successfully left room\"");
+                    .toBodilessEntity();
+            assertThat(leaveResponse.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
             trackedRoomIds.remove(roomId);
         }
 
@@ -305,8 +307,7 @@ class HttpSecurityIT {
                     .body(String.class));
             assertThat(nonHostRejected.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
 
-            JsonNode started = startGame(roomId, hostToken);
-            assertThat(started.path("message").asText()).isEqualTo("Game started successfully");
+            assertThat(startGame(roomId, hostToken)).isEqualTo(204);
         }
     }
 
@@ -486,7 +487,7 @@ class HttpSecurityIT {
                 }
                 assertThat(admitted).hasSize(1);
                 JsonNode room = getRoomData(host.path("roomId").asText(), host.path("token").asText());
-                assertThat(room.path("currentPlayers").asInt()).isEqualTo(2);
+                assertThat(room.path("players")).hasSize(2);
                 assertThat(room.path("players")).extracting(p -> p.path("name").asText())
                         .containsExactlyInAnyOrder("Host", admitted.getFirst());
             }

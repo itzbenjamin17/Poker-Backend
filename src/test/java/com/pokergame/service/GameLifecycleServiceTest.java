@@ -10,11 +10,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import com.pokergame.config.GameTimingProperties;
-import com.pokergame.dto.internal.TurnOutcome;
-import com.pokergame.dto.internal.TurnOutcome.TurnOutcomeType;
-import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
-import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ReadyGateState;
@@ -26,6 +22,8 @@ import com.pokergame.model.Game;
 import com.pokergame.model.HandPayout;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
+import com.pokergame.model.TurnOutcome;
+import com.pokergame.model.TurnOutcome.TurnOutcomeType;
 import com.pokergame.testutil.MutableClock;
 import com.pokergame.testutil.TestTimings;
 import com.pokergame.util.LockLease;
@@ -135,27 +133,25 @@ class GameLifecycleServiceTest {
     }
 
     private void stubGameEndCapture() {
-        Answer<GameEndResponse> buildResponse = invocation -> {
+        Answer<PublicGameStateResponse> buildResponse = invocation -> {
             Game game = invocation.getArgument(0);
             Player winner = invocation.getArgument(1);
             boolean forfeit = invocation.getArgument(2);
             int maxPlayers = game != null ? game.getMaxPlayers() : 6;
-            List<PublicPlayerState> players = game != null && game.getPlayers() != null
+            List<PublicGameStateResponse.PlayerState> players = game != null && game.getPlayers() != null
                     ? game.getPlayers().stream()
-                    .map(p -> new PublicPlayerState(
+                    .map(p -> new PublicGameStateResponse.PlayerState(
                             p.getPlayerId(), p.getName(), p.getChips(), 0, "status", false, false, false,
                             false, false, null, List.of(), p.equals(winner), null, null, null, false))
                     .toList()
                     : List.of();
-            PublicGameStateResponse finalState = new PublicGameStateResponse(
+            return new PublicGameStateResponse(
                     maxPlayers, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(),
                     players, null, null, List.of(winner.getName()), null, false, null, false, null,
                     false, null, true, null, List.of(), null, null, 1, ReadyGateState.CLOSED,
-                    mutableClock.millis(), game != null ? game.getStateRevision() : 1);
-            return new GameEndResponse(
-                    "GAME_END", game != null ? game.getGameId() : ROOM_ID,
-                    winner.getName(), winner.getChips(), forfeit,
-                    winner.getName() + " wins", finalState);
+                    mutableClock.millis(), game != null ? game.getStateRevision() : 1, null, null,
+                    PublicGameStateResponse.GameEnd.won(
+                            winner.getName(), winner.getChips(), forfeit, winner.getName() + " wins"));
         };
         lenient().when(gameStateService.advanceRevisionAndBuildGameEnd(any(Game.class), any(Player.class), anyBoolean()))
                 .thenAnswer(buildResponse);
@@ -163,9 +159,12 @@ class GameLifecycleServiceTest {
                 .thenAnswer(buildResponse);
         lenient().when(gameStateService.advanceRevisionAndBuildAbandonment(any(Game.class))).thenAnswer(inv -> {
             Game game = inv.getArgument(0);
-            return new GameEndResponse(
-                    "GAME_END", game.getGameId(), null, null, false, true, "INACTIVITY",
-                    "Abandoned due to inactivity", null);
+            return new PublicGameStateResponse(
+                    game.getMaxPlayers(), 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(),
+                    List.of(), null, null, List.of(), null, false, null, false, null,
+                    false, null, true, null, List.of(), null, null, 1, ReadyGateState.CLOSED,
+                    mutableClock.millis(), game.getStateRevision(), null, null,
+                    PublicGameStateResponse.GameEnd.abandoned("INACTIVITY", "Abandoned due to inactivity"));
         });
     }
 
@@ -690,7 +689,6 @@ class GameLifecycleServiceTest {
             assertEquals(chipsHostBefore, game.getPlayers().get(0).getChips());
             assertEquals(chipsP2Before, game.getPlayers().get(1).getChips());
             verify(gameStateService, never()).broadcastShowdownResults(any());
-            verify(gameStateService, never()).broadcastAutoAdvanceComplete(any());
         }
 
         @Test
@@ -759,8 +757,8 @@ class GameLifecycleServiceTest {
             withRoomLock(ROOM_ID, inactivityCallback);
 
             assertTrue(game.isGameOver());
-            assertTrue(game.getGameEndResult().abandoned());
-            assertEquals("INACTIVITY", game.getGameEndResult().reason());
+            assertTrue(game.getGameEndResult().gameEnd().abandoned());
+            assertEquals("INACTIVITY", game.getGameEndResult().gameEnd().reason());
         }
 
         @Test
@@ -808,7 +806,7 @@ class GameLifecycleServiceTest {
             mutableClock.setMillis(hand2Deadline);
             withRoomLock(ROOM_ID, hand2Callback);
             assertTrue(game.isGameOver());
-            assertTrue(game.getGameEndResult().abandoned());
+            assertTrue(game.getGameEndResult().gameEnd().abandoned());
         }
 
         @Test
@@ -871,9 +869,10 @@ class GameLifecycleServiceTest {
                 gameLifecycleService.markPlayerDisconnected(ROOM_ID, "Player3", BASE_EPOCH_MS + 60_000L);
             });
 
-            GameEndResponse claimed = withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
-            assertEquals("Host", claimed.winner());
-            assertTrue(claimed.isForfeit());
+            PublicGameStateResponse claimed = withRoomLock(ROOM_ID, () -> gameLifecycleService.claimWin(ROOM_ID, "Host"));
+            assertNotNull(claimed.gameEnd());
+            assertEquals("Host", claimed.gameEnd().winner());
+            assertTrue(claimed.gameEnd().isForfeit());
 
             Game game = getGameLocked(ROOM_ID);
             Long cleanupDeadline = game.getScheduledTaskTime(ScheduledGameTask.CLEANUP);

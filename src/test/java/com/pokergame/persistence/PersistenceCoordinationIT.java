@@ -7,9 +7,8 @@ import com.pokergame.controller.RoomController;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.dto.response.ApiResponse;
+import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.enums.PlayerAction;
-import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
@@ -717,8 +716,8 @@ class PersistenceCoordinationIT {
         });
         Mockito.verify(messagingTemplate).convertAndSend(
                 Mockito.eq("/room/" + roomId),
-                Mockito.argThat((Object payload) -> payload instanceof ApiResponse<?> response
-                        && ResponseMessage.ROOM_CLOSED.getMessage().equals(response.message())));
+                Mockito.argThat((Object payload) -> payload instanceof RoomDataResponse roomData
+                        && "INACTIVITY".equals(roomData.closedReason())));
     }
 
     @Test
@@ -829,8 +828,9 @@ class PersistenceCoordinationIT {
             assertThat(game).isNotNull();
             assertThat(game.isGameOver()).isTrue();
             assertThat(game.getGameEndResult()).isNotNull();
-            assertThat(game.getGameEndResult().abandoned()).isTrue();
-            assertThat(game.getGameEndResult().reason()).isEqualTo("INACTIVITY");
+            assertThat(game.getGameEndResult().gameEnd()).isNotNull();
+            assertThat(game.getGameEndResult().gameEnd().abandoned()).isTrue();
+            assertThat(game.getGameEndResult().gameEnd().reason()).isEqualTo("INACTIVITY");
             return null;
         }));
     }

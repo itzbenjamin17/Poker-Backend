@@ -1,8 +1,6 @@
 package com.pokergame.model;
 
-import com.pokergame.dto.internal.PlayerDecision;
-import com.pokergame.dto.internal.TurnOutcome;
-import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
@@ -256,13 +254,13 @@ class GameTest {
         }
 
         @Test
-        void processPlayerDecisionRejectsNullDecisionWithIllegalStateException() {
+        void processPlayerDecisionRejectsNullActionWithBadRequestException() {
             game.postBlinds();
             Player player = game.getActivePlayers().getFirst();
 
-            IllegalStateException ex = assertThrows(IllegalStateException.class,
-                    () -> game.processPlayerDecision(player, null));
-            assertEquals("Invalid player action", ex.getMessage());
+            BadRequestException ex = assertThrows(BadRequestException.class,
+                    () -> game.processPlayerDecision(player, null, 0));
+            assertEquals("No action specified. Please select an action", ex.getMessage());
         }
 
         @Test
@@ -354,12 +352,12 @@ class GameTest {
             game.postBlinds();
             Player utg = game.getCurrentPlayer();
             TurnOutcome firstFold = game.processPlayerDecision(
-                    utg, new PlayerDecision(PlayerAction.FOLD, 0, utg.getPlayerId()));
+                    utg, PlayerAction.FOLD, 0);
             assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, firstFold.type());
 
             Player sb = game.getCurrentPlayer();
             TurnOutcome secondFold = game.processPlayerDecision(
-                    sb, new PlayerDecision(PlayerAction.FOLD, 0, sb.getPlayerId()));
+                    sb, PlayerAction.FOLD, 0);
             assertEquals(TurnOutcome.TurnOutcomeType.SHOWDOWN, secondFold.type());
             assertEquals(GamePhase.SHOWDOWN, game.getCurrentPhase());
             assertEquals(1010, game.getPlayers().get(2).getChips());
@@ -482,7 +480,7 @@ class GameTest {
         void resetForNewHand_ClearsActedPlayersInRound() {
             game.postBlinds();
             Player actor = game.getCurrentPlayer();
-            game.processPlayerDecision(actor, new PlayerDecision(PlayerAction.CALL, 0, actor.getPlayerId()));
+            game.processPlayerDecision(actor, PlayerAction.CALL, 0);
             assertFalse(game.toSnapshot().actedPlayerIds().isEmpty());
 
             assertFalse(game.resetForNewHand());
@@ -541,7 +539,7 @@ class GameTest {
         @Test
         void testProcessPlayerDecisionFold() {
             Player player = game.getCurrentPlayer();
-            game.processPlayerDecision(player, new PlayerDecision(PlayerAction.FOLD, 0, player.getPlayerId()));
+            game.processPlayerDecision(player, PlayerAction.FOLD, 0);
             assertTrue(player.hasFolded());
             assertEquals(0, game.getPot());
         }
@@ -549,7 +547,7 @@ class GameTest {
         @Test
         void testProcessPlayerDecisionCheckAndCheckWithActiveBet() {
             Player player = game.getCurrentPlayer();
-            game.processPlayerDecision(player, new PlayerDecision(PlayerAction.CHECK, 0, player.getPlayerId()));
+            game.processPlayerDecision(player, PlayerAction.CHECK, 0);
             assertFalse(player.hasFolded());
             assertEquals(0, game.getPot());
             assertEquals(0, player.getCurrentBet());
@@ -558,14 +556,14 @@ class GameTest {
             activeBetGame.postBlinds();
             Player actor = activeBetGame.getCurrentPlayer();
             UnauthorisedActionException exception = assertThrows(UnauthorisedActionException.class, () ->
-                    activeBetGame.processPlayerDecision(actor, new PlayerDecision(PlayerAction.CHECK, 0, actor.getPlayerId())));
+                    activeBetGame.processPlayerDecision(actor, PlayerAction.CHECK, 0));
             assertTrue(exception.getMessage().contains("Cannot check when there is an active bet"));
         }
 
         @Test
         void testProcessPlayerDecisionBetAndBetWithActiveBet() {
             Player player = game.getCurrentPlayer();
-            game.processPlayerDecision(player, new PlayerDecision(PlayerAction.BET, 50, player.getPlayerId()));
+            game.processPlayerDecision(player, PlayerAction.BET, 50);
             assertEquals(50, game.getPot());
             assertEquals(50, player.getCurrentBet());
             assertEquals(950, player.getChips());
@@ -575,7 +573,7 @@ class GameTest {
             activeBetGame.postBlinds();
             Player actor = activeBetGame.getCurrentPlayer();
             UnauthorisedActionException exception = assertThrows(UnauthorisedActionException.class, () ->
-                    activeBetGame.processPlayerDecision(actor, new PlayerDecision(PlayerAction.BET, 50, actor.getPlayerId())));
+                    activeBetGame.processPlayerDecision(actor, PlayerAction.BET, 50));
             assertTrue(exception.getMessage().contains("Cannot bet when there is an active bet"));
         }
 
@@ -583,7 +581,7 @@ class GameTest {
         void testProcessPlayerDecisionCallRaiseAllInAndInvalidRaise() {
             game.postBlinds();
             Player caller = game.getActivePlayers().getFirst();
-            game.processPlayerDecision(caller, new PlayerDecision(PlayerAction.CALL, 0, caller.getPlayerId()));
+            game.processPlayerDecision(caller, PlayerAction.CALL, 0);
             assertEquals(50, game.getPot());
             assertEquals(20, caller.getCurrentBet());
             assertEquals(980, caller.getChips());
@@ -591,7 +589,7 @@ class GameTest {
             Game raiseGame = createStandardGame(3, 1000);
             raiseGame.postBlinds();
             Player raiser = raiseGame.getActivePlayers().getFirst();
-            raiseGame.processPlayerDecision(raiser, new PlayerDecision(PlayerAction.RAISE, 50, raiser.getPlayerId()));
+            raiseGame.processPlayerDecision(raiser, PlayerAction.RAISE, 50);
             assertEquals(80, raiseGame.getPot());
             assertEquals(50, raiser.getCurrentBet());
             assertEquals(950, raiser.getChips());
@@ -599,7 +597,7 @@ class GameTest {
 
             Game allInGame = createStandardGame(3, 1000);
             Player shover = allInGame.getCurrentPlayer();
-            allInGame.processPlayerDecision(shover, new PlayerDecision(PlayerAction.ALL_IN, 0, shover.getPlayerId()));
+            allInGame.processPlayerDecision(shover, PlayerAction.ALL_IN, 0);
             assertEquals(1000, allInGame.getPot());
             assertEquals(1000, shover.getCurrentBet());
             assertEquals(0, shover.getChips());
@@ -611,7 +609,7 @@ class GameTest {
             badRaiser.doAction(PlayerAction.BET, 10);
             BadRequestException nonIncreasing = assertThrows(BadRequestException.class, () ->
                     invalidRaiseGame.processPlayerDecision(
-                            badRaiser, new PlayerDecision(PlayerAction.RAISE, 5, badRaiser.getPlayerId())));
+                            badRaiser, PlayerAction.RAISE, 5));
             assertEquals("MIN_RAISE", nonIncreasing.actionErrorCode());
         }
 
@@ -620,7 +618,7 @@ class GameTest {
             game.postBlinds();
             Player player = game.getActivePlayers().getFirst();
             BadRequestException exception = assertThrows(BadRequestException.class, () ->
-                    game.processPlayerDecision(player, new PlayerDecision(PlayerAction.RAISE, 1, player.getPlayerId())));
+                    game.processPlayerDecision(player, PlayerAction.RAISE, 1));
             assertEquals("MIN_RAISE", exception.actionErrorCode());
             assertEquals("Min raise: 40; yours: 1", exception.actionErrorMessage());
         }
@@ -633,19 +631,19 @@ class GameTest {
             Game hand = restoredBettingGame("raise-increment", List.of(a, b, c), 30, 10, 0,
                     Map.of("a", 10, "b", 10, "c", 10), 0, Map.of());
 
-            hand.processPlayerDecision(a, new PlayerDecision(PlayerAction.RAISE, 40, "a"));
+            hand.processPlayerDecision(a, PlayerAction.RAISE, 40);
             assertEquals(50, a.getCurrentBet());
             assertEquals(40, hand.toSnapshot().lastFullRaise());
             assertEquals(80, hand.getMinimumRaiseAmount(b));
 
             int bChipsBefore = b.getChips();
             BadRequestException tooSmall = assertThrows(BadRequestException.class, () ->
-                    hand.processPlayerDecision(b, new PlayerDecision(PlayerAction.RAISE, 10, "b")));
+                    hand.processPlayerDecision(b, PlayerAction.RAISE, 10));
             assertEquals("MIN_RAISE", tooSmall.actionErrorCode());
             assertEquals(bChipsBefore, b.getChips());
             assertEquals(50, hand.getCurrentHighestBet());
 
-            hand.processPlayerDecision(b, new PlayerDecision(PlayerAction.RAISE, 80, "b"));
+            hand.processPlayerDecision(b, PlayerAction.RAISE, 80);
             assertEquals(90, b.getCurrentBet());
             assertEquals(90, hand.getCurrentHighestBet());
         }
@@ -657,7 +655,7 @@ class GameTest {
             Game hand = restoredBettingGame("showdown-min-raise", List.of(a, b), 60, 50, 0,
                     Map.of("a", 10, "b", 50), 40, Map.of("b", 50));
 
-            hand.processPlayerDecision(a, new PlayerDecision(PlayerAction.FOLD, 0, "a"));
+            hand.processPlayerDecision(a, PlayerAction.FOLD, 0);
 
             assertEquals(GamePhase.SHOWDOWN, hand.getCurrentPhase());
             int owed = Math.max(0, hand.getCurrentHighestBet() - b.getCurrentBet());
@@ -690,7 +688,7 @@ class GameTest {
             assertTrue(hand.getLegalActionsFor(a).contains(PlayerAction.CALL));
 
             UnauthorisedActionException closed = assertThrows(UnauthorisedActionException.class, () ->
-                    hand.processPlayerDecision(a, new PlayerDecision(PlayerAction.ALL_IN, 0, "a")));
+                    hand.processPlayerDecision(a, PlayerAction.ALL_IN, 0));
             assertEquals("RAISE_NOT_REOPENED", closed.actionErrorCode());
             assertEquals(100, a.getCurrentBet());
             assertEquals(900, a.getChips());
@@ -700,7 +698,7 @@ class GameTest {
                     List.of(shortA, restoredPlayer("Short", "s", 0, 150, true), restoredPlayer("B", "b", 900, 100, false)),
                     350, 150, 0, Map.of("a", 100, "s", 150, "b", 100), 100, Map.of("a", 100));
             assertTrue(shortHand.getLegalActionsFor(shortA).contains(PlayerAction.ALL_IN));
-            shortHand.processPlayerDecision(shortA, new PlayerDecision(PlayerAction.ALL_IN, 0, "a"));
+            shortHand.processPlayerDecision(shortA, PlayerAction.ALL_IN, 0);
             assertEquals(150, shortA.getCurrentBet());
             assertTrue(shortA.isAllIn());
         }
@@ -717,7 +715,7 @@ class GameTest {
             assertTrue(exactActions.contains(PlayerAction.CALL));
             assertTrue(exactActions.contains(PlayerAction.ALL_IN));
             assertFalse(exactActions.contains(PlayerAction.RAISE));
-            exactCall.processPlayerDecision(exactCaller, new PlayerDecision(PlayerAction.ALL_IN, 0, "exact"));
+            exactCall.processPlayerDecision(exactCaller, PlayerAction.ALL_IN, 0);
             assertEquals(100, exactCaller.getCurrentBet());
 
             Player shortRaiser = restoredPlayer("ShortRaise", "shortRaise", 90, 20, false);
@@ -728,7 +726,7 @@ class GameTest {
 
             assertTrue(shortRaise.getLegalActionsFor(shortRaiser).contains(PlayerAction.RAISE));
             assertTrue(shortRaise.getLegalActionsFor(shortRaiser).contains(PlayerAction.ALL_IN));
-            shortRaise.processPlayerDecision(shortRaiser, new PlayerDecision(PlayerAction.ALL_IN, 0, "shortRaise"));
+            shortRaise.processPlayerDecision(shortRaiser, PlayerAction.ALL_IN, 0);
             assertEquals(110, shortRaiser.getCurrentBet());
             assertTrue(shortRaiser.isAllIn());
         }
@@ -738,9 +736,9 @@ class GameTest {
             Player actor = game.getCurrentPlayer();
             int startingChips = actor.getChips();
             assertThrows(UnauthorisedActionException.class, () ->
-                    game.processPlayerDecision(actor, new PlayerDecision(PlayerAction.CALL, 0, actor.getPlayerId())));
+                    game.processPlayerDecision(actor, PlayerAction.CALL, 0));
             assertThrows(UnauthorisedActionException.class, () ->
-                    game.processPlayerDecision(actor, new PlayerDecision(PlayerAction.RAISE, 10, actor.getPlayerId())));
+                    game.processPlayerDecision(actor, PlayerAction.RAISE, 10));
             assertEquals(startingChips, actor.getChips());
             assertEquals(0, game.getPot());
             assertEquals(0, game.getCurrentHighestBet());
@@ -873,7 +871,7 @@ class GameTest {
                     .scheduledTimes(Map.of())
                     .build();
 
-            TurnOutcome outcome = hand.processPlayerDecision(caller, new PlayerDecision(PlayerAction.CALL, 0, "caller"));
+            TurnOutcome outcome = hand.processPlayerDecision(caller, PlayerAction.CALL, 0);
 
             assertEquals(TurnOutcome.TurnOutcomeType.SHOWDOWN, outcome.type());
             assertEquals(GamePhase.SHOWDOWN, hand.getCurrentPhase());
@@ -884,14 +882,14 @@ class GameTest {
         void testMinBetRaiseAndAllInShortExceptionsAndConversions() {
             Player current = game.getCurrentPlayer();
             BadRequestException smallBet = assertThrows(BadRequestException.class, () ->
-                    game.processPlayerDecision(current, new PlayerDecision(PlayerAction.BET, 10, current.getPlayerId())));
+                    game.processPlayerDecision(current, PlayerAction.BET, 10));
             assertTrue(smallBet.getMessage().contains("Bet amount must be at least the big blind"));
 
             Game smallRaiseGame = createStandardGame(3, 1000);
             smallRaiseGame.postBlinds();
             Player raiser = smallRaiseGame.getActivePlayers().getFirst();
             BadRequestException smallRaise = assertThrows(BadRequestException.class, () ->
-                    smallRaiseGame.processPlayerDecision(raiser, new PlayerDecision(PlayerAction.RAISE, 30, raiser.getPlayerId())));
+                    smallRaiseGame.processPlayerDecision(raiser, PlayerAction.RAISE, 30));
             assertTrue(smallRaise.getMessage().contains("Raise increment must be at least 20"));
             assertEquals("MIN_RAISE", smallRaise.actionErrorCode());
             assertEquals("Min raise: 40; yours: 30", smallRaise.actionErrorMessage());
@@ -902,7 +900,7 @@ class GameTest {
                     new Player("P3", "p3", 1000)), 10, 20);
             Player shortBetActor = shortBetGame.getCurrentPlayer();
             assertDoesNotThrow(() -> shortBetGame.processPlayerDecision(
-                    shortBetActor, new PlayerDecision(PlayerAction.BET, 15, shortBetActor.getPlayerId())));
+                    shortBetActor, PlayerAction.BET, 15));
             assertEquals(15, shortBetActor.getCurrentBet());
             assertTrue(shortBetActor.isAllIn());
 
@@ -913,7 +911,7 @@ class GameTest {
             shortRaiseGame.postBlinds();
             Player shortRaiser = shortRaiseGame.getActivePlayers().getFirst();
             assertDoesNotThrow(() -> shortRaiseGame.processPlayerDecision(
-                    shortRaiser, new PlayerDecision(PlayerAction.RAISE, 25, shortRaiser.getPlayerId())));
+                    shortRaiser, PlayerAction.RAISE, 25));
             assertEquals(25, shortRaiser.getCurrentBet());
             assertTrue(shortRaiser.isAllIn());
 
@@ -926,11 +924,11 @@ class GameTest {
             sidePotGame.postBlinds();
             Player allInPlayer = sidePotGame.getCurrentPlayer();
             assertEquals("Short", allInPlayer.getName());
-            sidePotGame.processPlayerDecision(allInPlayer, new PlayerDecision(PlayerAction.ALL_IN, 0, allInPlayer.getPlayerId()));
+            sidePotGame.processPlayerDecision(allInPlayer, PlayerAction.ALL_IN, 0);
             Player deep1 = sidePotGame.getPlayers().getFirst();
             int prevBet = deep1.getCurrentBet();
             TurnOutcome raiseOutcome = sidePotGame.processPlayerDecision(
-                    deep1, new PlayerDecision(PlayerAction.RAISE, 100, deep1.getPlayerId()));
+                    deep1, PlayerAction.RAISE, 100);
             assertNull(raiseOutcome.playerActionNotice());
             assertTrue(deep1.getCurrentBet() > prevBet);
             assertEquals(deep1.getCurrentBet(), sidePotGame.getCurrentHighestBet());
@@ -944,7 +942,7 @@ class GameTest {
             shortCallGame.postBlinds();
             Player shortCaller = shortCallGame.getCurrentPlayer();
             TurnOutcome callOutcome = shortCallGame.processPlayerDecision(
-                    shortCaller, new PlayerDecision(PlayerAction.CALL, 0, shortCaller.getPlayerId()));
+                    shortCaller, PlayerAction.CALL, 0);
             assertNotNull(callOutcome.playerActionNotice());
             assertTrue(callOutcome.playerActionNotice().contains("converted to all-in"));
             assertEquals(0, shortCaller.getChips());
@@ -1117,7 +1115,7 @@ class GameTest {
                     new Player("BigBlind", "b1", 1000)), 10, 20);
             shoveGame.postBlinds();
             Player allInPlayer = shoveGame.getCurrentPlayer();
-            shoveGame.processPlayerDecision(allInPlayer, new PlayerDecision(PlayerAction.ALL_IN, 0, allInPlayer.getPlayerId()));
+            shoveGame.processPlayerDecision(allInPlayer, PlayerAction.ALL_IN, 0);
             assertEquals(List.of(510), shoveGame.getPotBreakdown());
             assertEquals(0, shoveGame.getUncalledAmount());
 
@@ -1326,7 +1324,7 @@ class GameTest {
 
         @Test
         void testConductShowdownWithOnePlayerRefundOnlyAndMultiplePlayers() {
-            game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.BET, 100, "p3"));
+            game.processPlayerDecision(game.getActivePlayers().get(2), PlayerAction.BET, 100);
             game.getActivePlayers().get(0).doAction(PlayerAction.FOLD, 0);
             game.getActivePlayers().get(1).doAction(PlayerAction.FOLD, 0);
 
@@ -1343,9 +1341,9 @@ class GameTest {
             multiGame.getActivePlayers().get(2).setHoleCards(List.of(
                     new Card(Rank.THREE, Suit.HEARTS), new Card(Rank.EIGHT, Suit.CLUBS)));
 
-            multiGame.processPlayerDecision(multiGame.getActivePlayers().getFirst(), new PlayerDecision(PlayerAction.BET, 100, "p0"));
-            multiGame.processPlayerDecision(multiGame.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 100, "p1"));
-            multiGame.processPlayerDecision(multiGame.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 100, "p2"));
+            multiGame.processPlayerDecision(multiGame.getActivePlayers().getFirst(), PlayerAction.BET, 100);
+            multiGame.processPlayerDecision(multiGame.getActivePlayers().get(1), PlayerAction.CALL, 100);
+            multiGame.processPlayerDecision(multiGame.getActivePlayers().get(2), PlayerAction.CALL, 100);
             multiGame.getCommunityCards().clear();
             multiGame.getCommunityCards().addAll(List.of(
                     new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
@@ -1387,9 +1385,9 @@ class GameTest {
         @Test
         void testOddChipsAwardedClockwiseAcrossRotatedDealerHands() {
             // Hand 1: dealer is p1; p2 is clockwise left of p1 and receives the odd chip.
-            game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 51, "p1"));
-            game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 51, "p2"));
-            game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 51, "p3"));
+            game.processPlayerDecision(game.getActivePlayers().get(0), PlayerAction.BET, 51);
+            game.processPlayerDecision(game.getActivePlayers().get(1), PlayerAction.CALL, 51);
+            game.processPlayerDecision(game.getActivePlayers().get(2), PlayerAction.CALL, 51);
             game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0);
             game.getCommunityCards().addAll(ROYAL_FLUSH_BOARD);
             game.conductShowdown();
@@ -1406,9 +1404,9 @@ class GameTest {
             assertEquals(0, game.toSnapshot().carryOverPot());
 
             // Hand 2: dealer rotated to p2; p1 is now clockwise left of dealer (after folded p3) and receives the odd chip.
-            game.processPlayerDecision(game.getActivePlayers().get(0), new PlayerDecision(PlayerAction.BET, 51, "p1"));
-            game.processPlayerDecision(game.getActivePlayers().get(1), new PlayerDecision(PlayerAction.CALL, 51, "p2"));
-            game.processPlayerDecision(game.getActivePlayers().get(2), new PlayerDecision(PlayerAction.CALL, 51, "p3"));
+            game.processPlayerDecision(game.getActivePlayers().get(0), PlayerAction.BET, 51);
+            game.processPlayerDecision(game.getActivePlayers().get(1), PlayerAction.CALL, 51);
+            game.processPlayerDecision(game.getActivePlayers().get(2), PlayerAction.CALL, 51);
             game.getActivePlayers().get(2).doAction(PlayerAction.FOLD, 0);
             game.getCommunityCards().addAll(ROYAL_FLUSH_BOARD);
             game.conductShowdown();
@@ -1433,9 +1431,9 @@ class GameTest {
             Player s = basic.getPlayers().get(0);
             Player m = basic.getPlayers().get(1);
             Player d = basic.getPlayers().get(2);
-            basic.processPlayerDecision(m, new PlayerDecision(PlayerAction.BET, 150, m.getPlayerId()));
-            basic.processPlayerDecision(s, new PlayerDecision(PlayerAction.CALL, 0, s.getPlayerId()));
-            basic.processPlayerDecision(d, new PlayerDecision(PlayerAction.CALL, 0, d.getPlayerId()));
+            basic.processPlayerDecision(m, PlayerAction.BET, 150);
+            basic.processPlayerDecision(s, PlayerAction.CALL, 0);
+            basic.processPlayerDecision(d, PlayerAction.CALL, 0);
             basic.getCommunityCards().clear();
             basic.getCommunityCards().addAll(flushStraightBoard);
             s.setHoleCards(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
@@ -1450,9 +1448,9 @@ class GameTest {
             Game splitSide = createGame("side-pot-split", List.of(
                     new Player("Short", "s1", 50), new Player("Mid", "m1", 300), new Player("Deep", "d1", 300)),
                     10, 20);
-            splitSide.processPlayerDecision(splitSide.getPlayers().get(1), new PlayerDecision(PlayerAction.BET, 150, "m1"));
-            splitSide.processPlayerDecision(splitSide.getPlayers().get(0), new PlayerDecision(PlayerAction.CALL, 0, "s1"));
-            splitSide.processPlayerDecision(splitSide.getPlayers().get(2), new PlayerDecision(PlayerAction.CALL, 0, "d1"));
+            splitSide.processPlayerDecision(splitSide.getPlayers().get(1), PlayerAction.BET, 150);
+            splitSide.processPlayerDecision(splitSide.getPlayers().get(0), PlayerAction.CALL, 0);
+            splitSide.processPlayerDecision(splitSide.getPlayers().get(2), PlayerAction.CALL, 0);
             splitSide.getCommunityCards().clear();
             splitSide.getCommunityCards().addAll(flushStraightBoard);
             splitSide.getPlayers().get(0).setHoleCards(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
@@ -1466,10 +1464,10 @@ class GameTest {
             Game multi = createGame("side-pot-multi", List.of(
                     new Player("A", "a1", 50), new Player("B", "b1", 100),
                     new Player("C", "c1", 300), new Player("D", "d1", 300)), 10, 20);
-            multi.processPlayerDecision(multi.getPlayers().get(2), new PlayerDecision(PlayerAction.BET, 200, "c1"));
-            multi.processPlayerDecision(multi.getPlayers().get(3), new PlayerDecision(PlayerAction.CALL, 0, "d1"));
-            multi.processPlayerDecision(multi.getPlayers().get(1), new PlayerDecision(PlayerAction.CALL, 0, "b1"));
-            multi.processPlayerDecision(multi.getPlayers().get(0), new PlayerDecision(PlayerAction.CALL, 0, "a1"));
+            multi.processPlayerDecision(multi.getPlayers().get(2), PlayerAction.BET, 200);
+            multi.processPlayerDecision(multi.getPlayers().get(3), PlayerAction.CALL, 0);
+            multi.processPlayerDecision(multi.getPlayers().get(1), PlayerAction.CALL, 0);
+            multi.processPlayerDecision(multi.getPlayers().get(0), PlayerAction.CALL, 0);
             multi.getCommunityCards().clear();
             multi.getCommunityCards().addAll(flushStraightBoard);
             multi.getPlayers().get(0).setHoleCards(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
@@ -1485,9 +1483,9 @@ class GameTest {
             Game foldedEdge = createGame("side-pot-folded-edge", List.of(
                     new Player("Short", "s1", 50), new Player("Mid", "m1", 300), new Player("Folder", "f1", 300)),
                     10, 20);
-            foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(1), new PlayerDecision(PlayerAction.BET, 150, "m1"));
-            foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(0), new PlayerDecision(PlayerAction.CALL, 0, "s1"));
-            foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(2), new PlayerDecision(PlayerAction.CALL, 0, "f1"));
+            foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(1), PlayerAction.BET, 150);
+            foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(0), PlayerAction.CALL, 0);
+            foldedEdge.processPlayerDecision(foldedEdge.getPlayers().get(2), PlayerAction.CALL, 0);
             foldedEdge.getPlayers().get(2).doAction(PlayerAction.FOLD, 0);
             foldedEdge.getCommunityCards().clear();
             foldedEdge.getCommunityCards().addAll(flushStraightBoard);
@@ -1501,10 +1499,10 @@ class GameTest {
             Game splitRemainder = createGame("side-pot-remainder-edge", List.of(
                     new Player("A", "a1", 50), new Player("B", "b1", 101),
                     new Player("C", "c1", 101), new Player("D", "d1", 101)), 10, 20);
-            splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(1), new PlayerDecision(PlayerAction.BET, 101, "b1"));
-            splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(2), new PlayerDecision(PlayerAction.CALL, 0, "c1"));
-            splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(3), new PlayerDecision(PlayerAction.CALL, 0, "d1"));
-            splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(0), new PlayerDecision(PlayerAction.CALL, 0, "a1"));
+            splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(1), PlayerAction.BET, 101);
+            splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(2), PlayerAction.CALL, 0);
+            splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(3), PlayerAction.CALL, 0);
+            splitRemainder.processPlayerDecision(splitRemainder.getPlayers().get(0), PlayerAction.CALL, 0);
             splitRemainder.getCommunityCards().clear();
             splitRemainder.getCommunityCards().addAll(flushStraightBoard);
             splitRemainder.getPlayers().get(0).setHoleCards(List.of(new Card(Rank.NINE, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES)));
@@ -1524,7 +1522,7 @@ class GameTest {
                     new Player("BigBlind", "b1", 1000)), 10, 20);
             uncalledRefund.postBlinds();
             Player shover = uncalledRefund.getCurrentPlayer();
-            uncalledRefund.processPlayerDecision(shover, new PlayerDecision(PlayerAction.ALL_IN, 0, shover.getPlayerId()));
+            uncalledRefund.processPlayerDecision(shover, PlayerAction.ALL_IN, 0);
             uncalledRefund.getCommunityCards().clear();
             uncalledRefund.getCommunityCards().addAll(List.of(
                     new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
@@ -1565,7 +1563,7 @@ class GameTest {
             assertEquals(100, capGenuine.getCurrentHighestBet() - retained2.getCurrentBet());
             assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, nextTurn.type());
             assertEquals(List.of(PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.ALL_IN), capGenuine.getLegalActionsFor(retained2));
-            capGenuine.processPlayerDecision(retained2, new PlayerDecision(PlayerAction.ALL_IN, 0, "a"));
+            capGenuine.processPlayerDecision(retained2, PlayerAction.ALL_IN, 0);
             assertEquals(200, retained2.getCurrentBet());
             assertEquals(Map.of("s", 200, "a", 200, "b", 300), capGenuine.toSnapshot().handContributions());
 
@@ -1575,15 +1573,15 @@ class GameTest {
                     100, 100, 0, Map.of("b", 100), 100, Map.of());
             assertEquals(List.of(PlayerAction.FOLD, PlayerAction.CALL), aggressionBlocked.getLegalActionsFor(actorDeep));
             assertThrows(UnauthorisedActionException.class, () ->
-                    aggressionBlocked.processPlayerDecision(actorDeep, new PlayerDecision(PlayerAction.RAISE, 100, "a")));
+                    aggressionBlocked.processPlayerDecision(actorDeep, PlayerAction.RAISE, 100));
             assertThrows(UnauthorisedActionException.class, () ->
-                    aggressionBlocked.processPlayerDecision(actorDeep, new PlayerDecision(PlayerAction.ALL_IN, 0, "a")));
+                    aggressionBlocked.processPlayerDecision(actorDeep, PlayerAction.ALL_IN, 0));
 
             Player actorExact = restoredPlayer("Actor", "a", 100, 0, false);
             Game callingAllIn = restoredBettingGame("calling-allin", List.of(actorExact, restoredPlayer("All-in", "b", 0, 100, true)),
                     100, 100, 0, Map.of("b", 100), 100, Map.of());
             assertTrue(callingAllIn.getLegalActionsFor(actorExact).contains(PlayerAction.ALL_IN));
-            callingAllIn.processPlayerDecision(actorExact, new PlayerDecision(PlayerAction.ALL_IN, 0, "a"));
+            callingAllIn.processPlayerDecision(actorExact, PlayerAction.ALL_IN, 0);
             assertEquals(100, actorExact.getCurrentBet());
         }
 
@@ -1642,8 +1640,8 @@ class GameTest {
             Game idemp = createGame("double-showdown-game", List.of(p1, p2), 10, 20);
             idemp.dealHoleCards();
             idemp.postBlinds();
-            idemp.processPlayerDecision(p1, new PlayerDecision(PlayerAction.ALL_IN, 0, "p1"));
-            idemp.processPlayerDecision(p2, new PlayerDecision(PlayerAction.CALL, 0, "p2"));
+            idemp.processPlayerDecision(p1, PlayerAction.ALL_IN, 0);
+            idemp.processPlayerDecision(p2, PlayerAction.CALL, 0);
             idemp.getCommunityCards().addAll(List.of(
                     new Card(Rank.TEN, Suit.SPADES), new Card(Rank.JACK, Suit.SPADES),
                     new Card(Rank.QUEEN, Suit.SPADES), new Card(Rank.TWO, Suit.CLUBS),
@@ -1662,8 +1660,8 @@ class GameTest {
             assertEquals(2000, p1.getChips());
 
             Game voidGame = createStandardGame(2, 100);
-            voidGame.processPlayerDecision(voidGame.getPlayers().get(0), new PlayerDecision(PlayerAction.BET, 50, "p0"));
-            voidGame.processPlayerDecision(voidGame.getPlayers().get(1), new PlayerDecision(PlayerAction.CALL, 50, "p1"));
+            voidGame.processPlayerDecision(voidGame.getPlayers().get(0), PlayerAction.BET, 50);
+            voidGame.processPlayerDecision(voidGame.getPlayers().get(1), PlayerAction.CALL, 50);
             voidGame.getPlayers().forEach(pl -> pl.doAction(PlayerAction.FOLD, 0));
             voidGame.conductShowdown();
             assertTrue(voidGame.getLastHandPayout().winnerIds().isEmpty());
@@ -1720,9 +1718,9 @@ class GameTest {
             Game conserve = createStandardGame(3, 1000);
             conserve.dealHoleCards();
             conserve.postBlinds();
-            conserve.processPlayerDecision(conserve.getPlayers().get(0), new PlayerDecision(PlayerAction.ALL_IN, 0, "p0"));
-            conserve.processPlayerDecision(conserve.getPlayers().get(1), new PlayerDecision(PlayerAction.ALL_IN, 0, "p1"));
-            conserve.processPlayerDecision(conserve.getPlayers().get(2), new PlayerDecision(PlayerAction.FOLD, 0, "p2"));
+            conserve.processPlayerDecision(conserve.getPlayers().get(0), PlayerAction.ALL_IN, 0);
+            conserve.processPlayerDecision(conserve.getPlayers().get(1), PlayerAction.ALL_IN, 0);
+            conserve.processPlayerDecision(conserve.getPlayers().get(2), PlayerAction.FOLD, 0);
             conserve.dealFlop();
             conserve.dealTurn();
             conserve.dealRiver();
@@ -1868,7 +1866,7 @@ class GameTest {
 
             Player foldingPlayer = unsettled.getCurrentPlayer();
             unsettled.processPlayerDecision(foldingPlayer,
-                    new PlayerDecision(PlayerAction.FOLD, 0, foldingPlayer.getPlayerId()));
+                    PlayerAction.FOLD, 0);
             assertTrue(unsettled.isHandSettled());
             assertFalse(unsettled.wasContestedShowdown());
 
@@ -2124,9 +2122,9 @@ class GameTest {
                     .build();
             sbLeft.removePlayer(a2);
             assertEquals("c", sbLeft.getCurrentPlayer().getPlayerId());
-            sbLeft.processPlayerDecision(c2, new PlayerDecision(PlayerAction.CALL, 0, "c"));
-            sbLeft.processPlayerDecision(d2, new PlayerDecision(PlayerAction.CALL, 0, "d"));
-            sbLeft.processPlayerDecision(b2, new PlayerDecision(PlayerAction.CHECK, 0, "b"));
+            sbLeft.processPlayerDecision(c2, PlayerAction.CALL, 0);
+            sbLeft.processPlayerDecision(d2, PlayerAction.CALL, 0);
+            sbLeft.processPlayerDecision(b2, PlayerAction.CHECK, 0);
             assertEquals(GamePhase.FLOP, sbLeft.getCurrentPhase());
             assertEquals("b", sbLeft.getCurrentPlayer().getPlayerId());
             assertEquals("d", sbLeft.toSnapshot().dealerPlayerId());
@@ -2199,10 +2197,10 @@ class GameTest {
             assertEquals(20, headsUpGame.getActivePlayers().get(0).getCurrentBet());
 
             Player firstPlayer = game.getCurrentPlayer();
-            game.processPlayerDecision(firstPlayer, new PlayerDecision(PlayerAction.CHECK, 0, firstPlayer.getPlayerId()));
+            game.processPlayerDecision(firstPlayer, PlayerAction.CHECK, 0);
             Player secondPlayer = game.getCurrentPlayer();
             assertNotEquals(firstPlayer, secondPlayer);
-            game.processPlayerDecision(secondPlayer, new PlayerDecision(PlayerAction.CHECK, 0, secondPlayer.getPlayerId()));
+            game.processPlayerDecision(secondPlayer, PlayerAction.CHECK, 0);
             Player currentBeforeRemoval = game.getCurrentPlayer();
             Player nonCurrent = game.getActivePlayers().stream()
                     .filter(p -> !p.equals(currentBeforeRemoval)).findFirst().orElseThrow();
@@ -2241,7 +2239,7 @@ class GameTest {
             outOpponentB.setIsOut();
 
             TurnOutcome outcome = midHandOut.processPlayerDecision(
-                    actorA, new PlayerDecision(PlayerAction.CHECK, 0, actorA.getPlayerId()));
+                    actorA, PlayerAction.CHECK, 0);
 
             assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, outcome.type());
             assertEquals("c", midHandOut.getCurrentPlayer().getPlayerId());
@@ -2349,8 +2347,11 @@ class GameTest {
                 assertEquals(versionsBeforeClearAll.get(task) + 1, aggGame.getTimerVersion(task));
             }
 
-            GameEndResponse endResponse = new GameEndResponse(
-                    "GAME_END", "game-adversarial-1", "Alice", 2000, false, "Game Over", null);
+            PublicGameStateResponse endResponse = new PublicGameStateResponse(
+                    2, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(), List.of(), null, null,
+                    List.of("Alice"), null, false, null, false, null, false, null, true, 0,
+                    List.of(), null, null, 1L, ReadyGateState.CLOSED, 1_700_000_000_000L, 1L,
+                    null, null, PublicGameStateResponse.GameEnd.won("Alice", 2000, false, "Game Over"));
             aggGame.setGameEndResult(endResponse);
             assertSame(endResponse, aggGame.getGameEndResult());
         }
@@ -2608,8 +2609,11 @@ class GameTest {
 
             // Once settled, 0-chip Bob is no longer a contender and game is decided
             Game settledDecided = eligibilityGameWith(List.of(alice, bob), GamePhase.SHOWDOWN, true, false);
-            settledDecided.setGameEndResult(new GameEndResponse(
-                    "GAME_END", "elig-game", "Alice", 1000, false, "Complete", null));
+            settledDecided.setGameEndResult(new PublicGameStateResponse(
+                    2, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(), List.of(), null, null,
+                    List.of("Alice"), null, false, null, false, null, false, null, true, 0,
+                    List.of(), null, null, 1L, ReadyGateState.CLOSED, 1_700_000_000_000L, 1L,
+                    null, null, PublicGameStateResponse.GameEnd.won("Alice", 1000, false, "Complete")));
             assertEquals(Optional.empty(), settledDecided.findClaimWinPlayer());
         }
 
@@ -2769,8 +2773,11 @@ class GameTest {
             Map<ScheduledGameTask, Long> timerVersions = Map.of(
                     ScheduledGameTask.AUTO_ADVANCE, 3L,
                     ScheduledGameTask.CLEANUP, 1L);
-            GameEndResponse terminalResult = new GameEndResponse(
-                    "GAME_END", RESTORE_GAME_ID, "Alice", 1450, false, "Alice won", null);
+            PublicGameStateResponse terminalResult = new PublicGameStateResponse(
+                    3, 0, List.of(), 0, GamePhase.SHOWDOWN, 0, List.of(), List.of(), null, null,
+                    List.of("Alice"), null, false, null, false, null, false, null, true, 0,
+                    List.of(), null, null, 1L, ReadyGateState.CLOSED, 1_700_000_000_000L, 1L,
+                    null, null, PublicGameStateResponse.GameEnd.won("Alice", 1450, false, "Alice won"));
 
             Game settledGame = Game.restoreBuilder()
                     .gameId(RESTORE_GAME_ID)

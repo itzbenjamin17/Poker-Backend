@@ -1,37 +1,35 @@
 package com.pokergame.advice;
 
-import com.pokergame.enums.ResponseMessage;
+import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.RejectedAction;
-import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.exception.ActionFeedbackException;
 import com.pokergame.exception.PokerException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameStateService;
 import com.pokergame.util.SecurityUtils;
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.ValidationException;
+import java.nio.charset.StandardCharsets;
+import java.security.Principal;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.converter.MessageConversionException;
 import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
-import org.springframework.web.bind.annotation.ControllerAdvice;
-
-import java.security.Principal;
-import java.nio.charset.StandardCharsets;
-import java.util.Map;
-import tools.jackson.databind.ObjectMapper;
-import jakarta.validation.ConstraintViolationException;
-import jakarta.validation.ValidationException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.IdentityHashMap;
-import java.util.List;
-import java.util.Set;
-import java.util.function.Predicate;
 import org.springframework.validation.BindException;
 import org.springframework.validation.method.MethodValidationException;
+import org.springframework.web.bind.annotation.ControllerAdvice;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Centralized exception handler for STOMP-over-WebSocket messaging traffic.
@@ -109,8 +107,7 @@ public class WebSocketExceptionHandler {
 
         if (destination == null || !destination.endsWith("/action")) {
             gameStateService.sendPrivatePlayerNotification(playerPrincipal,
-                    userFriendlyMessage(exception, REQUEST_FALLBACK_MESSAGE, true),
-                    ResponseMessage.PLAYER_NOTIFICATION);
+                    userFriendlyMessage(exception, REQUEST_FALLBACK_MESSAGE, true));
             return;
         }
 
@@ -118,8 +115,7 @@ public class WebSocketExceptionHandler {
         if (action == null) {
             logger.warn("Cannot publish ACTION_ERROR without a supported rejected action");
             gameStateService.sendPrivatePlayerNotification(playerPrincipal,
-                    userFriendlyMessage(exception, REQUEST_FALLBACK_MESSAGE, true),
-                    ResponseMessage.PLAYER_NOTIFICATION);
+                    userFriendlyMessage(exception, REQUEST_FALLBACK_MESSAGE, true));
             return;
         }
 

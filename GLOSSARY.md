@@ -125,8 +125,8 @@ The shared table state projection sent to everyone in the room (community cards,
 **PrivatePlayerState**:
 A player's confidential view containing only their own player ID, hand number, and face-down hole cards, delivered only to that player.
 
-**GameEndResponse**:
-The final match summary recording the overall winner, winning chip total, whether the win was by forfeit or abandonment, and the final table snapshot for post-game review.
+**Game-end summary (`PublicGameStateResponse.GameEnd`)**:
+The optional `gameEnd` summary attached to a completed `PublicGameStateResponse` recording the overall winner, winning chip total, whether the win was by forfeit or abandonment, and the final table snapshot for post-game review.
 
 ## Persistence & Crash Recovery Terms
 
@@ -139,8 +139,8 @@ The record returned when loading a saved room during startup recovery, pairing t
 **RoomSnapshotMapper**:
 The mapper that converts live `Room` and `Game` state into a `RoomSnapshot` before saving and reconstructs a `RecoveredRoom` from a saved `RoomSnapshot`.
 
-**GameResultState**:
-The persisted form inside `RoomSnapshot.GameState` that stores a finished match's `GameEndResponse` for post-game review across restarts.
+**FinalGameState / GameEndState**:
+The persisted form inside `RoomSnapshot.GameState` that stores a finished match's completed `PublicGameStateResponse` and `GameEnd` metadata for post-game review across restarts.
 
 **DurableMutation (`@DurableMutation`)**:
 An annotation on room and game service methods that changes live state in memory, rolls back memory if an error is thrown, and saves an encrypted backup of the room to disk.

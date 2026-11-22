@@ -7,7 +7,6 @@ import com.pokergame.config.WebSocketEventListener;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ScheduledGameTask;
@@ -434,8 +433,9 @@ class PersistenceRestartIT {
                 assertThat(restoredGame.isGameOver()).isTrue();
                 assertThat(restoredGame.isAbandoned()).isTrue();
                 assertThat(restoredGame.getGameEndResult()).isNotNull();
-                assertThat(restoredGame.getGameEndResult().abandoned()).isTrue();
-                assertThat(restoredGame.getGameEndResult().reason()).isEqualTo("INACTIVITY");
+                assertThat(restoredGame.getGameEndResult().gameEnd()).isNotNull();
+                assertThat(restoredGame.getGameEndResult().gameEnd().abandoned()).isTrue();
+                assertThat(restoredGame.getGameEndResult().gameEnd().reason()).isEqualTo("INACTIVITY");
                 assertThat(restoredGame.getScheduledTaskTime(ScheduledGameTask.CLEANUP)).isNotNull();
                 return null;
             });
@@ -603,7 +603,7 @@ class PersistenceRestartIT {
     @DisplayName("Terminal game result survives restart within display window until cleanup deletes WAL")
     void terminalResultAndEmptyRoomSurviveRestartUntilCleanup() {
         String roomId = UUID.randomUUID().toString();
-        GameEndResponse originalResult;
+        PublicGameStateResponse originalResult;
         try (ConfigurableApplicationContext first = startApplication(120_000L, 30_000L)) {
             RoomService rooms = first.getBean(RoomService.class);
             GameLifecycleService games = first.getBean(GameLifecycleService.class);

@@ -29,8 +29,8 @@ All production packages are under `src/main/java/com/pokergame/`.
 | Lifecycle collaborators (`service/`) | Package-private Spring `@Component` beans: `GameReadinessCoordinator` (ready gate/countdown), `HandProgressionService` (dealing/street progression), `PlayerDepartureHandler` (leave, host transfer, timeout, reconnect, grace expiry, claim-win), `GameCompletionHandler` (settlement, inactivity abandonment, review lookup, game/room deletion), `GameTaskScheduler` (timer scheduling and claim validation), `GameTimerRegistry` (`TaskScheduler` futures for game timers, active-game inactivity, and lobby inactivity), and `LobbyInactivityScheduler` (the lobby expiry callback: it takes the room lock, checks the deadline, and calls the durable close through `ObjectProvider<RoomService>` only when the lobby has expired). |
 | [PlayerActionService](../../src/main/java/com/pokergame/service/PlayerActionService.java) | Action validation, betting mutations, turn/round progression, and lifecycle scheduling. |
 | [GameStateService](../../src/main/java/com/pokergame/service/GameStateService.java) | Public/private snapshots and WebSocket broadcasts queued via `PostSaveActions` until saving completes. |
-| `model/` and `enums/` | `Game` (including `GameRestoreBuilder`), `Room`, `Player`, `Deck`/`Card` state; package-private collaborators `BettingRound`, `TableSeating`, `PotCalculator`, `ShowdownResolver`, `GameScheduling`, and `ReadyGate`; [HandEvaluator](../../src/main/java/com/pokergame/model/HandEvaluator.java); poker phases/actions/statuses and scheduled-task identifiers. |
-| `dto/request/`, `dto/response/`, `dto/internal/` | Validated input, client projections, and service-internal results. |
+| `model/` and `enums/` | `Game` (including `GameRestoreBuilder`), `Room`, `Player`, `Deck`/`Card`, `TurnOutcome` state; package-private collaborators `BettingRound`, `TableSeating`, `PotCalculator`, `ShowdownResolver`, `GameScheduling`, and `ReadyGate`; [HandEvaluator](../../src/main/java/com/pokergame/model/HandEvaluator.java); poker phases/actions/statuses and scheduled-task identifiers. |
+| `dto/request/`, `dto/response/` | Validated input (`CreateRoomRequest`, `JoinRoomRequest`, `PlayerActionRequest`) and client projections (`PublicGameStateResponse` with nested `PlayerState`/`GameEnd`, `PrivatePlayerState`, `RoomDataResponse` with nested `RoomPlayer`, `TokenResponse`, `PlayerFeedbackResponse`). |
 | `advice/` and `exception/` | HTTP/STOMP error mapping and domain exceptions. |
 | `security/` and `config/` | JWT principal/filters, payload/rate limits, origins, STOMP authorization, session events, executor/scheduler setup. |
 | `RoomAggregates` (`persistence/`), `RoomAggregateStore` (`service/`) | The only view persistence has of live rooms and games: `find`, `replace` (rollback, timers rescheduled) and `remove`. `persistence/` imports nothing from `service`, `config` or `controller`. |
@@ -59,22 +59,20 @@ WebSocket identity allows multiple browser tabs per player; disconnect tracking 
 
 | Transport | Endpoints / destinations |
 | --- | --- |
-| Public room commands | `POST /api/room/create`, `POST /api/room/join`; return `ApiResponse<TokenResponse>`. |
+| Public room commands | `POST /api/room/create`, `POST /api/room/join`; return bare `TokenResponse`. |
 | Room snapshot | `GET /api/room/{roomId}`; returns `RoomDataResponse`. |
-| Secured room commands | `POST /api/room/{roomId}/start-game`, `POST /api/room/{roomId}/leave`. |
-| Secured game snapshots | `GET /api/game/{gameId}/state`, `GET /api/game/{gameId}/private-state`; return direct public/private DTOs. |
-| Secured game commands | `POST /api/game/{gameId}/claim-win`. |
+| Secured room commands | `POST /api/room/{roomId}/start-game`, `POST /api/room/{roomId}/leave`; return `204 No Content`. |
+| Secured game snapshots | `GET /api/game/{gameId}/state`, `GET /api/game/{gameId}/private-state`, `GET /api/game/{gameId}/review`; return direct public/private DTOs (`review` carries `gameEnd`). |
+| Secured game commands | `POST /api/game/{gameId}/claim-win`; returns bare completed `PublicGameStateResponse` (with `gameEnd` populated). |
 | STOMP handshake | `/ws`; bearer token supplied in CONNECT headers. |
 | Client SEND | `/app/{gameId}/action`, `/app/{gameId}/ready`, `/app/{gameId}/unready`. |
-| Client SUBSCRIBE | `/room/{roomId}`, `/game/{gameId}`, `/user/queue/private`. |
+| Client SUBSCRIBE | `/room/{roomId}` (`RoomDataResponse`), `/game/{gameId}` (`PublicGameStateResponse`), `/user/queue/private` (`PrivatePlayerState`, `PlayerFeedbackResponse`). |
 
-Use [WebSocketConfig](../../src/main/java/com/pokergame/config/WebSocketConfig.java) and controllers as exact mapping references; the simple broker serves `/room`, `/game`, and `/user/queue` prefixes. Public DTOs carry chips, players, board cards, turn/phase/pot state, and optional showdown/readiness/disconnect/claim-win metadata; private state carries player ID and hole cards. Keep optional/null payload fields compatible with frontend decoders.
+Use [WebSocketConfig](../../src/main/java/com/pokergame/config/WebSocketConfig.java) and controllers as exact mapping references; the simple broker serves `/room`, `/game`, and `/user/queue` prefixes. Public DTOs carry chips, players, board cards, turn/phase/pot state, and optional showdown/readiness/disconnect/claim-win/game-end metadata; private state carries player ID and hole cards. Keep optional/null payload fields compatible with frontend decoders.
 
 Public snapshots also carry `handNumber` and `stateRevision`: `GameStateService` increments `stateRevision` on each public broadcast (resetting it to `1` in `Game.beginHand()`), and `RoomSnapshot` saves it so clients can drop slower REST `/state` responses or out-of-order WebSocket messages—even across a server restart.
 
-### Response Envelope Convention
-
-The command/query split documented in [CODING_STANDARDS.md](../../CODING_STANDARDS.md#response-envelope) matches `../frontend-poker/src/services/api.ts`, which unwraps `message`/`data` on command responses and decodes `GET` queries (notably `getReview`) as bare top-level DTOs. Do not change a query envelope without coordinating the frontend decoder.
+As documented in [CODING_STANDARDS.md](../../CODING_STANDARDS.md#response-envelope), all REST success endpoints return bare DTOs directly (`TokenResponse`, `RoomDataResponse`, `PublicGameStateResponse`, `PrivatePlayerState`) or `204 No Content` (`/start-game`, `/leave`). Room broadcasts on `/room/{roomId}` send bare `RoomDataResponse` (with `closedReason` set when the lobby closes), game broadcasts on `/game/{gameId}` send bare `PublicGameStateResponse` (with `gameEnd` set when the match ends), and private user feedback uses `PlayerFeedbackResponse`. HTTP errors return RFC 9457 `ProblemDetail` (`application/problem+json`). Coordinate any contract changes with `../frontend-poker/src/services/api.ts` and `../frontend-poker/src/lib/payloads.ts`.
 
 ## Security And Boundaries
 

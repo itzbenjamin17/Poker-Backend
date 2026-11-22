@@ -1,10 +1,8 @@
 package com.pokergame.advice;
 
 import com.pokergame.enums.PlayerAction;
-import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.RejectedAction;
-import com.pokergame.dto.response.ActionErrorResponse;
-import com.pokergame.dto.response.PlayerNotificationResponse;
+import com.pokergame.dto.response.PlayerFeedbackResponse;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.persistence.PersistenceException;
@@ -104,7 +102,7 @@ class WebSocketExceptionHandlerTest {
                 new UnauthorisedActionException("old detail", "NOT_YOUR_TURN", "Wait for your turn"),
                 principal, actionFrame(action));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("NOT_YOUR_TURN", action, "Wait for your turn"));
+                PlayerFeedbackResponse.actionError("NOT_YOUR_TURN", RejectedAction.from(action), "Wait for your turn"));
     }
 
     /** The exact corrective values survive the handler without a generic length cap. */
@@ -114,13 +112,13 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(new BadRequestException("old detail", "MIN_RAISE", copy),
                 principal, actionFrame(PlayerAction.RAISE));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("MIN_RAISE", PlayerAction.RAISE, copy));
+                PlayerFeedbackResponse.actionError("MIN_RAISE", RejectedAction.from(PlayerAction.RAISE), copy));
 
         String longCopy = "A deliberately long rule description with relevant values 123456789 and 987654321 that exceeds eighty characters";
         handler.handleMessageException(new BadRequestException("old detail", "FUTURE_RULE", longCopy),
                 principal, actionFrame(PlayerAction.BET));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("FUTURE_RULE", PlayerAction.BET, longCopy));
+                PlayerFeedbackResponse.actionError("FUTURE_RULE", RejectedAction.from(PlayerAction.BET), longCopy));
     }
 
     /** An invalid frame cannot produce a partially populated action error. */
@@ -130,8 +128,7 @@ class WebSocketExceptionHandlerTest {
                 .setHeader("simpDestination", "/app/" + gameId + "/action").build();
         handler.handleMessageException(new RuntimeException("malformed"), principal, frame);
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
-                        "Request failed. Please try again.", playerName, gameId));
+                PlayerFeedbackResponse.notice("Request failed. Please try again."));
     }
 
     /** Ordinary transient readiness errors remain structured and retryable. */
@@ -142,7 +139,7 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(new UnauthorisedActionException("Ready countdown is not active."),
                 principal, frame);
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("ACTION_REJECTED", RejectedAction.READY, "Ready countdown is not active."));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.READY, "Ready countdown is not active."));
     }
 
     /** Authentication still guards access to the private response path. */
@@ -172,7 +169,7 @@ class WebSocketExceptionHandlerTest {
                 principal, spoofedFrame);
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("NOT_YOUR_TURN", PlayerAction.BET, "Wait for your turn"));
+                PlayerFeedbackResponse.actionError("NOT_YOUR_TURN", RejectedAction.from(PlayerAction.BET), "Wait for your turn"));
         verify(messagingTemplate, Mockito.never()).convertAndSendToUser(
                 ArgumentMatchers.contains("spoofed-game-999"),
                 ArgumentMatchers.anyString(),
@@ -192,7 +189,7 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.BET));
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("NEGATIVE_AMOUNT", PlayerAction.BET, "Amount must be positive; yours: -10"));
+                PlayerFeedbackResponse.actionError("NEGATIVE_AMOUNT", RejectedAction.from(PlayerAction.BET), "Amount must be positive; yours: -10"));
     }
 
     /**
@@ -207,7 +204,7 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.BET));
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("AMOUNT_REQUIRED", PlayerAction.BET, "Enter a positive amount"));
+                PlayerFeedbackResponse.actionError("AMOUNT_REQUIRED", RejectedAction.from(PlayerAction.BET), "Enter a positive amount"));
     }
 
     /**
@@ -222,7 +219,7 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.CALL));
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("UNEXPECTED_AMOUNT", PlayerAction.CALL, "No amount needed; yours: 50"));
+                PlayerFeedbackResponse.actionError("UNEXPECTED_AMOUNT", RejectedAction.from(PlayerAction.CALL), "No amount needed; yours: 50"));
     }
 
     /**
@@ -237,7 +234,7 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.CHECK));
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("GAME_NOT_FOUND", PlayerAction.CHECK, "Game unavailable"));
+                PlayerFeedbackResponse.actionError("GAME_NOT_FOUND", RejectedAction.from(PlayerAction.CHECK), "Game unavailable"));
     }
 
     /**
@@ -259,7 +256,7 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(validationException, principal, frame);
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("INVALID_ACTION_FORMAT", PlayerAction.RAISE, "Amount cannot exceed 10,000,000"));
+                PlayerFeedbackResponse.actionError("INVALID_ACTION_FORMAT", RejectedAction.from(PlayerAction.RAISE), "Amount cannot exceed 10,000,000"));
     }
 
     /**
@@ -275,7 +272,7 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(new RuntimeException("processing failed"), principal, frame);
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("ACTION_REJECTED", PlayerAction.FOLD, "Action unavailable"));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.from(PlayerAction.FOLD), "Action unavailable"));
     }
 
     private static final String FALLBACK = "Enter a valid action amount";
@@ -350,7 +347,7 @@ class WebSocketExceptionHandlerTest {
     private void verifyInvalidActionFormat(Exception exception, String expectedMessage) {
         handler.handleMessageException(exception, principal, actionFrame(PlayerAction.CHECK));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("INVALID_ACTION_FORMAT", PlayerAction.CHECK, expectedMessage));
+                PlayerFeedbackResponse.actionError("INVALID_ACTION_FORMAT", RejectedAction.from(PlayerAction.CHECK), expectedMessage));
     }
 
     @Test
@@ -503,7 +500,7 @@ class WebSocketExceptionHandlerTest {
         second.initCause(first);
         handler.handleMessageException(first, principal, actionFrame(PlayerAction.CALL));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("ACTION_REJECTED", PlayerAction.CALL, "Action unavailable"));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.from(PlayerAction.CALL), "Action unavailable"));
     }
 
     /** Deeply nested missing games map to GAME_NOT_FOUND. */
@@ -514,7 +511,7 @@ class WebSocketExceptionHandlerTest {
                 new ResourceNotFoundException("Game not found")));
         handler.handleMessageException(chain, principal, actionFrame(PlayerAction.FOLD));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("GAME_NOT_FOUND", PlayerAction.FOLD, "Game unavailable"));
+                PlayerFeedbackResponse.actionError("GAME_NOT_FOUND", RejectedAction.from(PlayerAction.FOLD), "Game unavailable"));
     }
 
     /** A missing game outranks a validation failure in the same chain. */
@@ -525,7 +522,7 @@ class WebSocketExceptionHandlerTest {
                 new ResourceNotFoundException("Game not found"));
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.CHECK));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("GAME_NOT_FOUND", PlayerAction.CHECK, "Game unavailable"));
+                PlayerFeedbackResponse.actionError("GAME_NOT_FOUND", RejectedAction.from(PlayerAction.CHECK), "Game unavailable"));
     }
 
     /** The outermost action-feedback exception in the chain wins. */
@@ -537,7 +534,7 @@ class WebSocketExceptionHandlerTest {
         outer.initCause(inner);
         handler.handleMessageException(outer, principal, actionFrame(PlayerAction.BET));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("OUTER_CODE", PlayerAction.BET, "Outer message"));
+                PlayerFeedbackResponse.actionError("OUTER_CODE", RejectedAction.from(PlayerAction.BET), "Outer message"));
     }
 
     /** Action feedback without a client message falls back to the exception message. */
@@ -547,7 +544,7 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(new BadRequestException("Plain detail", "SOME_CODE", null),
                 principal, actionFrame(PlayerAction.RAISE));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("SOME_CODE", PlayerAction.RAISE, "Plain detail"));
+                PlayerFeedbackResponse.actionError("SOME_CODE", RejectedAction.from(PlayerAction.RAISE), "Plain detail"));
     }
 
     /** Action feedback without a code is ignored in favour of later classification. */
@@ -573,7 +570,7 @@ class WebSocketExceptionHandlerTest {
     void rejectedActionIsRecoveredFromRawPayloads(Object payload) {
         handler.handleMessageException(new RuntimeException("boom"), principal, frame(payload, "action"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("ACTION_REJECTED", PlayerAction.FOLD, "Action unavailable"));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.from(PlayerAction.FOLD), "Action unavailable"));
     }
 
     /** Payload shapes from which no action can be recovered. */
@@ -597,8 +594,7 @@ class WebSocketExceptionHandlerTest {
     void unrecoverableActionPayloadIsReportedAsNotification(Object payload) {
         handler.handleMessageException(new RuntimeException("boom"), principal, frame(payload, "action"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
-                        "Request failed. Please try again.", playerName, gameId));
+                PlayerFeedbackResponse.notice("Request failed. Please try again."));
         verify(messagingTemplate, Mockito.times(1)).convertAndSendToUser(ArgumentMatchers.anyString(),
                 ArgumentMatchers.anyString(), ArgumentMatchers.any(Object.class));
     }
@@ -610,8 +606,7 @@ class WebSocketExceptionHandlerTest {
     void blankExceptionMessageIsReplacedWithDefault(String message) {
         handler.handleMessageException(new BadRequestException(message), principal, frame("{}", "other"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
-                        "Request failed. Please try again.", playerName, gameId));
+                PlayerFeedbackResponse.notice("Request failed. Please try again."));
     }
 
     /** A null domain exception message is replaced with a default. */
@@ -620,8 +615,7 @@ class WebSocketExceptionHandlerTest {
     void nullExceptionMessageIsReplacedWithDefault() {
         handler.handleMessageException(new BadRequestException((String) null), principal, frame("{}", "other"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
-                        "Request failed. Please try again.", playerName, gameId));
+                PlayerFeedbackResponse.notice("Request failed. Please try again."));
     }
 
     /** A frame without a destination is treated as a non-action frame. */
@@ -631,8 +625,7 @@ class WebSocketExceptionHandlerTest {
         Message<String> noDestination = MessageBuilder.withPayload("{}").build();
         handler.handleMessageException(new RuntimeException("boom"), principal, noDestination);
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
-                        "Request failed. Please try again.", playerName, gameId));
+                PlayerFeedbackResponse.notice("Request failed. Please try again."));
     }
 
     /** Domain messages longer than 80 characters are cut to 77 characters plus an ellipsis. */
@@ -642,8 +635,7 @@ class WebSocketExceptionHandlerTest {
         String longMessage = "x".repeat(81);
         handler.handleMessageException(new BadRequestException(longMessage), principal, frame("{}", "other"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, "x".repeat(77) + "...",
-                        playerName, gameId));
+                PlayerFeedbackResponse.notice("x".repeat(77) + "..."));
     }
 
     /** A domain message of exactly 80 characters is delivered unchanged. */
@@ -653,7 +645,7 @@ class WebSocketExceptionHandlerTest {
         String message = "y".repeat(80);
         handler.handleMessageException(new BadRequestException(message), principal, frame("{}", "other"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION, message, playerName, gameId));
+                PlayerFeedbackResponse.notice(message));
     }
 
     /** Conversion failures and deserialization messages are replaced with friendly copy. */
@@ -666,8 +658,7 @@ class WebSocketExceptionHandlerTest {
                 : new RuntimeException("Cannot deserialize value of type int");
         handler.handleMessageException(exception, principal, frame("{}", "other"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
-                        "Invalid action request format. Please try again with a valid amount.", playerName, gameId));
+                PlayerFeedbackResponse.notice("Invalid action request format. Please try again with a valid amount."));
     }
 
     /** Readiness rejections share the same message normalisation as other frames. */
@@ -678,7 +669,7 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(new UnauthorisedActionException("z".repeat(100)), principal, frame("{}", suffix));
         RejectedAction expected = suffix.equals("ready") ? RejectedAction.READY : RejectedAction.UNREADY;
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("ACTION_REJECTED", expected, "z".repeat(77) + "..."));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", expected, "z".repeat(77) + "..."));
     }
 
     /** Unexpected internal failures on /ready and /unready use friendly readiness fallback text. */
@@ -691,8 +682,7 @@ class WebSocketExceptionHandlerTest {
                 principal, frame("{}", suffix));
         RejectedAction expected = suffix.equals("ready") ? RejectedAction.READY : RejectedAction.UNREADY;
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("ACTION_REJECTED", expected,
-                        "Could not update readiness. Please try again."));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", expected, "Could not update readiness. Please try again."));
     }
 
     /** Unexpected internal failures on other STOMP paths use friendly request fallback text. */
@@ -703,8 +693,7 @@ class WebSocketExceptionHandlerTest {
                 new IllegalStateException("Nested durable mutations cannot cross room boundaries"),
                 principal, frame("{}", "other"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
-                        "Request failed. Please try again.", playerName, gameId));
+                PlayerFeedbackResponse.notice("Request failed. Please try again."));
     }
 
     /** Domain errors and nested domain causes keep friendly copy on non-action and readiness frames. */
@@ -715,15 +704,13 @@ class WebSocketExceptionHandlerTest {
                 new BadRequestException("Action not allowed right now"),
                 principal, frame("{\"action\":\"PUSH\"}", "action"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new PlayerNotificationResponse(ResponseMessage.PLAYER_NOTIFICATION,
-                        "Action not allowed right now", playerName, gameId));
+                PlayerFeedbackResponse.notice("Action not allowed right now"));
 
         RuntimeException wrapped = new RuntimeException("internal wrapper",
                 new UnauthorisedActionException("Ready countdown is not active."));
         handler.handleMessageException(wrapped, principal, frame("{}", "ready"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("ACTION_REJECTED", RejectedAction.READY,
-                        "Ready countdown is not active."));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.READY, "Ready countdown is not active."));
     }
 
     /** Persistence or deserialization text on readiness does not show action-amount copy or leak internals. */
@@ -736,7 +723,6 @@ class WebSocketExceptionHandlerTest {
                 principal, frame("{}", suffix));
         RejectedAction expected = suffix.equals("ready") ? RejectedAction.READY : RejectedAction.UNREADY;
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                new ActionErrorResponse("ACTION_REJECTED", expected,
-                        "Could not update readiness. Please try again."));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", expected, "Could not update readiness. Please try again."));
     }
 }

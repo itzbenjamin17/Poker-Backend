@@ -2,12 +2,11 @@ package com.pokergame.e2e;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.dto.response.ActionErrorResponse;
+import com.pokergame.dto.response.PlayerFeedbackResponse;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.RejectedAction;
-import com.pokergame.enums.ResponseMessage;
 import org.awaitility.Awaitility;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.DisplayName;
@@ -48,17 +47,16 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
 
         @Test
         @DisplayName("should allow the host to start a game when at least two players have joined")
-        void givenTwoPlayersAndHostToken_whenStartGame_thenReturnGameId() throws Exception {
+        void givenTwoPlayersAndHostToken_whenStartGame_thenReturnNoContent() throws Exception {
             String roomName = uniqueName("StartGameRoom");
             JsonNode hostData = createRoom(roomName, "HostStart", 6);
             String roomId = hostData.path("roomId").asText();
             String hostToken = hostData.path("token").asText();
             joinRoom(roomName, "SecondStartPlayer");
 
-            JsonNode response = startGame(roomId, hostToken);
+            int status = startGame(roomId, hostToken);
 
-            assertThat(response.path("message").asText()).isEqualTo("Game started successfully");
-            assertThat(response.path("data").asText()).isEqualTo(roomId);
+            assertThat(status).isEqualTo(204);
         }
 
         @Test
@@ -208,9 +206,9 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             String secondPlayerToken = joinRoom(roomName, "SecondLeaveGame").path("token").asText();
             startGame(roomId, hostToken);
 
-            String leaveBody = leaveRoom(roomId, secondPlayerToken);
+            int leaveStatus = leaveRoom(roomId, secondPlayerToken);
 
-            assertThat(leaveBody).contains("Successfully left room");
+            assertThat(leaveStatus).isEqualTo(204);
         }
 
         @Test
@@ -231,7 +229,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             String remainingGuestName = secondIsCurrent ? "SecondLeaveThree" : "ThirdLeaveThree";
             String remainingGuestToken = secondIsCurrent ? secondToken : thirdToken;
 
-            String leaveBody = leaveRoom(gameId, leavingToken);
+            int leaveStatus = leaveRoom(gameId, leavingToken);
 
             WebSocketStompClient stompClient = createStompClient();
             StompSession hostSession = connectSession(stompClient, hostToken);
@@ -260,7 +258,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
                     state -> "SHOWDOWN".equals(state.path("phase").asText())
                             || playerHasFolded(state, secondCurrentPlayer));
 
-            assertThat(leaveBody).contains("Successfully left room");
+            assertThat(leaveStatus).isEqualTo(204);
             assertThat(firstActor).isIn("HostLeaveThree", remainingGuestName);
             assertThat(secondActor).isIn("HostLeaveThree", remainingGuestName);
         }
@@ -337,9 +335,9 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             connectSession(stompClient, hostToken);
             connectSession(stompClient, guestToken);
 
-            String leaveBody = leaveRoom(gameId, guestToken);
+            int leaveStatus = leaveRoom(gameId, guestToken);
 
-            assertThat(leaveBody).contains("Successfully left room");
+            assertThat(leaveStatus).isEqualTo(204);
             awaitRoomDestruction(gameId, hostToken, DEFAULT_TIMEOUT);
         }
 
@@ -365,7 +363,8 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
 
             JsonNode response = claimWin(gameId, hostToken);
 
-            assertThat(response.path("message").asText()).isEqualTo("Win claimed successfully");
+            assertThat(response.path("gameEnd").path("winner").asText()).isEqualTo("ClaimHost");
+            assertThat(response.path("gameEnd").path("isForfeit").asBoolean()).isTrue();
             awaitRoomDestruction(gameId, hostToken, DEFAULT_TIMEOUT);
         }
 
@@ -660,16 +659,18 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             JsonNode beforeStray = readGameState(gameId, hostToken);
             long revisionBeforeStray = beforeStray.path("stateRevision").asLong();
 
-            CompletableFuture<ActionErrorResponse> rejection = new CompletableFuture<>();
+            CompletableFuture<PlayerFeedbackResponse> rejection = new CompletableFuture<>();
             host.session().subscribe("/user/queue/private", new StompFrameHandler() {
                 @Override
                 public Type getPayloadType(@NonNull StompHeaders headers) {
-                    return ActionErrorResponse.class;
+                    return PlayerFeedbackResponse.class;
                 }
 
                 @Override
                 public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                    if (payload instanceof ActionErrorResponse response && !rejection.isDone()) {
+                    if (payload instanceof PlayerFeedbackResponse response
+                            && response.type() == PlayerFeedbackResponse.Type.ACTION_ERROR
+                            && !rejection.isDone()) {
                         rejection.complete(response);
                     }
                 }
@@ -677,8 +678,8 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
 
             host.session().send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CHECK, 0));
 
-            ActionErrorResponse error = rejection.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(error.type()).isEqualTo(ResponseMessage.ACTION_ERROR);
+            PlayerFeedbackResponse error = rejection.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            assertThat(error.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
             assertThat(error.action()).isEqualTo(RejectedAction.CHECK);
 
             Awaitility.await().atMost(DEFAULT_TIMEOUT).untilAsserted(() -> {

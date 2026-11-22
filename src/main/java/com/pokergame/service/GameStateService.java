@@ -2,18 +2,14 @@ package com.pokergame.service;
 
 import static java.util.Objects.requireNonNull;
 
-import com.pokergame.dto.response.ActionErrorResponse;
-import com.pokergame.dto.response.GameEndResponse;
-import com.pokergame.dto.response.PlayerNotificationResponse;
+import com.pokergame.dto.response.PlayerFeedbackResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
-import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerStatus;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.RejectedAction;
-import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.model.Card;
@@ -153,7 +149,7 @@ public class GameStateService {
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
 
-        List<PublicPlayerState> playersList = game.getPlayers().stream().map(player -> {
+        List<PublicGameStateResponse.PlayerState> playersList = game.getPlayers().stream().map(player -> {
             boolean isWinner = winnerIds.contains(player.getPlayerId());
             boolean isActive = player.isInHand();
             return toPublicPlayerState(
@@ -200,7 +196,7 @@ public class GameStateService {
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
 
-        List<PublicPlayerState> playersList = game.getPlayers().stream()
+        List<PublicGameStateResponse.PlayerState> playersList = game.getPlayers().stream()
                 .map(player -> toPublicPlayerState(
                         player,
                         false,
@@ -238,31 +234,14 @@ public class GameStateService {
     }
 
     /**
-     * Broadcasts a notice that all community cards for auto-advance have been dealt.
-     *
-     * @param game the active game instance
-     */
-    public void broadcastAutoAdvanceComplete(Game game) {
-        requireNonNull(game, "game must not be null");
-        String gameId = game.getGameId();
-
-        logger.info("Broadcasting auto-advance complete for game {}: {}", gameId, game.getCommunityCards());
-        sendAfterSave("/game/" + gameId,
-                new PlayerNotificationResponse(ResponseMessage.AUTO_ADVANCE_COMPLETE, "", null, gameId));
-    }
-
-    /**
      * Sends a private notification to the specified player's active WebSocket session after save.
      *
      * @param gameId     the unique ID of the game
      * @param playerName the recipient player's name
      * @param message    the notification message text
-     * @param type       the notification category
      */
-    public void sendPrivatePlayerNotification(String gameId, String playerName, String message, ResponseMessage type) {
-        PlayerNotificationResponse notification = new PlayerNotificationResponse(
-                type, message, playerName, gameId);
-        sendToPlayerAfterSave(gameId, playerName, notification);
+    public void sendPrivatePlayerNotification(String gameId, String playerName, String message) {
+        sendToPlayerAfterSave(gameId, playerName, PlayerFeedbackResponse.notice(message));
     }
 
     /**
@@ -271,11 +250,9 @@ public class GameStateService {
      *
      * @param origin  the principal bound to the originating WebSocket session
      * @param message the notification message text
-     * @param type    the notification category
      */
-    public void sendPrivatePlayerNotification(PlayerPrincipal origin, String message, ResponseMessage type) {
-        sendToPrincipalAfterSave(origin,
-                new PlayerNotificationResponse(type, message, origin.playerName(), origin.roomId()));
+    public void sendPrivatePlayerNotification(PlayerPrincipal origin, String message) {
+        sendToPrincipalAfterSave(origin, PlayerFeedbackResponse.notice(message));
     }
 
     /**
@@ -287,18 +264,18 @@ public class GameStateService {
      * @param message explanation shown to the player
      */
     public void sendActionError(PlayerPrincipal origin, String code, RejectedAction action, String message) {
-        sendToPrincipalAfterSave(origin, new ActionErrorResponse(code, action, message));
+        sendToPrincipalAfterSave(origin, PlayerFeedbackResponse.actionError(code, action, message));
     }
 
     /**
-     * Increments the game's state revision and builds the final game-end payload for a won game.
+     * Increments the game's state revision and builds the final game-end snapshot for a won game.
      *
      * @param game      the completed game instance
      * @param winner    the winning player
      * @param isForfeit {@code true} if the game ended by forfeit
-     * @return the final {@link GameEndResponse}
+     * @return the completed {@link PublicGameStateResponse} with {@code gameEnd} populated
      */
-    public GameEndResponse advanceRevisionAndBuildGameEnd(Game game, Player winner, boolean isForfeit) {
+    public PublicGameStateResponse advanceRevisionAndBuildGameEnd(Game game, Player winner, boolean isForfeit) {
         requireNonNull(game, "game must not be null");
         requireNonNull(winner, "winner must not be null");
         game.incrementStateRevision();
@@ -306,69 +283,66 @@ public class GameStateService {
     }
 
     /**
-     * Increments the game's state revision and builds the final payload for a game closed due
+     * Increments the game's state revision and builds the final snapshot for a game closed due
      * to inactivity.
      *
      * @param game the abandoned game instance
-     * @return the abandonment {@link GameEndResponse}
+     * @return the abandoned {@link PublicGameStateResponse} with {@code gameEnd} populated
      */
-    public GameEndResponse advanceRevisionAndBuildAbandonment(Game game) {
+    public PublicGameStateResponse advanceRevisionAndBuildAbandonment(Game game) {
         requireNonNull(game, "game must not be null");
         game.incrementStateRevision();
         return buildAbandonmentResponse(game);
     }
 
     /**
-     * Builds a read-only final game-end response without mutating {@code game}'s state revision.
+     * Builds a read-only final game-end snapshot without mutating {@code game}'s state revision.
      *
      * @param game      the completed game instance
      * @param winner    the winning player
      * @param isForfeit {@code true} if the game ended by forfeit
-     * @return the final {@link GameEndResponse}
+     * @return the completed {@link PublicGameStateResponse} with {@code gameEnd} populated
      */
-    public GameEndResponse buildGameEndResponse(Game game, Player winner, boolean isForfeit) {
+    public PublicGameStateResponse buildGameEndResponse(Game game, Player winner, boolean isForfeit) {
         requireNonNull(game, "game must not be null");
         requireNonNull(winner, "winner must not be null");
-        String gameId = game.getGameId();
         String message = winner.getName() + " wins the game with " + winner.getChips() + " chips!";
-        PublicGameStateResponse finalState = buildCompletedGameState(game, winner);
-        return new GameEndResponse(
-                ResponseMessage.GAME_END.getMessage(), gameId, winner.getName(),
-                winner.getChips(), isForfeit, message, finalState);
+        PublicGameStateResponse.GameEnd gameEnd = PublicGameStateResponse.GameEnd.won(
+                winner.getName(), winner.getChips(), isForfeit, message);
+        return buildCompletedGameState(game, winner, gameEnd);
     }
 
     /**
-     * Builds a read-only inactivity abandonment response without mutating {@code game}'s state revision.
+     * Builds a read-only inactivity abandonment snapshot without mutating {@code game}'s state revision.
      *
      * @param game the abandoned game instance
-     * @return the abandonment {@link GameEndResponse}
+     * @return the abandoned {@link PublicGameStateResponse} with {@code gameEnd} populated
      */
-    public GameEndResponse buildAbandonmentResponse(Game game) {
+    public PublicGameStateResponse buildAbandonmentResponse(Game game) {
         requireNonNull(game, "game must not be null");
-        String gameId = game.getGameId();
-        String message = "Game abandoned due to inactivity.";
-        PublicGameStateResponse finalState = buildAbandonedGameState(game);
-        return new GameEndResponse(
-                ResponseMessage.GAME_END.getMessage(), gameId, null,
-                null, false, true, "INACTIVITY", message, finalState);
+        PublicGameStateResponse.GameEnd gameEnd = PublicGameStateResponse.GameEnd.abandoned(
+                "INACTIVITY", "Game abandoned due to inactivity.");
+        return buildAbandonedGameState(game, gameEnd);
     }
 
     /**
-     * Sends a completed {@link GameEndResponse} to the game topic after save.
+     * Sends a completed {@link PublicGameStateResponse} to the game topic after save.
      *
-     * @param response the final game-end payload, ignored if {@code null}
+     * @param gameId   the unique ID of the game
+     * @param response the completed game-end snapshot, ignored if {@code null}
      */
-    public void sendGameEnd(GameEndResponse response) {
+    public void sendGameEnd(String gameId, PublicGameStateResponse response) {
+        requireNonNull(gameId, "gameId must not be null");
         if (response != null) {
-            sendAfterSave("/game/" + response.gameId(), response);
+            sendAfterSave("/game/" + gameId, response);
         }
     }
 
-    private PublicGameStateResponse buildAbandonedGameState(Game game) {
+    private PublicGameStateResponse buildAbandonedGameState(Game game, PublicGameStateResponse.GameEnd gameEnd) {
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
 
-        List<PublicPlayerState> playerStates = game.getPlayers().stream()
+        List<PublicGameStateResponse.PlayerState> playerStates = game.getPlayers().stream()
                 .map(player -> toPublicPlayerState(
                         player,
                         false,
@@ -390,17 +364,19 @@ public class GameStateService {
                 .handSettled(game.isHandSettled())
                 .legalActions(List.of())
                 .readyGateState(ReadyGateState.CLOSED)
+                .gameEnd(gameEnd)
                 .build();
     }
 
-    private PublicGameStateResponse buildCompletedGameState(Game game, Player winner) {
+    private PublicGameStateResponse buildCompletedGameState(
+            Game game, Player winner, PublicGameStateResponse.GameEnd gameEnd) {
         boolean handSettled = game.isHandSettled();
         boolean revealHoleCards = game.wasContestedShowdown();
 
         String smallBlindPlayerId = game.getSmallBlindPlayerId();
         String bigBlindPlayerId = game.getBigBlindPlayerId();
 
-        List<PublicPlayerState> playerStates = game.getPlayers().stream().map(player -> {
+        List<PublicGameStateResponse.PlayerState> playerStates = game.getPlayers().stream().map(player -> {
             boolean isWinner = winner.equals(player);
             boolean isActive = player.isInHand();
             return toPublicPlayerState(
@@ -426,6 +402,7 @@ public class GameStateService {
                 .handSettled(handSettled)
                 .legalActions(List.of())
                 .readyGateState(ReadyGateState.CLOSED)
+                .gameEnd(gameEnd)
                 .build();
     }
 
@@ -459,7 +436,7 @@ public class GameStateService {
             logger.debug("Building game state - no active players found");
         }
 
-        List<PublicPlayerState> playerStates = new ArrayList<>();
+        List<PublicGameStateResponse.PlayerState> playerStates = new ArrayList<>();
         for (Player player : game.getPlayers()) {
             boolean isActive = player.isInHand();
             Boolean isWinner = handSettled ? settledWinnerIds.contains(player.getPlayerId()) : null;
@@ -521,7 +498,7 @@ public class GameStateService {
         return awards.stream().distinct().count() == 1 ? awards.getFirst() : null;
     }
 
-    private PublicPlayerState toPublicPlayerState(
+    private PublicGameStateResponse.PlayerState toPublicPlayerState(
             Player player,
             boolean isCurrentPlayer,
             String smallBlindPlayerId,
@@ -531,7 +508,7 @@ public class GameStateService {
             Boolean isWinner,
             Integer chipsWon,
             List<Card> holeCards) {
-        return new PublicPlayerState(
+        return new PublicGameStateResponse.PlayerState(
                 player.getPlayerId(),
                 player.getName(),
                 player.getChips(),

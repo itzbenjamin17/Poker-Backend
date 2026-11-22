@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.dto.response.ActionErrorResponse;
+import com.pokergame.dto.response.PlayerFeedbackResponse;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.security.JwtService;
 import com.pokergame.security.RateLimitService;
@@ -189,7 +189,7 @@ class WebSocketSecurityAndRateLimitIT {
                 .body(new CreateRoomRequest(roomName, hostName, maxPlayers, 10, 20, 1000, null))
                 .retrieve()
                 .body(String.class);
-        JsonNode data = objectMapper.readTree(body).path("data");
+        JsonNode data = objectMapper.readTree(body);
         String roomId = data.path("roomId").asText();
         if (!roomId.isBlank()) {
             trackedRoomIds.add(roomId);
@@ -204,16 +204,17 @@ class WebSocketSecurityAndRateLimitIT {
                 .body(new JoinRoomRequest(roomName, playerName, null))
                 .retrieve()
                 .body(String.class);
-        return objectMapper.readTree(body).path("data");
+        return objectMapper.readTree(body);
     }
 
-    private JsonNode startGame(String roomId, String hostToken) throws Exception {
-        String body = restClient.post()
+    private int startGame(String roomId, String hostToken) {
+        return restClient.post()
                 .uri("/api/room/" + roomId + "/start-game")
                 .header("Authorization", "Bearer " + hostToken)
                 .retrieve()
-                .body(String.class);
-        return objectMapper.readTree(body);
+                .toBodilessEntity()
+                .getStatusCode()
+                .value();
     }
 
     private JsonNode readGameState(String gameId, String token) throws Exception {
@@ -347,7 +348,7 @@ class WebSocketSecurityAndRateLimitIT {
             WebSocketStompClient stompClient = createStompClient();
             StompSession hostSession = connectSession(stompClient, hostToken);
             StompSession guestSession = connectSession(stompClient, guestToken);
-            assertThat(startGame(roomId, hostToken).path("message").asText()).isEqualTo("Game started successfully");
+            assertThat(startGame(roomId, hostToken)).isEqualTo(204);
 
             PrivateProjection hostProjection = readPrivateProjection(roomId, hostToken);
             PrivateProjection guestProjection = readPrivateProjection(roomId, guestToken);
@@ -736,16 +737,16 @@ class WebSocketSecurityAndRateLimitIT {
             StompSession session1 = connectSession(stompClient, token1);
             StompSession session2 = connectSession(stompClient, token2);
 
-            CompletableFuture<ActionErrorResponse> session2Reply = new CompletableFuture<>();
+            CompletableFuture<PlayerFeedbackResponse> session2Reply = new CompletableFuture<>();
             session2.subscribe("/user/queue/private", new StompFrameHandler() {
                 @Override
                 public @NonNull Type getPayloadType(@NonNull StompHeaders headers) {
-                    return ActionErrorResponse.class;
+                    return PlayerFeedbackResponse.class;
                 }
 
                 @Override
                 public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                    if (payload instanceof ActionErrorResponse reply && !session2Reply.isDone()) {
+                    if (payload instanceof PlayerFeedbackResponse reply && !session2Reply.isDone()) {
                         session2Reply.complete(reply);
                     }
                 }
@@ -759,7 +760,7 @@ class WebSocketSecurityAndRateLimitIT {
                     .untilAsserted(() -> assertThat(session1.isConnected()).isFalse());
 
             session2.send("/app/" + roomId2 + "/action", new PlayerActionRequest(PlayerAction.CHECK, 0));
-            ActionErrorResponse reply = session2Reply.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            PlayerFeedbackResponse reply = session2Reply.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
             assertThat(reply).isNotNull();
             assertThat(session2.isConnected()).isTrue();
         }

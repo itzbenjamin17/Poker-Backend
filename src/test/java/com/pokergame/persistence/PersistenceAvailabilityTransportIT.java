@@ -181,16 +181,20 @@ class PersistenceAvailabilityTransportIT {
         String roomName = "TransportOutage-" + System.nanoTime();
 
         JsonNode createData = postJson("/api/room/create", null,
-                new CreateRoomRequest(roomName, "Alice", 6, 5, 10, 1000, null)).path("data");
+                new CreateRoomRequest(roomName, "Alice", 6, 5, 10, 1000, null));
         String roomId = createData.path("roomId").asText();
         createdRoomId = roomId;
         String aliceToken = createData.path("token").asText();
 
         JsonNode joinData = postJson("/api/room/join", null,
-                new JoinRoomRequest(roomName, "Bob", null)).path("data");
+                new JoinRoomRequest(roomName, "Bob", null));
         String bobToken = joinData.path("token").asText();
 
-        postJson("/api/room/" + roomId + "/start-game", aliceToken, "");
+        restClient.post()
+                .uri("/api/room/" + roomId + "/start-game")
+                .header("Authorization", "Bearer " + aliceToken)
+                .retrieve()
+                .toBodilessEntity();
 
         stompClient = new WebSocketStompClient(new StandardWebSocketClient());
         stompClient.setMessageConverter(new CompositeMessageConverter(

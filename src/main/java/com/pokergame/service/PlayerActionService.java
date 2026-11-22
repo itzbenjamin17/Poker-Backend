@@ -2,17 +2,15 @@ package com.pokergame.service;
 
 import static java.util.Objects.requireNonNull;
 
-import com.pokergame.dto.internal.PlayerDecision;
-import com.pokergame.dto.internal.TurnOutcome;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.GamePhase;
-import com.pokergame.enums.ResponseMessage;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
 import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
+import com.pokergame.model.TurnOutcome;
 import com.pokergame.persistence.transaction.DurableMutation;
 import com.pokergame.persistence.transaction.GameId;
 import java.time.Clock;
@@ -116,12 +114,14 @@ public class PlayerActionService {
                     "Reconnect to act");
         }
 
-        PlayerDecision decision = new PlayerDecision(
-                actionRequest.action(),
-                actionRequest.amount(),
-                currentPlayer.getPlayerId());
-
-        TurnOutcome outcome = game.processPlayerDecision(currentPlayer, decision);
+        if (actionRequest.action() == null) {
+            throw new BadRequestException("No action specified. Please select an action");
+        }
+        int amount = actionRequest.amount() == null ? 0 : actionRequest.amount();
+        if (amount < 0) {
+            throw new BadRequestException("Amount must be positive");
+        }
+        TurnOutcome outcome = game.processPlayerDecision(currentPlayer, actionRequest.action(), amount);
         taskScheduler.cancelTask(game, ScheduledGameTask.TURN_TIMEOUT);
         taskScheduler.resetGameInactivity(game);
 
@@ -129,7 +129,7 @@ public class PlayerActionService {
             logger.info("Sending conversion message to player {}: {}",
                     currentPlayer.getName(), outcome.playerActionNotice());
             gameStateService.sendPrivatePlayerNotification(
-                    gameId, currentPlayer.getName(), outcome.playerActionNotice(), ResponseMessage.PLAYER_NOTIFICATION);
+                    gameId, currentPlayer.getName(), outcome.playerActionNotice());
         }
 
         readinessCoordinator.applyTurnOutcomeAndOpenReadyGateIfNeeded(game, outcome, true);

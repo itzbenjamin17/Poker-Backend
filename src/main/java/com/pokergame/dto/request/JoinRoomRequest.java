@@ -8,13 +8,12 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
- * DTO for joining an existing poker room
- * 
- * @param roomName The name of the room.
- * @param playerName The name of the player joining the room.
- * @param password The password for the room (optional).
+ * Validated request payload for joining an existing poker room.
+ *
+ * @param roomName   the name of the room
+ * @param playerName the name of the player joining the room
+ * @param password   the optional room password ({@code null} when blank or omitted)
  */
-
 public record JoinRoomRequest(
         @NotBlank(message = "Room name is required")
         @Size(max = 50, message = "Room name must be 50 characters or less")
@@ -32,9 +31,8 @@ public record JoinRoomRequest(
 
         @Size(max = 50, message = "Password must be 50 characters or less")
         @Pattern(regexp = "^[^\\p{Cntrl}]*$", message = "Password cannot contain control characters")
-        String password // Optional - null means no password required
+        String password) {
 
-) {
     public JoinRoomRequest {
         password = (password != null && password.trim().isEmpty()) ? null : password;
     }
@@ -48,5 +46,19 @@ public record JoinRoomRequest(
     @AssertTrue(message = RoomPasswordPolicy.BYTE_LIMIT_MESSAGE)
     public boolean isPasswordWithinByteLimit() {
         return RoomPasswordPolicy.isWithinByteLimit(password);
+    }
+
+    /**
+     * Returns a log-safe description that deliberately omits password contents.
+     *
+     * @return room name, player name, and password-presence flag
+     */
+    @Override
+    public String toString() {
+        return "JoinRoomRequest{"
+                + "roomName='" + roomName + '\''
+                + ", playerName='" + playerName + '\''
+                + ", hasPassword=" + (password != null)
+                + '}';
     }
 }

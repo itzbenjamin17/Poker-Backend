@@ -10,10 +10,8 @@ import com.pokergame.controller.RoomController;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.dto.response.GameEndResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
-import com.pokergame.dto.response.PublicPlayerState;
 import com.pokergame.dto.response.RoomDataResponse;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.Rank;
@@ -257,7 +255,7 @@ class LifecycleCoordinationIT {
                 assertThatThrownBy(() -> publicState.winners().clear())
                         .isInstanceOf(UnsupportedOperationException.class);
             }
-            PublicPlayerState firstPlayer = publicState.players().getFirst();
+            PublicGameStateResponse.PlayerState firstPlayer = publicState.players().getFirst();
             if (firstPlayer.bestHand() != null) {
                 assertThatThrownBy(() -> firstPlayer.bestHand().clear())
                         .isInstanceOf(UnsupportedOperationException.class);
@@ -293,13 +291,13 @@ class LifecycleCoordinationIT {
             assertThat(initialSnapshot).isNotNull();
             long initialRevision = initialSnapshot.stateRevision();
             assertThat(initialSnapshot.pot()
-                    + initialSnapshot.players().stream().mapToInt(PublicPlayerState::chips).sum())
+                    + initialSnapshot.players().stream().mapToInt(PublicGameStateResponse.PlayerState::chips).sum())
                     .isEqualTo(totalInitialChips);
 
             int charlieChipsBeforeDeparture = initialSnapshot.players().stream()
                     .filter(p -> p.name().equals("Charlie"))
                     .findFirst()
-                    .map(PublicPlayerState::chips)
+                    .map(PublicGameStateResponse.PlayerState::chips)
                     .orElse(buyIn);
 
             try (ExecutorService executor = Executors.newFixedThreadPool(4)) {
@@ -343,7 +341,7 @@ class LifecycleCoordinationIT {
             assertThat(finalSnapshot).isNotNull();
             assertThat(finalSnapshot.stateRevision()).isGreaterThanOrEqualTo(initialRevision);
             int finalPot = finalSnapshot.pot();
-            int activeChips = finalSnapshot.players().stream().mapToInt(PublicPlayerState::chips).sum();
+            int activeChips = finalSnapshot.players().stream().mapToInt(PublicGameStateResponse.PlayerState::chips).sum();
             assertThat(finalPot + activeChips + charlieChipsBeforeDeparture).isEqualTo(totalInitialChips);
         }
 
@@ -379,17 +377,19 @@ class LifecycleCoordinationIT {
                 readFuture.get(5, TimeUnit.SECONDS);
             }
 
-            GameEndResponse review = gameController.getGameReview(roomId, hostPrincipal).getBody();
+            PublicGameStateResponse review = gameController.getGameReview(roomId, hostPrincipal).getBody();
             assertThat(review).isNotNull();
-            assertThat(review.winner()).isEqualTo("Host");
-            assertThat(review.isForfeit()).isTrue();
-            assertThat(review.winnerChips()).isEqualTo(1005);
+            assertThat(review.gameEnd()).isNotNull();
+            assertThat(review.gameEnd().winner()).isEqualTo("Host");
+            assertThat(review.gameEnd().isForfeit()).isTrue();
+            assertThat(review.gameEnd().winnerChips()).isEqualTo(1005);
             int aliceRemainingChips = 995;
-            assertThat(review.winnerChips() + aliceRemainingChips).isEqualTo(totalChips);
+            assertThat(review.gameEnd().winnerChips() + aliceRemainingChips).isEqualTo(totalChips);
 
             PublicGameStateResponse observed = snapshotRead.get();
             if (observed != null) {
-                int observedChips = observed.pot() + observed.players().stream().mapToInt(PublicPlayerState::chips).sum();
+                int observedChips = observed.pot() + observed.players().stream()
+                        .mapToInt(PublicGameStateResponse.PlayerState::chips).sum();
                 assertThat(observedChips).isEqualTo(totalChips);
             }
         }
@@ -659,7 +659,7 @@ class LifecycleCoordinationIT {
             assertThat(finalSnapshot).isNotNull();
             assertThat(finalSnapshot.stateRevision()).isGreaterThanOrEqualTo(initialRevision);
             assertThat(finalSnapshot.pot()).isGreaterThanOrEqualTo(0);
-            assertThat(finalSnapshot.players().stream().mapToInt(PublicPlayerState::chips).sum()).isGreaterThanOrEqualTo(0);
+            assertThat(finalSnapshot.players().stream().mapToInt(PublicGameStateResponse.PlayerState::chips).sum()).isGreaterThanOrEqualTo(0);
         }
 
         @Test

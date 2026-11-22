@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.dto.response.GameEndResponse;
+import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
@@ -207,7 +207,7 @@ class TimingAndInactivityIT {
                 .body(new CreateRoomRequest(roomName, hostName, maxPlayers, 10, 20, 1000, null))
                 .retrieve()
                 .body(String.class);
-        JsonNode data = objectMapper.readTree(body).path("data");
+        JsonNode data = objectMapper.readTree(body);
         String roomId = data.path("roomId").asText();
         if (!roomId.isBlank()) {
             trackedRoomIds.add(roomId);
@@ -222,7 +222,7 @@ class TimingAndInactivityIT {
                 .body(new JoinRoomRequest(roomName, playerName, null))
                 .retrieve()
                 .body(String.class);
-        return objectMapper.readTree(body).path("data");
+        return objectMapper.readTree(body);
     }
 
     private JsonNode getRoom(String roomId, String token) throws Exception {
@@ -563,13 +563,14 @@ class TimingAndInactivityIT {
 
             lifecycle.abandonGameIfInactive(roomId, initialDeadline);
 
-            GameEndResponse review = withRoomLock(roomCoordinator, roomId, () -> {
+            PublicGameStateResponse review = withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
                 return lifecycle.getGameReview(roomId, actor);
             });
-            assertThat(review.abandoned()).isTrue();
-            assertThat(review.reason()).isEqualTo("INACTIVITY");
-            assertThat(review.winner()).isNull();
+            assertThat(review.gameEnd()).isNotNull();
+            assertThat(review.gameEnd().abandoned()).isTrue();
+            assertThat(review.gameEnd().reason()).isEqualTo("INACTIVITY");
+            assertThat(review.gameEnd().winner()).isNull();
         }
 
         @Test
@@ -590,13 +591,14 @@ class TimingAndInactivityIT {
 
             lifecycle.executeScheduledTask(roomId, ScheduledGameTask.TURN_TIMEOUT, timerMeta[0], timerMeta[1], timerMeta[2]);
 
-            GameEndResponse review = withRoomLock(roomCoordinator, roomId, () -> {
+            PublicGameStateResponse review = withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
                 return lifecycle.getGameReview(roomId, "Host");
             });
-            assertThat(review.abandoned()).isTrue();
-            assertThat(review.reason()).isEqualTo("INACTIVITY");
-            assertThat(review.winner()).isNull();
+            assertThat(review.gameEnd()).isNotNull();
+            assertThat(review.gameEnd().abandoned()).isTrue();
+            assertThat(review.gameEnd().reason()).isEqualTo("INACTIVITY");
+            assertThat(review.gameEnd().winner()).isNull();
         }
 
         @Test
@@ -621,12 +623,13 @@ class TimingAndInactivityIT {
 
             lifecycle.abandonGameIfInactive(roomId, inactivityDeadline);
 
-            GameEndResponse review = withRoomLock(roomCoordinator, roomId, () -> {
+            PublicGameStateResponse review = withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
                 return lifecycle.getGameReview(roomId, "Host");
             });
-            assertThat(review.abandoned()).isTrue();
-            assertThat(review.winner()).isNull();
+            assertThat(review.gameEnd()).isNotNull();
+            assertThat(review.gameEnd().abandoned()).isTrue();
+            assertThat(review.gameEnd().winner()).isNull();
         }
 
         @Test
@@ -638,16 +641,17 @@ class TimingAndInactivityIT {
 
             lifecycle.abandonGameDueToInactivity(roomId);
 
-            GameEndResponse review = withRoomLock(roomCoordinator, roomId, () -> {
+            PublicGameStateResponse review = withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
                 return lifecycle.getGameReview(roomId, "Host");
             });
-            assertThat(review.abandoned()).isTrue();
-            assertThat(review.reason()).isEqualTo("INACTIVITY");
-            assertThat(review.winner()).isNull();
-            assertThat(review.finalState().pot()).isEqualTo(potBefore);
-            assertThat(review.finalState().winners()).isEmpty();
-            for (var p : review.finalState().players()) {
+            assertThat(review.gameEnd()).isNotNull();
+            assertThat(review.gameEnd().abandoned()).isTrue();
+            assertThat(review.gameEnd().reason()).isEqualTo("INACTIVITY");
+            assertThat(review.gameEnd().winner()).isNull();
+            assertThat(review.pot()).isEqualTo(potBefore);
+            assertThat(review.winners()).isEmpty();
+            for (var p : review.players()) {
                 assertThat(p.holeCards()).isNull();
                 assertThat(p.handRank()).isNull();
                 assertThat(p.isWinner()).isFalse();
@@ -700,7 +704,7 @@ class TimingAndInactivityIT {
             withRoomLock(roomCoordinator, roomId, () -> {
                 assertThat(rooms.getRoom(roomId).hasPlayer(meta.actor())).isFalse();
                 assertThat(lifecycle.getGame(roomId).isGameOver()).isTrue();
-                assertThat(lifecycle.getGameReview(roomId, survivor).winner()).isEqualTo(survivor);
+                assertThat(lifecycle.getGameReview(roomId, survivor).gameEnd().winner()).isEqualTo(survivor);
                 return null;
             });
         }
@@ -896,11 +900,12 @@ class TimingAndInactivityIT {
                     .uri("/api/game/" + roomId + "/review")
                     .header("Authorization", "Bearer " + guestToken)
                     .retrieve()
-                    .toEntity(GameEndResponse.class);
+                    .toEntity(PublicGameStateResponse.class);
             assertThat(response.getStatusCode().value()).isEqualTo(200);
             assertThat(response.getBody()).isNotNull();
-            assertThat(response.getBody().abandoned()).isTrue();
-            assertThat(response.getBody().reason()).isEqualTo("INACTIVITY");
+            assertThat(response.getBody().gameEnd()).isNotNull();
+            assertThat(response.getBody().gameEnd().abandoned()).isTrue();
+            assertThat(response.getBody().gameEnd().reason()).isEqualTo("INACTIVITY");
         }
     }
 
