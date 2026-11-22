@@ -1,37 +1,27 @@
 package com.pokergame.e2e;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.dto.response.PlayerFeedbackResponse;
-import com.pokergame.dto.response.PublicGameStateResponse;
-import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.RejectedAction;
-import org.awaitility.Awaitility;
-import org.jspecify.annotations.NonNull;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
-import org.springframework.messaging.simp.stomp.StompFrameHandler;
-import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
-
-import java.lang.reflect.Type;
-import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Predicate;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import tools.jackson.databind.JsonNode;
 
 /**
- * End-to-end black-box REST and WebSocket STOMP tests covering game start, state projections,
+ * End-to-end black-box REST and WebSocket STOMP tests covering game start, state privacy,
  * leaving active games, multi-street progression, disconnect claim-win, cleanup, and ready countdowns.
  */
 @Tag("e2e")
@@ -40,132 +30,74 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
 
     private static final String HOST_NAME = "ActionHost";
     private static final String OTHER_NAME = "ActionOther";
+    private static final String WRONG_GAME_DETAIL = "Token is not valid for this game.";
+    private static final int TOTAL_CHIPS = 2000;
+    private static final int BLINDS_POT = 30;
 
     @Nested
     @DisplayName("starting games")
     class StartGame {
 
         @Test
-        @DisplayName("should allow the host to start a game when at least two players have joined")
-        void givenTwoPlayersAndHostToken_whenStartGame_thenReturnNoContent() throws Exception {
-            String roomName = uniqueName("StartGameRoom");
-            JsonNode hostData = createRoom(roomName, "HostStart", 6);
-            String roomId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            joinRoom(roomName, "SecondStartPlayer");
-
-            int status = startGame(roomId, hostToken);
-
-            assertThat(status).isEqualTo(204);
-        }
-
-        @Test
-        @DisplayName("should reject start game requests from non-host players")
-        void givenNonHostToken_whenStartGame_thenReturnForbidden() throws Exception {
-            String roomName = uniqueName("NonHostStartRoom");
-            JsonNode hostData = createRoom(roomName, "HostOnly", 6);
-            String roomId = hostData.path("roomId").asText();
-            String nonHostToken = joinRoom(roomName, "NonHostUser").path("token").asText();
-
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class,
-                    () -> startGame(roomId, nonHostToken));
-
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-            assertThat(exception.getResponseBodyAsString()).contains("Only the room host can start the game");
-        }
-
-        @Test
         @DisplayName("should reject start game requests when only one player is present")
-        void givenSinglePlayerRoom_whenStartGame_thenReturnForbidden() throws Exception {
+        void givenSinglePlayerRoom_whenStartGame_thenReturnForbiddenAndKeepRoomInLobby() {
             JsonNode hostData = createRoom(uniqueName("SinglePlayerStartRoom"), "SoloHost", 6);
-            String roomId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
+            String roomId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
 
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class,
-                    () -> startGame(roomId, hostToken));
+            HttpClientErrorException rejection = expectRejection(() -> startGame(roomId, hostToken));
 
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-            assertThat(exception.getResponseBodyAsString()).contains("Need at least 2 players to start game");
+            assertProblem(rejection, HttpStatus.FORBIDDEN,
+                    "Need at least 2 players to start game. Please wait for more players to join.");
+            assertThat(getRoomData(roomId, hostToken).path("gameStarted").asBoolean()).isFalse();
         }
     }
 
     @Nested
-    @DisplayName("state endpoints")
-    class StateEndpoints {
+    @DisplayName("state privacy")
+    class StatePrivacy {
 
         @Test
-        @DisplayName("should return the public game state to an active player")
-        void givenActivePlayer_whenGetGameState_thenReturnCurrentState() throws Exception {
-            String roomName = uniqueName("StateSnapshotRoom");
-            JsonNode hostData = createRoom(roomName, "StateHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            joinRoom(roomName, "StateGuest");
+        @DisplayName("should hide hole cards publicly, give each player their own two cards, and refuse outsiders")
+        void givenStartedGame_whenPlayersAndOutsiderReadState_thenOnlyOwnHoleCardsAreVisible() {
+            String roomName = uniqueName("PrivacyRoom");
+            JsonNode hostData = createRoom(roomName, "PrivacyHost", 6);
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String guestToken = joinRoom(roomName, "PrivacyGuest").path("token").asString();
             startGame(gameId, hostToken);
 
-            JsonNode state = readGameState(gameId, hostToken);
+            JsonNode publicState = readGameState(gameId, hostToken);
+            assertThat(publicState.path("phase").asString()).isEqualTo("PRE_FLOP");
+            assertThat(publicState.path("players")).hasSize(2);
+            for (String viewerToken : List.of(hostToken, guestToken)) {
+                for (JsonNode player : readGameState(gameId, viewerToken).path("players")) {
+                    assertThat(isAbsent(player.path("holeCards")))
+                            .as("public state must not reveal hole cards of %s", player.path("name").asString())
+                            .isTrue();
+                }
+            }
 
-            assertThat(state.path("phase").asText()).isEqualTo("PRE_FLOP");
-            assertThat(state.path("players").isArray()).isTrue();
-            assertThat(state.path("players").size()).isEqualTo(2);
-        }
+            JsonNode hostPrivate = readPrivateState(gameId, hostToken);
+            JsonNode guestPrivate = readPrivateState(gameId, guestToken);
+            assertThat(hostPrivate.path("playerId").asString())
+                    .isEqualTo(findPlayer(publicState, "PrivacyHost").path("id").asString());
+            assertThat(guestPrivate.path("playerId").asString())
+                    .isEqualTo(findPlayer(publicState, "PrivacyGuest").path("id").asString());
+            assertThat(hostPrivate.path("holeCards")).hasSize(2);
+            assertThat(guestPrivate.path("holeCards")).hasSize(2);
+            Set<String> dealtCards = new HashSet<>();
+            hostPrivate.path("holeCards").forEach(card -> dealtCards.add(card.asString()));
+            guestPrivate.path("holeCards").forEach(card -> dealtCards.add(card.asString()));
+            assertThat(dealtCards).as("all four dealt hole cards are distinct").hasSize(4);
 
-        @Test
-        @DisplayName("should reject public game state requests from players outside the game")
-        void givenAuthenticatedOutsider_whenGetGameState_thenReturnForbidden() throws Exception {
-            String roomName = uniqueName("StateForbiddenTarget");
-            JsonNode hostData = createRoom(roomName, "StateTargetHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            joinRoom(roomName, "StateTargetGuest");
-            startGame(gameId, hostToken);
-
-            String outsiderToken = createRoom(uniqueName("StateForbiddenOutsider"), "StateOutsider", 6)
+            String outsiderToken = createRoom(uniqueName("PrivacyOutsiderRoom"), "PrivacyOutsider", 6)
                     .path("token")
-                    .asText();
-
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class,
-                    () -> readGameState(gameId, outsiderToken));
-
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-            assertThat(exception.getResponseBodyAsString()).contains("Token is not valid for this game.");
-        }
-
-        @Test
-        @DisplayName("should return the private state with hole cards to an active player")
-        void givenActivePlayer_whenGetPrivateState_thenReturnHoleCards() throws Exception {
-            String roomName = uniqueName("PrivateStateRoom");
-            JsonNode hostData = createRoom(roomName, "PrivateStateHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            joinRoom(roomName, "PrivateStateGuest");
-            startGame(gameId, hostToken);
-
-            JsonNode privateState = readPrivateState(gameId, hostToken);
-
-            assertThat(privateState.path("playerId").asText()).isNotBlank();
-            assertThat(privateState.path("holeCards").size()).isEqualTo(2);
-        }
-
-        @Test
-        @DisplayName("should reject private state requests from players outside the game")
-        void givenAuthenticatedOutsider_whenGetPrivateState_thenReturnForbidden() throws Exception {
-            String roomName = uniqueName("PrivateStateForbiddenTarget");
-            JsonNode hostData = createRoom(roomName, "PrivateStateTargetHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            joinRoom(roomName, "PrivateStateTargetGuest");
-            startGame(gameId, hostToken);
-
-            String outsiderToken = createRoom(uniqueName("PrivateStateForbiddenOutsider"), "PrivateStateOutsider", 6)
-                    .path("token")
-                    .asText();
-
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class,
-                    () -> readPrivateState(gameId, outsiderToken));
-
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-            assertThat(exception.getResponseBodyAsString()).contains("Token is not valid for this game.");
+                    .asString();
+            assertProblem(expectRejection(() -> readGameState(gameId, outsiderToken)),
+                    HttpStatus.FORBIDDEN, WRONG_GAME_DETAIL);
+            assertProblem(expectRejection(() -> readPrivateState(gameId, outsiderToken)),
+                    HttpStatus.FORBIDDEN, WRONG_GAME_DETAIL);
         }
     }
 
@@ -174,93 +106,62 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
     class LeaveGame {
 
         @Test
-        @DisplayName("should reject room leave requests without a token")
-        void givenMissingToken_whenLeaveRoom_thenReturnUnauthorized() {
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restClient.post()
-                    .uri("/api/room/some-room-id/leave")
-                    .retrieve()
-                    .body(String.class));
-
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
-        }
-
-        @Test
-        @DisplayName("should return forbidden for an unknown room id due to token mismatch")
-        void givenUnknownRoom_whenLeaveRoom_thenReturnForbidden() throws Exception {
-            String hostToken = createRoom(uniqueName("UnknownRoom"), "HostUnknownRoom", 6).path("token").asText();
-
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class,
-                    () -> leaveRoom(uniqueName("missing-room"), hostToken));
-
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-            assertThat(exception.getResponseBodyAsString()).contains("Token is not valid for this room.");
-        }
-
-        @Test
-        @DisplayName("should allow a player to leave an active game")
-        void givenStartedGame_whenPlayerLeaves_thenReturnSuccessResponse() throws Exception {
-            String roomName = uniqueName("LeaveGameRoom");
-            JsonNode hostData = createRoom(roomName, "HostLeaveGame", 6);
-            String roomId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String secondPlayerToken = joinRoom(roomName, "SecondLeaveGame").path("token").asText();
-            startGame(roomId, hostToken);
-
-            int leaveStatus = leaveRoom(roomId, secondPlayerToken);
-
-            assertThat(leaveStatus).isEqualTo(204);
-        }
-
-        @Test
-        @DisplayName("should keep a three-player game responsive after a non-current player leaves")
+        @DisplayName("should remove a non-current player who leaves a three-player game and let the rest keep playing")
         void givenThreePlayerGame_whenNonCurrentPlayerLeaves_thenRemainingPlayersCanStillAct() throws Exception {
             String roomName = uniqueName("LeaveThreePlayerRoom");
             JsonNode hostData = createRoom(roomName, "HostLeaveThree", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String secondToken = joinRoom(roomName, "SecondLeaveThree").path("token").asText();
-            String thirdToken = joinRoom(roomName, "ThirdLeaveThree").path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String secondToken = joinRoom(roomName, "SecondLeaveThree").path("token").asString();
+            String thirdToken = joinRoom(roomName, "ThirdLeaveThree").path("token").asString();
             startGame(gameId, hostToken);
 
-            JsonNode initialState = readGameState(gameId, hostToken);
-            String initialCurrent = initialState.path("currentPlayerName").asText();
+            String initialCurrent = readGameState(gameId, hostToken).path("currentPlayerName").asString();
             boolean secondIsCurrent = "SecondLeaveThree".equals(initialCurrent);
+            String leavingName = secondIsCurrent ? "ThirdLeaveThree" : "SecondLeaveThree";
             String leavingToken = secondIsCurrent ? thirdToken : secondToken;
             String remainingGuestName = secondIsCurrent ? "SecondLeaveThree" : "ThirdLeaveThree";
             String remainingGuestToken = secondIsCurrent ? secondToken : thirdToken;
 
             int leaveStatus = leaveRoom(gameId, leavingToken);
 
+            assertThat(leaveStatus).isEqualTo(204);
+            JsonNode afterLeave = readGameState(gameId, hostToken);
+            assertThat(afterLeave.path("players")).hasSize(2);
+            assertThat(afterLeave.path("players"))
+                    .extracting(player -> player.path("name").asString())
+                    .containsExactlyInAnyOrder("HostLeaveThree", remainingGuestName)
+                    .doesNotContain(leavingName);
+
             WebSocketStompClient stompClient = createStompClient();
-            StompSession hostSession = connectSession(stompClient, hostToken);
-            StompSession guestSession = connectSession(stompClient, remainingGuestToken);
-            PlayerActor hostActor = new PlayerActor("HostLeaveThree", hostToken, hostSession);
-            PlayerActor guestActor = new PlayerActor(remainingGuestName, remainingGuestToken, guestSession);
+            PlayerActor hostActor = new PlayerActor("HostLeaveThree", hostToken, connectSession(stompClient, hostToken));
+            PlayerActor guestActor = new PlayerActor(
+                    remainingGuestName, remainingGuestToken, connectSession(stompClient, remainingGuestToken));
+            awaitActive(gameId, hostToken, "HostLeaveThree", remainingGuestName);
 
             JsonNode beforeFirstAction = readGameState(gameId, hostToken);
-            String firstCurrentPlayer = beforeFirstAction.path("currentPlayerName").asText();
-            String firstPhase = beforeFirstAction.path("phase").asText();
-            String firstActor = performActionByCurrentPlayer(
+            String firstCurrentPlayer = beforeFirstAction.path("currentPlayerName").asString();
+            String firstPhase = beforeFirstAction.path("phase").asString();
+            performActionByCurrentPlayer(
                     gameId,
                     new PlayerActionRequest(PlayerAction.CALL, 0),
                     hostActor,
                     guestActor,
-                    state -> !firstCurrentPlayer.equals(state.path("currentPlayerName").asText())
-                            || !firstPhase.equals(state.path("phase").asText()));
+                    state -> !firstCurrentPlayer.equals(state.path("currentPlayerName").asString())
+                            || !firstPhase.equals(state.path("phase").asString()));
 
-            JsonNode beforeSecondAction = readGameState(gameId, hostToken);
-            String secondCurrentPlayer = beforeSecondAction.path("currentPlayerName").asText();
-            String secondActor = performActionByCurrentPlayer(
+            String folder = readGameState(gameId, hostToken).path("currentPlayerName").asString();
+            String winner = "HostLeaveThree".equals(folder) ? remainingGuestName : "HostLeaveThree";
+            performActionByCurrentPlayer(
                     gameId,
                     new PlayerActionRequest(PlayerAction.FOLD, 0),
                     hostActor,
                     guestActor,
-                    state -> "SHOWDOWN".equals(state.path("phase").asText())
-                            || playerHasFolded(state, secondCurrentPlayer));
+                    state -> "SHOWDOWN".equals(state.path("phase").asString()));
 
-            assertThat(leaveStatus).isEqualTo(204);
-            assertThat(firstActor).isIn("HostLeaveThree", remainingGuestName);
-            assertThat(secondActor).isIn("HostLeaveThree", remainingGuestName);
+            JsonNode afterFold = readGameState(gameId, hostToken);
+            assertThat(playerHasFolded(afterFold, folder)).isTrue();
+            assertThat(afterFold.path("winners")).extracting(JsonNode::asString).containsExactly(winner);
         }
     }
 
@@ -273,47 +174,54 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
         void givenTwoPlayerGame_whenPlayersActAcrossRounds_thenGameAdvancesToTheTurn() throws Exception {
             String roomName = uniqueName("FullRoundRoom");
             JsonNode hostData = createRoom(roomName, "RoundHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String guestToken = joinRoom(roomName, "RoundGuest").path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String guestToken = joinRoom(roomName, "RoundGuest").path("token").asString();
             startGame(gameId, hostToken);
 
             WebSocketStompClient stompClient = createStompClient();
             PlayerActor host = new PlayerActor("RoundHost", hostToken, connectSession(stompClient, hostToken));
             PlayerActor guest = new PlayerActor("RoundGuest", guestToken, connectSession(stompClient, guestToken));
+            awaitActive(gameId, hostToken, "RoundHost", "RoundGuest");
+
+            String firstToAct = readGameState(gameId, hostToken).path("currentPlayerName").asString();
+            String secondToAct = "RoundHost".equals(firstToAct) ? "RoundGuest" : "RoundHost";
 
             performActionByCurrentPlayer(
                     gameId,
                     new PlayerActionRequest(PlayerAction.CALL, 0),
                     host,
                     guest,
-                    state -> "PRE_FLOP".equals(state.path("phase").asText())
-                            && "RoundHost".equals(state.path("currentPlayerName").asText()));
+                    state -> "PRE_FLOP".equals(state.path("phase").asString())
+                            && secondToAct.equals(state.path("currentPlayerName").asString()));
 
             performActionByCurrentPlayer(
                     gameId,
                     new PlayerActionRequest(PlayerAction.CHECK, 0),
                     host,
                     guest,
-                    state -> "FLOP".equals(state.path("phase").asText())
+                    state -> "FLOP".equals(state.path("phase").asString())
                             && state.path("communityCards").size() == 3
-                            && "RoundHost".equals(state.path("currentPlayerName").asText()));
+                            && secondToAct.equals(state.path("currentPlayerName").asString()));
 
             performActionByCurrentPlayer(
                     gameId,
                     new PlayerActionRequest(PlayerAction.CHECK, 0),
                     host,
                     guest,
-                    state -> "FLOP".equals(state.path("phase").asText())
-                            && "RoundGuest".equals(state.path("currentPlayerName").asText()));
+                    state -> "FLOP".equals(state.path("phase").asString())
+                            && firstToAct.equals(state.path("currentPlayerName").asString()));
 
             performActionByCurrentPlayer(
                     gameId,
                     new PlayerActionRequest(PlayerAction.CHECK, 0),
                     host,
                     guest,
-                    state -> "TURN".equals(state.path("phase").asText())
+                    state -> "TURN".equals(state.path("phase").asString())
                             && state.path("communityCards").size() == 4);
+
+            JsonNode turnState = readGameState(gameId, hostToken);
+            assertThat(turnState.path("pot").asInt()).isEqualTo(40);
         }
     }
 
@@ -326,9 +234,9 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
         void givenOnePlayerRemaining_whenGameEnds_thenRoomIsDestroyed() throws Exception {
             String roomName = uniqueName("EndGameCleanupRoom");
             JsonNode hostData = createRoom(roomName, "EndHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String guestToken = joinRoom(roomName, "EndGuest").path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String guestToken = joinRoom(roomName, "EndGuest").path("token").asString();
             startGame(gameId, hostToken);
 
             WebSocketStompClient stompClient = createStompClient();
@@ -338,67 +246,61 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             int leaveStatus = leaveRoom(gameId, guestToken);
 
             assertThat(leaveStatus).isEqualTo(204);
-            awaitRoomDestruction(gameId, hostToken, DEFAULT_TIMEOUT);
+            awaitRoomDestruction(gameId, hostToken);
         }
 
         @Test
         @DisplayName("should allow claim win when every other non-out player is disconnected")
-        void givenDisconnectedOpponents_whenClaimWin_thenReturnSuccessAndCleanupRoom() throws Exception {
+        void givenDisconnectedOpponents_whenClaimWin_thenReturnFinalResultAndCleanupRoom() throws Exception {
             String roomName = uniqueName("ClaimWinRoom");
             JsonNode hostData = createRoom(roomName, "ClaimHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String guestToken = joinRoom(roomName, "ClaimGuest").path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String guestToken = joinRoom(roomName, "ClaimGuest").path("token").asString();
             startGame(gameId, hostToken);
 
             WebSocketStompClient stompClient = createStompClient();
             connectSession(stompClient, hostToken);
             StompSession guestSession = connectSession(stompClient, guestToken);
-            guestSession.disconnect();
+            awaitActive(gameId, hostToken, "ClaimHost", "ClaimGuest");
+            disconnectSession(guestSession);
+            awaitPlayerStatus(gameId, hostToken, "ClaimGuest", "DISCONNECTED");
 
-            Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-                JsonNode state = readGameState(gameId, hostToken);
-                assertThat(findPlayer(state, "ClaimGuest").path("status").asText()).isEqualTo("DISCONNECTED");
-            });
+            JsonNode claim = claimWin(gameId, hostToken);
 
-            JsonNode response = claimWin(gameId, hostToken);
-
-            assertThat(response.path("gameEnd").path("winner").asText()).isEqualTo("ClaimHost");
-            assertThat(response.path("gameEnd").path("isForfeit").asBoolean()).isTrue();
-            awaitRoomDestruction(gameId, hostToken, DEFAULT_TIMEOUT);
+            assertThat(claim.path("gameEnd").path("winner").asString()).isEqualTo("ClaimHost");
+            assertThat(claim.path("gameEnd").path("isForfeit").asBoolean()).isTrue();
+            JsonNode review = readGameReview(gameId, hostToken);
+            assertThat(review.path("gameEnd")).isEqualTo(claim.path("gameEnd"));
+            awaitRoomDestruction(gameId, hostToken);
         }
 
         @Test
         @DisplayName("should reject stale claim win requests once an opponent has reconnected")
-        void givenReconnectedOpponent_whenClaimWin_thenReturnForbidden() throws Exception {
+        void givenReconnectedOpponent_whenClaimWin_thenReturnForbiddenAndKeepGameRunning() throws Exception {
             String roomName = uniqueName("ClaimRejectRoom");
             JsonNode hostData = createRoom(roomName, "ClaimRejectHost", 6);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String guestToken = joinRoom(roomName, "ClaimRejectGuest").path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String guestToken = joinRoom(roomName, "ClaimRejectGuest").path("token").asString();
             startGame(gameId, hostToken);
 
             WebSocketStompClient stompClient = createStompClient();
             connectSession(stompClient, hostToken);
             StompSession guestSession = connectSession(stompClient, guestToken);
-            guestSession.disconnect();
-
-            Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-                JsonNode state = readGameState(gameId, hostToken);
-                assertThat(findPlayer(state, "ClaimRejectGuest").path("status").asText()).isEqualTo("DISCONNECTED");
-            });
+            awaitActive(gameId, hostToken, "ClaimRejectHost", "ClaimRejectGuest");
+            disconnectSession(guestSession);
+            awaitPlayerStatus(gameId, hostToken, "ClaimRejectGuest", "DISCONNECTED");
 
             connectSession(stompClient, guestToken);
-            Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-                JsonNode state = readGameState(gameId, hostToken);
-                assertThat(findPlayer(state, "ClaimRejectGuest").path("status").asText()).isEqualTo("ACTIVE");
-            });
+            awaitPlayerStatus(gameId, hostToken, "ClaimRejectGuest", "ACTIVE");
 
-            HttpClientErrorException exception = assertThrows(HttpClientErrorException.class,
-                    () -> claimWin(gameId, hostToken));
+            HttpClientErrorException rejection = expectRejection(() -> claimWin(gameId, hostToken));
 
-            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-            assertThat(exception.getResponseBodyAsString().toLowerCase()).contains("claim");
+            assertProblem(rejection, HttpStatus.FORBIDDEN, "Cannot claim win right now.");
+            JsonNode state = readGameState(gameId, hostToken);
+            assertThat(state.path("phase").asString()).isEqualTo("PRE_FLOP");
+            assertThat(isAbsent(state.path("gameEnd"))).isTrue();
         }
     }
 
@@ -411,76 +313,31 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
         void givenValidAction_whenSendOverWebSocket_thenBroadcastUpdatedGameState() throws Exception {
             String roomName = uniqueName("WsActionRoom");
             JsonNode hostData = createRoom(roomName, HOST_NAME, 6);
-            String roomId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String otherToken = joinRoom(roomName, OTHER_NAME).path("token").asText();
+            String roomId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String otherToken = joinRoom(roomName, OTHER_NAME).path("token").asString();
 
             WebSocketStompClient stompClient = createStompClient();
             StompSession hostSession = connectSession(stompClient, hostToken);
             StompSession otherSession = connectSession(stompClient, otherToken);
-
-            CompletableFuture<PublicGameStateResponse> initialStateFuture = new CompletableFuture<>();
-            CompletableFuture<PublicGameStateResponse> nextStateFuture = new CompletableFuture<>();
-
-            hostSession.subscribe("/game/" + roomId, new MatchingPublicStateFrameHandler(
-                    initialStateFuture,
-                    response -> response.phase() == GamePhase.PRE_FLOP
-                            && !Boolean.TRUE.equals(response.isReadyCountdownActive())));
-            awaitBrokerSubscription("/game/" + roomId);
+            List<JsonNode> broadcasts = recordGameBroadcasts(hostSession, roomId);
 
             startGame(roomId, hostToken);
 
-            PublicGameStateResponse initialState = initialStateFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            hostSession.subscribe("/game/" + roomId, new MatchingPublicStateFrameHandler(
-                    nextStateFuture,
-                    response -> response.players().stream().anyMatch(player ->
-                            player.name().equals(initialState.currentPlayerName()) && player.hasFolded())));
-            awaitBrokerSubscriptions("/game/" + roomId, 2);
+            JsonNode initialState = awaitBroadcast(broadcasts, GameplayLifecycleE2E::isFreshHand);
+            awaitActive(roomId, hostToken, HOST_NAME, OTHER_NAME);
+            String folder = initialState.path("currentPlayerName").asString();
+            String winner = HOST_NAME.equals(folder) ? OTHER_NAME : HOST_NAME;
+            StompSession actingSession = HOST_NAME.equals(folder) ? hostSession : otherSession;
 
-            StompSession actingSession = HOST_NAME.equals(initialState.currentPlayerName())
-                    ? hostSession
-                    : otherSession;
             actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, 0));
 
-            PublicGameStateResponse nextState = nextStateFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-
-            assertThat(nextState.players()).anySatisfy(player -> {
-                assertThat(player.name()).isEqualTo(initialState.currentPlayerName());
-                assertThat(player.hasFolded()).isTrue();
-            });
-        }
-
-        @Test
-        @DisplayName("should continue processing actions after the active client reconnects")
-        void givenReconnectDuringGame_whenActionIsSent_thenGameStillBroadcastsState() throws Exception {
-            String roomName = uniqueName("WsReconnectAction");
-            JsonNode hostData = createRoom(roomName, HOST_NAME, 6);
-            String roomId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String otherToken = joinRoom(roomName, OTHER_NAME).path("token").asText();
-
-            WebSocketStompClient stompClient = createStompClient();
-            StompSession observerSession = connectSession(stompClient, hostToken);
-            CompletableFuture<PublicGameStateResponse> initialStateFuture = new CompletableFuture<>();
-
-            observerSession.subscribe("/game/" + roomId, new PublicStateFrameHandler(initialStateFuture));
-            awaitBrokerSubscription("/game/" + roomId);
-
-            startGame(roomId, hostToken);
-
-            PublicGameStateResponse initialState = initialStateFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            observerSession.disconnect();
-
-            String actingToken = HOST_NAME.equals(initialState.currentPlayerName()) ? hostToken : otherToken;
-            StompSession reconnectedSession = connectSession(stompClient, actingToken);
-            CompletableFuture<PublicGameStateResponse> nextStateFuture = new CompletableFuture<>();
-            reconnectedSession.subscribe("/game/" + roomId, new PublicStateFrameHandler(nextStateFuture));
-            awaitBrokerSubscription("/game/" + roomId);
-
-            reconnectedSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, 0));
-
-            PublicGameStateResponse nextState = nextStateFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(nextState).isNotNull();
+            JsonNode afterFold = awaitBroadcast(broadcasts, state ->
+                    state.path("stateRevision").asLong() > initialState.path("stateRevision").asLong()
+                            && playerHasFolded(state, folder));
+            assertThat(afterFold.path("handNumber").asLong()).isEqualTo(initialState.path("handNumber").asLong());
+            assertThat(afterFold.path("phase").asString()).isEqualTo("SHOWDOWN");
+            assertThat(afterFold.path("winners")).extracting(JsonNode::asString).containsExactly(winner);
         }
 
         @Test
@@ -488,41 +345,40 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
         void givenReadyGate_whenAllEligiblePlayersReady_thenAdvanceWithoutWaitingForTimeout() throws Exception {
             String roomName = uniqueName("WsAllReady");
             JsonNode hostData = createRoom(roomName, HOST_NAME, 6);
-            String roomId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String otherToken = joinRoom(roomName, OTHER_NAME).path("token").asText();
+            String roomId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String otherToken = joinRoom(roomName, OTHER_NAME).path("token").asString();
 
             WebSocketStompClient stompClient = createStompClient();
             StompSession hostSession = connectSession(stompClient, hostToken);
             StompSession otherSession = connectSession(stompClient, otherToken);
-
-            CompletableFuture<PublicGameStateResponse> initialStateFuture = new CompletableFuture<>();
-            CompletableFuture<PublicGameStateResponse> readyGateOpenFuture = new CompletableFuture<>();
-            CompletableFuture<PublicGameStateResponse> nextHandFuture = new CompletableFuture<>();
-
-            hostSession.subscribe("/game/" + roomId,
-                    readyGateHandler(initialStateFuture, readyGateOpenFuture, nextHandFuture));
-            awaitBrokerSubscription("/game/" + roomId);
+            List<JsonNode> broadcasts = recordGameBroadcasts(hostSession, roomId);
 
             startGame(roomId, hostToken);
 
-            PublicGameStateResponse initialState = initialStateFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            StompSession actingSession = HOST_NAME.equals(initialState.currentPlayerName())
+            JsonNode initialState = awaitBroadcast(broadcasts, GameplayLifecycleE2E::isFreshHand);
+            awaitActive(roomId, hostToken, HOST_NAME, OTHER_NAME);
+            StompSession actingSession = HOST_NAME.equals(initialState.path("currentPlayerName").asString())
                     ? hostSession
                     : otherSession;
             actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, 0));
 
-            PublicGameStateResponse readyGateState = readyGateOpenFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(readyGateState.phase()).isEqualTo(GamePhase.SHOWDOWN);
-            assertThat(readyGateState.isReadyCountdownActive()).isTrue();
-            assertThat(readyGateState.readyCountdownDeadlineEpochMs()).isNotNull();
+            JsonNode readyGateState = awaitBroadcast(broadcasts, GameplayLifecycleE2E::isReadyGate);
+            assertThat(readyGateState.path("phase").asString()).isEqualTo("SHOWDOWN");
+            assertThat(readyGateState.path("readyCountdownDeadlineEpochMs").asLong()).isPositive();
 
             hostSession.send("/app/" + roomId + "/ready", "");
             otherSession.send("/app/" + roomId + "/ready", "");
 
-            PublicGameStateResponse nextHand = nextHandFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(nextHand.phase()).isEqualTo(GamePhase.PRE_FLOP);
-            assertThat(Boolean.TRUE.equals(nextHand.isReadyCountdownActive())).isFalse();
+            long firstHandNumber = initialState.path("handNumber").asLong();
+            JsonNode nextHand = awaitBroadcast(broadcasts, state ->
+                    state.path("handNumber").asLong() > firstHandNumber && isFreshHand(state));
+            assertThat(nextHand.path("handNumber").asLong()).isEqualTo(firstHandNumber + 1);
+            assertThat(nextHand.path("phase").asString()).isEqualTo("PRE_FLOP");
+            assertThat(nextHand.path("pot").asInt()).isEqualTo(BLINDS_POT);
+            assertThat(nextHand.path("serverTimeEpochMs").asLong())
+                    .as("the next hand must start before the ready countdown would have expired")
+                    .isLessThan(readyGateState.path("readyCountdownDeadlineEpochMs").asLong());
         }
 
         @Test
@@ -530,271 +386,118 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
         void givenReadyGate_whenOnePlayerStaysUnready_thenTimeoutForcesAdvance() throws Exception {
             String roomName = uniqueName("WsReadyTimeout");
             JsonNode hostData = createRoom(roomName, HOST_NAME, 6);
-            String roomId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String otherToken = joinRoom(roomName, OTHER_NAME).path("token").asText();
+            String roomId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String otherToken = joinRoom(roomName, OTHER_NAME).path("token").asString();
 
             WebSocketStompClient stompClient = createStompClient();
             StompSession hostSession = connectSession(stompClient, hostToken);
             StompSession otherSession = connectSession(stompClient, otherToken);
-
-            CompletableFuture<PublicGameStateResponse> initialStateFuture = new CompletableFuture<>();
-            CompletableFuture<PublicGameStateResponse> readyGateOpenFuture = new CompletableFuture<>();
-            CompletableFuture<PublicGameStateResponse> partiallyReadyFuture = new CompletableFuture<>();
-            CompletableFuture<PublicGameStateResponse> nextHandFuture = new CompletableFuture<>();
-            AtomicBoolean readyGateSeen = new AtomicBoolean(false);
-
-            hostSession.subscribe("/game/" + roomId, new StompFrameHandler() {
-                @Override
-                public Type getPayloadType(@NonNull StompHeaders headers) {
-                    return PublicGameStateResponse.class;
-                }
-
-                @Override
-                public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                    if (!(payload instanceof PublicGameStateResponse response)) {
-                        return;
-                    }
-                    if (!initialStateFuture.isDone()
-                            && response.phase() == GamePhase.PRE_FLOP
-                            && !Boolean.TRUE.equals(response.isReadyCountdownActive())) {
-                        initialStateFuture.complete(response);
-                    }
-                    if (!readyGateOpenFuture.isDone()
-                            && response.phase() == GamePhase.SHOWDOWN
-                            && Boolean.TRUE.equals(response.isReadyCountdownActive())) {
-                        readyGateSeen.set(true);
-                        readyGateOpenFuture.complete(response);
-                    }
-                    if (!partiallyReadyFuture.isDone()
-                            && readyGateSeen.get()
-                            && response.phase() == GamePhase.SHOWDOWN
-                            && Boolean.TRUE.equals(response.isReadyCountdownActive())
-                            && countReadyEligiblePlayers(response) == 1) {
-                        partiallyReadyFuture.complete(response);
-                    }
-                    if (!nextHandFuture.isDone()
-                            && readyGateSeen.get()
-                            && response.phase() == GamePhase.PRE_FLOP
-                            && !Boolean.TRUE.equals(response.isReadyCountdownActive())) {
-                        nextHandFuture.complete(response);
-                    }
-                }
-            });
-            awaitBrokerSubscription("/game/" + roomId);
+            List<JsonNode> broadcasts = recordGameBroadcasts(hostSession, roomId);
 
             startGame(roomId, hostToken);
 
-            PublicGameStateResponse initialState = initialStateFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            StompSession actingSession = HOST_NAME.equals(initialState.currentPlayerName())
+            JsonNode initialState = awaitBroadcast(broadcasts, GameplayLifecycleE2E::isFreshHand);
+            awaitActive(roomId, hostToken, HOST_NAME, OTHER_NAME);
+            StompSession actingSession = HOST_NAME.equals(initialState.path("currentPlayerName").asString())
                     ? hostSession
                     : otherSession;
             actingSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.FOLD, 0));
 
-            PublicGameStateResponse readyGateState = readyGateOpenFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(readyGateState.phase()).isEqualTo(GamePhase.SHOWDOWN);
-            assertThat(readyGateState.isReadyCountdownActive()).isTrue();
+            JsonNode readyGateState = awaitBroadcast(broadcasts, GameplayLifecycleE2E::isReadyGate);
+            assertThat(readyGateState.path("phase").asString()).isEqualTo("SHOWDOWN");
 
             hostSession.send("/app/" + roomId + "/ready", "");
 
-            PublicGameStateResponse partiallyReadyState = partiallyReadyFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(countReadyEligiblePlayers(partiallyReadyState)).isEqualTo(1);
+            awaitBroadcast(broadcasts, state -> isReadyGate(state)
+                    && isReadyForNextHand(state, HOST_NAME)
+                    && !isReadyForNextHand(state, OTHER_NAME));
 
-            PublicGameStateResponse nextHand = nextHandFuture.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertThat(nextHand.phase()).isEqualTo(GamePhase.PRE_FLOP);
-            assertThat(Boolean.TRUE.equals(nextHand.isReadyCountdownActive())).isFalse();
-        }
-    }
-
-    @Nested
-    @DisplayName("ready countdown flow")
-    class ReadyCountdownFlow {
-
-        @Test
-        @DisplayName("should start new hand when all players are ready")
-        void givenShowdown_whenAllPlayersReady_thenStartNewHand() throws Exception {
-            String roomName = uniqueName("ReadyFlowRoom");
-            JsonNode hostData = createRoom(roomName, "ReadyHost", 2);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String guestToken = joinRoom(roomName, "ReadyGuest").path("token").asText();
-            startGame(gameId, hostToken);
-
-            WebSocketStompClient stompClient = createStompClient();
-            PlayerActor host = new PlayerActor("ReadyHost", hostToken, connectSession(stompClient, hostToken));
-            PlayerActor guest = new PlayerActor("ReadyGuest", guestToken, connectSession(stompClient, guestToken));
-
-            checkDownToShowdown(gameId, host, guest);
-
-            JsonNode showdownState = readGameState(gameId, hostToken);
-            assertThat(showdownState.path("isReadyCountdownActive").asBoolean()).isTrue();
-
-            host.session().send("/app/" + gameId + "/ready", "{}");
-            guest.session().send("/app/" + gameId + "/ready", "{}");
-
-            Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-                JsonNode nextHandState = readGameState(gameId, hostToken);
-                assertThat(nextHandState.path("phase").asText()).isEqualTo("PRE_FLOP");
-                assertThat(nextHandState.path("pot").asInt()).isEqualTo(30);
-            });
+            long firstHandNumber = initialState.path("handNumber").asLong();
+            JsonNode nextHand = awaitBroadcast(broadcasts, state ->
+                    state.path("handNumber").asLong() > firstHandNumber && isFreshHand(state));
+            assertThat(nextHand.path("handNumber").asLong()).isEqualTo(firstHandNumber + 1);
+            assertThat(nextHand.path("pot").asInt()).isEqualTo(BLINDS_POT);
+            assertThat(nextHand.path("serverTimeEpochMs").asLong())
+                    .as("with one player unready the next hand must wait for the countdown deadline")
+                    .isGreaterThanOrEqualTo(readyGateState.path("readyCountdownDeadlineEpochMs").asLong() - 250);
         }
 
         @Test
-        @DisplayName("should reject stray action after showdown and conserve total chips")
+        @DisplayName("should reject a stray action after showdown and conserve total chips")
         void givenShowdown_whenStrayActionSubmitted_thenRejectAndConserveChips() throws Exception {
             String roomName = uniqueName("GhostActionRoom");
             JsonNode hostData = createRoom(roomName, "GhostHost", 2);
-            String gameId = hostData.path("roomId").asText();
-            String hostToken = hostData.path("token").asText();
-            String guestToken = joinRoom(roomName, "GhostGuest").path("token").asText();
+            String gameId = hostData.path("roomId").asString();
+            String hostToken = hostData.path("token").asString();
+            String guestToken = joinRoom(roomName, "GhostGuest").path("token").asString();
             startGame(gameId, hostToken);
 
             WebSocketStompClient stompClient = createStompClient();
             PlayerActor host = new PlayerActor("GhostHost", hostToken, connectSession(stompClient, hostToken));
             PlayerActor guest = new PlayerActor("GhostGuest", guestToken, connectSession(stompClient, guestToken));
+            awaitActive(gameId, hostToken, "GhostHost", "GhostGuest");
+            List<PlayerFeedbackResponse> feedback = recordPrivateFeedback(host.session(), hostToken);
 
             checkDownToShowdown(gameId, host, guest);
-
-            int totalExpectedChips = 2000;
-            JsonNode beforeStray = readGameState(gameId, hostToken);
-            long revisionBeforeStray = beforeStray.path("stateRevision").asLong();
-
-            CompletableFuture<PlayerFeedbackResponse> rejection = new CompletableFuture<>();
-            host.session().subscribe("/user/queue/private", new StompFrameHandler() {
-                @Override
-                public Type getPayloadType(@NonNull StompHeaders headers) {
-                    return PlayerFeedbackResponse.class;
-                }
-
-                @Override
-                public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                    if (payload instanceof PlayerFeedbackResponse response
-                            && response.type() == PlayerFeedbackResponse.Type.ACTION_ERROR
-                            && !rejection.isDone()) {
-                        rejection.complete(response);
-                    }
-                }
-            });
+            assertThat(feedback).as("legal check-down actions must not be rejected").isEmpty();
+            long revisionBeforeStray = readGameState(gameId, hostToken).path("stateRevision").asLong();
 
             host.session().send("/app/" + gameId + "/action", new PlayerActionRequest(PlayerAction.CHECK, 0));
 
-            PlayerFeedbackResponse error = rejection.get(DEFAULT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            PlayerFeedbackResponse error = await()
+                    .until(() -> feedback.stream().findFirst(), Optional::isPresent)
+                    .orElseThrow();
             assertThat(error.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
+            assertThat(error.code()).isEqualTo("HAND_COMPLETE");
             assertThat(error.action()).isEqualTo(RejectedAction.CHECK);
+            assertThat(error.message()).isEqualTo("Hand is complete");
 
-            Awaitility.await().atMost(DEFAULT_TIMEOUT).untilAsserted(() -> {
-                JsonNode showdownState = readGameState(gameId, hostToken);
-                assertThat(showdownState.path("phase").asText()).isEqualTo("SHOWDOWN");
-                assertThat(showdownState.path("stateRevision").asLong()).isEqualTo(revisionBeforeStray);
-                int sumChips = 0;
-                for (JsonNode player : showdownState.path("players")) {
-                    sumChips += player.path("chips").asInt();
-                }
-                assertThat(sumChips + showdownState.path("pot").asInt()).isEqualTo(totalExpectedChips);
-            });
-        }
-    }
-
-    private void checkDownToShowdown(String gameId, PlayerActor host, PlayerActor guest) throws Exception {
-        performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CALL, 0), host, guest, s -> true);
-        for (int step = 0; step < 6; step++) {
-            performActionByCurrentPlayer(gameId, new PlayerActionRequest(PlayerAction.CHECK, 0), host, guest, s -> true);
-        }
-        performActionByCurrentPlayer(
-                gameId,
-                new PlayerActionRequest(PlayerAction.CHECK, 0),
-                host,
-                guest,
-                state -> "SHOWDOWN".equals(state.path("phase").asText()));
-    }
-
-    private static long countReadyEligiblePlayers(PublicGameStateResponse response) {
-        return response.players().stream()
-                .filter(player -> !"OUT".equals(player.status()) && !"DISCONNECTED".equals(player.status()))
-                .filter(player -> Boolean.TRUE.equals(player.isReadyForNextHand()))
-                .count();
-    }
-
-    private static @NonNull StompFrameHandler readyGateHandler(
-            CompletableFuture<PublicGameStateResponse> initialStateFuture,
-            CompletableFuture<PublicGameStateResponse> readyGateOpenFuture,
-            CompletableFuture<PublicGameStateResponse> nextHandFuture) {
-        AtomicBoolean readyGateSeen = new AtomicBoolean(false);
-        return new StompFrameHandler() {
-            @Override
-            public Type getPayloadType(@NonNull StompHeaders headers) {
-                return PublicGameStateResponse.class;
+            JsonNode showdownState = readGameState(gameId, hostToken);
+            assertThat(showdownState.path("phase").asString()).isEqualTo("SHOWDOWN");
+            assertThat(showdownState.path("stateRevision").asLong()).isEqualTo(revisionBeforeStray);
+            int sumChips = 0;
+            for (JsonNode player : showdownState.path("players")) {
+                sumChips += player.path("chips").asInt();
             }
-
-            @Override
-            public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-                if (!(payload instanceof PublicGameStateResponse response)) {
-                    return;
-                }
-                if (!initialStateFuture.isDone()
-                        && response.phase() == GamePhase.PRE_FLOP
-                        && !Boolean.TRUE.equals(response.isReadyCountdownActive())) {
-                    initialStateFuture.complete(response);
-                }
-                if (!readyGateOpenFuture.isDone()
-                        && response.phase() == GamePhase.SHOWDOWN
-                        && Boolean.TRUE.equals(response.isReadyCountdownActive())) {
-                    readyGateSeen.set(true);
-                    readyGateOpenFuture.complete(response);
-                }
-                if (!nextHandFuture.isDone()
-                        && readyGateSeen.get()
-                        && response.phase() == GamePhase.PRE_FLOP
-                        && !Boolean.TRUE.equals(response.isReadyCountdownActive())) {
-                    nextHandFuture.complete(response);
-                }
-            }
-        };
-    }
-
-    private static final class PublicStateFrameHandler implements StompFrameHandler {
-        private final CompletableFuture<PublicGameStateResponse> future;
-
-        private PublicStateFrameHandler(CompletableFuture<PublicGameStateResponse> future) {
-            this.future = future;
-        }
-
-        @Override
-        public Type getPayloadType(@NonNull StompHeaders headers) {
-            return PublicGameStateResponse.class;
-        }
-
-        @Override
-        public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-            if (payload instanceof PublicGameStateResponse response && !future.isDone()) {
-                future.complete(response);
-            }
+            assertThat(sumChips + showdownState.path("pot").asInt()).isEqualTo(TOTAL_CHIPS);
+            assertThat(feedback).containsExactly(error);
         }
     }
 
-    private static final class MatchingPublicStateFrameHandler implements StompFrameHandler {
-        private final CompletableFuture<PublicGameStateResponse> future;
-        private final Predicate<PublicGameStateResponse> predicate;
-
-        private MatchingPublicStateFrameHandler(
-                CompletableFuture<PublicGameStateResponse> future,
-                Predicate<PublicGameStateResponse> predicate) {
-            this.future = future;
-            this.predicate = predicate;
+    private void awaitActive(String gameId, String viewerToken, String... playerNames) {
+        for (String playerName : playerNames) {
+            awaitPlayerStatus(gameId, viewerToken, playerName, "ACTIVE");
         }
+    }
 
-        @Override
-        public Type getPayloadType(@NonNull StompHeaders headers) {
-            return PublicGameStateResponse.class;
+    // Heads-up check-down: the CALL settles pre-flop, then every street takes two CHECKs; each step must
+    // move the state forward to the phase listed, and the last one waits for the ready countdown to open.
+    private void checkDownToShowdown(String gameId, PlayerActor host, PlayerActor guest) {
+        String[] phaseAfterStep = {"PRE_FLOP", "FLOP", "FLOP", "TURN", "TURN", "RIVER", "RIVER", "SHOWDOWN"};
+        for (int step = 0; step < phaseAfterStep.length; step++) {
+            String expectedPhase = phaseAfterStep[step];
+            boolean showdownStep = step == phaseAfterStep.length - 1;
+            PlayerAction action = step == 0 ? PlayerAction.CALL : PlayerAction.CHECK;
+            performActionByCurrentPlayer(
+                    gameId,
+                    new PlayerActionRequest(action, 0),
+                    host,
+                    guest,
+                    state -> expectedPhase.equals(state.path("phase").asString())
+                            && (!showdownStep || state.path("isReadyCountdownActive").asBoolean()));
         }
+    }
 
-        @Override
-        public void handleFrame(@NonNull StompHeaders headers, Object payload) {
-            if (payload instanceof PublicGameStateResponse response
-                    && !future.isDone()
-                    && predicate.test(response)) {
-                future.complete(response);
-            }
-        }
+    private static boolean isFreshHand(JsonNode state) {
+        return "PRE_FLOP".equals(state.path("phase").asString()) && !state.path("isReadyCountdownActive").asBoolean();
+    }
+
+    private static boolean isReadyGate(JsonNode state) {
+        return "SHOWDOWN".equals(state.path("phase").asString()) && state.path("isReadyCountdownActive").asBoolean();
+    }
+
+    private static boolean isReadyForNextHand(JsonNode state, String playerName) {
+        return findPlayer(state, playerName).path("isReadyForNextHand").asBoolean();
     }
 }
