@@ -1,7 +1,7 @@
 {
   "deleted" : false,
   "room" : {
-    "roomId" : "room-terminal",
+    "roomId" : "room-finished",
     "roomName" : "Final Table",
     "hostName" : "Alice",
     "maxPlayers" : 6,
@@ -19,7 +19,7 @@
     "inactivityDeadlineEpochMs" : null
   },
   "game" : {
-    "gameId" : "room-terminal",
+    "gameId" : "room-finished",
     "players" : [ {
       "name" : "Alice",
       "playerId" : "a",
@@ -44,7 +44,7 @@
       "allIn" : false,
       "out" : false,
       "disconnected" : false,
-      "disconnectDeadlineEpochMs" : null,
+      "disconnectDeadlineEpochMs" : 1700000015000,
       "readyForNextHand" : false
     }, {
       "name" : "Bob",
@@ -94,7 +94,17 @@
     "smallBlindPlayerId" : "a",
     "bigBlindPlayerId" : "b",
     "currentPlayerId" : "a",
-    "lastHandPayout" : null,
+    "lastHandPayout" : {
+      "potWinnings" : {
+        "a" : 2000
+      },
+      "refunds" : {
+        "a" : 10
+      },
+      "winnerIds" : [ "a" ],
+      "remainder" : 0,
+      "wentToShowdown" : true
+    },
     "finalPotSettled" : false,
     "readyGateState" : "CLOSED",
     "handNumber" : 1,
@@ -106,7 +116,7 @@
     "gameEndResult" : {
       "maxPlayers" : 6,
       "pot" : 0,
-      "pots" : [ ],
+      "pots" : [ 2000 ],
       "uncalledAmount" : 0,
       "phase" : "SHOWDOWN",
       "currentBet" : 0,
@@ -131,7 +141,7 @@
           "suit" : "SPADES"
         } ],
         "isWinner" : true,
-        "chipsWon" : null,
+        "chipsWon" : 2000,
         "holeCards" : [ {
           "rank" : "ACE",
           "suit" : "SPADES"
@@ -139,7 +149,7 @@
           "rank" : "KING",
           "suit" : "SPADES"
         } ],
-        "disconnectDeadlineEpochMs" : null,
+        "disconnectDeadlineEpochMs" : 1700000015000,
         "isReadyForNextHand" : false
       }, {
         "id" : "b",
@@ -155,7 +165,7 @@
         "handRank" : null,
         "bestHand" : [ ],
         "isWinner" : false,
-        "chipsWon" : null,
+        "chipsWon" : 0,
         "holeCards" : null,
         "disconnectDeadlineEpochMs" : null,
         "isReadyForNextHand" : true
@@ -163,7 +173,7 @@
       "currentPlayerName" : null,
       "currentPlayerId" : null,
       "winners" : [ "Alice" ],
-      "winningsPerPlayer" : null,
+      "winningsPerPlayer" : 2000,
       "isAutoAdvancing" : false,
       "autoAdvanceMessage" : null,
       "isReadyCountdownActive" : false,

@@ -1,61 +1,71 @@
 package com.pokergame.persistence.transaction;
 
-import com.pokergame.config.RoomTimingProperties;
+import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.model.Game;
+import com.pokergame.model.Player;
 import com.pokergame.model.Room;
+import com.pokergame.persistence.PersistenceException;
 import com.pokergame.persistence.RoomAggregate;
 import com.pokergame.persistence.RoomAggregates;
+import com.pokergame.persistence.config.PersistenceProperties;
+import com.pokergame.persistence.snapshot.RecoveredRoom;
+import com.pokergame.persistence.snapshot.RoomSnapshot;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
+import com.pokergame.persistence.wal.EncryptedWalStore;
+import com.pokergame.persistence.wal.EncryptionKeyring;
+import com.pokergame.persistence.wal.WalFaultPoint;
+import com.pokergame.util.LockLease;
+import com.pokergame.util.MdcKeys;
+import com.pokergame.util.RoomCoordinator;
+import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import javax.crypto.spec.SecretKeySpec;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.scheduling.TaskScheduler;
-import org.springframework.security.crypto.password.PasswordEncoder;
-
-import javax.crypto.spec.SecretKeySpec;
-import java.lang.reflect.Method;
-import java.nio.file.Path;
-import java.time.Clock;
-import java.util.Map;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
-import com.pokergame.util.LockLease;
-import com.pokergame.persistence.wal.EncryptedWalStore;
-import com.pokergame.persistence.wal.EncryptionKeyring;
-import com.pokergame.persistence.wal.WalFaultPoint;
-import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
-import com.pokergame.persistence.snapshot.RoomSnapshot;
-import com.pokergame.persistence.snapshot.RecoveredRoom;
-import com.pokergame.util.MdcKeys;
-import com.pokergame.util.RoomCoordinator;
-import org.junit.jupiter.api.DisplayName;
-import com.pokergame.model.Game;
-import com.pokergame.model.Player;
-import com.pokergame.persistence.config.PersistenceProperties;
-import com.pokergame.persistence.PersistenceException;
-import java.util.concurrent.Callable;
-import org.mockito.Mockito;
 import org.slf4j.MDC;
+import org.springframework.aop.aspectj.annotation.AspectJProxyFactory;
 import tools.jackson.databind.json.JsonMapper;
 
-/** Tests durable mutation aspect transaction boundaries and room ID parameter resolution. */
+/** Unit tests for {@link DurableMutationAspect} transaction boundaries, rollback, and room ID resolution. */
 @Tag("unit")
 @ExtendWith(MockitoExtension.class)
 class DurableMutationAspectTest {
@@ -71,6 +81,7 @@ class DurableMutationAspectTest {
 
     private PersistenceProperties properties;
     private RoomCoordinator roomCoordinator;
+    private RoomSnapshotMapper realMapper;
 
     public static class TestTarget {
         @DurableMutation
@@ -90,13 +101,31 @@ class DurableMutationAspectTest {
         }
     }
 
+    static class MemoryOnlyTarget {
+        private final RoomCoordinator roomCoordinator;
+        private final String expectedRoomId;
+
+        MemoryOnlyTarget(RoomCoordinator roomCoordinator, String expectedRoomId) {
+            this.roomCoordinator = roomCoordinator;
+            this.expectedRoomId = expectedRoomId;
+        }
+
+        @DurableMutation
+        public void runCoordinated(@RoomId String roomId, Runnable action) {
+            roomCoordinator.assertHeldByCurrentThread(expectedRoomId);
+            action.run();
+        }
+    }
+
     @BeforeEach
     void setUp() {
-        properties = new PersistenceProperties(false, Path.of("data", "poker-wal"), null, Map.of(), 1000, 16L * 1024 * 1024, 5000);
+        properties = new PersistenceProperties(
+                false, Path.of("data", "poker-wal"), null, Map.of(), 1000, 16L * 1024 * 1024, 5000);
         roomCoordinator = new RoomCoordinator();
-        RoomSnapshot mockImage = Mockito.mock(RoomSnapshot.class);
-        Mockito.lenient().when(snapshotMapper.captureSnapshot(any(), any())).thenReturn(mockImage);
-        Mockito.lenient().when(snapshotMapper.serialize(any(RoomSnapshot.class))).thenReturn(new byte[]{1, 2, 3});
+        realMapper = new RoomSnapshotMapper(JsonMapper.builder().findAndAddModules().build());
+        RoomSnapshot mockSnapshot = mock(RoomSnapshot.class);
+        lenient().when(snapshotMapper.captureSnapshot(any(), any())).thenReturn(mockSnapshot);
+        lenient().when(snapshotMapper.serialize(any(RoomSnapshot.class))).thenReturn(new byte[]{1, 2, 3});
     }
 
     @AfterEach
@@ -104,11 +133,8 @@ class DurableMutationAspectTest {
         PostSaveActions.clear();
     }
 
-    /**
-     * Protects the contract that nested durable mutations reject calls crossing room boundaries.
-     */
     @Test
-    void nestedDurableMutationCrossRoomBoundaryThrowsPersistenceException() throws Throwable {
+    void nestedMutationCrossRoomBoundaryThrowsPersistenceException() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
@@ -202,12 +228,93 @@ class DurableMutationAspectTest {
         assertThat(roomCoordinator.isHeldByCurrentThread("room-A")).isFalse();
     }
 
-    /**
-     * Commit failure retains accepted effects and later commands without replay.
-     */
+    @Test
+    void sameRoomNestedMutationWhenPersistenceEnabledSharesOuterSaveAndFiresPostSaveActionsOnce() throws Throwable {
+        String roomId = "room-nested-enabled";
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        AtomicInteger commitWrites = new AtomicInteger();
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, (point, id) -> {
+            if (point == WalFaultPoint.BEFORE_COMMIT_WRITE) {
+                commitWrites.incrementAndGet();
+            }
+        }, roomCoordinator);
+
+        Room room = new Room(roomId, "Nested Room", "Alice", 6, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        when(aggregates.find(roomId)).thenReturn(new RoomAggregate(room, null));
+
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, realMapper, aggregates, properties, roomCoordinator);
+
+        List<String> events = new ArrayList<>();
+        ProceedingJoinPoint innerJoinPoint = mutationPoint(roomId, () -> {
+            room.addPlayer("Bob");
+            PostSaveActions.runAfterSave(() -> events.add("inner-after-save"));
+            return "inner-ok";
+        });
+        ProceedingJoinPoint outerJoinPoint = mutationPoint(roomId, () -> {
+            PostSaveActions.runAfterSave(() -> events.add("outer-before-inner"));
+            assertEquals("inner-ok", aspect.persist(innerJoinPoint));
+            assertThat(events).isEmpty();
+            PostSaveActions.runAfterSave(() -> events.add("outer-after-inner"));
+            return "outer-ok";
+        });
+
+        assertEquals("outer-ok", aspect.persist(outerJoinPoint));
+        assertThat(events).containsExactly("outer-before-inner", "inner-after-save", "outer-after-inner");
+        assertThat(commitWrites.get()).as("nested mutation joins the outer save").isEqualTo(1);
+        RecoveredRoom recovered = withRoomLock(roomCoordinator, roomId,
+                () -> realMapper.deserialize(store.recoverLatest(roomId).orElseThrow()));
+        assertThat(recovered.room().getPlayers()).containsExactly("Alice", "Bob");
+    }
+
+    @Test
+    void persistenceOrderingAndCoordination_MemoryOnlyMode() throws Exception {
+        String roomId = "memory-only-room";
+        DurableMutationAspect memoryOnlyAspect = new DurableMutationAspect(
+                null, snapshotMapper, aggregates, properties, roomCoordinator);
+        MemoryOnlyTarget target = new MemoryOnlyTarget(roomCoordinator, roomId);
+        AspectJProxyFactory factory = new AspectJProxyFactory(target);
+        factory.addAspect(memoryOnlyAspect);
+        MemoryOnlyTarget proxy = factory.getProxy();
+
+        int threads = 8;
+        CyclicBarrier barrier = new CyclicBarrier(threads);
+        AtomicInteger concurrentInside = new AtomicInteger();
+        AtomicInteger maxConcurrent = new AtomicInteger();
+        List<String> executedOrder = Collections.synchronizedList(new ArrayList<>());
+
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        try {
+            List<Future<?>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                int index = i;
+                futures.add(executor.submit(() -> {
+                    barrier.await(5, TimeUnit.SECONDS);
+                    proxy.runCoordinated(roomId, () -> {
+                        int active = concurrentInside.incrementAndGet();
+                        maxConcurrent.accumulateAndGet(active, Math::max);
+                        executedOrder.add("task-" + index);
+                        concurrentInside.decrementAndGet();
+                    });
+                    return null;
+                }));
+            }
+            for (Future<?> future : futures) {
+                future.get(5, TimeUnit.SECONDS);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(maxConcurrent.get()).isEqualTo(1);
+        assertThat(executedOrder).hasSize(threads);
+        assertThat(roomCoordinator.lockReservationCount(roomId)).isZero();
+    }
+
     @Test
     void commitFailureKeepsAcceptedEffectsAndLaterMutationAvailable() throws Throwable {
-
         AtomicReference<WalFaultPoint> failure = new AtomicReference<>(WalFaultPoint.BEFORE_COMMIT_WRITE);
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
@@ -251,7 +358,6 @@ class DurableMutationAspectTest {
                 "Thread-local PostSaveActions should be null after commit failure");
     }
 
-    /** A blank or null value in the marked parameter cannot name a room, so nothing runs. */
     @Test
     void blankRoomIdArgumentThrowsPersistenceException() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
@@ -270,7 +376,6 @@ class DurableMutationAspectTest {
         }
     }
 
-    /** A durable method that marks neither {@code @RoomId} nor {@code @GameId} is a coding error and never runs. */
     @Test
     void methodWithNeitherRoomIdNorGameIdParameterFails() throws Throwable {
         for (DurableMutationAspect aspect : List.of(aspectWithStorage(), aspectWithoutStorage())) {
@@ -282,7 +387,6 @@ class DurableMutationAspectTest {
         }
     }
 
-    /** A durable method that marks both {@code @RoomId} and {@code @GameId} is ambiguous and never runs. */
     @Test
     void methodWithBothRoomIdAndGameIdParametersFails() throws Throwable {
         for (DurableMutationAspect aspect : List.of(aspectWithStorage(), aspectWithoutStorage())) {
@@ -295,7 +399,6 @@ class DurableMutationAspectTest {
         }
     }
 
-    /** A {@code @GameId} parameter in any position names the room that is locked. */
     @Test
     void gameIdParameterSelectsTheLockedRoom() throws Throwable {
         for (DurableMutationAspect aspect : List.of(aspectWithStorage(), aspectWithoutStorage())) {
@@ -315,7 +418,6 @@ class DurableMutationAspectTest {
         }
     }
 
-    /** The room ID is in the logging context while the mutation runs, with or without storage, and restored after. */
     @Test
     void roomIdIsInLoggingContextDuringMutationAndRestoredAfterward() throws Throwable {
         for (DurableMutationAspect aspect : List.of(aspectWithStorage(), aspectWithoutStorage())) {
@@ -335,7 +437,6 @@ class DurableMutationAspectTest {
         }
     }
 
-    /** A prepare outage must still allow the domain mutation and its effects. */
     @Test
     void prepareFailureContinuesMutationAndEffects() throws Throwable {
         AtomicBoolean unavailable = new AtomicBoolean(true);
@@ -348,7 +449,6 @@ class DurableMutationAspectTest {
         assertEquals(1, moves.get(), "Mutation proceeds when prepare fails");
     }
 
-    /** Serialization failure leaves gameplay available and releases accepted effects. */
     @Test
     void serializationFailureContinuesMutationAndLaterCommand() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
@@ -362,7 +462,8 @@ class DurableMutationAspectTest {
             PostSaveActions.runAfterSave(() -> effects.add("effect-" + move));
             return move;
         });
-        when(snapshotMapper.serialize(any(RoomSnapshot.class))).thenThrow(new PersistenceException("injected serialization failure"));
+        when(snapshotMapper.serialize(any(RoomSnapshot.class)))
+                .thenThrow(new PersistenceException("injected serialization failure"));
 
         assertEquals(1, aspect.persist(joinPoint));
         assertEquals(List.of("effect-1"), effects);
@@ -370,7 +471,6 @@ class DurableMutationAspectTest {
         assertEquals(2, moves.get());
     }
 
-    /** Persistence fallback must not turn a rejected domain mutation into a successful command. */
     @Test
     void failedDomainMutationStillRejectsAndDiscardsEffects() throws Throwable {
         AtomicBoolean unavailable = new AtomicBoolean(false);
@@ -386,56 +486,44 @@ class DurableMutationAspectTest {
         assertTrue(published.isEmpty());
         assertNull(PostSaveActions.currentRoomId());
         verify(snapshotMapper, never()).serialize(any(RoomSnapshot.class));
-        verify(snapshotMapper, never()).serialize(any(RoomSnapshot.class));
     }
 
     @Test
     @DisplayName("captureState holds the shared room coordinator through capture and encoding")
     void captureState_UsesSharedRoomCoordinatorForCaptureAndEncoding() throws Throwable {
-
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
-        RoomSnapshotMapper realMapper = spy(new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build()));
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, realMapper, aggregates, properties, roomCoordinator);
+                store, snapshotMapper, aggregates, properties, roomCoordinator);
 
-        Room room = spy(new Room("room-capture", "Capture Room", "Host", 6, 10, 20, 1000, null));
+        Room room = new Room("room-capture", "Capture Room", "Host", 6, 10, 20, 1000, null);
         room.addPlayer("Host");
         room.addPlayer("Guest");
-        Game game = spy(new Game("room-capture",
+        Game game = new Game("room-capture",
                 List.of(new Player("Host", "p1", 1000), new Player("Guest", "p2", 1000)),
-                6, 10, 20));
+                6, 10, 20);
 
         when(aggregates.find("room-capture")).thenReturn(new RoomAggregate(room, game));
 
-        doAnswer(inv -> {
-            assertTrue(roomCoordinator.isHeldByCurrentThread("room-capture"),
-                    "Room state must be read under the room coordination boundary");
-            return inv.callRealMethod();
-        }).when(room).getPlayers();
-
-        doAnswer(inv -> {
-            assertTrue(roomCoordinator.isHeldByCurrentThread("room-capture"),
-                    "Game state must be read under the room coordination boundary");
-            return inv.callRealMethod();
-        }).when(game).getPlayers();
-
-        doAnswer(inv -> {
-            assertTrue(roomCoordinator.isHeldByCurrentThread("room-capture"),
-                    "Encoding must retain the established room coordination boundary");
-            return inv.callRealMethod();
-        }).when(realMapper).serialize(any(RoomSnapshot.class));
+        AtomicBoolean lockHeldOnCapture = new AtomicBoolean();
+        AtomicBoolean lockHeldOnSerialize = new AtomicBoolean();
+        when(snapshotMapper.captureSnapshot(room, game)).thenAnswer(inv -> {
+            lockHeldOnCapture.set(roomCoordinator.isHeldByCurrentThread("room-capture"));
+            return realMapper.captureSnapshot(room, game);
+        });
+        when(snapshotMapper.serialize(any(RoomSnapshot.class))).thenAnswer(inv -> {
+            lockHeldOnSerialize.set(roomCoordinator.isHeldByCurrentThread("room-capture"));
+            return realMapper.serialize(inv.getArgument(0));
+        });
 
         ProceedingJoinPoint joinPoint = mutationPoint("room-capture", () -> "done");
         aspect.persist(joinPoint);
 
-        verify(realMapper, times(2)).captureSnapshot(room, game);
-        verify(realMapper).serialize(any(RoomSnapshot.class));
+        assertTrue(lockHeldOnCapture.get(), "Room lock must be held during snapshot capture");
+        assertTrue(lockHeldOnSerialize.get(), "Room lock must be held during snapshot serialization");
     }
 
-    /** An accepted action's timer must still run if its preceding broadcast callback fails. */
     @Test
     void callbackFailureDoesNotRejectAcceptedMutationOrSuppressNextCallback() throws Throwable {
         AtomicBoolean unavailable = new AtomicBoolean(false);
@@ -444,7 +532,9 @@ class DurableMutationAspectTest {
         when(snapshotMapper.serialize(any(RoomSnapshot.class))).thenReturn(new byte[]{1});
         List<String> effects = new ArrayList<>();
         ProceedingJoinPoint joinPoint = mutationPoint("room-callback", () -> {
-            PostSaveActions.runAfterSave(() -> { throw new IllegalStateException("broker unavailable"); });
+            PostSaveActions.runAfterSave(() -> {
+                throw new IllegalStateException("broker unavailable");
+            });
             PostSaveActions.runAfterSave(() -> effects.add("scheduled"));
             return "accepted";
         });
@@ -454,54 +544,62 @@ class DurableMutationAspectTest {
         assertTrue(store.isHealthy());
     }
 
-    /**
-     * Mutation failure restores the independent pre-mutation image, without reading the WAL.
-     */
     @Test
-    @DisplayName("When a mutation throws, in-memory aggregate is restored from its pre-mutation image")
-    void failedMutationRestoresPreMutationImage() throws Throwable {
+    @DisplayName("When a mutation throws, in-memory aggregate is restored from its pre-mutation snapshot and connection state is preserved")
+    void failedMutationRestoresPreMutationSnapshotAndConnectionState() throws Throwable {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, aggregates, properties, roomCoordinator);
+                store, realMapper, aggregates, properties, roomCoordinator);
 
         String roomId = "room-rollback-test";
         Room originalRoom = new Room(roomId, "Rollback Room", "Alice", 6, 10, 20, 1000, null);
         originalRoom.addPlayer("Alice");
         originalRoom.addPlayer("Bob");
+        originalRoom.setPlayerConnected("Alice", true);
+        originalRoom.setPlayerConnected("Bob", false);
+        originalRoom.setAbsenceDeadline("Bob", 1_700_000_045_000L);
 
         Player alice = new Player("Alice", "p1", 1000);
         Player bob = new Player("Bob", "p2", 1000);
         Game originalGame = new Game(roomId, List.of(alice, bob), 6, 10, 20);
 
-        byte[] committedPayload = new byte[]{42, 43, 44};
+        byte[] committedPayload = realMapper.serialize(realMapper.captureSnapshot(originalRoom, originalGame));
         withRoomLock(roomCoordinator, roomId, () -> {
             store.checkpoint(roomId, committedPayload);
             return null;
         });
 
-        when(snapshotMapper.restoreSnapshot(any(RoomSnapshot.class)))
-                .thenReturn(new RecoveredRoom(originalRoom, originalGame, false));
-
-        lenient().when(aggregates.find(roomId)).thenReturn(new RoomAggregate(originalRoom, originalGame));
+        when(aggregates.find(roomId)).thenReturn(new RoomAggregate(originalRoom, originalGame));
 
         ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
-            // Simulate dirty uncommitted mutation before throwing
             bob.doAction(PlayerAction.BET, 500);
+            originalRoom.setPlayerConnected("Alice", false);
+            originalRoom.setPlayerConnected("Bob", true);
+            originalRoom.setAbsenceDeadline("Bob", null);
             throw new RuntimeException("Simulated domain action failure");
         });
 
         assertThrows(RuntimeException.class, () -> aspect.persist(joinPoint));
+        assertEquals(500, bob.getChips(), "Live dirty instance was mutated before rollback");
 
-        // Verify that the dirty mutation was rolled back by replacing the live room and game
-        verify(aggregates).replace(new RoomAggregate(originalRoom, originalGame));
+        ArgumentCaptor<RoomAggregate> captor = ArgumentCaptor.forClass(RoomAggregate.class);
+        verify(aggregates).replace(captor.capture());
         verify(aggregates, never()).remove(roomId);
+
+        RoomAggregate rolledBack = captor.getValue();
+        Player restoredBob = rolledBack.game().findPlayerByName("Bob");
+        assertEquals(1000, restoredBob.getChips());
+        assertEquals(0, restoredBob.getCurrentBet());
+        assertTrue(rolledBack.room().isPlayerConnected("Alice"));
+        assertFalse(rolledBack.room().isPlayerConnected("Bob"));
+        assertEquals(1_700_000_045_000L, rolledBack.room().getAbsenceDeadline("Bob"));
+
+        byte[] walBytes = withRoomLock(roomCoordinator, roomId, () -> store.recoverLatest(roomId).orElseThrow());
+        assertArrayEquals(committedPayload, walBytes);
     }
 
-    /**
-     * Mutation failure evicts a room that did not exist before the attempted creation.
-     */
     @Test
     @DisplayName("When creation fails and no pre-mutation room existed, aggregate is evicted")
     void failedCreationEvictsAggregateWhenNoPreMutationRoomExists() throws Throwable {
@@ -520,15 +618,11 @@ class DurableMutationAspectTest {
 
         assertThrows(IllegalStateException.class, () -> aspect.persist(joinPoint));
 
-        // A failed creation must not leave an uncommitted aggregate in the active registry
         verify(aggregates).remove(roomId);
         verify(aggregates, never()).replace(any());
         verify(snapshotMapper, never()).deserialize(any());
     }
 
-    /**
-     * Absent pre-mutation state must not resurrect an obsolete WAL room.
-     */
     @Test
     @DisplayName("When no pre-mutation room exists, old WAL records are not restored")
     void failedMutationDoesNotResurrectOldWalWithoutPreMutationRoom() throws Throwable {
@@ -545,63 +639,74 @@ class DurableMutationAspectTest {
             return null;
         });
 
-        // No pre-mutation room exists; stale WAL must not resurrect an old membership.
-
         ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
             throw new RuntimeException("Domain error");
         });
 
         assertThrows(RuntimeException.class, () -> aspect.persist(joinPoint));
 
-        // Verify no old WAL room is resurrected into the live registry
         verify(aggregates).remove(roomId);
     }
 
-    /**
-     * Subsequent mutation failure restores accepted in-memory pending save state.
-     */
     @Test
-    @DisplayName("Subsequent mutation failure rolls back to accepted pending save image")
+    @DisplayName("Subsequent mutation failure rolls back to accepted pending save state during storage outage")
     void failedMutationRollsBackToAcceptedPendingSaveState() throws Throwable {
+        String roomId = "room-pending-rollback";
         AtomicBoolean storageOutage = new AtomicBoolean(false);
         EncryptedWalStore store = failingStore(storageOutage);
-        DurableMutationAspect aspect = aspectForRoom(store, "room-pending-rollback");
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, realMapper, aggregates, properties, roomCoordinator);
 
-        Room room = new Room("room-pending-rollback", "Room", "Host", 6, 10, 20, 1000, null);
+        Room room = new Room(roomId, "Room", "Host", 6, 10, 20, 1000, null);
         room.addPlayer("Host");
         room.addPlayer("Guest");
         Player host = new Player("Host", "p1", 1000);
         Player guest = new Player("Guest", "p2", 1000);
-        Game game = new Game("room-pending-rollback", List.of(host, guest), 6, 10, 20);
+        Game game = new Game(roomId, List.of(host, guest), 6, 10, 20);
 
-        when(aggregates.find("room-pending-rollback")).thenReturn(new RoomAggregate(room, game));
+        byte[] initialPayload = realMapper.serialize(realMapper.captureSnapshot(room, game));
+        withRoomLock(roomCoordinator, roomId, () -> {
+            store.checkpoint(roomId, initialPayload);
+            return null;
+        });
 
-        byte[] acceptedBytes = new byte[]{50, 51, 52};
-        RoomSnapshot capturedImage = mock(RoomSnapshot.class);
-        when(snapshotMapper.captureSnapshot(any(), any())).thenReturn(capturedImage);
-        when(snapshotMapper.serialize(capturedImage)).thenReturn(acceptedBytes);
-        when(snapshotMapper.restoreSnapshot(capturedImage)).thenReturn(new RecoveredRoom(room, game, false));
+        AtomicReference<RoomAggregate> currentAggregate = new AtomicReference<>(new RoomAggregate(room, game));
+        when(aggregates.find(roomId)).thenAnswer(inv -> currentAggregate.get());
 
-        // First mutation: domain succeeds, but storage fails (saving pendingSave with acceptedBytes)
+        // Move 1: domain mutates state and succeeds, but storage fails during commit
         storageOutage.set(true);
-        ProceedingJoinPoint joinPoint1 = mutationPoint("room-pending-rollback", () -> "accepted-move");
+        ProceedingJoinPoint joinPoint1 = mutationPoint(roomId, () -> {
+            host.doAction(PlayerAction.BET, 200);
+            return "accepted-move";
+        });
         assertEquals("accepted-move", aspect.persist(joinPoint1));
+        assertEquals(800, host.getChips());
+        assertEquals(200, host.getCurrentBet());
 
-        // Second mutation: domain throws
-        ProceedingJoinPoint joinPoint2 = mutationPoint("room-pending-rollback", () -> {
+        // Move 2: domain mutates state further and throws
+        ProceedingJoinPoint joinPoint2 = mutationPoint(roomId, () -> {
+            guest.doAction(PlayerAction.BET, 400);
             throw new RuntimeException("Second move failed");
         });
 
         assertThrows(RuntimeException.class, () -> aspect.persist(joinPoint2));
 
-        // Rolled back to accepted pending save state
-        verify(aggregates).replace(new RoomAggregate(room, game));
-        verify(aggregates, never()).remove("room-pending-rollback");
+        ArgumentCaptor<RoomAggregate> captor = ArgumentCaptor.forClass(RoomAggregate.class);
+        verify(aggregates).replace(captor.capture());
+        verify(aggregates, never()).remove(roomId);
+
+        RoomAggregate rolledBack = captor.getValue();
+        Player restoredHost = rolledBack.game().findPlayerByName("Host");
+        Player restoredGuest = rolledBack.game().findPlayerByName("Guest");
+        assertEquals(800, restoredHost.getChips(), "Move 1 accepted chips must be preserved");
+        assertEquals(200, restoredHost.getCurrentBet(), "Move 1 accepted bet must be preserved");
+        assertEquals(1000, restoredGuest.getChips(), "Move 2 failed bet must be rolled back");
+        assertEquals(0, restoredGuest.getCurrentBet(), "Move 2 failed bet must be rolled back");
+
+        byte[] walBytes = withRoomLock(roomCoordinator, roomId, () -> store.recoverLatest(roomId).orElseThrow());
+        assertArrayEquals(initialPayload, walBytes, "WAL still holds pre-outage initial payload until retry");
     }
 
-    /**
-     * Storage and serialization failures do not leave in-memory aggregate corrupted.
-     */
     @Test
     @DisplayName("When serialization fails on accepted mutation, aggregate is preserved and subsequent mutation succeeds")
     void serializationFailurePreservesAcceptedStateWithoutCorruption() throws Throwable {
@@ -618,7 +723,6 @@ class DurableMutationAspectTest {
             return move;
         });
 
-        // Serialization fails on first mutation
         when(snapshotMapper.serialize(any(RoomSnapshot.class)))
                 .thenThrow(new PersistenceException("transient serialization failure"))
                 .thenReturn(new byte[]{7, 8, 9});
@@ -626,7 +730,6 @@ class DurableMutationAspectTest {
         assertEquals(1, aspect.persist(joinPoint1));
         assertEquals(List.of("effect-1"), effects, "Accepted mutation effects are executed");
 
-        // Second mutation succeeds and serializes cleanly without corruption
         ProceedingJoinPoint joinPoint2 = mutationPoint("room-serialize-safe", () -> {
             int move = moves.incrementAndGet();
             PostSaveActions.runAfterSave(() -> effects.add("effect-" + move));
@@ -639,10 +742,6 @@ class DurableMutationAspectTest {
         verify(aggregates, never()).remove("room-serialize-safe");
     }
 
-    /**
-     * When mutation fails on lobby room without active game,
-     * room is restored and game is evicted without destroying the room.
-     */
     @Test
     @DisplayName("When lobby room mutation fails, room is restored and game is evicted without destroying room")
     void lobbyMutationFailureEvictsGameAndPreservesLobbyRoom() throws Throwable {
@@ -650,36 +749,30 @@ class DurableMutationAspectTest {
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, snapshotMapper, aggregates, properties, roomCoordinator);
+                store, realMapper, aggregates, properties, roomCoordinator);
 
         String roomId = "room-lobby-rollback";
-        byte[] snapshotBytes = new byte[]{10, 20, 30};
-        withRoomLock(roomCoordinator, roomId, () -> {
-            store.checkpoint(roomId, snapshotBytes);
-            return null;
-        });
-
         Room lobbyRoom = new Room(roomId, "Lobby Room", "Alice", 6, 10, 20, 1000, null);
         lobbyRoom.addPlayer("Alice");
-        RecoveredRoom lobbyAggregate = new RecoveredRoom(lobbyRoom, null, false);
         when(aggregates.find(roomId)).thenReturn(new RoomAggregate(lobbyRoom, null));
-        when(snapshotMapper.restoreSnapshot(any(RoomSnapshot.class))).thenReturn(lobbyAggregate);
 
         ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
+            lobbyRoom.addPlayer("DirtyGuest");
             throw new RuntimeException("Lobby mutation failure");
         });
 
         assertThrows(RuntimeException.class, () -> aspect.persist(joinPoint));
 
-        verify(aggregates).replace(new RoomAggregate(lobbyRoom, null));
+        ArgumentCaptor<RoomAggregate> captor = ArgumentCaptor.forClass(RoomAggregate.class);
+        verify(aggregates).replace(captor.capture());
         verify(aggregates, never()).remove(roomId);
+        assertThat(captor.getValue().room().getPlayers()).containsExactly("Alice");
+        assertThat(captor.getValue().game()).isNull();
     }
 
     @Test
     void failedDeletionSaveRetainsAndRetriesDeletionTombstone() throws Throwable {
         String roomId = "room-deletion-retry";
-        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
         AtomicBoolean failCommit = new AtomicBoolean(true);
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
@@ -702,14 +795,12 @@ class DurableMutationAspectTest {
         assertEquals(0, store.unsavedRoomCount());
         assertTrue(withRoomLock(roomCoordinator, roomId, () -> store.recoverLatest(roomId)).isEmpty(),
                 "The retry checkpoints and removes the deleted room's WAL");
-        verify(joinPoint, times(1)).proceed();
+        verify(joinPoint).proceed();
     }
 
     @Test
     void prepareFailureBeforeRejectedMutationQueuesRetryForExistingRoom() throws Throwable {
         String roomId = "room-prepare-rejected-retry";
-        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
         AtomicBoolean failPrepare = new AtomicBoolean(true);
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
@@ -742,54 +833,182 @@ class DurableMutationAspectTest {
     }
 
     @Test
-    void retryPendingSavesHoldsRoomLockWhenRecordingSnapshotFailure() throws Throwable {
-        String roomId = "room-retry-failure-lock";
-        RoomSnapshotMapper failingMapper = spy(new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build()));
-        doThrow(new PersistenceException("injected serialization outage"))
-                .when(failingMapper).serialize(any(RoomSnapshot.class));
+    void retryPendingSavesSkipsRoomWhileLockedAndSucceedsOnceUnlocked() throws Throwable {
+        String roomId = "room-retry-skip-locked";
+        AtomicBoolean failCommit = new AtomicBoolean(true);
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = spy(new EncryptedWalStore(tempDir, keyring, roomCoordinator));
-        Room existingRoom = new Room(roomId, "Retry Lock Room", "Alice", 6, 10, 20, 1000, null);
-        existingRoom.addPlayer("Alice");
-        when(aggregates.find(roomId)).thenReturn(new RoomAggregate(existingRoom, null));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, (point, id) -> {
+            if (failCommit.get() && point == WalFaultPoint.BEFORE_COMMIT_WRITE) {
+                throw new PersistenceException("injected commit outage");
+            }
+        }, roomCoordinator);
+        Room room = new Room(roomId, "Locked Retry Room", "Alice", 6, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        when(aggregates.find(roomId)).thenReturn(new RoomAggregate(room, null));
 
         DurableMutationAspect aspect = new DurableMutationAspect(
-                store, failingMapper, aggregates, properties, roomCoordinator);
-        ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> "ok");
-
-        assertEquals("ok", aspect.persist(joinPoint));
+                store, realMapper, aggregates, properties, roomCoordinator);
+        aspect.persist(mutationPoint(roomId, () -> "ok"));
         assertEquals(1, store.unsavedRoomCount());
 
-        AtomicBoolean lockHeldOnRecordFailure = new AtomicBoolean(false);
-        doAnswer(invocation -> {
-            lockHeldOnRecordFailure.set(roomCoordinator.isHeldByCurrentThread(roomId));
-            return invocation.callRealMethod();
-        }).when(store).recordWriteFailure(eq(roomId), any());
+        failCommit.set(false);
+        CountDownLatch lockAcquired = new CountDownLatch(1);
+        CountDownLatch releaseLock = new CountDownLatch(1);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> holder = executor.submit(() -> {
+                try (LockLease _ = roomCoordinator.acquire(roomId)) {
+                    lockAcquired.countDown();
+                    releaseLock.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            assertTrue(lockAcquired.await(5, TimeUnit.SECONDS));
+
+            aspect.retryPendingSaves();
+            assertEquals(1, store.unsavedRoomCount(), "Locked room must be skipped without blocking");
+
+            releaseLock.countDown();
+            holder.get(5, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
 
         aspect.retryPendingSaves();
-
-        assertTrue(lockHeldOnRecordFailure.get(),
-                "Room lock must be held while retryPendingSaves records storage failure");
-        verify(store, times(2)).recordWriteFailure(eq(roomId), any());
-        assertFalse(roomCoordinator.isHeldByCurrentThread(roomId),
-                "Room lock must be released after retryPendingSaves completes");
+        assertEquals(0, store.unsavedRoomCount());
+        assertTrue(store.isHealthy());
     }
 
     @Test
-    void storeFailuresAreRecordedOnlyByTheStoreAndRetryStillHeals() throws Throwable {
+    void automaticWalCompactionTriggersWhenRecordCountReachesThreshold() throws Throwable {
+        String roomId = "room-auto-compact";
+        PersistenceProperties compactProps = new PersistenceProperties(
+                true, tempDir, "current", Map.of(), 6, 16L * 1024 * 1024, 5000);
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        AtomicInteger compactionCount = new AtomicInteger();
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, (point, id) -> {
+            if (point == WalFaultPoint.BEFORE_COMPACTION_REPLACE) {
+                compactionCount.incrementAndGet();
+            }
+        }, roomCoordinator);
+
+        Room room = new Room(roomId, "Compaction Room", "Alice", 6, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        when(aggregates.find(roomId)).thenReturn(new RoomAggregate(room, null));
+
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, realMapper, aggregates, compactProps, roomCoordinator);
+
+        // Each save appends a PREPARE and a COMMIT record; the threshold of 6 is reached on save 3.
+        aspect.persist(mutationPoint(roomId, () -> "save-1"));
+        long sizeAfterFirstSave = withRoomLock(roomCoordinator, roomId, () -> store.walSize(roomId));
+
+        aspect.persist(mutationPoint(roomId, () -> "save-2"));
+        long sizeAfterSecondSave = withRoomLock(roomCoordinator, roomId, () -> store.walSize(roomId));
+        assertThat(sizeAfterSecondSave).isGreaterThan(sizeAfterFirstSave);
+        assertThat(compactionCount.get()).isZero();
+
+        aspect.persist(mutationPoint(roomId, () -> {
+            room.addPlayer("Bob");
+            return "save-3";
+        }));
+        long sizeAfterCompaction = withRoomLock(roomCoordinator, roomId, () -> store.walSize(roomId));
+        assertThat(compactionCount.get()).isEqualTo(1);
+        assertThat(sizeAfterCompaction).isLessThan(sizeAfterSecondSave);
+        RecoveredRoom recovered = withRoomLock(roomCoordinator, roomId,
+                () -> realMapper.deserialize(store.recoverLatest(roomId).orElseThrow()));
+        assertThat(recovered.room().getPlayers()).containsExactly("Alice", "Bob");
+    }
+
+    @Test
+    void rollbackRestorationFailureEvictsRoomAndMarksStoreUnhealthy() throws Throwable {
+        String roomId = "room-restore-fail";
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
+        Room room = new Room(roomId, "Restore Fail Room", "Alice", 6, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        when(aggregates.find(roomId)).thenReturn(new RoomAggregate(room, null));
+        when(snapshotMapper.restoreSnapshot(any(RoomSnapshot.class)))
+                .thenThrow(new PersistenceException("corrupted pre-mutation snapshot"));
+
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, snapshotMapper, aggregates, properties, roomCoordinator);
+        ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
+            throw new IllegalStateException("domain failure");
+        });
+
+        assertThrows(IllegalStateException.class, () -> aspect.persist(joinPoint));
+
+        verify(aggregates).remove(roomId);
+        verify(aggregates, never()).replace(any());
+        assertFalse(store.isHealthy(roomId));
+        assertEquals(1, store.unsavedRoomCount());
+    }
+
+    @Test
+    void preMutationCaptureFailureStillAllowsAcceptedMutationAndQueuesRetry() throws Throwable {
+        String roomId = "room-pre-capture-fail";
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
+        Room room = new Room(roomId, "Pre-Capture Fail Room", "Alice", 6, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        when(aggregates.find(roomId)).thenReturn(new RoomAggregate(room, null));
+
+        RoomSnapshot validSnapshot = realMapper.captureSnapshot(room, null);
+        when(snapshotMapper.captureSnapshot(room, null))
+                .thenThrow(new PersistenceException("pre-mutation capture failed"))
+                .thenReturn(validSnapshot);
+        when(snapshotMapper.serialize(validSnapshot)).thenReturn(realMapper.serialize(validSnapshot));
+
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, snapshotMapper, aggregates, properties, roomCoordinator);
+
+        assertEquals("accepted", aspect.persist(mutationPoint(roomId, () -> "accepted")));
+        assertTrue(store.isHealthy(roomId), "Post-mutation checkpoint heals the pre-mutation capture failure");
+        assertEquals(0, store.unsavedRoomCount());
+    }
+
+    @Test
+    void preMutationCaptureFailureFollowedByDomainFailureEvictsAggregateToPreventDirtyState() throws Throwable {
+        String roomId = "room-pre-capture-and-domain-fail";
+        EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
+                "current", new SecretKeySpec(new byte[32], "AES")));
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, roomCoordinator);
+        Room room = new Room(roomId, "Double Fail Room", "Alice", 6, 10, 20, 1000, null);
+        room.addPlayer("Alice");
+        when(aggregates.find(roomId)).thenReturn(new RoomAggregate(room, null));
+        when(snapshotMapper.captureSnapshot(room, null))
+                .thenThrow(new PersistenceException("pre-mutation capture failed"));
+
+        DurableMutationAspect aspect = new DurableMutationAspect(
+                store, snapshotMapper, aggregates, properties, roomCoordinator);
+        ProceedingJoinPoint joinPoint = mutationPoint(roomId, () -> {
+            throw new IllegalStateException("domain rejected");
+        });
+
+        assertThrows(IllegalStateException.class, () -> aspect.persist(joinPoint));
+
+        verify(aggregates).remove(roomId);
+        verify(aggregates, never()).replace(any());
+        assertFalse(store.isHealthy(roomId));
+    }
+
+    @Test
+    void storeFailuresAreRecordedAndRetryHealsStore() throws Throwable {
         String roomId = "room-store-records-once";
-        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
         AtomicReference<WalFaultPoint> outage = new AtomicReference<>(WalFaultPoint.BEFORE_COMMIT_WRITE);
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = spy(new EncryptedWalStore(tempDir, keyring, (point, id) -> {
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, (point, id) -> {
             if (point == outage.get()) {
                 throw new PersistenceException("injected " + point);
             }
-        }, roomCoordinator));
+        }, roomCoordinator);
         Room existingRoom = new Room(roomId, "Record Once Room", "Alice", 6, 10, 20, 1000, null);
         existingRoom.addPlayer("Alice");
         when(aggregates.find(roomId)).thenReturn(new RoomAggregate(existingRoom, null));
@@ -797,24 +1016,24 @@ class DurableMutationAspectTest {
                 store, realMapper, aggregates, properties, roomCoordinator);
 
         assertEquals("ok", aspect.persist(mutationPoint(roomId, () -> "ok")));
-        verify(store, times(1)).recordWriteFailure(eq(roomId), any());
+        assertEquals(1, store.unsavedRoomCount());
+        assertFalse(store.isHealthy(roomId));
 
         outage.set(WalFaultPoint.BEFORE_PREPARE_WRITE);
         aspect.retryPendingSaves();
-        verify(store, times(2)).recordWriteFailure(eq(roomId), any());
         assertEquals(1, store.unsavedRoomCount());
+        assertFalse(store.isHealthy(roomId));
 
         outage.set(null);
         aspect.retryPendingSaves();
         assertEquals(0, store.unsavedRoomCount());
+        assertTrue(store.isHealthy());
         assertTrue(withRoomLock(roomCoordinator, roomId, () -> store.recoverLatest(roomId)).isPresent());
     }
 
     @Test
     void missingRoomRejectedMutationDuringPrepareOutageDoesNotDegradeStore() throws Throwable {
         String roomId = "room-missing-prepare-outage";
-        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, (point, id) -> {
@@ -841,16 +1060,22 @@ class DurableMutationAspectTest {
     @Test
     @DisplayName("Room B uses ordinary append and deletes normally even when room A has a write failure")
     void otherRoomUsesOrdinaryAppendAndDeletesNormallyWhenAnotherRoomHasWriteFailure() throws Throwable {
-        RoomSnapshotMapper realMapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
         AtomicReference<String> failRoom = new AtomicReference<>();
+        List<String> preparedRooms = new ArrayList<>();
+        List<String> deletedRooms = new ArrayList<>();
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
-        EncryptedWalStore store = spy(new EncryptedWalStore(tempDir, keyring, (point, roomId) -> {
+        EncryptedWalStore store = new EncryptedWalStore(tempDir, keyring, (point, roomId) -> {
+            if (point == WalFaultPoint.BEFORE_PREPARE_WRITE) {
+                preparedRooms.add(roomId);
+            }
+            if (point == WalFaultPoint.BEFORE_DELETE) {
+                deletedRooms.add(roomId);
+            }
             if (roomId.equals(failRoom.get()) && point == WalFaultPoint.BEFORE_COMMIT_WRITE) {
                 throw new PersistenceException("injected outage for " + roomId);
             }
-        }, roomCoordinator));
+        }, roomCoordinator);
 
         Room roomA = new Room("room-A", "Room A", "Alice", 6, 10, 20, 1000, null);
         roomA.addPlayer("Alice");
@@ -863,30 +1088,27 @@ class DurableMutationAspectTest {
         DurableMutationAspect aspect = new DurableMutationAspect(
                 store, realMapper, aggregates, properties, roomCoordinator);
 
-        // Create initial WAL files for both rooms
         aspect.persist(mutationPoint("room-A", () -> "init-a"));
         aspect.persist(mutationPoint("room-B", () -> "init-b"));
-        clearInvocations(store);
+        preparedRooms.clear();
 
-        // Room A fails a commit write, degrading global store health
         failRoom.set("room-A");
         aspect.persist(mutationPoint("room-A", () -> "accepted-a"));
         failRoom.set(null);
         assertFalse(store.isHealthy());
         assertEquals(1, store.unsavedRoomCount());
 
-        // Room B still uses prepare + commit (ordinary append), NOT a forced full checkpoint
+        long roomBSizeBeforeAppend = withRoomLock(roomCoordinator, "room-B", () -> store.walSize("room-B"));
         aspect.persist(mutationPoint("room-B", () -> "accepted-b"));
-        verify(store).prepare("room-B");
-        verify(store).commit(argThat(tx -> "room-B".equals(tx.roomId())), any());
-        verify(store, never()).checkpoint(eq("room-B"), any());
+        long roomBSizeAfterAppend = withRoomLock(roomCoordinator, "room-B", () -> store.walSize("room-B"));
+        assertThat(roomBSizeAfterAppend).isGreaterThan(roomBSizeBeforeAppend);
 
-        // Deleting room B still executes store.delete("room-B") instead of skipping deletion
         aspect.persist(mutationPoint("room-B", () -> {
             roomBDeleted.set(true);
             return null;
         }));
-        verify(store).delete("room-B");
+        assertThat(deletedRooms).contains("room-B");
+        assertFalse(Files.exists(tempDir.resolve("room-B.wal")));
         assertTrue(withRoomLock(roomCoordinator, "room-B", () -> store.recoverLatest("room-B")).isEmpty());
         assertEquals(1, store.unsavedRoomCount());
     }
@@ -895,7 +1117,9 @@ class DurableMutationAspectTest {
         EncryptionKeyring keyring = new EncryptionKeyring("current", Map.of(
                 "current", new SecretKeySpec(new byte[32], "AES")));
         return new EncryptedWalStore(tempDir, keyring, (point, roomId) -> {
-            if (unavailable.get()) throw new PersistenceException("injected storage outage");
+            if (unavailable.get()) {
+                throw new PersistenceException("injected storage outage");
+            }
         }, roomCoordinator);
     }
 
@@ -930,13 +1154,18 @@ class DurableMutationAspectTest {
         return joinPoint;
     }
 
-    private ProceedingJoinPoint mutationPoint(String roomId, Callable<Object> body) throws Throwable {
+    private ProceedingJoinPoint mutationPoint(String roomId, MutationBody body) throws Throwable {
         ProceedingJoinPoint joinPoint = mock(ProceedingJoinPoint.class);
         MethodSignature signature = mock(MethodSignature.class);
         when(signature.getMethod()).thenReturn(TestTarget.class.getMethod("validMutation", String.class));
         when(joinPoint.getSignature()).thenReturn(signature);
         when(joinPoint.getArgs()).thenReturn(new Object[]{roomId});
-        lenient().when(joinPoint.proceed()).thenAnswer(invocation -> body.call());
+        lenient().when(joinPoint.proceed()).thenAnswer(invocation -> body.run());
         return joinPoint;
+    }
+
+    @FunctionalInterface
+    private interface MutationBody {
+        Object run() throws Throwable;
     }
 }

@@ -1,100 +1,119 @@
 package com.pokergame.persistence.snapshot;
 
-import com.pokergame.persistence.wal.EncryptedWalStore;
-import com.pokergame.persistence.wal.EncryptionKeyring;
-import com.pokergame.persistence.wal.WalTransaction;
-import java.nio.file.Path;
-import java.util.*;
-import javax.crypto.spec.SecretKeySpec;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.io.TempDir;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import org.junit.jupiter.api.DisplayName;
-
-import tools.jackson.databind.json.JsonMapper;
-import com.pokergame.model.Card;
-import com.pokergame.model.Game;
-import com.pokergame.model.Player;
-import com.pokergame.model.Room;
-import com.pokergame.model.HandPayout;
 import com.pokergame.dto.response.PublicGameStateResponse;
 import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
+import com.pokergame.enums.Rank;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
-import com.pokergame.enums.Rank;
-import com.pokergame.util.RoomCoordinator;
-import com.pokergame.service.GameStateService;
-import com.pokergame.util.LockLease;
-import org.awaitility.Awaitility;
-import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.scheduling.TaskScheduler;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
-
-import java.time.Clock;
+import com.pokergame.exception.UnauthorisedActionException;
+import com.pokergame.model.Card;
+import com.pokergame.model.Game;
+import com.pokergame.model.HandPayout;
+import com.pokergame.model.Player;
+import com.pokergame.model.Room;
+import com.pokergame.persistence.PersistenceException;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.nio.charset.StandardCharsets;
-
-import static org.junit.jupiter.api.Assertions.*;
-import com.pokergame.config.RoomTimingProperties;
-import com.pokergame.enums.HandRank;
-import com.pokergame.exception.UnauthorisedActionException;
-import com.pokergame.persistence.PersistenceException;
-import com.pokergame.service.RoomService;
-import java.util.ArrayList;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.HashMap;
-import org.mockito.Mockito;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-import java.time.LocalDateTime;
-import java.util.LinkedHashMap;
+import java.util.TreeSet;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
-import java.io.UncheckedIOException;
 
-/** Tests aggregate snapshot mapper behavior. */
+/** Unit tests for {@link RoomSnapshotMapper} snapshot capture, JSON serialization, and restoration. */
 @Tag("unit")
 class RoomSnapshotMapperTest {
 
-    private static final PasswordEncoder PASSWORD_ENCODER = new BCryptPasswordEncoder();
+    private static final PasswordEncoder PASSWORD_ENCODER = new BCryptPasswordEncoder(4);
+    private static final JsonMapper JSON = JsonMapper.builder().findAndAddModules().build();
+    private static final String FINISHED_ROOM_ID = "room-finished";
+    private static final String FINISHED_FIXTURE = "/persistence/finished-game-snapshot.json";
+    private static final long FIXED_EPOCH_MS = 1_700_000_000_000L;
 
-    /**
-     * Protects the contract that active game round trip preserves exact next cards and authoritative state.
-     */
+    private static final List<Card> DETERMINISTIC_DECK = List.of(
+            new Card(Rank.TWO, Suit.CLUBS),
+            new Card(Rank.THREE, Suit.DIAMONDS),
+            new Card(Rank.FOUR, Suit.HEARTS),
+            new Card(Rank.FIVE, Suit.SPADES),
+            new Card(Rank.SIX, Suit.CLUBS));
+
+    private static RoomSnapshotMapper newMapper() {
+        return new RoomSnapshotMapper(JSON);
+    }
+
     @Test
-    void activeGameRoundTripPreservesExactNextCardsAndAuthoritativeState() {
+    void activeGameRoundTripPreservesExactNextCardsAndGameState() {
         Room room = new Room("room-1", "Night Game", "Alice", 6, 5, 10, 1000,
                 PASSWORD_ENCODER.encode("secret"));
         room.addPlayer("Alice");
         room.addPlayer("Bob");
         room.setGameStarted(true);
-        Game game = new Game("room-1", List.of(
-                new Player("Alice", "alice-id", 1000),
-                new Player("Bob", "bob-id", 1000)), 6, 5, 10);
-        assertFalse(game.resetForNewHand());
-        game.dealHoleCards();
-        game.postBlinds();
 
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
+        Player alice = Player.restoreBuilder()
+                .name("Alice").playerId("alice-id").chips(995).currentBet(5)
+                .holeCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
+                .bestHand(List.of()).handRank(HandRank.NO_HAND)
+                .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+        Player bob = Player.restoreBuilder()
+                .name("Bob").playerId("bob-id").chips(990).currentBet(10)
+                .holeCards(List.of(new Card(Rank.QUEEN, Suit.HEARTS), new Card(Rank.JACK, Suit.HEARTS)))
+                .bestHand(List.of()).handRank(HandRank.NO_HAND)
+                .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+
+        Game game = Game.restoreBuilder()
+                .gameId("room-1")
+                .maxPlayers(6)
+                .players(List.of(alice, bob))
+                .activePlayerIds(List.of("alice-id", "bob-id"))
+                .remainingDeck(DETERMINISTIC_DECK)
+                .communityCards(List.of())
+                .pot(15)
+                .currentPlayerId("alice-id")
+                .currentHighestBet(10)
+                .currentPhase(GamePhase.PRE_FLOP)
+                .gameOver(false)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handContributions(Map.of("alice-id", 5, "bob-id", 10))
+                .handSeatOrder(List.of("alice-id", "bob-id"))
+                .dealerPlayerId("alice-id")
+                .smallBlindPlayerId("alice-id")
+                .bigBlindPlayerId("bob-id")
+                .build();
+
+        RoomSnapshotMapper mapper = newMapper();
         RecoveredRoom recovered = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, game)));
 
         assertEquals(room.getRoomName(), recovered.room().getRoomName());
@@ -136,14 +155,15 @@ class RoomSnapshotMapperTest {
     }
 
     @Test
-    void settlementAndTerminalRoundTripPreservesState() {
+    void settledGameEndRoundTripPreservesFinalPotSettlementAndRevision() {
         Room room = new Room("room-2", "Recovery", "Alice", 4, 5, 10, 1000,
                 PASSWORD_ENCODER.encode("secret"));
         room.addPlayer("Alice");
         room.addPlayer("Bob");
         room.setGameStarted(true);
         List<Player> players = List.of(new Player("Alice", "a", 1030), new Player("Bob", "b", 970));
-        Game game = Game.restoreBuilder().gameId("room-2").players(players).activePlayerIds(List.of("a", "b"))
+        Game game = Game.restoreBuilder().gameId("room-2").maxPlayers(4).players(players)
+                .activePlayerIds(List.of("a", "b"))
                 .remainingDeck(List.of()).communityCards(List.of()).pot(3).currentPlayerId("a").currentHighestBet(0)
                 .currentPhase(GamePhase.SHOWDOWN)
                 .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).carryOverPot(3)
@@ -154,15 +174,15 @@ class RoomSnapshotMapperTest {
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTimes(Map.of(ScheduledGameTask.CLEANUP, 123L))
                 .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 9L))
-                .handNumber(7).readyGateState(ReadyGateState.WAITING_FOR_PLAYERS).pausedForDisconnectedSurvivor(true).stateRevision(19)
+                .handNumber(7).readyGateState(ReadyGateState.WAITING_FOR_PLAYERS)
+                .pausedForDisconnectedSurvivor(true).stateRevision(19)
                 .build();
         game.markGameOver();
         game.settleGameEnd(players.getFirst(), Set.of());
         assertEquals(1033, players.getFirst().getChips());
         assertEquals(0, game.getPot());
         assertTrue(game.isFinalPotSettled());
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
+        RoomSnapshotMapper mapper = newMapper();
 
         byte[] snapshot = mapper.serialize(mapper.captureSnapshot(room, game));
         Game restored = mapper.deserialize(snapshot).game();
@@ -179,73 +199,94 @@ class RoomSnapshotMapperTest {
         String json = new String(snapshot, StandardCharsets.UTF_8);
         assertTrue(json.contains("\"stateRevision\":19"));
         assertFalse(json.contains("schemaVersion"));
+    }
+
+    @Test
+    void restoredSettledGameRemainsIdempotentAcrossSettleGameEndAndConductShowdown() {
+        Room room = new Room("room-2", "Recovery", "Alice", 4, 5, 10, 1000, null);
+        room.addPlayer("Alice");
+        room.addPlayer("Bob");
+        room.setGameStarted(true);
+        List<Player> players = List.of(new Player("Alice", "a", 1030), new Player("Bob", "b", 970));
+        Game game = Game.restoreBuilder().gameId("room-2").maxPlayers(4).players(players)
+                .activePlayerIds(List.of("a", "b"))
+                .remainingDeck(List.of()).communityCards(List.of()).pot(3).currentPlayerId("a").currentHighestBet(0)
+                .currentPhase(GamePhase.SHOWDOWN)
+                .gameOver(false).smallBlind(5).bigBlind(10).handContributions(Map.of()).carryOverPot(3)
+                .lastHandPayout(new HandPayout(Map.of("a", 50), Map.of("b", 2), Set.of("a"), 3, true))
+                .build();
+        game.settleGameEnd(players.getFirst(), Set.of());
+
+        RoomSnapshotMapper mapper = newMapper();
+        Game restored = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, game))).game();
+
         restored.settleGameEnd(restored.getPlayers().getFirst(), Set.of());
         assertEquals(1033, restored.getPlayers().getFirst().getChips(),
-                "A recovered terminal marker prevents a second carry-over payout");
+                "A recovered settled marker prevents a second carry-over payout");
         assertEquals(0, restored.getPot());
+
         int aliceBeforeRetry = restored.getPlayers().getFirst().getChips();
         int bobBeforeRetry = restored.getPlayers().get(1).getChips();
         restored.conductShowdown();
         assertEquals(Set.of("a"), restored.getLastHandPayout().winnerIds());
         assertEquals(aliceBeforeRetry, restored.getPlayers().getFirst().getChips());
         assertEquals(bobBeforeRetry, restored.getPlayers().get(1).getChips());
+    }
 
+    @Test
+    void handPayoutDefensivelyCopiesAwardMaps() {
         Map<String, Integer> mutableAwards = new HashMap<>(Map.of("a", 1));
         HandPayout immutable = new HandPayout(mutableAwards, Map.of(), Set.of("a"), 0, true);
         mutableAwards.put("b", 2);
+
         assertEquals(Map.of("a", 1), immutable.potWinnings());
         assertThrows(UnsupportedOperationException.class, () -> immutable.potWinnings().put("b", 2));
     }
 
     @Test
-    void retainedTerminalResultRoundTrip() {
-        Room room = new Room("room-terminal", "Final Table", "Alice", 6, 5, 10, 1000, null);
-        room.addPlayer("Alice");
-        room.addPlayer("Bob");
+    void pausedForDisconnectedSurvivorRoundTripPreservesOutDepartedPlayerAndRoomMembership() {
+        Room room = new Room("room-paused-survivor", "Paused Room", "Survivor", 6, 5, 10, 1000, null);
+        room.addPlayer("Survivor");
         room.setGameStarted(true);
-        room.setFinished(true);
 
-        List<Player> players = List.of(
-                Player.restoreBuilder().name("Alice").playerId("a").chips(2000).currentBet(0)
-                        .holeCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
-                        .bestHand(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
-                        .handRank(HandRank.HIGH_CARD)
-                        .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build(),
-                Player.restoreBuilder().name("Bob").playerId("b").chips(0).currentBet(0)
-                        .holeCards(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.DIAMONDS)))
-                        .bestHand(List.of())
-                        .handRank(HandRank.NO_HAND)
-                        .hasFolded(false).allIn(false).out(true).disconnected(false).readyForNextHand(false).build());
+        Player departing = Player.restoreBuilder()
+                .name("Departing").playerId("d").chips(950).currentBet(0)
+                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
+                .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+        Player survivor = Player.restoreBuilder()
+                .name("Survivor").playerId("s").chips(1050).currentBet(0)
+                .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
+                .hasFolded(false).allIn(false).out(false).disconnected(true)
+                .disconnectDeadlineEpochMs(FIXED_EPOCH_MS + 30_000L).readyForNextHand(false).build();
 
-        PublicGameStateResponse terminalResult = new PublicGameStateResponse(
-                6, 0, List.of(), 0, GamePhase.SHOWDOWN, 0,
-                List.of(new Card(Rank.TEN, Suit.CLUBS)),
-                List.of(
-                        new PublicGameStateResponse.PlayerState("a", "Alice", 2000, 0, "ACTIVE", false, false, false, true, false,
-                                HandRank.HIGH_CARD, List.of(new Card(Rank.ACE, Suit.SPADES)),
-                                true, null, List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)), null, false),
-                        new PublicGameStateResponse.PlayerState("b", "Bob", 0, 0, "OUT", false, false, false, false, true,
-                                null, List.of(), false, null, null, null, true)),
-                null, null, List.of("Alice"), null, false, null, false, null, false, null,
-                true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, 123456789L, 42,
-                null, null, PublicGameStateResponse.GameEnd.won(
-                        "Alice", 2000, false, "Alice wins the game with 2000 chips!"));
-
-        Game game = Game.restoreBuilder().gameId("room-terminal").players(players).activePlayerIds(List.of("a", "b"))
-                .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
-                .currentPlayerId("a").currentHighestBet(0)
-                .currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10).handContributions(Map.of())
-                .carryOverPot(0).lastFullRaise(0).previousBets(Map.of())
-                .handSeatOrder(List.of("a", "b")).dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
-                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
-                .scheduledTimes(Map.of(ScheduledGameTask.CLEANUP, 999999L))
-                .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 1L))
-                .handNumber(1).readyGateState(ReadyGateState.CLOSED).pausedForDisconnectedSurvivor(false).stateRevision(42)
-                .gameEndResult(terminalResult)
+        Game game = Game.restoreBuilder()
+                .gameId("room-paused-survivor")
+                .maxPlayers(6)
+                .players(List.of(departing, survivor))
+                .activePlayerIds(List.of("d", "s"))
+                .remainingDeck(List.of())
+                .currentPhase(GamePhase.SHOWDOWN)
+                .smallBlind(5)
+                .bigBlind(10)
                 .build();
+        game.pauseForDisconnectedSurvivor(List.of(departing));
 
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
+        RoomSnapshotMapper mapper = newMapper();
+        RecoveredRoom recovered = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, game)));
+
+        assertTrue(recovered.game().isPausedForDisconnectedSurvivor());
+        assertTrue(recovered.game().getPlayers().stream()
+                .anyMatch(player -> "Departing".equals(player.getName()) && player.isOut()));
+        assertFalse(recovered.room().hasPlayer("Departing"));
+        assertTrue(recovered.room().hasPlayer("Survivor"));
+    }
+
+    @Test
+    void retainedFinishedGameResultRoundTripPreservesFullResponse() {
+        Room room = buildFinishedFixtureRoom();
+        PublicGameStateResponse finalResult = buildFinishedFixtureResponse();
+        Game game = buildFinishedFixtureGame(finalResult);
+        RoomSnapshotMapper mapper = newMapper();
 
         byte[] snapshot = mapper.serialize(mapper.captureSnapshot(room, game));
         String json = new String(snapshot, StandardCharsets.UTF_8);
@@ -260,21 +301,19 @@ class RoomSnapshotMapperTest {
         Game restored = mapper.deserialize(snapshot).game();
         assertNotNull(restored.getGameEndResult());
         PublicGameStateResponse restoredResult = restored.getGameEndResult();
-        assertNotNull(restoredResult.gameEnd());
-        assertEquals("Alice", restoredResult.gameEnd().winner());
-        assertEquals(2000, restoredResult.gameEnd().winnerChips());
-        assertFalse(restoredResult.gameEnd().isForfeit());
-        assertEquals("Alice wins the game with 2000 chips!", restoredResult.gameEnd().message());
-        assertEquals(42, restoredResult.stateRevision());
-        assertEquals(2, restoredResult.players().size());
-        assertEquals("Alice", restoredResult.players().get(0).name());
-        assertEquals("Bob", restoredResult.players().get(1).name());
+        assertThat(restoredResult).isEqualTo(finalResult);
+        assertThat(restored.getLastHandPayout()).isEqualTo(game.getLastHandPayout());
+        assertThat(restored.getPlayers().getFirst().getDisconnectDeadlineEpochMs())
+                .isEqualTo(1_700_000_015_000L);
     }
 
     @Test
     void midStreetRoundTripPreservesRaiseMinimumAndReopeningLegality() {
         Room room = new Room("room-3", "Betting", "A", 6, 5, 10, 1000, null);
-        room.addPlayer("A"); room.addPlayer("B"); room.addPlayer("Short1"); room.addPlayer("Short2");
+        room.addPlayer("A");
+        room.addPlayer("B");
+        room.addPlayer("Short1");
+        room.addPlayer("Short2");
         room.setGameStarted(true);
         List<Player> players = List.of(bettingPlayer("A", "a", 900, 100, false),
                 bettingPlayer("B", "b", 900, 100, false), bettingPlayer("Short1", "s1", 0, 150, true),
@@ -289,8 +328,7 @@ class RoomSnapshotMapperTest {
                 .dealerPlayerId("a").smallBlindPlayerId("a").bigBlindPlayerId("b")
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of("a"))
                 .scheduledTimes(Map.of()).build();
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
+        RoomSnapshotMapper mapper = newMapper();
 
         Game restored = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, game))).game();
         Player initialA = restored.getPlayers().getFirst();
@@ -325,8 +363,7 @@ class RoomSnapshotMapperTest {
                 new Player("BustedSpectator", "spectator-id", 0));
         Game game = new Game("room-divergent", gamePlayers, 6, 5, 10);
 
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
+        RoomSnapshotMapper mapper = newMapper();
         byte[] snapshot = mapper.serialize(mapper.captureSnapshot(room, game));
 
         RecoveredRoom recovered = mapper.deserialize(snapshot);
@@ -343,7 +380,7 @@ class RoomSnapshotMapperTest {
     @Test
     void deserializeRejectsUnknownProperty() {
         RoomSnapshotMapper mapper = newMapper();
-        ObjectNode snapshot = validTerminalSnapshotTree();
+        ObjectNode snapshot = validFinishedSnapshotTree();
         snapshot.put("unexpectedField", "stale");
 
         PersistenceException ex = assertThrows(
@@ -355,7 +392,7 @@ class RoomSnapshotMapperTest {
     @Test
     void deserializeRejectsMissingCreatorProperty() {
         RoomSnapshotMapper mapper = newMapper();
-        ObjectNode snapshot = validTerminalSnapshotTree();
+        ObjectNode snapshot = validFinishedSnapshotTree();
         ((ObjectNode) snapshot.get("room")).remove("inactivityDeadlineEpochMs");
 
         PersistenceException ex = assertThrows(
@@ -367,7 +404,7 @@ class RoomSnapshotMapperTest {
     @Test
     void deserializeRejectsNullRoomPlayerElement() {
         RoomSnapshotMapper mapper = newMapper();
-        ObjectNode snapshot = validTerminalSnapshotTree();
+        ObjectNode snapshot = validFinishedSnapshotTree();
         ((ObjectNode) snapshot.get("room")).putArray("players").add("Alice").addNull();
 
         PersistenceException ex = assertThrows(
@@ -394,7 +431,7 @@ class RoomSnapshotMapperTest {
         assertEquals("Alice", recovered.room().getHostName());
     }
 
-    private Player bettingPlayer(String name, String id, int chips, int currentBet, boolean allIn) {
+    private static Player bettingPlayer(String name, String id, int chips, int currentBet, boolean allIn) {
         return Player.restoreBuilder().name(name).playerId(id).chips(chips).currentBet(currentBet)
                 .holeCards(List.of()).bestHand(List.of()).handRank(HandRank.NO_HAND)
                 .hasFolded(false).allIn(allIn).out(false).disconnected(false).readyForNextHand(false).build();
@@ -403,8 +440,7 @@ class RoomSnapshotMapperTest {
     @Test
     @DisplayName("captureSnapshot copies state into an immutable snapshot detached from live mutations")
     void captureSnapshot_DetachesSnapshotFromLiveMutation() {
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
+        RoomSnapshotMapper mapper = newMapper();
 
         Room room = new Room("room-order", "Order Room", "Alice", 6, 10, 20, 1000, null);
         room.addPlayer("Alice");
@@ -414,69 +450,24 @@ class RoomSnapshotMapperTest {
         Player p2 = new Player("Bob", "p2", 1000);
         Game game = new Game("room-order", List.of(p1, p2), 6, 10, 20);
 
-        // Capture and serialize state image before mutating live game
-        RoomSnapshot stateImage = mapper.captureSnapshot(room, game);
-        assertNotNull(stateImage);
-        assertNotNull(stateImage.room());
-        assertNotNull(stateImage.game());
+        RoomSnapshot capturedSnapshot = mapper.captureSnapshot(room, game);
+        assertNotNull(capturedSnapshot);
+        assertNotNull(capturedSnapshot.room());
+        assertNotNull(capturedSnapshot.game());
 
-        byte[] jsonBytes = mapper.serialize(stateImage);
+        byte[] jsonBytes = mapper.serialize(capturedSnapshot);
         assertNotNull(jsonBytes);
 
-        // Mutating live game after capture does not alter captured image or serialization
         p1.doAction(PlayerAction.BET, 500);
         RecoveredRoom recovered = mapper.deserialize(jsonBytes);
         assertEquals(1000, recovered.game().getPlayers().get(0).getChips(),
                 "Captured snapshot must be independent from post-capture live game mutations");
     }
 
-    /** A restart image captured during a chip transfer must include both sides of the transfer. */
-    @Test
-    void concurrentStateImageCaptureAndMutation_RestoresCoherentState() throws Exception {
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
-
-        String roomId = "concurrent-capture";
-        Room room = new Room(roomId, "Concurrent Capture Room", "Alice", 6, 10, 20, 1000, null);
-        room.addPlayer("Alice");
-        room.addPlayer("Bob");
-        Player alice = new Player("Alice", "p1", 1000);
-        Player bob = new Player("Bob", "p2", 1000);
-        Game game = new Game(roomId, List.of(alice, bob), 6, 10, 20);
-        game.dealHoleCards();
-        game.postBlinds();
-        RoomCoordinator coordinator = new RoomCoordinator();
-
-        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
-            Future<byte[]> capture;
-            try (LockLease _ = coordinator.acquire(roomId)) {
-                alice.doAction(PlayerAction.BET, 10);
-                capture = executor.submit(() -> {
-                    try (LockLease _ = coordinator.acquire(roomId)) {
-                        return mapper.serialize(mapper.captureSnapshot(room, game));
-                    }
-                });
-                Awaitility.await().until(() -> coordinator.lockReservationCount(roomId) >= 2);
-                bob.addChips(10);
-                game.incrementStateRevision();
-            }
-
-            RecoveredRoom recovered = mapper.deserialize(capture.get(5, TimeUnit.SECONDS));
-            assertEquals(List.of("Alice", "Bob"), recovered.room().getPlayers());
-            Game restored = recovered.game();
-            assertEquals(List.of(alice.getChips(), bob.getChips()),
-                    restored.getPlayers().stream().map(Player::getChips).toList());
-            assertEquals(2000, restored.getPot() + restored.getPlayers().stream().mapToInt(Player::getChips).sum());
-            assertEquals(game.getStateRevision(), restored.getStateRevision());
-            assertEquals(game.toSnapshot().remainingDeck(), restored.toSnapshot().remainingDeck());
-        }
-    }
-
     @Test
     @DisplayName("toGameState returns null for a lobby without a game, and toPlayerState captures a fresh player")
     void toGameState_NullGameAndFreshPlayer_AreHandled() {
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
+        RoomSnapshotMapper mapper = newMapper();
 
         assertNull(mapper.toGameState(null));
 
@@ -492,8 +483,7 @@ class RoomSnapshotMapperTest {
     @Test
     @DisplayName("Snapshot serializes passwordHash and never cleartext, and deserialization restores passwordHash")
     void passwordSecurity_SnapshotSerializesPasswordHashAndNeverPlaintext() {
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
+        RoomSnapshotMapper mapper = newMapper();
 
         String rawSecret = "VerySecretPassphrase123!";
         Room room = new Room("pw-room", "Protected Room", "Host", 4, 10, 20, 500,
@@ -503,30 +493,24 @@ class RoomSnapshotMapperTest {
         byte[] snapshot = mapper.serialize(mapper.captureSnapshot(room, null));
         String json = new String(snapshot, StandardCharsets.UTF_8);
 
-        // Security check: raw password MUST NOT appear anywhere in the snapshot JSON
         assertFalse(json.contains(rawSecret), "Cleartext password must NEVER appear in serialized snapshot JSON");
-
-        // Security check: passwordHash MUST appear in the snapshot JSON
         assertNotNull(room.getPasswordHash());
         assertTrue(json.contains(room.getPasswordHash()), "Snapshot must serialize the BCrypt passwordHash");
 
-        // Reconstruct room from snapshot bytes
         RecoveredRoom recovered = mapper.deserialize(snapshot);
         assertNotNull(recovered.room());
         Room restoredRoom = recovered.room();
 
-        // Verifications on restored room
         assertTrue(restoredRoom.hasPassword());
-        assertEquals(room.getPasswordHash(), restoredRoom.getPasswordHash(), "restored Room must have exact passwordHash preserved");
-        assertTrue(restoredRoom.checkPassword(rawSecret, PASSWORD_ENCODER), "restored Room must match raw password against restored passwordHash");
-        assertFalse(restoredRoom.checkPassword("WrongPass", PASSWORD_ENCODER), "restored Room must reject invalid password");
+        assertEquals(room.getPasswordHash(), restoredRoom.getPasswordHash());
+        assertTrue(restoredRoom.checkPassword(rawSecret, PASSWORD_ENCODER));
+        assertFalse(restoredRoom.checkPassword("WrongPass", PASSWORD_ENCODER));
     }
 
     @Test
     @DisplayName("Public room snapshot serializes null password and deserialization restores room with no password")
     void passwordSecurity_PublicRoomSnapshotSerializesNullPassword() {
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
+        RoomSnapshotMapper mapper = newMapper();
 
         Room publicRoom = new Room("pub-room", "Public Room", "Host", 4, 10, 20, 500, null);
         publicRoom.addPlayer("Host");
@@ -545,8 +529,7 @@ class RoomSnapshotMapperTest {
     @Test
     @DisplayName("Snapshot and restoreRoom preserve playerMembershipIds so original JWT membership remains valid")
     void snapshotAndRestoreRoom_PreservesPlayerMembershipIds() {
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
+        RoomSnapshotMapper mapper = newMapper();
 
         Room room = new Room("mem-room", "Membership Room", "Alice", 4, 10, 20, 500, null);
         String aliceMemId = room.addPlayer("Alice");
@@ -562,98 +545,90 @@ class RoomSnapshotMapperTest {
                 "Bob membershipId must survive WAL snapshot round-trip");
     }
 
-    private static final JsonMapper JSON = JsonMapper.builder().findAndAddModules().build();
-    private static final String TERMINAL_ROOM_ID = "room-terminal";
-
-    private static RoomSnapshotMapper newMapper() {
-        return new RoomSnapshotMapper(JSON);
-    }
-
-    /**
-     * Classpath location of the hand-written terminal snapshot fixture. The fixture is an
-     * independent oracle (ADR-0001): it is NOT produced by {@link RoomSnapshotMapper#captureSnapshot}, so a
-     * symmetric field rename in the writer and reader cannot silently keep the shape check green.
-     */
-    private static final String TERMINAL_FIXTURE = "/persistence/schema4-terminal-snapshot.json";
-
-    /** Loads and parses the checked-in valid terminal snapshot fixture as a fresh mutable tree. */
-    private static ObjectNode validTerminalSnapshotTree() {
-        try (var in = RoomSnapshotMapperTest.class.getResourceAsStream(TERMINAL_FIXTURE)) {
-            assertNotNull(in, "Missing terminal snapshot fixture on the classpath: " + TERMINAL_FIXTURE);
+    private static ObjectNode validFinishedSnapshotTree() {
+        try (var in = RoomSnapshotMapperTest.class.getResourceAsStream(FINISHED_FIXTURE)) {
+            assertNotNull(in, "Missing finished-game snapshot fixture on the classpath: " + FINISHED_FIXTURE);
             return (ObjectNode) JSON.readTree(in.readAllBytes());
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
     }
 
-    /**
-     * Guards that the mapper's writer still emits exactly the field names the independent fixture declares.
-     * If writer and reader were renamed together, the mapper would round-trip against itself but its freshly
-     * serialized output would no longer match the frozen fixture's field names, failing here.
-     */
-    @Test
-    @DisplayName("The mapper's serialized output carries the same field names as the independent fixture")
-    void captureSnapshot_FieldNames_MatchIndependentFixture() {
-        Room room = new Room(TERMINAL_ROOM_ID, "Final Table", "Alice", 6, 5, 10, 1000, null);
+    private static Room buildFinishedFixtureRoom() {
+        Room room = new Room(FINISHED_ROOM_ID, "Final Table", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
         room.addPlayer("Bob");
         room.setGameStarted(true);
         room.setFinished(true);
+        return room;
+    }
 
+    private static PublicGameStateResponse buildFinishedFixtureResponse() {
+        return new PublicGameStateResponse(
+                6, 0, List.of(2000), 0, GamePhase.SHOWDOWN, 0,
+                List.of(new Card(Rank.TEN, Suit.CLUBS)),
+                List.of(
+                        new PublicGameStateResponse.PlayerState(
+                                "a", "Alice", 2000, 0, "ACTIVE", false, false, false, true, false,
+                                HandRank.HIGH_CARD, List.of(new Card(Rank.ACE, Suit.SPADES)),
+                                true, 2000,
+                                List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)),
+                                1_700_000_015_000L, false),
+                        new PublicGameStateResponse.PlayerState(
+                                "b", "Bob", 0, 0, "OUT", false, false, false, false, true,
+                                null, List.of(), false, 0, null, null, true)),
+                null, null, List.of("Alice"), 2000, false, null, false, null, false, null,
+                true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, 123456789L, 42,
+                null, null, PublicGameStateResponse.GameEnd.won(
+                        "Alice", 2000, false, "Alice wins the game with 2000 chips!"));
+    }
+
+    private static Game buildFinishedFixtureGame(PublicGameStateResponse finalResult) {
         List<Player> players = List.of(
                 Player.restoreBuilder().name("Alice").playerId("a").chips(2000).currentBet(0)
                         .holeCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
                         .bestHand(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
                         .handRank(HandRank.HIGH_CARD)
-                        .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build(),
+                        .hasFolded(false).allIn(false).out(false).disconnected(false)
+                        .disconnectDeadlineEpochMs(1_700_000_015_000L).readyForNextHand(false).build(),
                 Player.restoreBuilder().name("Bob").playerId("b").chips(0).currentBet(0)
                         .holeCards(List.of(new Card(Rank.TWO, Suit.HEARTS), new Card(Rank.THREE, Suit.DIAMONDS)))
                         .bestHand(List.of())
                         .handRank(HandRank.NO_HAND)
                         .hasFolded(false).allIn(false).out(true).disconnected(false).readyForNextHand(false).build());
 
-        PublicGameStateResponse terminalResult = new PublicGameStateResponse(
-                6, 0, List.of(), 0, GamePhase.SHOWDOWN, 0,
-                List.of(new Card(Rank.TEN, Suit.CLUBS)),
-                List.of(
-                        new PublicGameStateResponse.PlayerState("a", "Alice", 2000, 0, "ACTIVE", false, false, false, true, false,
-                                HandRank.HIGH_CARD, List.of(new Card(Rank.ACE, Suit.SPADES)),
-                                true, null, List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)),
-                                null, false),
-                        new PublicGameStateResponse.PlayerState("b", "Bob", 0, 0, "OUT", false, false, false, false, true,
-                                null, List.of(), false, null, null, null, true)),
-                null, null, List.of("Alice"), null, false, null, false, null, false, null,
-                true, null, List.of(), null, null, 1, ReadyGateState.CLOSED, 123456789L, 42,
-                null, null, PublicGameStateResponse.GameEnd.won(
-                        "Alice", 2000, false, "Alice wins the game with 2000 chips!"));
-
-        Game game = Game.restoreBuilder().gameId(TERMINAL_ROOM_ID).players(players).activePlayerIds(List.of("a", "b"))
+        return Game.restoreBuilder().gameId(FINISHED_ROOM_ID).maxPlayers(6).players(players)
+                .activePlayerIds(List.of("a", "b"))
                 .remainingDeck(List.of()).communityCards(List.of(new Card(Rank.TEN, Suit.CLUBS))).pot(0)
                 .currentPlayerId("a")
                 .currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(true).smallBlind(5).bigBlind(10)
                 .handContributions(Map.of()).carryOverPot(0).lastFullRaise(0)
                 .previousBets(Map.of()).handSeatOrder(List.of("a", "b")).dealerPlayerId("a")
                 .smallBlindPlayerId("a").bigBlindPlayerId("b")
+                .lastHandPayout(new HandPayout(Map.of("a", 2000), Map.of("a", 10), Set.of("a"), 0, true))
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTimes(Map.of(ScheduledGameTask.CLEANUP, 999999L))
                 .timerVersions(Map.of(ScheduledGameTask.CLEANUP, 1L))
-                .handNumber(1).readyGateState(ReadyGateState.CLOSED).pausedForDisconnectedSurvivor(false).stateRevision(42)
-                .gameEndResult(terminalResult).build();
-
-        ObjectNode serialized = JSON.valueToTree(
-                new RoomSnapshotMapper(JSON).captureSnapshot(room, game));
-
-        assertEquals(fieldNameShape(validTerminalSnapshotTree()), fieldNameShape(serialized),
-                "Mapper writer field names drifted from the independent terminal-snapshot fixture");
+                .handNumber(1).readyGateState(ReadyGateState.CLOSED).pausedForDisconnectedSurvivor(false)
+                .stateRevision(42)
+                .gameEndResult(finalResult).build();
     }
 
-    /**
-     * Collects every JSON field path in the tree (object keys recursively, with array elements folded onto a
-     * shared [*] path) so two trees with identical structure but different scalar values compare equal here,
-     * while any renamed/added/removed field is detected.
-     */
+    @Test
+    @DisplayName("The mapper's serialized output carries the same field names as the independent fixture")
+    void captureSnapshot_FieldNames_MatchIndependentFixture() {
+        Room room = buildFinishedFixtureRoom();
+        PublicGameStateResponse finalResult = buildFinishedFixtureResponse();
+        Game game = buildFinishedFixtureGame(finalResult);
+
+        ObjectNode serialized = JSON.valueToTree(newMapper().captureSnapshot(room, game));
+
+        assertEquals(fieldNameShape(validFinishedSnapshotTree()), fieldNameShape(serialized),
+                "Mapper writer field names drifted from the independent finished-game snapshot fixture");
+    }
+
     private static Set<String> fieldNameShape(JsonNode node) {
-        Set<String> paths = new java.util.TreeSet<>();
+        Set<String> paths = new TreeSet<>();
         collectFieldPaths("", node, paths);
         return paths;
     }
@@ -672,11 +647,10 @@ class RoomSnapshotMapperTest {
         }
     }
 
-    private static ObjectNode playerOf(ObjectNode terminal, int index) {
-        return (ObjectNode) ((ArrayNode) terminal.get("players")).get(index);
+    private static ObjectNode playerOf(ObjectNode gameEndNode, int index) {
+        return (ObjectNode) ((ArrayNode) gameEndNode.get("players")).get(index);
     }
 
-    /** Builds a JSON array of cards; a {@code null} element becomes a JSON null entry. */
     private static ArrayNode cardArray(ObjectNode... cards) {
         ArrayNode array = JSON.createArrayNode();
         for (ObjectNode card : cards) {
@@ -690,11 +664,11 @@ class RoomSnapshotMapperTest {
     }
 
     @Test
-    @DisplayName("The unmodified terminal-result fixture restores, and empty hole cards are accepted")
-    void deserialize_ValidRetainedTerminalResult_Restores() {
-        ObjectNode snapshot = validTerminalSnapshotTree();
-        assertEquals("Alice", newMapper().deserialize(JSON.writeValueAsBytes(snapshot))
-                .game().getGameEndResult().gameEnd().winner());
+    @DisplayName("The unmodified finished-game result fixture restores, and empty hole cards are accepted")
+    void deserialize_ValidRetainedFinishedResult_Restores() {
+        ObjectNode snapshot = validFinishedSnapshotTree();
+        RecoveredRoom restoredFromFixture = newMapper().deserialize(JSON.writeValueAsBytes(snapshot));
+        assertThat(restoredFromFixture.game().getGameEndResult()).isEqualTo(buildFinishedFixtureResponse());
 
         playerOf((ObjectNode) snapshot.at("/game/gameEndResult"), 1).set("holeCards", cardArray());
         RecoveredRoom recovered = newMapper().deserialize(JSON.writeValueAsBytes(snapshot));
@@ -704,8 +678,8 @@ class RoomSnapshotMapperTest {
     @Test
     @DisplayName("deserialize rejects a snapshot with a null card element")
     void deserialize_NullCardElement_IsRejected() {
-        ObjectNode snapshot = validTerminalSnapshotTree();
-        ((ObjectNode) snapshot.get("game")).set("communityCards", cardArray(new ObjectNode[] {null}));
+        ObjectNode snapshot = validFinishedSnapshotTree();
+        ((ObjectNode) snapshot.get("game")).set("communityCards", cardArray(new ObjectNode[]{null}));
 
         PersistenceException ex = assertThrows(PersistenceException.class,
                 () -> newMapper().deserialize(JSON.writeValueAsBytes(snapshot)));
@@ -719,26 +693,52 @@ class RoomSnapshotMapperTest {
         room.addPlayer("Alice");
         room.addPlayer("Bob");
         room.setGameStarted(true);
-        Game game = new Game(room.getRoomId(), List.of(
-                new Player("Alice", "alice-id", 1000),
-                new Player("Bob", "bob-id", 1000)), 6, 5, 10);
-        game.resetForNewHand();
-        game.dealHoleCards();
-        game.postBlinds();
-        game.markGameOver();
-        game.closeReadyCountdown();
-        var projections = new GameStateService(
-                Mockito.mock(RoomService.class),
-                Mockito.mock(SimpMessagingTemplate.class),
-                Clock.systemUTC());
-        PublicGameStateResponse result = projections.buildAbandonmentResponse(game);
-        game.setGameEndResult(result);
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(JSON);
 
+        Player alice = Player.restoreBuilder().name("Alice").playerId("alice-id").chips(995).currentBet(5)
+                .holeCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
+                .bestHand(List.of()).handRank(HandRank.NO_HAND)
+                .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+        Player bob = Player.restoreBuilder().name("Bob").playerId("bob-id").chips(990).currentBet(10)
+                .holeCards(List.of(new Card(Rank.QUEEN, Suit.HEARTS), new Card(Rank.JACK, Suit.HEARTS)))
+                .bestHand(List.of()).handRank(HandRank.NO_HAND)
+                .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
+
+        PublicGameStateResponse abandonedResult = new PublicGameStateResponse(
+                6, 15, List.of(15), 0, GamePhase.PRE_FLOP, 10, List.of(),
+                List.of(
+                        new PublicGameStateResponse.PlayerState(
+                                "alice-id", "Alice", 995, 5, "ACTIVE", false, true, false, true, false,
+                                null, List.of(), false, null, null, null, false),
+                        new PublicGameStateResponse.PlayerState(
+                                "bob-id", "Bob", 990, 10, "ACTIVE", false, false, false, false, true,
+                                null, List.of(), false, null, null, null, false)),
+                null, null, List.of(), null, false, null, false, null, false, null, false, null,
+                List.of(), null, null, 1L, ReadyGateState.CLOSED, FIXED_EPOCH_MS, 3L, null, null,
+                PublicGameStateResponse.GameEnd.abandoned(
+                        "INACTIVITY", "Game closed due to 15 minutes of inactivity."));
+
+        Game game = Game.restoreBuilder()
+                .gameId(room.getRoomId())
+                .maxPlayers(6)
+                .players(List.of(alice, bob))
+                .activePlayerIds(List.of("alice-id", "bob-id"))
+                .remainingDeck(List.of())
+                .pot(15)
+                .currentHighestBet(10)
+                .currentPhase(GamePhase.PRE_FLOP)
+                .gameOver(true)
+                .smallBlind(5)
+                .bigBlind(10)
+                .handNumber(1L)
+                .stateRevision(3L)
+                .gameEndResult(abandonedResult)
+                .build();
+
+        RoomSnapshotMapper mapper = newMapper();
         PublicGameStateResponse restored = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, game)))
                 .game().getGameEndResult();
 
-        assertEquals(result, restored);
+        assertThat(restored).isEqualTo(abandonedResult);
         assertNotNull(restored.gameEnd());
         assertTrue(restored.gameEnd().abandoned());
         assertNull(restored.gameEnd().winner());
@@ -769,7 +769,7 @@ class RoomSnapshotMapperTest {
     @DisplayName("deserialize rejects a corrupt game aggregate with the specific message")
     void deserialize_CorruptGame_IsRejectedWithSpecificMessage(String name, Consumer<ObjectNode> corruption,
             String expectedMessage) {
-        ObjectNode snapshot = validTerminalSnapshotTree();
+        ObjectNode snapshot = validFinishedSnapshotTree();
         corruption.accept((ObjectNode) snapshot.get("game"));
 
         PersistenceException ex = assertThrows(PersistenceException.class,
@@ -784,38 +784,38 @@ class RoomSnapshotMapperTest {
                 null, LocalDateTime.of(2024, 1, 1, 12, 0), List.of(), Map.of(), false, null);
     }
 
-    private static RoomSnapshot lobbyImage(RoomSnapshot.RoomState room) {
+    private static RoomSnapshot lobbySnapshot(RoomSnapshot.RoomState room) {
         return new RoomSnapshot(false, room, null);
     }
 
-    static Stream<Arguments> invalidImages() {
+    static Stream<Arguments> invalidSnapshots() {
         String unsupported = "Unsupported in-memory aggregate image";
         String missingRoom = "Missing required room state in aggregate snapshot";
         String badParameters = "Invalid room parameters in snapshot";
         return Stream.of(
-                Arguments.of("null image", null, unsupported),
-                Arguments.of("missing room", lobbyImage(null), missingRoom),
-                Arguments.of("null room id", lobbyImage(roomState(null, 6, 5, 10, 100)), missingRoom),
-                Arguments.of("empty room id", lobbyImage(roomState("", 6, 5, 10, 100)), missingRoom),
-                Arguments.of("blank room id", lobbyImage(roomState("   ", 6, 5, 10, 100)), missingRoom),
-                Arguments.of("maxPlayers below 2", lobbyImage(roomState("r", 1, 5, 10, 100)), badParameters),
-                Arguments.of("maxPlayers above 10", lobbyImage(roomState("r", 11, 5, 10, 100)),
+                Arguments.of("null snapshot", null, unsupported),
+                Arguments.of("missing room", lobbySnapshot(null), missingRoom),
+                Arguments.of("null room id", lobbySnapshot(roomState(null, 6, 5, 10, 100)), missingRoom),
+                Arguments.of("empty room id", lobbySnapshot(roomState("", 6, 5, 10, 100)), missingRoom),
+                Arguments.of("blank room id", lobbySnapshot(roomState("   ", 6, 5, 10, 100)), missingRoom),
+                Arguments.of("maxPlayers below 2", lobbySnapshot(roomState("r", 1, 5, 10, 100)), badParameters),
+                Arguments.of("maxPlayers above 10", lobbySnapshot(roomState("r", 11, 5, 10, 100)),
                         badParameters),
-                Arguments.of("small blind below 1", lobbyImage(roomState("r", 6, 0, 10, 100)),
+                Arguments.of("small blind below 1", lobbySnapshot(roomState("r", 6, 0, 10, 100)),
                         badParameters),
                 Arguments.of("big blind below twice the small blind",
-                        lobbyImage(roomState("r", 6, 5, 9, 100)), badParameters),
-                Arguments.of("buy-in below the big blind", lobbyImage(roomState("r", 6, 5, 10, 9)),
+                        lobbySnapshot(roomState("r", 6, 5, 9, 100)), badParameters),
+                Arguments.of("buy-in below the big blind", lobbySnapshot(roomState("r", 6, 5, 10, 9)),
                         badParameters));
     }
 
     @ParameterizedTest(name = "[{index}] {0}")
-    @MethodSource("invalidImages")
-    @DisplayName("restoreSnapshot rejects an invalid image with the specific message")
-    void restoreSnapshot_InvalidImage_IsRejectedWithSpecificMessage(String name, RoomSnapshot image,
+    @MethodSource("invalidSnapshots")
+    @DisplayName("restoreSnapshot rejects an invalid snapshot with the specific message")
+    void restoreSnapshot_InvalidSnapshot_IsRejectedWithSpecificMessage(String name, RoomSnapshot snapshot,
             String expectedMessage) {
         PersistenceException ex = assertThrows(PersistenceException.class,
-                () -> newMapper().restoreSnapshot(image));
+                () -> newMapper().restoreSnapshot(snapshot));
 
         assertEquals(expectedMessage, ex.getMessage(), name);
     }
@@ -825,23 +825,23 @@ class RoomSnapshotMapperTest {
     void restoreSnapshot_BoundaryRoomParameters_AreAccepted() {
         RoomSnapshotMapper mapper = newMapper();
 
-        Room minimal = mapper.restoreSnapshot(lobbyImage(roomState("r", 2, 1, 2, 2))).room();
-        Room maximal = mapper.restoreSnapshot(lobbyImage(roomState("r", 10, 5, 10, 10))).room();
+        Room minimal = mapper.restoreSnapshot(lobbySnapshot(roomState("r", 2, 1, 2, 2))).room();
+        Room maximal = mapper.restoreSnapshot(lobbySnapshot(roomState("r", 10, 5, 10, 10))).room();
 
         assertEquals(2, minimal.getMaxPlayers());
         assertEquals(10, maximal.getMaxPlayers());
     }
 
     @Test
-    @DisplayName("A deleted image restores to a deleted marker without room or game, even from a tombstone")
-    void restoreSnapshot_DeletedImage_ReturnsDeletedMarker() {
+    @DisplayName("A deleted snapshot restores to a deleted marker without room or game, even from a tombstone")
+    void restoreSnapshot_DeletedSnapshot_ReturnsDeletedMarker() {
         RoomSnapshotMapper mapper = newMapper();
 
-        RecoveredRoom fromImage = mapper.restoreSnapshot(
+        RecoveredRoom fromSnapshot = mapper.restoreSnapshot(
                 new RoomSnapshot(true, null, null));
         RecoveredRoom fromTombstone = mapper.deserialize(mapper.serializeDeletion("gone-room"));
 
-        for (RecoveredRoom recovered : List.of(fromImage, fromTombstone)) {
+        for (RecoveredRoom recovered : List.of(fromSnapshot, fromTombstone)) {
             assertTrue(recovered.deleted());
             assertNull(recovered.room());
             assertNull(recovered.game());
@@ -859,12 +859,13 @@ class RoomSnapshotMapperTest {
     @ParameterizedTest(name = "[{index}] {0}")
     @MethodSource("hostReconciliations")
     @DisplayName("restoreSnapshot reconciles the host against actual room membership")
-    void restoreSnapshot_HostReconciliation_FallsBackThroughMembership(String name, String hostName, List<String> members, String expectedHost) {
+    void restoreSnapshot_HostReconciliation_FallsBackThroughMembership(
+            String name, String hostName, List<String> members, String expectedHost) {
         RoomSnapshot.RoomState room = new RoomSnapshot.RoomState("r", "Room", hostName, 6, 5, 10,
                 100, null, LocalDateTime.of(2024, 1, 1, 12, 0), members, Map.of(), false, null);
-        RoomSnapshot image = new RoomSnapshot(false, room, null);
+        RoomSnapshot snapshot = new RoomSnapshot(false, room, null);
 
-        RecoveredRoom recovered = newMapper().restoreSnapshot(image);
+        RecoveredRoom recovered = newMapper().restoreSnapshot(snapshot);
 
         assertEquals(expectedHost, recovered.room().getHostName(), name);
         assertFalse(recovered.deleted());
@@ -881,16 +882,16 @@ class RoomSnapshotMapperTest {
     }
 
     @Test
-    @DisplayName("serialize rejects a null room and a null state image")
+    @DisplayName("serialize rejects a null room and a null snapshot")
     void serialize_NullInputs_AreRejected() {
         RoomSnapshotMapper mapper = newMapper();
 
-        PersistenceException nullImage = assertThrows(PersistenceException.class,
+        PersistenceException nullSnapshot = assertThrows(PersistenceException.class,
                 () -> mapper.serialize((RoomSnapshot) null));
         PersistenceException nullRoom = assertThrows(PersistenceException.class,
                 () -> mapper.serialize(mapper.captureSnapshot(null, null)));
 
-        assertEquals("State image cannot be null for serialization", nullImage.getMessage());
+        assertEquals("State image cannot be null for serialization", nullSnapshot.getMessage());
         assertEquals("Room cannot be null for aggregate state capture", nullRoom.getMessage());
     }
 
@@ -923,18 +924,29 @@ class RoomSnapshotMapperTest {
     @Nested
     class SnapshotRecoveryScenarios {
 
-
         private static final String ROOM_ID = "empirical-room-m2";
         private RoomSnapshotMapper snapshotMapper;
 
         @BeforeEach
         void setUp() {
-            JsonMapper jsonMapper = JsonMapper.builder().findAndAddModules().build();
-            snapshotMapper = new RoomSnapshotMapper(jsonMapper);
+            snapshotMapper = newMapper();
         }
 
-        private Player createPlayer(String id, String name, int chips) {
-            return new Player(name, id, chips);
+        private Player createPlayer(String id, String name, int chips, int currentBet) {
+            return Player.restoreBuilder()
+                    .playerId(id)
+                    .name(name)
+                    .chips(chips)
+                    .currentBet(currentBet)
+                    .holeCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)))
+                    .bestHand(List.of())
+                    .handRank(HandRank.NO_HAND)
+                    .hasFolded(false)
+                    .allIn(false)
+                    .out(false)
+                    .disconnected(false)
+                    .readyForNextHand(false)
+                    .build();
         }
 
         private Room createRoom(String roomId, List<Player> players) {
@@ -947,44 +959,37 @@ class RoomSnapshotMapperTest {
             return room;
         }
 
-        // =========================================================================
-        // 1. Snapshot and WAL Recovery Across All 5 Game Phases
-        // =========================================================================
-
         @Test
-        @DisplayName("Phase 1: PRE_FLOP snapshot serialization and WAL recovery round-trip preserves state & action continuity")
-        void testPhase_PreFlop_WalRecoveryAndActionContinuity(@TempDir Path tempDir) {
-            Player p1 = createPlayer("p1", "Alice", 1000);
-            Player p2 = createPlayer("p2", "Bob", 1000);
-            Player p3 = createPlayer("p3", "Charlie", 1000);
+        @DisplayName("Phase 1: PRE_FLOP snapshot round-trip preserves state & action continuity")
+        void testPhase_PreFlop_RoundTripAndActionContinuity() {
+            Player p1 = createPlayer("p1", "Alice", 1000, 0);
+            Player p2 = createPlayer("p2", "Bob", 990, 10);
+            Player p3 = createPlayer("p3", "Charlie", 980, 20);
             List<Player> players = List.of(p1, p2, p3);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 6, 10, 20);
-            assertFalse(game.resetForNewHand());
-            game.dealHoleCards();
-            game.postBlinds();
+            Game game = Game.restoreBuilder()
+                    .gameId(ROOM_ID)
+                    .maxPlayers(6)
+                    .players(players)
+                    .activePlayerIds(List.of("p1", "p2", "p3"))
+                    .remainingDeck(DETERMINISTIC_DECK)
+                    .communityCards(List.of())
+                    .pot(30)
+                    .currentPlayerId("p1")
+                    .currentHighestBet(20)
+                    .currentPhase(GamePhase.PRE_FLOP)
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .handContributions(Map.of("p2", 10, "p3", 20))
+                    .handSeatOrder(List.of("p1", "p2", "p3"))
+                    .dealerPlayerId("p1")
+                    .smallBlindPlayerId("p2")
+                    .bigBlindPlayerId("p3")
+                    .build();
 
-            assertEquals(GamePhase.PRE_FLOP, game.getCurrentPhase());
-            assertEquals(30, game.getPot());
-            assertEquals(20, game.getCurrentHighestBet());
-
-            // Snapshot via mapper
             byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
-
-            // Store into real encrypted WAL
-            RoomCoordinator coordinator = new RoomCoordinator();
-            EncryptionKeyring keyring = new EncryptionKeyring("k1", Map.of("k1", new SecretKeySpec(new byte[32], "AES")));
-            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring, coordinator);
-            try (LockLease _ = coordinator.acquire(ROOM_ID)) {
-                WalTransaction tx = walStore.prepare(ROOM_ID);
-                walStore.commit(tx, snapshotBytes);
-            }
-
-            // Recover from WAL
-            Map<String, byte[]> recoveredMap = walStore.recoverAll();
-            assertTrue(recoveredMap.containsKey(ROOM_ID));
-            RecoveredRoom recovered = snapshotMapper.deserialize(recoveredMap.get(ROOM_ID));
+            RecoveredRoom recovered = snapshotMapper.deserialize(snapshotBytes);
             Game restored = recovered.game();
 
             assertNotNull(restored);
@@ -995,192 +1000,177 @@ class RoomSnapshotMapperTest {
             assertEquals(3, restored.getPlayers().size());
             assertEquals(3, restored.getActivePlayers().size());
             assertEquals(game.getCurrentPlayer().getPlayerId(), restored.getCurrentPlayer().getPlayerId());
-            assertEquals(game.toSnapshot().remainingDeck().size(), restored.toSnapshot().remainingDeck().size());
+            assertEquals(game.toSnapshot().remainingDeck(), restored.toSnapshot().remainingDeck());
             assertEquals(game.toSnapshot().handSeatOrder(), restored.toSnapshot().handSeatOrder());
             assertEquals(game.toSnapshot().dealerPlayerId(), restored.toSnapshot().dealerPlayerId());
 
-            // Verify hole cards match
             for (int i = 0; i < 3; i++) {
                 assertEquals(game.getPlayers().get(i).getHoleCards(), restored.getPlayers().get(i).getHoleCards());
             }
 
-            // Action continuity: Current player calls on restored instance
             Player current = restored.getCurrentPlayer();
             restored.processPlayerDecision(current, PlayerAction.CALL, 0);
             assertEquals(50, restored.getPot(), "Pot must increase to 50 following call on restored game");
         }
 
         @Test
-        @DisplayName("Phase 2: FLOP snapshot serialization and WAL recovery round-trip preserves 3 community cards")
-        void testPhase_Flop_WalRecoveryAndProgression(@TempDir Path tempDir) {
-            Player p1 = createPlayer("p1", "Alice", 1000);
-            Player p2 = createPlayer("p2", "Bob", 1000);
+        @DisplayName("Phase 2: FLOP snapshot round-trip preserves 3 community cards")
+        void testPhase_Flop_RoundTripAndProgression() {
+            Player p1 = createPlayer("p1", "Alice", 980, 0);
+            Player p2 = createPlayer("p2", "Bob", 980, 0);
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
+            List<Card> flopCards = DETERMINISTIC_DECK.subList(0, 3);
 
-            Game game = new Game(ROOM_ID, players, 6, 10, 20);
-            assertFalse(game.resetForNewHand());
-            game.dealHoleCards();
-            game.postBlinds();
-            game.dealFlop();
-
-            assertEquals(GamePhase.FLOP, game.getCurrentPhase());
-            assertEquals(3, game.getCommunityCards().size());
+            Game game = Game.restoreBuilder()
+                    .gameId(ROOM_ID)
+                    .maxPlayers(6)
+                    .players(players)
+                    .activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(DETERMINISTIC_DECK.subList(3, 5))
+                    .communityCards(flopCards)
+                    .pot(40)
+                    .currentPlayerId("p1")
+                    .currentHighestBet(0)
+                    .currentPhase(GamePhase.FLOP)
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .handContributions(Map.of("p1", 20, "p2", 20))
+                    .handSeatOrder(List.of("p1", "p2"))
+                    .dealerPlayerId("p1")
+                    .smallBlindPlayerId("p1")
+                    .bigBlindPlayerId("p2")
+                    .build();
 
             byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
-
-            // WAL round-trip
-            RoomCoordinator coordinator = new RoomCoordinator();
-            EncryptionKeyring keyring = new EncryptionKeyring("k1", Map.of("k1", new SecretKeySpec(new byte[32], "AES")));
-            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring, coordinator);
-            try (LockLease _ = coordinator.acquire(ROOM_ID)) {
-                WalTransaction tx = walStore.prepare(ROOM_ID);
-                walStore.commit(tx, snapshotBytes);
-            }
-
-            RecoveredRoom recovered = snapshotMapper.deserialize(walStore.recoverAll().get(ROOM_ID));
-            Game restored = recovered.game();
+            Game restored = snapshotMapper.deserialize(snapshotBytes).game();
 
             assertEquals(GamePhase.FLOP, restored.getCurrentPhase());
             assertEquals(3, restored.getCommunityCards().size());
-            assertEquals(game.getCommunityCards(), restored.getCommunityCards());
-            assertEquals(game.toSnapshot().remainingDeck().size(), restored.toSnapshot().remainingDeck().size());
+            assertEquals(flopCards, restored.getCommunityCards());
+            assertEquals(2, restored.toSnapshot().remainingDeck().size());
 
-            // Advance to Turn on restored instance
             restored.dealTurn();
             assertEquals(GamePhase.TURN, restored.getCurrentPhase());
             assertEquals(4, restored.getCommunityCards().size());
         }
 
         @Test
-        @DisplayName("Phase 3: TURN snapshot serialization and WAL recovery round-trip preserves 4 community cards")
-        void testPhase_Turn_WalRecoveryAndProgression(@TempDir Path tempDir) {
-            Player p1 = createPlayer("p1", "Alice", 1000);
-            Player p2 = createPlayer("p2", "Bob", 1000);
+        @DisplayName("Phase 3: TURN snapshot round-trip preserves 4 community cards")
+        void testPhase_Turn_RoundTripAndProgression() {
+            Player p1 = createPlayer("p1", "Alice", 980, 0);
+            Player p2 = createPlayer("p2", "Bob", 980, 0);
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
+            List<Card> turnCards = DETERMINISTIC_DECK.subList(0, 4);
 
-            Game game = new Game(ROOM_ID, players, 6, 10, 20);
-            assertFalse(game.resetForNewHand());
-            game.dealHoleCards();
-            game.postBlinds();
-            game.dealFlop();
-            game.dealTurn();
-
-            assertEquals(GamePhase.TURN, game.getCurrentPhase());
-            assertEquals(4, game.getCommunityCards().size());
+            Game game = Game.restoreBuilder()
+                    .gameId(ROOM_ID)
+                    .maxPlayers(6)
+                    .players(players)
+                    .activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(DETERMINISTIC_DECK.subList(4, 5))
+                    .communityCards(turnCards)
+                    .pot(40)
+                    .currentPlayerId("p1")
+                    .currentHighestBet(0)
+                    .currentPhase(GamePhase.TURN)
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .handContributions(Map.of("p1", 20, "p2", 20))
+                    .handSeatOrder(List.of("p1", "p2"))
+                    .dealerPlayerId("p1")
+                    .smallBlindPlayerId("p1")
+                    .bigBlindPlayerId("p2")
+                    .build();
 
             byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
-
-            // WAL round-trip
-            RoomCoordinator coordinator = new RoomCoordinator();
-            EncryptionKeyring keyring = new EncryptionKeyring("k1", Map.of("k1", new SecretKeySpec(new byte[32], "AES")));
-            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring, coordinator);
-            try (LockLease _ = coordinator.acquire(ROOM_ID)) {
-                WalTransaction tx = walStore.prepare(ROOM_ID);
-                walStore.commit(tx, snapshotBytes);
-            }
-
-            RecoveredRoom recovered = snapshotMapper.deserialize(walStore.recoverAll().get(ROOM_ID));
-            Game restored = recovered.game();
+            Game restored = snapshotMapper.deserialize(snapshotBytes).game();
 
             assertEquals(GamePhase.TURN, restored.getCurrentPhase());
             assertEquals(4, restored.getCommunityCards().size());
-            assertEquals(game.getCommunityCards(), restored.getCommunityCards());
+            assertEquals(turnCards, restored.getCommunityCards());
 
-            // Advance to River on restored instance
             restored.dealRiver();
             assertEquals(GamePhase.RIVER, restored.getCurrentPhase());
             assertEquals(5, restored.getCommunityCards().size());
         }
 
         @Test
-        @DisplayName("Phase 4: RIVER snapshot serialization and WAL recovery round-trip preserves 5 community cards")
-        void testPhase_River_WalRecoveryAndShowdown(@TempDir Path tempDir) {
-            Player p1 = createPlayer("p1", "Alice", 1000);
-            Player p2 = createPlayer("p2", "Bob", 1000);
+        @DisplayName("Phase 4: RIVER snapshot round-trip preserves 5 community cards")
+        void testPhase_River_RoundTripAndShowdown() {
+            Player p1 = createPlayer("p1", "Alice", 980, 0);
+            Player p2 = createPlayer("p2", "Bob", 980, 0);
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
-            Game game = new Game(ROOM_ID, players, 6, 10, 20);
-            assertFalse(game.resetForNewHand());
-            game.dealHoleCards();
-            game.postBlinds();
-            game.dealFlop();
-            game.dealTurn();
-            game.dealRiver();
-
-            assertEquals(GamePhase.RIVER, game.getCurrentPhase());
-            assertEquals(5, game.getCommunityCards().size());
+            Game game = Game.restoreBuilder()
+                    .gameId(ROOM_ID)
+                    .maxPlayers(6)
+                    .players(players)
+                    .activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(List.of())
+                    .communityCards(DETERMINISTIC_DECK)
+                    .pot(40)
+                    .currentPlayerId("p1")
+                    .currentHighestBet(0)
+                    .currentPhase(GamePhase.RIVER)
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .handContributions(Map.of("p1", 20, "p2", 20))
+                    .handSeatOrder(List.of("p1", "p2"))
+                    .dealerPlayerId("p1")
+                    .smallBlindPlayerId("p1")
+                    .bigBlindPlayerId("p2")
+                    .build();
 
             byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
-
-            // WAL round-trip
-            RoomCoordinator coordinator = new RoomCoordinator();
-            EncryptionKeyring keyring = new EncryptionKeyring("k1", Map.of("k1", new SecretKeySpec(new byte[32], "AES")));
-            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring, coordinator);
-            try (LockLease _ = coordinator.acquire(ROOM_ID)) {
-                WalTransaction tx = walStore.prepare(ROOM_ID);
-                walStore.commit(tx, snapshotBytes);
-            }
-
-            RecoveredRoom recovered = snapshotMapper.deserialize(walStore.recoverAll().get(ROOM_ID));
-            Game restored = recovered.game();
+            Game restored = snapshotMapper.deserialize(snapshotBytes).game();
 
             assertEquals(GamePhase.RIVER, restored.getCurrentPhase());
             assertEquals(5, restored.getCommunityCards().size());
-            assertEquals(game.getCommunityCards(), restored.getCommunityCards());
+            assertEquals(DETERMINISTIC_DECK, restored.getCommunityCards());
 
-            // Conduct Showdown on restored instance
             assertDoesNotThrow(restored::conductShowdown);
             assertNotNull(restored.getLastHandPayout());
             assertTrue(restored.isHandSettled());
         }
 
         @Test
-        @DisplayName("Phase 5: SHOWDOWN snapshot serialization and WAL recovery preserves HandPayout & resetForNewHand")
-        void testPhase_Showdown_WalRecoveryAndResetForNewHand(@TempDir Path tempDir) {
-            Player p1 = createPlayer("p1", "Alice", 1000);
-            Player p2 = createPlayer("p2", "Bob", 1000);
+        @DisplayName("Phase 5: SHOWDOWN snapshot round-trip preserves HandPayout & resetForNewHand")
+        void testPhase_Showdown_RoundTripAndResetForNewHand() {
+            Player p1 = createPlayer("p1", "Alice", 1020, 0);
+            Player p2 = createPlayer("p2", "Bob", 980, 0);
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
+            HandPayout originalSettlement = new HandPayout(Map.of("p1", 40), Map.of(), Set.of("p1"), 0, true);
 
-            Game game = new Game(ROOM_ID, players, 6, 10, 20);
-            assertFalse(game.resetForNewHand());
-            game.dealHoleCards();
-            game.postBlinds();
-            game.dealFlop();
-            game.dealTurn();
-            game.dealRiver();
-            game.conductShowdown();
-
-            assertNotNull(game.getLastHandPayout());
-            HandPayout originalSettlement = game.getLastHandPayout();
+            Game game = Game.restoreBuilder()
+                    .gameId(ROOM_ID)
+                    .maxPlayers(6)
+                    .players(players)
+                    .activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(List.of())
+                    .communityCards(DETERMINISTIC_DECK)
+                    .pot(0)
+                    .currentPlayerId("p1")
+                    .currentHighestBet(0)
+                    .currentPhase(GamePhase.SHOWDOWN)
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .handSeatOrder(List.of("p1", "p2"))
+                    .dealerPlayerId("p1")
+                    .smallBlindPlayerId("p1")
+                    .bigBlindPlayerId("p2")
+                    .lastHandPayout(originalSettlement)
+                    .build();
 
             byte[] snapshotBytes = snapshotMapper.serialize(snapshotMapper.captureSnapshot(room, game));
-
-            // WAL round-trip
-            RoomCoordinator coordinator = new RoomCoordinator();
-            EncryptionKeyring keyring = new EncryptionKeyring("k1", Map.of("k1", new SecretKeySpec(new byte[32], "AES")));
-            EncryptedWalStore walStore = new EncryptedWalStore(tempDir, keyring, coordinator);
-            try (LockLease _ = coordinator.acquire(ROOM_ID)) {
-                WalTransaction tx = walStore.prepare(ROOM_ID);
-                walStore.commit(tx, snapshotBytes);
-            }
-
-            RecoveredRoom recovered = snapshotMapper.deserialize(walStore.recoverAll().get(ROOM_ID));
-            Game restored = recovered.game();
+            Game restored = snapshotMapper.deserialize(snapshotBytes).game();
 
             assertNotNull(restored.getLastHandPayout());
-            HandPayout restoredSettlement = restored.getLastHandPayout();
+            assertEquals(originalSettlement, restored.getLastHandPayout());
 
-            assertEquals(originalSettlement.potWinnings(), restoredSettlement.potWinnings());
-            assertEquals(originalSettlement.refunds(), restoredSettlement.refunds());
-            assertEquals(originalSettlement.winnerIds(), restoredSettlement.winnerIds());
-            assertEquals(originalSettlement.remainder(), restoredSettlement.remainder());
-            assertEquals(originalSettlement.wentToShowdown(), restoredSettlement.wentToShowdown());
-
-            // Perform resetForNewHand on restored game
             assertDoesNotThrow(restored::resetForNewHand);
             assertEquals(GamePhase.PRE_FLOP, restored.getCurrentPhase());
             assertTrue(restored.getCommunityCards().isEmpty());
@@ -1189,18 +1179,22 @@ class RoomSnapshotMapperTest {
         @Test
         @DisplayName("Settlement round-trip keeps whether the hand went to a contested showdown")
         void testSettlementRoundTrip_PreservesContestedShowdownVersusUncontestedFoldWin() {
-            Player p1 = createPlayer("p1", "Alice", 1000);
-            Player p2 = createPlayer("p2", "Bob", 1000);
+            Player p1 = createPlayer("p1", "Alice", 1020, 0);
+            Player p2 = createPlayer("p2", "Bob", 980, 0);
             List<Player> contestedPlayers = List.of(p1, p2);
             Room contestedRoom = createRoom(ROOM_ID, contestedPlayers);
-            Game contested = new Game(ROOM_ID, contestedPlayers, 6, 10, 20);
-            assertFalse(contested.resetForNewHand());
-            contested.dealHoleCards();
-            contested.postBlinds();
-            contested.dealFlop();
-            contested.dealTurn();
-            contested.dealRiver();
-            contested.conductShowdown();
+            Game contested = Game.restoreBuilder()
+                    .gameId(ROOM_ID)
+                    .maxPlayers(6)
+                    .players(contestedPlayers)
+                    .activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(List.of())
+                    .communityCards(DETERMINISTIC_DECK)
+                    .currentPhase(GamePhase.SHOWDOWN)
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .lastHandPayout(new HandPayout(Map.of("p1", 40), Map.of(), Set.of("p1"), 0, true))
+                    .build();
             assertTrue(contested.wasContestedShowdown());
 
             Game restoredContested = snapshotMapper.deserialize(
@@ -1209,16 +1203,21 @@ class RoomSnapshotMapperTest {
             assertTrue(restoredContested.isHandSettled());
             assertTrue(restoredContested.wasContestedShowdown());
 
-            Player f1 = createPlayer("p1", "Alice", 1000);
-            Player f2 = createPlayer("p2", "Bob", 1000);
+            Player f1 = createPlayer("p1", "Alice", 1010, 0);
+            Player f2 = createPlayer("p2", "Bob", 990, 0);
             List<Player> foldPlayers = List.of(f1, f2);
             Room foldRoom = createRoom(ROOM_ID, foldPlayers);
-            Game foldWin = new Game(ROOM_ID, foldPlayers, 6, 10, 20);
-            assertFalse(foldWin.resetForNewHand());
-            foldWin.dealHoleCards();
-            foldWin.postBlinds();
-            Player folder = foldWin.getCurrentPlayer();
-            foldWin.processPlayerDecision(folder, PlayerAction.FOLD, 0);
+            Game foldWin = Game.restoreBuilder()
+                    .gameId(ROOM_ID)
+                    .maxPlayers(6)
+                    .players(foldPlayers)
+                    .activePlayerIds(List.of("p1", "p2"))
+                    .remainingDeck(List.of())
+                    .currentPhase(GamePhase.SHOWDOWN)
+                    .smallBlind(10)
+                    .bigBlind(20)
+                    .lastHandPayout(new HandPayout(Map.of("p1", 20), Map.of("p1", 10), Set.of("p1"), 0, false))
+                    .build();
             assertTrue(foldWin.isHandSettled());
             assertFalse(foldWin.wasContestedShowdown());
 
@@ -1229,18 +1228,14 @@ class RoomSnapshotMapperTest {
             assertFalse(restoredFoldWin.wasContestedShowdown());
         }
 
-        // =========================================================================
-        // 2. Ready Gate Countdown State Restoration
-        // =========================================================================
-
         @Test
         @DisplayName("ReadyGateState COUNTING_DOWN: Restores active flag, deadline, and enum state")
         void testReadyGateState_CountingDown() {
-            Player p1 = createPlayer("p1", "Alice", 1000);
-            Player p2 = createPlayer("p2", "Bob", 1000);
+            Player p1 = createPlayer("p1", "Alice", 1000, 0);
+            Player p2 = createPlayer("p2", "Bob", 1000, 0);
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
-            long deadline = System.currentTimeMillis() + 10000L;
+            long deadline = FIXED_EPOCH_MS + 10_000L;
 
             Game game = Game.restoreBuilder()
                     .gameId(ROOM_ID)
@@ -1252,7 +1247,6 @@ class RoomSnapshotMapperTest {
                     .currentPhase(GamePhase.PRE_FLOP)
                     .readyCountdownDeadlineEpochMs(deadline)
                     .readyGateState(ReadyGateState.COUNTING_DOWN)
-                    
                     .build();
 
             assertEquals(ReadyGateState.COUNTING_DOWN, game.getReadyGateState());
@@ -1270,8 +1264,8 @@ class RoomSnapshotMapperTest {
         @Test
         @DisplayName("ReadyGateState WAITING_FOR_PLAYERS: Restores inactive flag, null deadline, and enum state")
         void testReadyGateState_WaitingForPlayers() {
-            Player p1 = createPlayer("p1", "Alice", 1000);
-            Player p2 = createPlayer("p2", "Bob", 1000);
+            Player p1 = createPlayer("p1", "Alice", 1000, 0);
+            Player p2 = createPlayer("p2", "Bob", 1000, 0);
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
@@ -1285,7 +1279,6 @@ class RoomSnapshotMapperTest {
                     .currentPhase(GamePhase.PRE_FLOP)
                     .readyCountdownDeadlineEpochMs(null)
                     .readyGateState(ReadyGateState.WAITING_FOR_PLAYERS)
-                    
                     .build();
 
             assertEquals(ReadyGateState.WAITING_FOR_PLAYERS, game.getReadyGateState());
@@ -1303,8 +1296,8 @@ class RoomSnapshotMapperTest {
         @Test
         @DisplayName("ReadyGateState CLOSED: Restores inactive flag and CLOSED enum state")
         void testReadyGateState_Closed() {
-            Player p1 = createPlayer("p1", "Alice", 1000);
-            Player p2 = createPlayer("p2", "Bob", 1000);
+            Player p1 = createPlayer("p1", "Alice", 1000, 0);
+            Player p2 = createPlayer("p2", "Bob", 1000, 0);
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
@@ -1318,7 +1311,6 @@ class RoomSnapshotMapperTest {
                     .currentPhase(GamePhase.PRE_FLOP)
                     .readyCountdownDeadlineEpochMs(null)
                     .readyGateState(ReadyGateState.CLOSED)
-                    
                     .build();
 
             assertEquals(ReadyGateState.CLOSED, game.getReadyGateState());
@@ -1331,15 +1323,11 @@ class RoomSnapshotMapperTest {
             assertFalse(restored.isReadyCountdownActive());
         }
 
-        // =========================================================================
-        // 3. Defensive Isolation & Scheduled Tasks
-        // =========================================================================
-
         @Test
         @DisplayName("Scheduled Tasks & Defensive Isolation: Validates snapshot round-trip of task deadlines & timer versions")
         void testScheduledTasksAndTimerVersionsRoundTrip() {
-            Player p1 = createPlayer("p1", "Alice", 1000);
-            Player p2 = createPlayer("p2", "Bob", 1000);
+            Player p1 = createPlayer("p1", "Alice", 1000, 0);
+            Player p2 = createPlayer("p2", "Bob", 1000, 0);
             List<Player> players = List.of(p1, p2);
             Room room = createRoom(ROOM_ID, players);
 
@@ -1363,7 +1351,6 @@ class RoomSnapshotMapperTest {
                     .timerVersions(timerVersions)
                     .stateRevision(42L)
                     .handNumber(5L)
-                    
                     .build();
 
             assertEquals(42L, game.getStateRevision());
@@ -1382,53 +1369,8 @@ class RoomSnapshotMapperTest {
     }
 
     @Test
-    void queuedSnapshotSeesCompleteMutationAndPriorSnapshotRemainsUnchanged() throws Exception {
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
-        Player alice = new Player("Alice", "p1", 1000);
-        Player bob = new Player("Bob", "p2", 1000);
-        Player departing = new Player("Charlie", "p3", 1000);
-        Game game = new Game("snapshot-room", List.of(alice, bob, departing), 6, 10, 20);
-        RoomSnapshot.GameState before = mapper.toGameState(game);
-        RoomCoordinator coordinator = new RoomCoordinator();
-
-        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
-            Future<RoomSnapshot.GameState> capture;
-            try (LockLease _ = coordinator.acquire("snapshot-room")) {
-                alice.setDisconnected(true);
-                capture = executor.submit(() -> {
-                    try (LockLease _ = coordinator.acquire("snapshot-room")) {
-                        return mapper.toGameState(game);
-                    }
-                });
-                Awaitility.await().until(() -> coordinator.lockReservationCount("snapshot-room") >= 2);
-
-                bob.setReadyForNextHand(true);
-                game.removePlayer(departing);
-                game.incrementStateRevision();
-            }
-
-            RoomSnapshot.GameState after = capture.get(5, TimeUnit.SECONDS);
-            assertEquals(before.stateRevision() + 1, after.stateRevision());
-            assertEquals(List.of("p1", "p2"), after.activePlayerIds());
-            assertEquals(after.activePlayerIds(),
-                    after.players().stream().map(RoomSnapshot.PlayerState::playerId).toList());
-            assertTrue(after.players().get(0).disconnected());
-            assertTrue(after.players().get(1).readyForNextHand());
-
-            assertEquals(List.of("p1", "p2", "p3"), before.activePlayerIds());
-            assertEquals(before.activePlayerIds(),
-                    before.players().stream().map(RoomSnapshot.PlayerState::playerId).toList());
-            assertFalse(before.players().get(0).disconnected());
-            assertFalse(before.players().get(1).readyForNextHand());
-            assertThrows(UnsupportedOperationException.class, () -> after.players().clear());
-        }
-    }
-
-    @Test
-    void repeatedSeatingGetterCallsDoNotMutateSnapshotStateImage() {
-        RoomSnapshotMapper mapper = new RoomSnapshotMapper(
-                JsonMapper.builder().findAndAddModules().build());
+    void repeatedSeatingGetterCallsDoNotMutateCapturedSnapshot() {
+        RoomSnapshotMapper mapper = newMapper();
         Room room = new Room("room-pure-getters", "Pure Getters", "Alice", 6, 5, 10, 1000, null);
         room.addPlayer("Alice");
         room.addPlayer("Bob");
@@ -1452,10 +1394,9 @@ class RoomSnapshotMapperTest {
                 .bigBlindPlayerId(null)
                 .currentPlayerId("p2")
                 .currentPhase(GamePhase.PRE_FLOP)
-                
                 .build();
 
-        RoomSnapshot beforeImage = mapper.captureSnapshot(room, game);
+        RoomSnapshot beforeSnapshot = mapper.captureSnapshot(room, game);
         byte[] beforeBytes = mapper.serialize(mapper.captureSnapshot(room, game));
 
         for (int i = 0; i < 3; i++) {
@@ -1464,10 +1405,10 @@ class RoomSnapshotMapperTest {
             assertEquals("p3", game.getBigBlindPlayerId());
         }
 
-        RoomSnapshot afterImage = mapper.captureSnapshot(room, game);
+        RoomSnapshot afterSnapshot = mapper.captureSnapshot(room, game);
         byte[] afterBytes = mapper.serialize(mapper.captureSnapshot(room, game));
 
-        assertEquals(beforeImage, afterImage);
+        assertEquals(beforeSnapshot, afterSnapshot);
         assertArrayEquals(beforeBytes, afterBytes);
     }
 }

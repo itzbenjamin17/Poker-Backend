@@ -1,20 +1,32 @@
 package com.pokergame.persistence;
 
 import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import com.pokergame.model.Game;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
-import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
 import com.pokergame.persistence.snapshot.RecoveredRoom;
+import com.pokergame.persistence.snapshot.RoomSnapshotMapper;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;
+import com.pokergame.persistence.wal.MissingPersistenceKeyException;
 import com.pokergame.persistence.wal.WalFaultPoint;
 import com.pokergame.util.RoomCoordinator;
 import java.nio.charset.StandardCharsets;
@@ -24,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,6 +44,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.DefaultApplicationArguments;
@@ -68,6 +83,33 @@ class PersistenceRecoveryTest {
         if (applicationContext != null) {
             applicationContext.close();
         }
+    }
+
+    static Stream<PersistenceException> unrecoverableStoreFailures() {
+        return Stream.of(
+                new MissingPersistenceKeyException("old"),
+                new PersistenceException("Cannot enumerate persistence WALs"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("unrecoverableStoreFailures")
+    void unrecoverableStoreFailureAbortsStartupWithoutAcceptingTraffic(PersistenceException failure) {
+        when(store.recoverAll()).thenThrow(failure);
+        List<ReadinessState> states = new ArrayList<>();
+        applicationContext.addApplicationListener(
+                (ApplicationListener<AvailabilityChangeEvent<ReadinessState>>) event -> states.add(event.getState()));
+        PersistenceRecovery recovery = new PersistenceRecovery(
+                store, mapper, recoveryHandler, applicationContext, new RoomCoordinator());
+
+        PersistenceException thrown =
+                assertThrows(PersistenceException.class, () -> recovery.run(new DefaultApplicationArguments()));
+
+        assertSame(failure, thrown);
+        assertFalse(recovery.isComplete());
+        assertEquals(List.of(ReadinessState.REFUSING_TRAFFIC), states);
+        verify(store, never()).quarantine(anyString(), anyString());
+        verify(store, never()).delete(anyString());
+        verifyNoInteractions(mapper, recoveryHandler);
     }
 
     @Test

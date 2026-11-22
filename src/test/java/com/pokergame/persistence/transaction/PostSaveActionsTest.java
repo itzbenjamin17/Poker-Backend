@@ -1,21 +1,19 @@
 package com.pokergame.persistence.transaction;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import com.pokergame.model.Room;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
-
-import java.util.ArrayList;
-import java.util.List;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 
 /** Unit tests for {@link PostSaveActions} queueing, execution, and discard semantics. */
 @Tag("unit")
@@ -24,16 +22,6 @@ class PostSaveActionsTest {
     @AfterEach
     void clearThreadLocal() {
         PostSaveActions.clear();
-    }
-
-    @Test
-    void runsImmediatelyWhenNoSaveContextIsActive() {
-        List<String> executed = new ArrayList<>();
-
-        PostSaveActions.runAfterSave(() -> executed.add("immediate"));
-
-        assertThat(PostSaveActions.currentRoomId()).isNull();
-        assertThat(executed).containsExactly("immediate");
     }
 
     @Test
@@ -91,6 +79,61 @@ class PostSaveActionsTest {
         PostSaveActions.executeAll();
 
         assertThat(executed).containsExactly("first", "third");
+        assertThat(PostSaveActions.currentRoomId()).isNull();
+    }
+
+    @Test
+    void clearDiscardsQueuedActionsWithoutRunningThem() {
+        List<String> executed = new ArrayList<>();
+        PostSaveActions.begin("room-1");
+        PostSaveActions.runAfterSave(() -> executed.add("discarded"));
+
+        PostSaveActions.clear();
+        PostSaveActions.executeAll();
+
+        assertThat(PostSaveActions.currentRoomId()).isNull();
+        assertThat(executed).isEmpty();
+    }
+
+    @Test
+    void rejectsNullAction() {
+        assertThatThrownBy(() -> PostSaveActions.runAfterSave(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("action must not be null");
+    }
+
+    @Test
+    void rejectsNullActionWithoutDisturbingActiveQueue() {
+        List<String> executed = new ArrayList<>();
+        PostSaveActions.begin("room-1");
+        PostSaveActions.runAfterSave(() -> executed.add("kept"));
+
+        assertThatThrownBy(() -> PostSaveActions.runAfterSave(null)).isInstanceOf(NullPointerException.class);
+        PostSaveActions.executeAll();
+
+        assertThat(executed).containsExactly("kept");
+    }
+
+    @Test
+    void executeAllWithoutActiveContextDoesNothing() {
+        assertThatCode(PostSaveActions::executeAll).doesNotThrowAnyException();
+
+        assertThat(PostSaveActions.currentRoomId()).isNull();
+    }
+
+    @Test
+    void actionQueuedDuringExecuteAllRunsImmediatelyBecauseContextIsAlreadyClosed() {
+        List<String> executed = new ArrayList<>();
+        PostSaveActions.begin("room-1");
+        PostSaveActions.runAfterSave(() -> {
+            executed.add("outer");
+            PostSaveActions.runAfterSave(() -> executed.add("nested"));
+            executed.add("outer-after-nested-queue");
+        });
+
+        PostSaveActions.executeAll();
+
+        assertThat(executed).containsExactly("outer", "nested", "outer-after-nested-queue");
         assertThat(PostSaveActions.currentRoomId()).isNull();
     }
 
