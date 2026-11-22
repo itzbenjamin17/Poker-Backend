@@ -443,6 +443,8 @@ public class RoomService {
 
     /*
      * Finds an active room by name using case-insensitive matching.
+     * A finished room gives up its name as soon as its game ends: it stays registered by ID until
+     * cleanup so its players can still read the review, but a new room may reuse the name meanwhile.
      * Callers must not read mutable Room fields without acquiring the room lock.
      */
     private Room findRoomByName(String roomName) {
@@ -450,6 +452,7 @@ public class RoomService {
             return null;
         }
         return rooms.all().stream()
+                .filter(r -> !r.isFinished())
                 .filter(r -> r.getRoomName().equalsIgnoreCase(roomName))
                 .findFirst()
                 .orElse(null);

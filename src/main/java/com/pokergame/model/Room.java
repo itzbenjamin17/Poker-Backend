@@ -57,7 +57,8 @@ public class Room {
     private Long inactivityDeadlineEpochMs;
 
     // Live server state (rebuilt on restart, not saved to WAL).
-    private boolean isFinished;
+    // Volatile because the lock-free room-name lookup reads it to let a finished room's name be reused.
+    private volatile boolean isFinished;
     private final Map<String, Long> playerAbsenceDeadlines = new LinkedHashMap<>();
     private final Set<String> connectedPlayers = new HashSet<>();
 

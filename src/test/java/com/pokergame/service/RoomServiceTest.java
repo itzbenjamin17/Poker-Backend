@@ -249,6 +249,20 @@ class RoomServiceTest {
         }
 
         @Test
+        @DisplayName("frees a finished room's name for a new room while the finished room stays readable for its review")
+        void givenFinishedRoom_whenCreateRoomWithSameName_thenNewRoomTakesTheName() {
+            String finishedRoomId = createRoom(roomService, validCreateRequest).roomId();
+            withRoomLock(finishedRoomId, () -> coordinatedGetRoom(finishedRoomId).setFinished(true));
+
+            String newRoomId = createRoom(roomService, new CreateRoomRequest(
+                    "TEST ROOM", "AnotherHost", 4, 5, 10, 100, null)).roomId();
+
+            assertThat(newRoomId).isNotEqualTo(finishedRoomId);
+            assertThat(coordinatedGetRoom(finishedRoomId)).isNotNull();
+            assertThat(roomService.resolveRoomIdByName("Test Room")).isEqualTo(newRoomId);
+        }
+
+        @Test
         @DisplayName("should trim room and player names during creation")
         void createRoom_TrimsNames() {
             String roomId = createRoom(roomService, new CreateRoomRequest(
