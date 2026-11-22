@@ -1,5 +1,12 @@
 package com.pokergame.security;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
+import jakarta.servlet.ReadListener;
+import jakarta.servlet.ServletInputStream;
+import jakarta.servlet.http.HttpServletRequest;
+import java.io.ByteArrayInputStream;
+import java.util.Arrays;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -8,15 +15,6 @@ import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import tools.jackson.databind.ObjectMapper;
-
-import jakarta.servlet.ReadListener;
-import jakarta.servlet.ServletInputStream;
-import jakarta.servlet.http.HttpServletRequest;
-
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Unit tests for {@link PayloadSizeFilter}.
@@ -29,20 +27,24 @@ class PayloadSizeFilterTest {
 
     @BeforeEach
     void setUp() {
-        filter = new PayloadSizeFilter(new ObjectMapper());
+        filter = new PayloadSizeFilter(new ObjectMapper(), false);
     }
 
     @Test
     @DisplayName("should allow request when Content-Length is equal to max limit (10,240 bytes)")
     void givenExactMaxContentLength_whenDoFilter_thenAllowRequest() throws Exception {
+        byte[] body = new byte[10_240];
+        Arrays.fill(body, (byte) 'a');
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/room/create");
-        request.setContent(new byte[10_240]);
+        request.setContent(body);
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain filterChain = new MockFilterChain();
 
         filter.doFilterInternal(request, response, filterChain);
 
-        assertThat(filterChain.getRequest()).isNotNull();
+        HttpServletRequest downstream = (HttpServletRequest) filterChain.getRequest();
+        assertThat(downstream).isNotNull();
+        assertThat(downstream.getInputStream().readAllBytes()).isEqualTo(body);
         assertThat(response.getStatus()).isEqualTo(200);
     }
 
@@ -61,7 +63,7 @@ class PayloadSizeFilterTest {
     }
 
     @Test
-    @DisplayName("should reject request with HTTP 413 when Content-Length exceeds 10,240 bytes")
+    @DisplayName("should reject request with HTTP 413 when declared Content-Length exceeds 10,240 bytes")
     void givenOversizedContentLength_whenDoFilter_thenRejectWith413() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/room/create");
         request.setContent(new byte[10_241]);
@@ -70,72 +72,100 @@ class PayloadSizeFilterTest {
 
         filter.doFilterInternal(request, response, filterChain);
 
-        assertThat(response.getStatus()).isEqualTo(413);
-        assertThat(response.getContentAsString()).contains("payload too large");
+        assert413ProblemDetail(response);
         assertThat(filterChain.getRequest()).isNull();
     }
 
     @Test
-    @DisplayName("should allow unknown-length (Content-Length -1) body under the limit, reading its full body")
-    void givenUnknownLengthBodyUnderLimit_whenDoFilter_thenAllowAndConsume() throws Exception {
-        byte[] body = new byte[512];
-        UnknownLengthRequest request = new UnknownLengthRequest(body);
+    @DisplayName("should allow unknown-length (Content-Length -1) body of exact 10,240 bytes and forward exact bytes")
+    void givenUnknownLengthBodyAtExactLimit_whenDoFilter_thenAllowAndForwardExactBytes() throws Exception {
+        byte[] body = new byte[10_240];
+        Arrays.fill(body, (byte) 'x');
+        StreamedRequest request = new StreamedRequest(-1L, body);
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain filterChain = new MockFilterChain();
 
         filter.doFilterInternal(request, response, filterChain);
 
         assertThat(response.getStatus()).isEqualTo(200);
-        // The downstream request the chain received must be the wrapped (bounded) request, and
-        // its body must be fully readable up to the limit.
         HttpServletRequest downstream = (HttpServletRequest) filterChain.getRequest();
         assertThat(downstream).isNotNull();
-        assertThat(downstream.getInputStream().readAllBytes()).hasSize(body.length);
+        assertThat(downstream.getContentLengthLong()).isEqualTo(10_240L);
+        assertThat(downstream.getInputStream().readAllBytes()).isEqualTo(body);
     }
 
     @Test
-    @DisplayName("should reject unknown-length (Content-Length -1) body over the limit with HTTP 413")
-    void givenUnknownLengthBodyOverLimit_whenBodyRead_thenRejectWith413() throws Exception {
-        byte[] body = new byte[11_000];
-        UnknownLengthRequest request = new UnknownLengthRequest(body);
+    @DisplayName("should reject unknown-length (Content-Length -1) body of 10,241 bytes with HTTP 413 before filter chain")
+    void givenUnknownLengthBodyAt10241Bytes_whenDoFilter_thenRejectWith413BeforeChain() throws Exception {
+        byte[] body = new byte[10_241];
+        StreamedRequest request = new StreamedRequest(-1L, body);
         MockHttpServletResponse response = new MockHttpServletResponse();
-        // The chain drains the body (as Jackson body binding would), triggering the bound.
-        MockFilterChain filterChain = new MockFilterChain() {
-            @Override
-            public void doFilter(jakarta.servlet.ServletRequest req, jakarta.servlet.ServletResponse res)
-                    throws IOException, jakarta.servlet.ServletException {
-                ((HttpServletRequest) req).getInputStream().readAllBytes();
-                super.doFilter(req, res);
-            }
-        };
+        MockFilterChain filterChain = new MockFilterChain();
 
         filter.doFilterInternal(request, response, filterChain);
 
-        assertThat(response.getStatus()).isEqualTo(413);
-        assertThat(response.getContentAsString()).contains("payload too large");
+        assert413ProblemDetail(response);
+        assertThat(filterChain.getRequest()).isNull();
     }
 
-    /**
-     * Request whose declared content length is unknown ({@code -1}, as with chunked transfer
-     * encoding) but whose input stream still yields a real body, so the filter's counting path
-     * is exercised rather than the declared-length fast path.
-     */
-    private static final class UnknownLengthRequest extends MockHttpServletRequest {
+    @Test
+    @DisplayName("should reject request when declared Content-Length is small (100) but stream yields 10,241 bytes")
+    void givenLyingSmallContentLengthWithOversizedStream_whenDoFilter_thenRejectWith413() throws Exception {
+        byte[] body = new byte[10_241];
+        StreamedRequest request = new StreamedRequest(100L, body);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain filterChain = new MockFilterChain();
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        assert413ProblemDetail(response);
+        assertThat(filterChain.getRequest()).isNull();
+    }
+
+    @Test
+    @DisplayName("should pass GET request without body through untouched without reading input stream")
+    void givenGetRequestWithoutBody_whenDoFilter_thenPassThroughWithoutReadingStream() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/ws") {
+            @Override
+            public ServletInputStream getInputStream() {
+                throw new AssertionError("GET without body must not read input stream");
+            }
+        };
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain filterChain = new MockFilterChain();
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        assertThat(filterChain.getRequest()).isSameAs(request);
+        assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    private static void assert413ProblemDetail(MockHttpServletResponse response) throws Exception {
+        assertThat(response.getStatus()).isEqualTo(413);
+        assertThat(response.getContentType()).contains("application/problem+json");
+        assertThat(response.getContentAsString())
+                .contains("\"status\":413")
+                .contains("Request payload too large. Maximum allowed is 10KB.");
+    }
+
+    private static final class StreamedRequest extends MockHttpServletRequest {
+        private final long declaredLength;
         private final byte[] body;
 
-        UnknownLengthRequest(byte[] body) {
+        StreamedRequest(long declaredLength, byte[] body) {
             super("POST", "/api/room/create");
+            this.declaredLength = declaredLength;
             this.body = body;
         }
 
         @Override
         public long getContentLengthLong() {
-            return -1L;
+            return declaredLength;
         }
 
         @Override
         public int getContentLength() {
-            return -1;
+            return (int) declaredLength;
         }
 
         @Override
@@ -164,7 +194,6 @@ class PayloadSizeFilterTest {
 
                 @Override
                 public void setReadListener(ReadListener readListener) {
-                    // not used in blocking test reads
                 }
             };
         }

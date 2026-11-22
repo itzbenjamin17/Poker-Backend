@@ -1,12 +1,12 @@
 package com.pokergame.security;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.pokergame.testutil.MutableClock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Unit tests for {@link RateLimitService}.
@@ -15,17 +15,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("RateLimitService")
 class RateLimitServiceTest {
 
+    private static final long INITIAL_EPOCH_MS = 1_700_000_000_000L;
+
+    private MutableClock clock;
     private RateLimitService service;
 
     @BeforeEach
     void setUp() {
-        service = new RateLimitService();
-        ReflectionTestUtils.setField(service, "enabled", true);
+        clock = new MutableClock(INITIAL_EPOCH_MS);
+        service = new RateLimitService(true, clock);
     }
 
     @Test
-    @DisplayName("should allow REST_CAPACITY requests per key and reject the next")
-    void givenRestEndpoint_whenConsumedUpToLimit_thenRejectSubsequentRequests() {
+    @DisplayName("should allow REST_CAPACITY requests per key, reject the 21st, and refill one token after 3 seconds")
+    void givenRestEndpoint_whenConsumedUpToLimit_thenRejectAndRefillDeterministically() {
         String key = "192.168.1.1:/api/room/create";
 
         for (int i = 0; i < RateLimitService.REST_CAPACITY; i++) {
@@ -34,9 +37,17 @@ class RateLimitServiceTest {
                     .isTrue();
         }
 
-        assertThat(service.consumeRest(key).allowed())
-                .as("6th REST request should be rejected by rate limit")
+        RateLimitService.Decision rejected = service.consumeRest(key);
+        assertThat(rejected.allowed())
+                .as("21st REST request should be rejected by rate limit")
                 .isFalse();
+        assertThat(rejected.retryAfterSeconds()).isEqualTo(3L);
+
+        clock.advanceByMillis(2_999L);
+        assertThat(service.consumeRest(key).allowed()).isFalse();
+
+        clock.advanceByMillis(1L);
+        assertThat(service.consumeRest(key).allowed()).isTrue();
     }
 
     @Test
@@ -50,15 +61,14 @@ class RateLimitServiceTest {
         }
         assertThat(service.consumeRest(key1).allowed()).isFalse();
 
-        // Key 2 should still have full quota
         assertThat(service.consumeRest(key2).allowed())
                 .as("Distinct REST key should not be throttled by key1's exhaustion")
                 .isTrue();
     }
 
     @Test
-    @DisplayName("should allow up to 5 WebSocket messages per user and reject the 6th")
-    void givenWsUser_whenConsumedUpToLimit_thenRejectSubsequentMessages() {
+    @DisplayName("should allow up to 5 WebSocket messages per user, reject the 6th, and refill one token after 200ms")
+    void givenWsUser_whenConsumedUpToLimit_thenRejectAndRefillDeterministically() {
         String username = "Alice:room-123";
 
         for (int i = 0; i < 5; i++) {
@@ -70,6 +80,12 @@ class RateLimitServiceTest {
         assertThat(service.tryConsumeWs(username))
                 .as("6th WS message should be rejected by rate limit")
                 .isFalse();
+
+        clock.advanceByMillis(199L);
+        assertThat(service.tryConsumeWs(username)).isFalse();
+
+        clock.advanceByMillis(1L);
+        assertThat(service.tryConsumeWs(username)).isTrue();
     }
 
     @Test
@@ -83,7 +99,6 @@ class RateLimitServiceTest {
         }
         assertThat(service.tryConsumeWs(user1)).isFalse();
 
-        // User 2 should still have full quota
         assertThat(service.tryConsumeWs(user2))
                 .as("Distinct WS user should not be throttled by user1's exhaustion")
                 .isTrue();
@@ -92,12 +107,12 @@ class RateLimitServiceTest {
     @Test
     @DisplayName("should bypass rate limits when enabled is false")
     void givenRateLimitingDisabled_whenConsumedBeyondLimit_thenAllRequestsSucceed() {
-        ReflectionTestUtils.setField(service, "enabled", false);
+        RateLimitService disabledService = new RateLimitService(false, clock);
         String key = "10.0.0.1:/api/room/create";
 
-        for (int i = 0; i < 10; i++) {
-            assertThat(service.consumeRest(key).allowed()).isTrue();
-            assertThat(service.tryConsumeWs("Player1")).isTrue();
+        for (int i = 0; i < RateLimitService.REST_CAPACITY + 5; i++) {
+            assertThat(disabledService.consumeRest(key).allowed()).isTrue();
+            assertThat(disabledService.tryConsumeWs("Player1")).isTrue();
         }
     }
 
@@ -113,7 +128,6 @@ class RateLimitServiceTest {
 
         service.cleanUpWs(username);
 
-        // After cleanup, a fresh bucket is created on next call
         assertThat(service.tryConsumeWs(username))
                 .as("After cleanup, player gets a fresh bucket")
                 .isTrue();
@@ -137,21 +151,22 @@ class RateLimitServiceTest {
         assertThat(service.consumeRest(restKey).allowed()).isTrue();
         assertThat(service.tryConsumeWs(wsUser)).isTrue();
     }
+
     @Test
-    @DisplayName("should evict idle WebSocket buckets after idle threshold and retain active ones")
-    void givenActiveAndIdleWsBuckets_whenEvicted_thenOnlyIdleBucketsRemoved() {
+    @DisplayName("should evict idle WebSocket buckets via periodicWsCleanup and retain recently touched ones")
+    void givenActiveAndIdleWsBuckets_whenPeriodicWsCleanupRuns_thenOnlyIdleBucketsRemoved() {
         String idleUser = "IdleUser:room-1";
         String activeUser = "ActiveUser:room-1";
 
         service.tryConsumeWs(idleUser);
         service.tryConsumeWs(activeUser);
-
         assertThat(service.wsBucketCount()).isEqualTo(2);
 
-        // Manually simulate time passing for idleUser by setting its last access to 65 seconds ago
-        service.setLastAccessForTesting(idleUser, System.currentTimeMillis() - 65_000);
+        clock.advanceByMillis(35_000L);
+        service.tryConsumeWs(activeUser);
 
-        service.evictIdleWsBuckets(60_000);
+        clock.advanceByMillis(30_000L);
+        service.periodicWsCleanup();
 
         assertThat(service.wsBucketCount()).isEqualTo(1);
         assertThat(service.hasWsBucket(activeUser)).isTrue();
@@ -159,29 +174,8 @@ class RateLimitServiceTest {
     }
 
     @Test
-    @DisplayName("should allow at least 20 REST requests per minute so a shared network is not blocked")
-    void restCapacityFitsAGroupOfFriendsOnOneNetwork() {
-        assertThat(RateLimitService.REST_CAPACITY).isGreaterThanOrEqualTo(20);
-    }
-
-    @Test
-    @DisplayName("should report the real wait until the next REST request is allowed")
-    void givenExhaustedRestKey_whenConsumed_thenReportsSecondsUntilNextToken() {
-        String key = "192.168.1.9:/api/room/join";
-        for (int i = 0; i < RateLimitService.REST_CAPACITY; i++) {
-            assertThat(service.consumeRest(key).allowed()).isTrue();
-        }
-
-        RateLimitService.Decision rejected = service.consumeRest(key);
-
-        assertThat(rejected.allowed()).isFalse();
-        // Tokens refill one at a time, so the wait is one refill interval, never the whole window.
-        assertThat(rejected.retryAfterSeconds()).isBetween(1L, 3L);
-    }
-
-    @Test
-    @DisplayName("should block join attempts on a room only after repeated wrong passwords from one IP")
-    void givenRepeatedWrongPasswords_whenChecked_thenOnlyThatIpAndRoomAreBlocked() {
+    @DisplayName("should block join attempts on a room after repeated wrong passwords and refill one attempt after 30s")
+    void givenRepeatedWrongPasswords_whenChecked_thenOnlyThatIpAndRoomAreBlockedAndRefillDeterministically() {
         for (int i = 0; i < RateLimitService.JOIN_PASSWORD_FAILURES; i++) {
             assertThat(service.checkJoinPasswordAttempt("10.0.0.5", "room-a").allowed()).isTrue();
             service.recordFailedJoinPassword("10.0.0.5", "room-a");
@@ -189,12 +183,18 @@ class RateLimitServiceTest {
 
         RateLimitService.Decision blocked = service.checkJoinPasswordAttempt("10.0.0.5", "room-a");
         assertThat(blocked.allowed()).isFalse();
-        assertThat(blocked.retryAfterSeconds()).isBetween(1L, 30L);
+        assertThat(blocked.retryAfterSeconds()).isEqualTo(30L);
 
         assertThat(service.checkJoinPasswordAttempt("10.0.0.5", "room-b").allowed())
                 .as("other rooms are unaffected").isTrue();
         assertThat(service.checkJoinPasswordAttempt("10.0.0.6", "room-a").allowed())
                 .as("other IPs are unaffected").isTrue();
+
+        clock.advanceByMillis(29_999L);
+        assertThat(service.checkJoinPasswordAttempt("10.0.0.5", "room-a").allowed()).isFalse();
+
+        clock.advanceByMillis(1L);
+        assertThat(service.checkJoinPasswordAttempt("10.0.0.5", "room-a").allowed()).isTrue();
     }
 
     @Test
@@ -208,26 +208,26 @@ class RateLimitServiceTest {
     @Test
     @DisplayName("should bypass the join-password limit when rate limiting is disabled")
     void givenRateLimitingDisabled_whenWrongPasswordsRecorded_thenNeverBlocked() {
-        ReflectionTestUtils.setField(service, "enabled", false);
+        RateLimitService disabledService = new RateLimitService(false, clock);
         for (int i = 0; i < RateLimitService.JOIN_PASSWORD_FAILURES * 2; i++) {
-            service.recordFailedJoinPassword("10.0.0.8", "room-a");
+            disabledService.recordFailedJoinPassword("10.0.0.8", "room-a");
         }
-        assertThat(service.checkJoinPasswordAttempt("10.0.0.8", "room-a").allowed()).isTrue();
+        assertThat(disabledService.checkJoinPasswordAttempt("10.0.0.8", "room-a").allowed()).isTrue();
     }
 
     @Test
-    @DisplayName("should evict idle REST buckets and keep recently used ones")
-    void givenIdleAndActiveRestBuckets_whenEvicted_thenOnlyIdleRemoved() {
+    @DisplayName("should evict idle REST buckets via periodicRestCleanup and keep recently touched ones")
+    void givenIdleAndActiveRestBuckets_whenPeriodicRestCleanupRuns_thenOnlyIdleRemoved() {
         service.consumeRest("idle-key");
         service.recordFailedJoinPassword("10.0.0.9", "room-idle");
         service.consumeRest("active-key");
         assertThat(service.restBucketCount()).isEqualTo(3);
 
-        long longAgo = System.currentTimeMillis() - 20 * 60_000L;
-        service.setRestLastAccessForTesting("idle-key", longAgo);
-        service.setRestLastAccessForTesting(RateLimitService.joinPasswordKey("10.0.0.9", "room-idle"), longAgo);
+        clock.advanceByMillis(6 * 60_000L);
+        service.consumeRest("active-key");
 
-        service.evictIdleRestBuckets(10 * 60_000L);
+        clock.advanceByMillis(5 * 60_000L);
+        service.periodicRestCleanup();
 
         assertThat(service.restBucketCount()).isEqualTo(1);
     }

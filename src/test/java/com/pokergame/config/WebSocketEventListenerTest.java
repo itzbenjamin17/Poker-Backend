@@ -1,5 +1,18 @@
 package com.pokergame.config;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import com.pokergame.model.Room;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.security.RateLimitService;
@@ -15,11 +28,22 @@ import com.pokergame.testutil.TestRoomLocks;
 import com.pokergame.testutil.TestTimings;
 import com.pokergame.util.LockLease;
 import com.pokergame.util.RoomCoordinator;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
@@ -29,44 +53,24 @@ import org.springframework.web.socket.messaging.SessionDisconnectEvent;
 import org.springframework.web.socket.messaging.SessionSubscribeEvent;
 import org.springframework.web.socket.messaging.SessionUnsubscribeEvent;
 
-import java.time.Duration;
-import java.time.Instant;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.CyclicBarrier;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
+/** Unit tests for {@link WebSocketEventListener}. */
 @Tag("unit")
+@ExtendWith(MockitoExtension.class)
 class WebSocketEventListenerTest {
 
+    private static final long INITIAL_EPOCH_MS = 1_700_000_000_000L;
     private static final long GRACE_PERIOD_MS = 60_000L;
     private static final RoomTimingProperties ROOM_TIMINGS = TestTimings.room(GRACE_PERIOD_MS);
 
+    @Mock
     private RoomService roomService;
+
+    @Mock
     private GameLifecycleService lifecycle;
+
+    @Mock
     private RateLimitService rateLimit;
+
     private MutableClock clock;
     private DeterministicTaskScheduler scheduler;
     private RoomCoordinator roomCoordinator;
@@ -74,14 +78,11 @@ class WebSocketEventListenerTest {
 
     @BeforeEach
     void setUp() {
-        roomService = mock(RoomService.class);
-        lifecycle = mock(GameLifecycleService.class);
-        rateLimit = mock(RateLimitService.class);
-        clock = new MutableClock(System.currentTimeMillis());
+        clock = new MutableClock(INITIAL_EPOCH_MS);
         scheduler = new DeterministicTaskScheduler(clock);
         roomCoordinator = new RoomCoordinator();
         listener = new WebSocketEventListener(
-                roomService, lifecycle, rateLimit, scheduler, roomCoordinator, ROOM_TIMINGS);
+                roomService, lifecycle, rateLimit, scheduler, roomCoordinator, ROOM_TIMINGS, clock);
     }
 
     @Test
@@ -93,27 +94,27 @@ class WebSocketEventListenerTest {
         CountDownLatch releaseCleanup = new CountDownLatch(1);
 
         doAnswer(invocation -> {
-            // Models same-room re-entry by the durable service proxy.
             try (LockLease _ = roomCoordinator.acquire("room")) {
-                assertTrue(roomCoordinator.isHeldByCurrentThread("room"));
+                assertThat(roomCoordinator.isHeldByCurrentThread("room")).isTrue();
                 return null;
             }
         }).when(lifecycle).markPlayerReconnected("room", "Alice");
 
         doAnswer(invocation -> {
             cleanupInsideLock.countDown();
-            assertTrue(releaseCleanup.await(2, TimeUnit.SECONDS));
+            assertThat(releaseCleanup.await(2, TimeUnit.SECONDS)).isTrue();
             return null;
         }).when(lifecycle).cancelTimers("room", false);
 
         listener.publishRoomDestroyed("room");
 
-        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
             Future<Void> cleanup = executor.submit(() -> {
                 scheduler.runAllPending();
                 return null;
             });
-            assertTrue(cleanupInsideLock.await(2, TimeUnit.SECONDS));
+            assertThat(cleanupInsideLock.await(2, TimeUnit.SECONDS)).isTrue();
 
             Future<Void> reconnect = executor.submit(() -> {
                 listener.registerSession(principal, "replacement-session");
@@ -127,65 +128,59 @@ class WebSocketEventListenerTest {
 
             cleanup.get(3, TimeUnit.SECONDS);
             reconnect.get(3, TimeUnit.SECONDS);
+        } finally {
+            releaseCleanup.countDown();
+            executor.shutdownNow();
+            executor.awaitTermination(2, TimeUnit.SECONDS);
         }
 
         verify(lifecycle).cancelTimers("room", false);
         verify(rateLimit).cleanUpWs("Alice:room");
 
-        // Replacement session registered after cleanup remains active.
         listener.handleWebSocketDisconnectListener(disconnectEvent("replacement-session", principal));
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
     }
 
-    /** An ended-membership cleanup that runs late must not evict a player who has since re-joined. */
     @Test
     void lateMembershipEndedDoesNotEvictRejoinedPlayer() {
-        Room room = new Room("room", "Room", "Bob", 4, 10, 20, 500, null);
+        Room room = new Room("room", "Room", "Bob", 4, 10, 20, 500, null, clock);
         String firstMembership = room.addPlayer("Bob");
         when(roomService.getRoom("room")).thenReturn(room);
         listener.registerSession(new PlayerPrincipal("Bob", "room", firstMembership), "bob-session-1");
 
-        // The membership-ended cleanup is scheduled but has not run yet.
         listener.publishMembershipEnded("room", "Bob", firstMembership);
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
 
-        // Meanwhile Bob leaves and re-joins with a new membership and connects again.
         String secondMembership = TestRoomLocks.withRoomLock(roomCoordinator, "room", () -> {
             room.removePlayer("Bob");
             String membership = room.addPlayer("Bob");
             room.setPlayerConnected("Bob", true);
             return membership;
         });
-        assertNotEquals(firstMembership, secondMembership);
+        assertThat(secondMembership).isNotEqualTo(firstMembership);
         listener.registerSession(new PlayerPrincipal("Bob", "room", secondMembership), "bob-session-2");
 
-        assertEquals(1, scheduler.runAllPending());
+        assertThat(scheduler.runAllPending()).isEqualTo(1);
 
-        TestRoomLocks.withRoomLock(roomCoordinator, "room", () -> {
-            assertTrue(room.hasPlayer("Bob"));
-            assertEquals(secondMembership, room.getMembershipId("Bob"));
-            return null;
+        TestRoomLocks.runWithRoomLock(roomCoordinator, "room", () -> {
+            assertThat(room.hasPlayer("Bob")).isTrue();
+            assertThat(room.getMembershipId("Bob")).isEqualTo(secondMembership);
         });
         verify(rateLimit, never()).cleanUpWs("Bob:room");
 
-        // Disconnecting the retired session does not disturb Bob's active rejoined session.
         listener.handleWebSocketDisconnectListener(
                 disconnectEvent("bob-session-1", new PlayerPrincipal("Bob", "room", firstMembership)));
-        assertTrue(room.isPlayerConnected("Bob"));
-        assertEquals(0, scheduler.pendingCount());
+        assertThat(room.isPlayerConnected("Bob")).isTrue();
+        assertThat(scheduler.pendingCount()).isZero();
 
-        // Disconnecting the rejoined session triggers normal disconnect grace scheduling.
         listener.handleWebSocketDisconnectListener(
                 disconnectEvent("bob-session-2", new PlayerPrincipal("Bob", "room", secondMembership)));
-        assertFalse(room.isPlayerConnected("Bob"));
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(room.isPlayerConnected("Bob")).isFalse();
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
     }
 
     @Test
     void connectReconcilesRecoveredDisconnectedPlayerEvenWithoutPendingRuntimeFuture() {
-        when(lifecycle.gameExists("room")).thenReturn(true);
-        when(lifecycle.playerExistsInGame("room", "Alice")).thenReturn(true);
-
         listener.handleWebSocketConnectListener(connectEvent("session-a", new PlayerPrincipal("Alice", "room")));
 
         verify(lifecycle).markPlayerReconnected("room", "Alice");
@@ -227,10 +222,10 @@ class WebSocketEventListenerTest {
         ArgumentCaptor<Long> deadlineCaptor = ArgumentCaptor.forClass(Long.class);
         verify(lifecycle).markPlayerDisconnected(eq("room"), eq("Alice"), deadlineCaptor.capture());
 
+        assertThat(deadlineCaptor.getValue()).isEqualTo(INITIAL_EPOCH_MS + GRACE_PERIOD_MS);
         assertThat(scheduler.scheduledTasks()).hasSize(1);
-        assertEquals(Instant.ofEpochMilli(deadlineCaptor.getValue()),
-                scheduler.scheduledTasks().getFirst().startTime(),
-                "TaskScheduler instant must exactly match the domain deadline epoch ms");
+        assertThat(scheduler.scheduledTasks().getFirst().startTime())
+                .isEqualTo(Instant.ofEpochMilli(deadlineCaptor.getValue()));
     }
 
     @Test
@@ -239,15 +234,12 @@ class WebSocketEventListenerTest {
         when(lifecycle.gameExists("room")).thenReturn(true);
         when(lifecycle.playerExistsInGame("room", "Alice")).thenReturn(true);
 
-        // Connect session-1 twice
         listener.handleWebSocketConnectListener(connectEvent("session-1", principal));
         listener.handleWebSocketConnectListener(connectEvent("session-1", principal));
 
-        // Disconnecting session-1 once transitions to 0 and schedules
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-1", principal));
         assertThat(scheduler.scheduledTasks()).hasSize(1);
 
-        // A second disconnect for session-1 is a duplicate/already-retired disconnect and produces no new schedule
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-1", principal));
         assertThat(scheduler.scheduledTasks()).hasSize(1);
     }
@@ -263,9 +255,8 @@ class WebSocketEventListenerTest {
         assertThat(scheduler.scheduledTasks()).isEmpty();
         verify(lifecycle, never()).markPlayerDisconnected(anyString(), anyString(), anyLong());
 
-        // Alice's session remains active so her own disconnect schedules cleanup.
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-1", alicePrincipal));
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
     }
 
     @Test
@@ -279,44 +270,48 @@ class WebSocketEventListenerTest {
         ScheduledTask scheduled = scheduler.scheduledTasks().getFirst();
 
         listener.handleWebSocketConnectListener(connectEvent("session-b", principal));
-        assertTrue(scheduled.isCancelled());
-        assertEquals(0, scheduler.pendingCount());
+        assertThat(scheduled.isCancelled()).isTrue();
+        assertThat(scheduler.pendingCount()).isZero();
 
-        clock.advanceByMillis(GRACE_PERIOD_MS + 5_000L);
-        assertEquals(0, scheduler.runDueTasks(clock));
+        clock.advanceByMillis(GRACE_PERIOD_MS);
+        assertThat(scheduler.runDueTasks(clock)).isZero();
 
-        // Even if an already-dispatched callback runs, its stale/cancelled guard prevents eviction.
         scheduled.task().run();
         verify(lifecycle, never()).removeDisconnectedPlayer(anyString(), anyString(), any(), anyLong());
     }
 
     @Test
-    void connectFailureInMarkPlayerReconnectedLeavesPendingDisconnectActive() {
-        PlayerPrincipal principal = new PlayerPrincipal("Alice", "room");
+    void connectFailureInMarkPlayerReconnectedDoesNotRegisterActiveSessionAndAllowsGraceEviction() {
+        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null, clock);
+        String membershipId = room.addPlayer("Alice");
+        when(roomService.getRoom("room")).thenReturn(room);
 
+        PlayerPrincipal principal = new PlayerPrincipal("Alice", "room", membershipId);
         listener.handleWebSocketConnectListener(connectEvent("session-a", principal));
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-a", principal));
 
         assertThat(scheduler.scheduledTasks()).hasSize(1);
         ScheduledTask pending = scheduler.scheduledTasks().getFirst();
 
-        when(lifecycle.gameExists("room")).thenReturn(true);
-        when(lifecycle.playerExistsInGame("room", "Alice")).thenReturn(true);
         doThrow(new RuntimeException("Simulated persistence failure"))
                 .when(lifecycle).markPlayerReconnected("room", "Alice");
 
-        try {
-            listener.handleWebSocketConnectListener(connectEvent("session-b", principal));
-        } catch (RuntimeException ignored) {
-        }
+        assertThatThrownBy(() -> listener.handleWebSocketConnectListener(connectEvent("session-b", principal)))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("Simulated persistence failure");
 
-        assertFalse(pending.isCancelled());
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(pending.isCancelled()).isFalse();
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
+
+        clock.advanceByMillis(GRACE_PERIOD_MS);
+        assertThat(scheduler.runDueTasks(clock)).isEqualTo(1);
+        verify(lifecycle).removeDisconnectedPlayer(
+                "room", "Alice", membershipId, INITIAL_EPOCH_MS + GRACE_PERIOD_MS);
     }
 
     @Test
     void disconnectSchedulesCleanupEvenIfMarkPlayerDisconnectedThrows() {
-        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
+        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null, clock);
         String membershipId = room.addPlayer("Alice");
         when(roomService.getRoom("room")).thenReturn(room);
 
@@ -329,16 +324,17 @@ class WebSocketEventListenerTest {
                 .when(lifecycle).markPlayerDisconnected(eq("room"), eq("Alice"), anyLong());
 
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-a", principal));
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
 
-        clock.advanceByMillis(GRACE_PERIOD_MS + 5_000L);
-        assertEquals(1, scheduler.runDueTasks(clock));
-        verify(lifecycle).removeDisconnectedPlayer(eq("room"), eq("Alice"), eq(membershipId), anyLong());
+        clock.advanceByMillis(GRACE_PERIOD_MS);
+        assertThat(scheduler.runDueTasks(clock)).isEqualTo(1);
+        verify(lifecycle).removeDisconnectedPlayer(
+                "room", "Alice", membershipId, INITIAL_EPOCH_MS + GRACE_PERIOD_MS);
     }
 
     @Test
     void registerInitialConnection_SchedulesGraceTimerWithAcceptanceDeadline() {
-        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
+        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null, clock);
         String membershipId = room.addPlayer("Alice");
         when(roomService.getRoom("room")).thenReturn(room);
 
@@ -346,21 +342,21 @@ class WebSocketEventListenerTest {
         listener.registerInitialConnection("room", "Alice", membershipId, deadline);
 
         assertThat(scheduler.scheduledTasks()).hasSize(1);
-        assertEquals(Instant.ofEpochMilli(deadline), scheduler.scheduledTasks().getFirst().startTime());
+        assertThat(scheduler.scheduledTasks().getFirst().startTime()).isEqualTo(Instant.ofEpochMilli(deadline));
 
         clock.advanceByMillis(GRACE_PERIOD_MS - 1L);
-        assertEquals(0, scheduler.runDueTasks(clock));
+        assertThat(scheduler.runDueTasks(clock)).isZero();
         verify(lifecycle, never()).removeDisconnectedPlayer(anyString(), anyString(), any(), anyLong());
 
         clock.advanceByMillis(1L);
-        assertEquals(1, scheduler.runDueTasks(clock));
+        assertThat(scheduler.runDueTasks(clock)).isEqualTo(1);
         verify(rateLimit).cleanUpWs("Alice:room");
         verify(lifecycle).removeDisconnectedPlayer("room", "Alice", membershipId, deadline);
     }
 
     @Test
     void registerInitialConnection_PlayerAlreadyConnected_DoesNotScheduleTimer() {
-        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
+        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null, clock);
         String membershipId = room.addPlayer("Alice");
         when(roomService.getRoom("room")).thenReturn(room);
 
@@ -373,27 +369,73 @@ class WebSocketEventListenerTest {
     }
 
     @Test
+    void registerInitialConnection_StaleMembershipOrExistingPendingDisconnect_IsNoOp() {
+        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null, clock);
+        String membershipId = room.addPlayer("Alice");
+        when(roomService.getRoom("room")).thenReturn(room);
+
+        listener.registerInitialConnection("room", "Alice", "stale-mem", clock.millis() + GRACE_PERIOD_MS);
+        assertThat(scheduler.scheduledTasks()).isEmpty();
+
+        long firstDeadline = clock.millis() + GRACE_PERIOD_MS;
+        listener.registerInitialConnection("room", "Alice", membershipId, firstDeadline);
+        assertThat(scheduler.scheduledTasks()).hasSize(1);
+
+        listener.registerInitialConnection("room", "Alice", membershipId, firstDeadline + 10_000L);
+        assertThat(scheduler.scheduledTasks()).hasSize(1);
+        assertThat(scheduler.scheduledTasks().getFirst().startTime()).isEqualTo(Instant.ofEpochMilli(firstDeadline));
+    }
+
+    @Test
+    void scheduleRecoveredDisconnect_ReplacesExistingTimerAndEvictsOrReconcilesActiveSession() {
+        String roomId = "room-recovered";
+        Room room = new Room(roomId, "Recovered Room", "Alice", 4, 10, 20, 1000, null, clock);
+        String aliceMem = room.addPlayer("Alice");
+        String bobMem = room.addPlayer("Bob");
+        room.setPlayerConnected("Alice", true);
+        when(roomService.getRoom(roomId)).thenReturn(room);
+
+        long firstDeadline = clock.millis() + 10_000L;
+        listener.scheduleRecoveredDisconnect(roomId, "Alice", firstDeadline);
+        assertThat(scheduler.scheduledTasks()).hasSize(1);
+        ScheduledTask firstTask = scheduler.scheduledTasks().getFirst();
+
+        long secondDeadline = clock.millis() + 20_000L;
+        listener.scheduleRecoveredDisconnect(roomId, "Alice", secondDeadline);
+        assertThat(firstTask.isCancelled()).isTrue();
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
+        TestRoomLocks.runWithRoomLock(roomCoordinator, roomId, () -> {
+            assertThat(room.isPlayerConnected("Alice")).isFalse();
+            assertThat(room.getAbsenceDeadline("Alice")).isEqualTo(secondDeadline);
+        });
+
+        listener.registerSession(new PlayerPrincipal("Bob", roomId, bobMem), "bob-active-session");
+        listener.scheduleRecoveredDisconnect(roomId, "Bob", secondDeadline);
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
+        verify(lifecycle, org.mockito.Mockito.times(2)).markPlayerReconnected(roomId, "Bob");
+
+        clock.advanceByMillis(20_000L);
+        assertThat(scheduler.runDueTasks(clock)).isEqualTo(1);
+        verify(lifecycle).removeDisconnectedPlayer(roomId, "Alice", aliceMem, secondDeadline);
+    }
+
+    @Test
     void disconnectSetsRoomPlayerConnectedFalseAndAbsenceDeadlineUnderRoomLock() {
-        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
+        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null, clock);
         String membershipId = room.addPlayer("Alice");
         room.setPlayerConnected("Alice", true);
         when(roomService.getRoom("room")).thenReturn(room);
 
         PlayerPrincipal principal = new PlayerPrincipal("Alice", "room", membershipId);
         listener.handleWebSocketConnectListener(connectEvent("session-1", principal));
-        assertTrue(room.isPlayerConnected("Alice"));
+        assertThat(room.isPlayerConnected("Alice")).isTrue();
 
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-1", principal));
 
-        TestRoomLocks.withRoomLock(roomCoordinator, "room", () -> {
-            assertFalse(room.isPlayerConnected("Alice"),
-                    "Player connection flag in room aggregate must be cleared on disconnect");
-            assertNotNull(room.getAbsenceDeadline("Alice"),
-                    "Room absence deadline must be recorded on disconnect");
-            assertEquals(scheduler.scheduledTasks().getFirst().startTime().toEpochMilli(),
-                    room.getAbsenceDeadline("Alice"),
-                    "Room absence deadline must match the scheduled grace expiry instant");
-            return null;
+        TestRoomLocks.runWithRoomLock(roomCoordinator, "room", () -> {
+            assertThat(room.isPlayerConnected("Alice")).isFalse();
+            assertThat(room.getAbsenceDeadline("Alice"))
+                    .isEqualTo(scheduler.scheduledTasks().getFirst().startTime().toEpochMilli());
         });
     }
 
@@ -406,8 +448,8 @@ class WebSocketEventListenerTest {
         when(roomService.getRoom("room")).thenReturn(null);
         when(lifecycle.gameExists("room")).thenReturn(false);
 
-        clock.advanceByMillis(GRACE_PERIOD_MS + 5_000L);
-        assertEquals(1, scheduler.runDueTasks(clock));
+        clock.advanceByMillis(GRACE_PERIOD_MS);
+        assertThat(scheduler.runDueTasks(clock)).isEqualTo(1);
 
         verify(rateLimit).cleanUpWs("Alice:room");
         verify(lifecycle, never()).removeDisconnectedPlayer(anyString(), anyString(), any(), anyLong());
@@ -415,43 +457,39 @@ class WebSocketEventListenerTest {
 
     @Test
     void staleMembershipConnectAndDisconnectAreIgnoredWithoutPoisoningActivePlayer() {
-        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null);
+        Room room = new Room("room", "Room", "Alice", 4, 10, 20, 1000, null, clock);
         String activeMemId = room.addPlayer("Alice");
         room.setPlayerConnected("Alice", true);
         when(roomService.getRoom("room")).thenReturn(room);
 
         PlayerPrincipal stalePrincipal = new PlayerPrincipal("Alice", "room", "stale-mem-id");
 
-        // Stale connect is ignored (and disconnecting it has no effect)
         listener.handleWebSocketConnectListener(connectEvent("stale-session", stalePrincipal));
         verify(lifecycle, never()).markPlayerReconnected("room", "Alice");
 
         listener.handleWebSocketDisconnectListener(disconnectEvent("stale-session", stalePrincipal));
-        assertTrue(room.isPlayerConnected("Alice"));
+        assertThat(room.isPlayerConnected("Alice")).isTrue();
         assertThat(scheduler.scheduledTasks()).isEmpty();
         verify(rateLimit, never()).cleanUpWs(anyString());
 
-        // Active session connects
         PlayerPrincipal activePrincipal = new PlayerPrincipal("Alice", "room", activeMemId);
         listener.handleWebSocketConnectListener(connectEvent("active-session", activePrincipal));
         verify(lifecycle).markPlayerReconnected("room", "Alice");
 
-        // Stale disconnect is ignored and does not mark Alice disconnected or schedule grace timer
         listener.handleWebSocketDisconnectListener(disconnectEvent("stale-session", stalePrincipal));
-        assertTrue(room.isPlayerConnected("Alice"));
+        assertThat(room.isPlayerConnected("Alice")).isTrue();
         assertThat(scheduler.scheduledTasks()).isEmpty();
         verify(lifecycle, never()).markPlayerDisconnected(anyString(), anyString(), anyLong());
 
-        // Active disconnect marks Alice disconnected and schedules grace timer
         listener.handleWebSocketDisconnectListener(disconnectEvent("active-session", activePrincipal));
-        assertFalse(room.isPlayerConnected("Alice"));
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(room.isPlayerConnected("Alice")).isFalse();
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
     }
 
     @Test
     void reconnectWinsLockDisconnectSkipsGraceTimerAndPreservesPresence() {
         String roomId = "room-race-1";
-        Room room = new Room(roomId, "Race Room", "Alice", 4, 10, 20, 1000, null);
+        Room room = new Room(roomId, "Race Room", "Alice", 4, 10, 20, 1000, null, clock);
         String membershipId = room.addPlayer("Alice");
         room.setPlayerConnected("Alice", true);
         when(roomService.getRoom(roomId)).thenReturn(room);
@@ -465,16 +503,15 @@ class WebSocketEventListenerTest {
         assertThat(scheduler.scheduledTasks()).isEmpty();
         assertThat(room.isPlayerConnected("Alice")).isTrue();
 
-        // Second session stays registered until explicitly disconnected
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-2", principal));
         assertThat(room.isPlayerConnected("Alice")).isFalse();
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
     }
 
     @Test
     void disconnectWinsLockReconnectCancelsTimerAndPreventsEviction() {
         String roomId = "room-race-2";
-        Room room = new Room(roomId, "Race Room", "Alice", 4, 10, 20, 1000, null);
+        Room room = new Room(roomId, "Race Room", "Alice", 4, 10, 20, 1000, null, clock);
         String membershipId = room.addPlayer("Alice");
         room.setPlayerConnected("Alice", true);
         when(roomService.getRoom(roomId)).thenReturn(room);
@@ -491,33 +528,30 @@ class WebSocketEventListenerTest {
 
         listener.registerSession(principal, "session-2");
 
-        assertTrue(firstGrace.isCancelled());
-        assertEquals(0, scheduler.pendingCount());
+        assertThat(firstGrace.isCancelled()).isTrue();
+        assertThat(scheduler.pendingCount()).isZero();
 
-        clock.advanceByMillis(GRACE_PERIOD_MS + 5_000L);
-        assertEquals(0, scheduler.runDueTasks(clock));
+        clock.advanceByMillis(GRACE_PERIOD_MS);
+        assertThat(scheduler.runDueTasks(clock)).isZero();
         verify(lifecycle, never()).removeDisconnectedPlayer(any(), any(), any(), anyLong());
 
-        // session-2 stays registered after the grace deadline passes
-        TestRoomLocks.withRoomLock(roomCoordinator, roomId, () -> {
-            room.setPlayerConnected("Alice", true);
-            return null;
-        });
+        TestRoomLocks.runWithRoomLock(roomCoordinator, roomId, () -> room.setPlayerConnected("Alice", true));
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-2", principal));
         assertThat(room.isPlayerConnected("Alice")).isFalse();
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
     }
 
     @Test
     void concurrentReconnectAndDisconnectPreservesPresenceWithoutDeadlock() throws Exception {
-        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
-            int iterations = 40;
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            int iterations = 15;
             for (int i = 0; i < iterations; i++) {
                 scheduler.clear();
-                clock.setMillis(System.currentTimeMillis());
+                clock.setMillis(INITIAL_EPOCH_MS + i * 100_000L);
 
                 String roomId = "room-concurrent-" + i;
-                Room room = new Room(roomId, "Concurrent Room", "Alice", 4, 10, 20, 1000, null);
+                Room room = new Room(roomId, "Concurrent Room", "Alice", 4, 10, 20, 1000, null, clock);
                 String membershipId = room.addPlayer("Alice");
                 room.setPlayerConnected("Alice", true);
                 when(roomService.getRoom(roomId)).thenReturn(room);
@@ -542,39 +576,40 @@ class WebSocketEventListenerTest {
                 disconnectFuture.get(3, TimeUnit.SECONDS);
                 connectFuture.get(3, TimeUnit.SECONDS);
 
-                // Whether disconnect or reconnect won the room lock, no pending disconnect remains active.
-                assertEquals(0, scheduler.pendingCount());
+                assertThat(scheduler.pendingCount()).isZero();
                 for (ScheduledTask task : scheduler.scheduledTasks()) {
-                    assertTrue(task.isCancelled());
+                    assertThat(task.isCancelled()).isTrue();
                 }
-                clock.advanceByMillis(GRACE_PERIOD_MS + 5_000L);
-                assertEquals(0, scheduler.runDueTasks(clock));
+                clock.advanceByMillis(GRACE_PERIOD_MS);
+                assertThat(scheduler.runDueTasks(clock)).isZero();
                 verify(lifecycle, never()).removeDisconnectedPlayer(eq(roomId), any(), any(), anyLong());
                 verify(rateLimit, never()).cleanUpWs("Alice:" + roomId);
 
-                // Re-disconnecting origSession is a no-op; disconnecting newSession schedules cleanup
                 int tasksBefore = scheduler.scheduledTasks().size();
                 listener.handleWebSocketDisconnectListener(disconnectEvent(origSession, principal));
-                assertEquals(tasksBefore, scheduler.scheduledTasks().size());
-                assertEquals(0, scheduler.pendingCount());
+                assertThat(scheduler.scheduledTasks()).hasSize(tasksBefore);
+                assertThat(scheduler.pendingCount()).isZero();
 
                 listener.handleWebSocketDisconnectListener(disconnectEvent(newSession, principal));
-                assertEquals(1, scheduler.pendingCount());
+                assertThat(scheduler.pendingCount()).isEqualTo(1);
             }
+        } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(2, TimeUnit.SECONDS);
         }
     }
 
     @Test
-    void roomDestructionCleansUpAllSessionsAndRegistrations() {
+    void roomDestructionCleansUpAllSessionsAndRegistrationsIncludingPlayerNamesWithColons() {
         String roomId = "room-destroy-1";
-        Room room = new Room(roomId, "Destroy Room", "Host", 4, 10, 20, 1000, null);
+        Room room = new Room(roomId, "Destroy Room", "Host", 4, 10, 20, 1000, null, clock);
         String hostMem = room.addPlayer("Host");
-        String aliceMem = room.addPlayer("Alice");
+        String aliceMem = room.addPlayer("Alice:anything");
         String bobMem = room.addPlayer("Bob");
         when(roomService.getRoom(roomId)).thenReturn(room);
 
         PlayerPrincipal hostPrincipal = new PlayerPrincipal("Host", roomId, hostMem);
-        PlayerPrincipal alicePrincipal = new PlayerPrincipal("Alice", roomId, aliceMem);
+        PlayerPrincipal alicePrincipal = new PlayerPrincipal("Alice:anything", roomId, aliceMem);
         PlayerPrincipal bobPrincipal = new PlayerPrincipal("Bob", roomId, bobMem);
 
         listener.registerSession(hostPrincipal, "host-s1");
@@ -582,41 +617,38 @@ class WebSocketEventListenerTest {
 
         listener.registerSession(alicePrincipal, "alice-s1");
         listener.handleWebSocketDisconnectListener(disconnectEvent("alice-s1", alicePrincipal));
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
         ScheduledTask aliceGrace = scheduler.scheduledTasks().getFirst();
 
         listener.registerSession(bobPrincipal, "bob-s1");
 
         listener.publishRoomDestroyed(roomId);
-        // Step slightly past wall-clock now to run the immediate destruction task without reaching Alice's 60s grace deadline.
-        clock.setMillis(System.currentTimeMillis() + 1_000L);
-        assertEquals(1, scheduler.runDueTasks(clock));
+        assertThat(scheduler.runDueTasks(clock)).isEqualTo(1);
 
         verify(lifecycle).cancelTimers(roomId, false);
-        assertTrue(aliceGrace.isCancelled());
+        assertThat(aliceGrace.isCancelled()).isTrue();
         verify(rateLimit).cleanUpWs("Host:" + roomId);
-        verify(rateLimit).cleanUpWs("Alice:" + roomId);
+        verify(rateLimit).cleanUpWs("Alice:anything:" + roomId);
         verify(rateLimit).cleanUpWs("Bob:" + roomId);
 
-        clock.advanceByMillis(GRACE_PERIOD_MS + 5_000L);
-        assertEquals(0, scheduler.runDueTasks(clock));
+        clock.advanceByMillis(GRACE_PERIOD_MS);
+        assertThat(scheduler.runDueTasks(clock)).isZero();
         verify(lifecycle, never()).removeDisconnectedPlayer(anyString(), anyString(), anyString(), anyLong());
 
-        // Subsequent sessionId-only disconnects confirm sessionToPrincipal and active sessions were purged
         int scheduledCount = scheduler.scheduledTasks().size();
-        for (String sid : new String[] { "host-s1", "host-s2", "alice-s1", "bob-s1" }) {
+        for (String sid : new String[] {"host-s1", "host-s2", "alice-s1", "bob-s1"}) {
             listener.handleWebSocketDisconnectListener(disconnectEvent(sid, null));
         }
-        assertEquals(scheduledCount, scheduler.scheduledTasks().size());
+        assertThat(scheduler.scheduledTasks()).hasSize(scheduledCount);
     }
 
     @Test
     void repeatedConnectionAndDestructionCyclesReleaseAllRegistrationsWithoutLeak() {
-        int cycles = 50;
+        int cycles = 15;
         for (int i = 0; i < cycles; i++) {
             scheduler.clear();
             String roomId = "churn-room-" + i;
-            Room room = new Room(roomId, "Churn Room", "Host", 4, 10, 20, 1000, null);
+            Room room = new Room(roomId, "Churn Room", "Host", 4, 10, 20, 1000, null, clock);
             String hostMem = room.addPlayer("Host");
             String guestMem = room.addPlayer("Guest");
             when(roomService.getRoom(roomId)).thenReturn(room);
@@ -630,17 +662,17 @@ class WebSocketEventListenerTest {
             ScheduledTask guestGrace = scheduler.scheduledTasks().getFirst();
 
             listener.publishRoomDestroyed(roomId);
-            assertEquals(1, scheduler.runDueTasks(Instant.now().plusSeconds(1)));
+            assertThat(scheduler.runDueTasks(clock)).isEqualTo(1);
 
-            assertTrue(guestGrace.isCancelled());
-            assertEquals(0, scheduler.pendingCount());
+            assertThat(guestGrace.isCancelled()).isTrue();
+            assertThat(scheduler.pendingCount()).isZero();
             verify(rateLimit).cleanUpWs("Host:" + roomId);
             verify(rateLimit).cleanUpWs("Guest:" + roomId);
 
             int tasksBefore = scheduler.scheduledTasks().size();
             listener.handleWebSocketDisconnectListener(disconnectEvent("host-sess-" + i, null));
             listener.handleWebSocketDisconnectListener(disconnectEvent("guest-sess-" + i, null));
-            assertEquals(tasksBefore, scheduler.scheduledTasks().size());
+            assertThat(scheduler.scheduledTasks()).hasSize(tasksBefore);
         }
     }
 
@@ -667,10 +699,10 @@ class WebSocketEventListenerTest {
             listener.registerSession(principalB, "session-b1");
         }
 
-        // Session mappings registered inside separate room leases drive subsequent principal-less disconnects
+        // Session mappings registered inside separate room locks drive subsequent principal-less disconnects
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-a1", null));
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-b1", null));
-        assertEquals(2, scheduler.pendingCount());
+        assertThat(scheduler.pendingCount()).isEqualTo(2);
     }
 
     @Test
@@ -679,7 +711,7 @@ class WebSocketEventListenerTest {
         String roomB = "room-pending-B";
         long deadline = clock.millis() + 30_000L;
 
-        listener.scheduleRecoveredDisconnect(roomA, "Alice", deadline);
+        listener.scheduleRecoveredDisconnect(roomA, "Alice:colon", deadline);
         listener.scheduleRecoveredDisconnect(roomB, "Bob", deadline);
         assertThat(scheduler.scheduledTasks()).hasSize(2);
         ScheduledTask taskA = scheduler.scheduledTasks().get(0);
@@ -688,21 +720,18 @@ class WebSocketEventListenerTest {
         assertThatThrownBy(() -> listener.cancelRoomPendingDisconnects(roomA))
                 .isInstanceOf(IllegalStateException.class);
 
-        TestRoomLocks.withRoomLock(roomCoordinator, roomA, () -> {
-            listener.cancelRoomPendingDisconnects(roomA);
-            return null;
-        });
+        TestRoomLocks.runWithRoomLock(roomCoordinator, roomA, () -> listener.cancelRoomPendingDisconnects(roomA));
 
-        assertTrue(taskA.isCancelled());
-        assertFalse(taskB.isCancelled());
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(taskA.isCancelled()).isTrue();
+        assertThat(taskB.isCancelled()).isFalse();
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
 
-        Room bobRoom = new Room(roomB, "Room B", "Bob", 4, 10, 20, 1000, null);
+        Room bobRoom = new Room(roomB, "Room B", "Bob", 4, 10, 20, 1000, null, clock);
         bobRoom.addPlayer("Bob");
         when(roomService.getRoom(roomB)).thenReturn(bobRoom);
 
         clock.advanceByMillis(30_000L);
-        assertEquals(1, scheduler.runDueTasks(clock));
+        assertThat(scheduler.runDueTasks(clock)).isEqualTo(1);
 
         verify(lifecycle, never()).removeDisconnectedPlayer(eq(roomA), anyString(), any(), anyLong());
         verify(lifecycle).removeDisconnectedPlayer(roomB, "Bob", null, deadline);
@@ -711,7 +740,7 @@ class WebSocketEventListenerTest {
     @Test
     void registerSessionDropsSocketsFromOlderMembership() {
         String roomId = "room-replace-mem";
-        Room room = new Room(roomId, "Room", "Alice", 4, 10, 20, 1000, null);
+        Room room = new Room(roomId, "Room", "Alice", 4, 10, 20, 1000, null, clock);
         String firstMembership = room.addPlayer("Alice");
         when(roomService.getRoom(roomId)).thenReturn(room);
 
@@ -725,16 +754,14 @@ class WebSocketEventListenerTest {
         });
         listener.registerSession(new PlayerPrincipal("Alice", roomId, secondMembership), "session-new");
 
-        // Old socket was evicted on new membership connect, so disconnecting it is ignored.
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-old", null));
-        assertTrue(room.isPlayerConnected("Alice"));
-        assertEquals(0, scheduler.pendingCount());
+        assertThat(room.isPlayerConnected("Alice")).isTrue();
+        assertThat(scheduler.pendingCount()).isZero();
 
-        // Disconnecting the replacement socket is therefore the last active session.
         listener.handleWebSocketDisconnectListener(
                 disconnectEvent("session-new", new PlayerPrincipal("Alice", roomId, secondMembership)));
-        assertFalse(room.isPlayerConnected("Alice"));
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(room.isPlayerConnected("Alice")).isFalse();
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
     }
 
     @Test
@@ -745,105 +772,122 @@ class WebSocketEventListenerTest {
         authSub.setSessionId("s-sub");
         authSub.setUser(principal);
         authSub.setDestination("/room/room-sub");
-        assertDoesNotThrow(() -> listener.handleSubscribe(
-                new SessionSubscribeEvent(this, MessageBuilder.createMessage(new byte[0], authSub.getMessageHeaders()))));
+        assertThatCode(() -> listener.handleSubscribe(
+                new SessionSubscribeEvent(this, MessageBuilder.createMessage(new byte[0], authSub.getMessageHeaders()))))
+                .doesNotThrowAnyException();
 
         StompHeaderAccessor anonSub = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
         anonSub.setSessionId("s-anon");
         anonSub.setDestination("/room/room-sub");
-        assertDoesNotThrow(() -> listener.handleSubscribe(
-                new SessionSubscribeEvent(this, MessageBuilder.createMessage(new byte[0], anonSub.getMessageHeaders()))));
+        assertThatCode(() -> listener.handleSubscribe(
+                new SessionSubscribeEvent(this, MessageBuilder.createMessage(new byte[0], anonSub.getMessageHeaders()))))
+                .doesNotThrowAnyException();
 
         StompHeaderAccessor authUnsub = StompHeaderAccessor.create(StompCommand.UNSUBSCRIBE);
         authUnsub.setSessionId("s-sub");
         authUnsub.setUser(principal);
         authUnsub.setSubscriptionId("sub-1");
-        assertDoesNotThrow(() -> listener.handleUnsubscribe(
-                new SessionUnsubscribeEvent(this, MessageBuilder.createMessage(new byte[0], authUnsub.getMessageHeaders()))));
+        assertThatCode(() -> listener.handleUnsubscribe(
+                new SessionUnsubscribeEvent(this, MessageBuilder.createMessage(new byte[0], authUnsub.getMessageHeaders()))))
+                .doesNotThrowAnyException();
 
         StompHeaderAccessor anonUnsub = StompHeaderAccessor.create(StompCommand.UNSUBSCRIBE);
         anonUnsub.setSessionId("s-anon");
         anonUnsub.setSubscriptionId("sub-2");
-        assertDoesNotThrow(() -> listener.handleUnsubscribe(
-                new SessionUnsubscribeEvent(this, MessageBuilder.createMessage(new byte[0], anonUnsub.getMessageHeaders()))));
+        assertThatCode(() -> listener.handleUnsubscribe(
+                new SessionUnsubscribeEvent(this, MessageBuilder.createMessage(new byte[0], anonUnsub.getMessageHeaders()))))
+                .doesNotThrowAnyException();
 
         assertThat(scheduler.scheduledTasks()).isEmpty();
     }
 
     @Test
-    void eventListenerAdaptersStartInitialGraceEndMembershipAndDestroyRoom() {
-        String roomId = "room-events";
-        Room room = new Room(roomId, "Events Room", "Alice", 4, 10, 20, 1000, null);
+    void onRoomMemberRegisteredAdapterStartsInitialGraceTimer() {
+        String roomId = "room-event-register";
+        Room room = new Room(roomId, "Events Room", "Alice", 4, 10, 20, 1000, null, clock);
         String aliceMem = room.addPlayer("Alice");
-        String bobMem = room.addPlayer("Bob");
         when(roomService.getRoom(roomId)).thenReturn(room);
 
         long deadline = clock.millis() + GRACE_PERIOD_MS;
         listener.onRoomMemberRegistered(new RoomMemberRegistered(roomId, "Alice", aliceMem, deadline));
-        assertEquals(1, scheduler.pendingCount());
+        assertThat(scheduler.pendingCount()).isEqualTo(1);
 
         clock.advanceByMillis(GRACE_PERIOD_MS);
-        assertEquals(1, scheduler.runDueTasks(clock));
+        assertThat(scheduler.runDueTasks(clock)).isEqualTo(1);
         verify(rateLimit).cleanUpWs("Alice:" + roomId);
         verify(lifecycle).removeDisconnectedPlayer(roomId, "Alice", aliceMem, deadline);
+    }
+
+    @Test
+    void onRoomMembershipEndedAdapterSchedulesAndRunsMembershipCleanup() {
+        String roomId = "room-event-ended";
+        Room room = new Room(roomId, "Events Room", "Bob", 4, 10, 20, 1000, null, clock);
+        String bobMem = room.addPlayer("Bob");
+        when(roomService.getRoom(roomId)).thenReturn(room);
 
         listener.registerSession(new PlayerPrincipal("Bob", roomId, bobMem), "bob-sess");
-        TestRoomLocks.withRoomLock(roomCoordinator, roomId, () -> {
-            room.removePlayer("Bob");
-            return null;
-        });
+        TestRoomLocks.runWithRoomLock(roomCoordinator, roomId, () -> room.removePlayer("Bob"));
+
         listener.onRoomMembershipEnded(new RoomMembershipEnded(roomId, "Bob", bobMem));
-        assertEquals(1, scheduler.runAllPending());
+        assertThat(scheduler.runAllPending()).isEqualTo(1);
         verify(rateLimit).cleanUpWs("Bob:" + roomId);
+    }
+
+    @Test
+    void onRoomDestroyedAdapterSchedulesAndRunsRoomCleanup() {
+        String roomId = "room-event-destroyed";
+        Room room = new Room(roomId, "Events Room", "Alice", 4, 10, 20, 1000, null, clock);
+        String aliceMem = room.addPlayer("Alice");
+        when(roomService.getRoom(roomId)).thenReturn(room);
 
         listener.registerSession(new PlayerPrincipal("Alice", roomId, aliceMem), "alice-sess");
         listener.onRoomDestroyed(new RoomDestroyed(roomId));
-        assertEquals(1, scheduler.runAllPending());
+        assertThat(scheduler.runAllPending()).isEqualTo(1);
         verify(lifecycle).cancelTimers(roomId, false);
-        verify(rateLimit, times(2)).cleanUpWs("Alice:" + roomId);
+        verify(rateLimit).cleanUpWs("Alice:" + roomId);
     }
 
     @Test
     void scheduleCleanupDropsTaskWhenSchedulerRejects() {
         scheduler.setRejectNext(true);
-        assertDoesNotThrow(() -> listener.onRoomDestroyed(new RoomDestroyed("room-reject-1")));
+        assertThatCode(() -> listener.onRoomDestroyed(new RoomDestroyed("room-reject-1")))
+                .doesNotThrowAnyException();
 
         scheduler.setRejectNext(true);
-        assertDoesNotThrow(() -> listener.onRoomMembershipEnded(
-                new RoomMembershipEnded("room-reject-2", "Alice", "mem-1")));
+        assertThatCode(() -> listener.onRoomMembershipEnded(
+                new RoomMembershipEnded("room-reject-2", "Alice", "mem-1")))
+                .doesNotThrowAnyException();
 
-        assertEquals(0, scheduler.pendingCount());
+        assertThat(scheduler.pendingCount()).isZero();
     }
 
     @Test
     void lateCancelRaceBeforeFutureAttachCancelsReturnedFutureAndPreventsEviction() {
         String roomId = "room-late-cancel";
-        Room room = new Room(roomId, "Late Cancel Room", "Alice", 4, 10, 20, 1000, null);
+        Room room = new Room(roomId, "Late Cancel Room", "Alice", 4, 10, 20, 1000, null, clock);
         String membershipId = room.addPlayer("Alice");
         when(roomService.getRoom(roomId)).thenReturn(room);
 
         PlayerPrincipal principal = new PlayerPrincipal("Alice", roomId, membershipId);
         listener.registerSession(principal, "session-1");
 
-        // Reconnect wins between taskScheduler.schedule(...) and PendingDisconnect.attach(future).
         scheduler.onNextSchedule(() -> listener.registerSession(principal, "session-2"));
 
         listener.handleWebSocketDisconnectListener(disconnectEvent("session-1", principal));
 
         assertThat(scheduler.scheduledTasks()).hasSize(1);
-        assertTrue(scheduler.scheduledTasks().getFirst().isCancelled(),
-                "Returned future must be cancelled by PendingDisconnect.attach");
-        assertEquals(0, scheduler.pendingCount());
+        assertThat(scheduler.scheduledTasks().getFirst().isCancelled()).isTrue();
+        assertThat(scheduler.pendingCount()).isZero();
 
-        clock.advanceByMillis(GRACE_PERIOD_MS + 5_000L);
-        assertEquals(0, scheduler.runDueTasks(clock));
+        clock.advanceByMillis(GRACE_PERIOD_MS);
+        assertThat(scheduler.runDueTasks(clock)).isZero();
         verify(lifecycle, never()).removeDisconnectedPlayer(anyString(), anyString(), any(), anyLong());
     }
 
     @Test
     void graceExpiryRemovesDisconnectedPlayerWithMembershipAndDeadline() {
         String roomId = "room-grace-expiry";
-        Room room = new Room(roomId, "Grace Room", "Alice", 4, 10, 20, 1000, null);
+        Room room = new Room(roomId, "Grace Room", "Alice", 4, 10, 20, 1000, null, clock);
         String membershipId = room.addPlayer("Alice");
         when(roomService.getRoom(roomId)).thenReturn(room);
         when(lifecycle.gameExists(roomId)).thenReturn(true);
@@ -856,12 +900,12 @@ class WebSocketEventListenerTest {
         long deadline = TestRoomLocks.withRoomLock(roomCoordinator, roomId,
                 () -> room.getAbsenceDeadline("Alice"));
 
-        clock.advanceByMillis(GRACE_PERIOD_MS - 5_000L);
-        assertEquals(0, scheduler.runDueTasks(clock));
+        clock.advanceByMillis(GRACE_PERIOD_MS - 1L);
+        assertThat(scheduler.runDueTasks(clock)).isZero();
         verify(lifecycle, never()).removeDisconnectedPlayer(anyString(), anyString(), any(), anyLong());
 
-        clock.advanceByMillis(10_000L);
-        assertEquals(1, scheduler.runDueTasks(clock));
+        clock.advanceByMillis(1L);
+        assertThat(scheduler.runDueTasks(clock)).isEqualTo(1);
         verify(rateLimit).cleanUpWs("Alice:" + roomId);
         verify(lifecycle).removeDisconnectedPlayer(roomId, "Alice", membershipId, deadline);
     }

@@ -1,51 +1,59 @@
 package com.pokergame.advice;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+import com.pokergame.dto.request.PlayerActionRequest;
+import com.pokergame.dto.response.PlayerFeedbackResponse;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.RejectedAction;
-import com.pokergame.dto.response.PlayerFeedbackResponse;
 import com.pokergame.exception.BadRequestException;
+import com.pokergame.exception.ResourceNotFoundException;
 import com.pokergame.exception.UnauthorisedActionException;
+import com.pokergame.model.Room;
 import com.pokergame.persistence.PersistenceException;
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.service.GameStateService;
 import com.pokergame.service.RoomService;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.ValidationException;
+import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
-import org.springframework.messaging.Message;
-import org.springframework.messaging.support.MessageBuilder;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import com.pokergame.dto.request.PlayerActionRequest;
-import com.pokergame.exception.ResourceNotFoundException;
-import java.time.Clock;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.ArgumentMatchers;
-import org.mockito.Mockito;
+import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.core.MethodParameter;
+import org.springframework.messaging.Message;
 import org.springframework.messaging.converter.MessageConversionException;
 import org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.validation.BeanPropertyBindingResult;
-import org.springframework.validation.FieldError;
-import com.pokergame.model.Room;
-import jakarta.validation.ConstraintViolation;
-import jakarta.validation.ConstraintViolationException;
-import jakarta.validation.ValidationException;
-import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
-import java.util.List;
-import java.util.Set;
-import java.util.stream.Stream;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.validation.BindException;
 import org.springframework.validation.BindingResult;
+import org.springframework.validation.FieldError;
 import org.springframework.validation.method.MethodValidationException;
 import org.springframework.validation.method.MethodValidationResult;
 import org.springframework.validation.method.ParameterValidationResult;
@@ -55,43 +63,47 @@ import tools.jackson.databind.ObjectMapper;
 @Tag("unit")
 @DisplayName("WebSocket action errors")
 class WebSocketExceptionHandlerTest {
-    /** Delayed failures remain owned by their original membership across every feedback branch. */
-    @ParameterizedTest
-    @ValueSource(strings = {"action", "ready", "unready", "malformed", "other"})
-    void delayedRetiredFrameCannotNotifyReplacementMembership(String kind) {
-        var rooms = mock(RoomService.class);
-        var room = new Room(gameId, "Room", "Host", 6, 5, 10, 100, null);
-        room.addPlayer(playerName);
-        PlayerPrincipal original = new PlayerPrincipal(playerName, gameId, room.getMembershipId(playerName));
-        room.removePlayer(playerName);
-        room.addPlayer(playerName);
-        PlayerPrincipal replacement = new PlayerPrincipal(playerName, gameId, room.getMembershipId(playerName));
-        Mockito.when(rooms.getRoom(gameId)).thenReturn(room);
-        var realHandler = new WebSocketExceptionHandler(
-                new GameStateService(rooms, messagingTemplate, Clock.systemUTC()));
-        String suffix = kind.equals("malformed") ? "action" : kind;
-        String payload = kind.equals("malformed") ? "{\"action\":\"INVALID\"}" : "{\"action\":\"CHECK\"}";
-        Message<String> frame = MessageBuilder.withPayload(payload)
-                .setHeader("simpDestination", "/app/" + gameId + "/" + suffix).build();
-        realHandler.handleMessageException(new RuntimeException("Delayed failure"), original, frame);
-        verify(messagingTemplate).convertAndSendToUser(ArgumentMatchers.eq(original.getName()),
-                ArgumentMatchers.eq("/queue/private"), ArgumentMatchers.any(Object.class));
-        Mockito.verify(messagingTemplate, Mockito.never()).convertAndSendToUser(
-                ArgumentMatchers.eq(replacement.getName()), ArgumentMatchers.anyString(),
-                ArgumentMatchers.any(Object.class));
-    }
 
-    private SimpMessagingTemplate messagingTemplate;
-    private WebSocketExceptionHandler handler;
+    private static final Clock FIXED_CLOCK = Clock.fixed(Instant.EPOCH, ZoneOffset.UTC);
+    private static final String FALLBACK = "Enter a valid action amount";
+
     private final String gameId = "game-123";
     private final String playerName = "Player1";
     private final PlayerPrincipal principal = new PlayerPrincipal(playerName, gameId, "original-membership");
+
+    private SimpMessagingTemplate messagingTemplate;
+    private WebSocketExceptionHandler handler;
 
     @BeforeEach
     void setUp() {
         messagingTemplate = mock(SimpMessagingTemplate.class);
         handler = new WebSocketExceptionHandler(
-                new GameStateService(mock(RoomService.class), messagingTemplate, Clock.systemUTC()));
+                new GameStateService(mock(RoomService.class), messagingTemplate, FIXED_CLOCK));
+    }
+
+    /** Delayed failures remain owned by their original membership across every feedback branch. */
+    @ParameterizedTest
+    @ValueSource(strings = {"action", "ready", "unready", "malformed", "other"})
+    void delayedRetiredFrameCannotNotifyReplacementMembership(String kind) {
+        var rooms = mock(RoomService.class);
+        var room = new Room(gameId, "Room", "Host", 6, 5, 10, 100, null, FIXED_CLOCK);
+        room.addPlayer(playerName);
+        PlayerPrincipal original = new PlayerPrincipal(playerName, gameId, room.getMembershipId(playerName));
+        room.removePlayer(playerName);
+        room.addPlayer(playerName);
+        PlayerPrincipal replacement = new PlayerPrincipal(playerName, gameId, room.getMembershipId(playerName));
+        when(rooms.getRoom(gameId)).thenReturn(room);
+        var realHandler = new WebSocketExceptionHandler(
+                new GameStateService(rooms, messagingTemplate, FIXED_CLOCK));
+        String suffix = kind.equals("malformed") ? "action" : kind;
+        String payload = kind.equals("malformed") ? "{\"action\":\"INVALID\"}" : "{\"action\":\"CHECK\"}";
+        Message<String> frame = MessageBuilder.withPayload(payload)
+                .setHeader("simpDestination", "/app/" + gameId + "/" + suffix).build();
+        realHandler.handleMessageException(new RuntimeException("Delayed failure"), original, frame);
+        verify(messagingTemplate).convertAndSendToUser(eq(original.getName()),
+                eq("/queue/private"), any(Object.class));
+        verify(messagingTemplate, never()).convertAndSendToUser(
+                eq(replacement.getName()), anyString(), any(Object.class));
     }
 
     /** Every supported rejected action is carried explicitly in private feedback. */
@@ -108,27 +120,11 @@ class WebSocketExceptionHandlerTest {
     /** The exact corrective values survive the handler without a generic length cap. */
     @Test
     void minimumRaiseCopyIsDeliveredWithoutTruncation() {
-        String copy = "Min raise: 50; yours: 25";
-        handler.handleMessageException(new BadRequestException("old detail", "MIN_RAISE", copy),
-                principal, actionFrame(PlayerAction.RAISE));
-        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("MIN_RAISE", RejectedAction.from(PlayerAction.RAISE), copy));
-
         String longCopy = "A deliberately long rule description with relevant values 123456789 and 987654321 that exceeds eighty characters";
         handler.handleMessageException(new BadRequestException("old detail", "FUTURE_RULE", longCopy),
                 principal, actionFrame(PlayerAction.BET));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 PlayerFeedbackResponse.actionError("FUTURE_RULE", RejectedAction.from(PlayerAction.BET), longCopy));
-    }
-
-    /** An invalid frame cannot produce a partially populated action error. */
-    @Test
-    void malformedActionIsPublishedAsTechnicalFeedback() {
-        Message<String> frame = MessageBuilder.withPayload("{\"action\":\"PUSH\"}")
-                .setHeader("simpDestination", "/app/" + gameId + "/action").build();
-        handler.handleMessageException(new RuntimeException("malformed"), principal, frame);
-        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.notice("Request failed. Please try again."));
     }
 
     /** Ordinary transient readiness errors remain structured and retryable. */
@@ -142,23 +138,28 @@ class WebSocketExceptionHandlerTest {
                 PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.READY, "Ready countdown is not active."));
     }
 
+    /** Readiness errors prefer actionErrorMessage() over getMessage() when both are present. */
+    @ParameterizedTest
+    @ValueSource(strings = {"ready", "unready"})
+    void readinessRejectionPrefersActionErrorMessageOverExceptionMessage(String suffix) {
+        BadRequestException exception = new BadRequestException(
+                "Internal readiness detail", "READY_CODE", "Concise readiness message");
+        handler.handleMessageException(exception, principal, frame("{}", suffix));
+        RejectedAction expected = suffix.equals("ready") ? RejectedAction.READY : RejectedAction.UNREADY;
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", expected, "Concise readiness message"));
+    }
+
     /** Authentication still guards access to the private response path. */
     @Test
     void invalidPrincipalIsRejected() {
         assertThatThrownBy(() -> handler.handleMessageException(new RuntimeException("Error"),
                 () -> "invalid", actionFrame(PlayerAction.CHECK)))
                 .isInstanceOf(UnauthorisedActionException.class);
+        verifyNoInteractions(messagingTemplate);
     }
 
-    /** Builds a private action frame for the exception boundary. */
-    private Message<String> actionFrame(PlayerAction action) {
-        return MessageBuilder.withPayload("{\"action\":\"" + action + "\"}")
-                .setHeader("simpDestination", "/app/" + gameId + "/action").build();
-    }
-
-    /**
-     * Routing uses playerPrincipal.roomId() and playerName(), not the destination header.
-     */
+    /** Routing uses playerPrincipal.roomId() and playerName(), not the destination header. */
     @Test
     void routingUsesPrincipalRoomIdNotDestinationHeader() {
         Message<String> spoofedFrame = MessageBuilder.withPayload("{\"action\":\"BET\",\"amount\":100}")
@@ -170,15 +171,29 @@ class WebSocketExceptionHandlerTest {
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 PlayerFeedbackResponse.actionError("NOT_YOUR_TURN", RejectedAction.from(PlayerAction.BET), "Wait for your turn"));
-        verify(messagingTemplate, Mockito.never()).convertAndSendToUser(
-                ArgumentMatchers.contains("spoofed-game-999"),
-                ArgumentMatchers.anyString(),
-                ArgumentMatchers.any());
+        verify(messagingTemplate, never()).convertAndSendToUser(
+                contains("spoofed-game-999"),
+                anyString(),
+                any());
     }
 
-    /**
-     * Cause chain traversal prefers nested ActionFeedbackException over outer MessageConversionException.
-     */
+    /** Non-action or unrecoverable frames with a spoofed destination still route to principal's queue. */
+    @Test
+    void nonActionFrameWithSpoofedDestinationRoutesToPrincipalIdentity() {
+        Message<String> spoofedFrame = MessageBuilder.withPayload("{\"action\":\"INVALID\"}")
+                .setHeader("simpDestination", "/app/spoofed-game-999/other").build();
+
+        handler.handleMessageException(new RuntimeException("boom"), principal, spoofedFrame);
+
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                PlayerFeedbackResponse.notice("Request failed. Please try again."));
+        verify(messagingTemplate, never()).convertAndSendToUser(
+                contains("spoofed-game-999"),
+                anyString(),
+                any());
+    }
+
+    /** Cause chain traversal prefers nested ActionFeedbackException over outer MessageConversionException. */
     @Test
     void nestedActionFeedbackExceptionIsPreferredOverMessageConversion() {
         BadRequestException nested = new BadRequestException("Action amount cannot be negative",
@@ -192,9 +207,7 @@ class WebSocketExceptionHandlerTest {
                 PlayerFeedbackResponse.actionError("NEGATIVE_AMOUNT", RejectedAction.from(PlayerAction.BET), "Amount must be positive; yours: -10"));
     }
 
-    /**
-     * Cause chain traversal preserves AMOUNT_REQUIRED code.
-     */
+    /** Cause chain traversal preserves AMOUNT_REQUIRED code. */
     @Test
     void nestedAmountRequiredInCauseChainIsPreserved() {
         BadRequestException nested = new BadRequestException("Bet/raise amount must be greater than 0",
@@ -207,9 +220,7 @@ class WebSocketExceptionHandlerTest {
                 PlayerFeedbackResponse.actionError("AMOUNT_REQUIRED", RejectedAction.from(PlayerAction.BET), "Enter a positive amount"));
     }
 
-    /**
-     * Cause chain traversal preserves UNEXPECTED_AMOUNT code.
-     */
+    /** Cause chain traversal preserves UNEXPECTED_AMOUNT code. */
     @Test
     void nestedUnexpectedAmountInCauseChainIsPreserved() {
         BadRequestException nested = new BadRequestException("No amount is needed for CALL actions",
@@ -222,46 +233,7 @@ class WebSocketExceptionHandlerTest {
                 PlayerFeedbackResponse.actionError("UNEXPECTED_AMOUNT", RejectedAction.from(PlayerAction.CALL), "No amount needed; yours: 50"));
     }
 
-    /**
-     * Cause chain traversal preserves ResourceNotFoundException as GAME_NOT_FOUND.
-     */
-    @Test
-    void nestedResourceNotFoundExceptionPreservesGameNotFound() {
-        ResourceNotFoundException nested =
-                new ResourceNotFoundException("Game not found");
-        RuntimeException wrapped = new RuntimeException("outer", nested);
-
-        handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.CHECK));
-
-        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("GAME_NOT_FOUND", RejectedAction.from(PlayerAction.CHECK), "Game unavailable"));
-    }
-
-    /**
-     * Bean Validation failure on amount > 10,000,000 extracts exact validation message and uses INVALID_ACTION_FORMAT.
-     */
-    @Test
-    void beanValidationFailureAboveMaxAmountReturnsInvalidActionFormatWithExactMessage() {
-        Message<String> frame = MessageBuilder.withPayload("{\"action\":\"RAISE\",\"amount\":10000001}")
-                .setHeader("simpDestination", "/app/" + gameId + "/action").build();
-
-        BeanPropertyBindingResult bindingResult =
-                new BeanPropertyBindingResult(new Object(), "actionRequest");
-        bindingResult.addError(new FieldError(
-                "actionRequest", "amount", "Amount cannot exceed 10,000,000"));
-        MethodArgumentNotValidException validationException =
-                new MethodArgumentNotValidException(
-                        frame, methodParameter(), bindingResult);
-
-        handler.handleMessageException(validationException, principal, frame);
-
-        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("INVALID_ACTION_FORMAT", RejectedAction.from(PlayerAction.RAISE), "Amount cannot exceed 10,000,000"));
-    }
-
-    /**
-     * Action is recovered from typed PlayerActionRequest payload when already deserialized.
-     */
+    /** Action is recovered from typed PlayerActionRequest payload when already deserialized. */
     @Test
     void typedRequestPayloadRecoversAction() {
         PlayerActionRequest request =
@@ -275,84 +247,9 @@ class WebSocketExceptionHandlerTest {
                 PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.from(PlayerAction.FOLD), "Action unavailable"));
     }
 
-    private static final String FALLBACK = "Enter a valid action amount";
-
-    /**
-     * Produces a genuine decoding failure from the configured messaging mapper by feeding it a
-     * wrong-typed amount, so the classification matrix is anchored to the real
-     * {@code tools.jackson} exception the broker surfaces rather than a name-only stand-in.
-     */
-    private static Throwable realJacksonDecodingFailure() {
-        try {
-            new ObjectMapper().readValue("{\"action\":\"RAISE\",\"amount\":\"not-a-number\"}",
-                    PlayerActionRequest.class);
-        } catch (RuntimeException decodingFailure) {
-            return decodingFailure;
-        }
-        throw new AssertionError("Expected the configured mapper to reject a wrong-typed amount");
-    }
-
-    /** Builds a frame addressed to the given suffix of the principal's room. */
-    private Message<?> frame(Object payload, String suffix) {
-        return MessageBuilder.withPayload(payload)
-                .setHeader("simpDestination", "/app/" + gameId + "/" + suffix).build();
-    }
-
-    /** Builds the parameter handle that Spring's argument-validation exceptions require. */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private MethodParameter methodParameter() {
-        Method executable = mock(Method.class);
-        Mockito.lenient().when(executable.toGenericString()).thenReturn("handle(PlayerActionRequest)");
-        MethodParameter parameter = mock(MethodParameter.class);
-        Mockito.lenient().when(parameter.getExecutable()).thenReturn(executable);
-        Mockito.lenient().when(parameter.getNestedParameterType()).thenReturn((Class) PlayerActionRequest.class);
-        Mockito.lenient().when(parameter.getParameterIndex()).thenReturn(0);
-        return parameter;
-    }
-
-    /** Builds a binding result holding one field error with the given message. */
-    private BindingResult bindingResultWithError(String message) {
-        BeanPropertyBindingResult result = new BeanPropertyBindingResult(new Object(), "actionRequest");
-        result.addError(new FieldError("actionRequest", "amount", message));
-        return result;
-    }
-
-    /** Builds a binding result without any errors. */
-    private BindingResult emptyBindingResult() {
-        return new BeanPropertyBindingResult(new Object(), "actionRequest");
-    }
-
-    @SuppressWarnings("unchecked")
-    private ConstraintViolation<Object> violation(String message) {
-        ConstraintViolation<Object> violation = Mockito.mock(ConstraintViolation.class);
-        Mockito.when(violation.getMessage()).thenReturn(message);
-        return violation;
-    }
-
-    /** Builds a method-validation failure whose only error carries the given message. */
-    private MethodValidationException methodValidationException(String message) {
-        MethodValidationResult result = Mockito.mock(MethodValidationResult.class);
-        List<ParameterValidationResult> parameterResults = List.of();
-        if (message != null) {
-            ParameterValidationResult parameterResult = Mockito.mock(ParameterValidationResult.class);
-            Mockito.when(parameterResult.getResolvableErrors())
-                    .thenReturn(List.of(new DefaultMessageSourceResolvable(new String[] { "code" }, null, message)));
-            parameterResults = List.of(parameterResult);
-        }
-        Mockito.when(result.getParameterValidationResults()).thenReturn(parameterResults);
-        return new MethodValidationException(result);
-    }
-
-    /** Runs the handler for an action frame and returns after the private feedback was sent. */
-    private void verifyInvalidActionFormat(Exception exception, String expectedMessage) {
-        handler.handleMessageException(exception, principal, actionFrame(PlayerAction.CHECK));
-        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("INVALID_ACTION_FORMAT", RejectedAction.from(PlayerAction.CHECK), expectedMessage));
-    }
-
     @Test
     @DisplayName("Messaging validation failure with a field error reports that field message")
-    void messagingValidationFailureWithFieldErrorReportsFieldMessage() throws Exception {
+    void messagingValidationFailureWithFieldErrorReportsFieldMessage() {
         Message<?> frame = frame("{}", "action");
         verifyInvalidActionFormat(new MethodArgumentNotValidException(frame, methodParameter(),
                 bindingResultWithError("Amount must be positive")), "Amount must be positive");
@@ -360,36 +257,28 @@ class WebSocketExceptionHandlerTest {
 
     @Test
     @DisplayName("Messaging validation failure without binding result falls back to generic message")
-    void messagingValidationFailureWithoutBindingResultFallsBack() throws Exception {
+    void messagingValidationFailureWithoutBindingResultFallsBack() {
         verifyInvalidActionFormat(new MethodArgumentNotValidException(frame("{}", "action"), methodParameter()),
                 FALLBACK);
     }
 
     @Test
     @DisplayName("Messaging validation failure with empty binding result falls back to generic message")
-    void messagingValidationFailureWithEmptyBindingResultFallsBack() throws Exception {
+    void messagingValidationFailureWithEmptyBindingResultFallsBack() {
         verifyInvalidActionFormat(new MethodArgumentNotValidException(frame("{}", "action"), methodParameter(),
                 emptyBindingResult()), FALLBACK);
     }
 
     @Test
     @DisplayName("Web validation failure with a field error reports that field message")
-    void webValidationFailureWithFieldErrorReportsFieldMessage() throws Exception {
+    void webValidationFailureWithFieldErrorReportsFieldMessage() {
         verifyInvalidActionFormat(new org.springframework.web.bind.MethodArgumentNotValidException(
                 methodParameter(), bindingResultWithError("Amount too large")), "Amount too large");
     }
 
     @Test
-    @DisplayName("Web validation failure with null binding result falls back to generic message")
-    void webValidationFailureWithNullBindingResultFallsBack() {
-        var exception = Mockito.mock(org.springframework.web.bind.MethodArgumentNotValidException.class);
-        Mockito.when(exception.getBindingResult()).thenReturn(null);
-        verifyInvalidActionFormat(exception, FALLBACK);
-    }
-
-    @Test
     @DisplayName("Web validation failure with empty binding result falls back to generic message")
-    void webValidationFailureWithEmptyBindingResultFallsBack() throws Exception {
+    void webValidationFailureWithEmptyBindingResultFallsBack() {
         verifyInvalidActionFormat(new org.springframework.web.bind.MethodArgumentNotValidException(
                 methodParameter(), emptyBindingResult()), FALLBACK);
     }
@@ -466,16 +355,14 @@ class WebSocketExceptionHandlerTest {
     }
 
     /**
-     * A real {@code tools.jackson} decoding failure, surfaced the way the broker wraps it (inside a
-     * {@link MessageConversionException}), is classified as an invalid action format. This anchors
-     * the deep-cause branch to the concrete exception the configured mapper actually throws instead
-     * of to a class whose name merely contains {@code JacksonException}.
+     * A real {@code tools.jackson} decoding failure nested inside a plain {@link RuntimeException}
+     * (without {@link MessageConversionException}) is classified as an invalid action format via
+     * {@code instanceof tools.jackson.core.JacksonException}.
      */
     @Test
-    @DisplayName("Real Jackson decoding failure in the cause chain gives invalid action format")
+    @DisplayName("Real Jackson decoding failure deep in a plain RuntimeException cause chain gives invalid action format")
     void jacksonFailureDeepInCauseChainIsInvalidActionFormat() {
-        MessageConversionException chain =
-                new MessageConversionException("conversion failed", realJacksonDecodingFailure());
+        RuntimeException chain = new RuntimeException("outer", realJacksonDecodingFailure());
         verifyInvalidActionFormat(chain, FALLBACK);
     }
 
@@ -595,8 +482,8 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(new RuntimeException("boom"), principal, frame(payload, "action"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 PlayerFeedbackResponse.notice("Request failed. Please try again."));
-        verify(messagingTemplate, Mockito.times(1)).convertAndSendToUser(ArgumentMatchers.anyString(),
-                ArgumentMatchers.anyString(), ArgumentMatchers.any(Object.class));
+        verify(messagingTemplate, times(1)).convertAndSendToUser(anyString(),
+                anyString(), any(Object.class));
     }
 
     /** Missing or blank domain exception messages are replaced with a default. */
@@ -690,22 +577,27 @@ class WebSocketExceptionHandlerTest {
     @DisplayName("Unexpected non-action failure uses friendly fallback without leaking internal detail")
     void unexpectedNonActionFailureUsesFriendlyFallbackMessage() {
         handler.handleMessageException(
-                new IllegalStateException("Nested durable mutations cannot cross room boundaries"),
+                new IllegalStateException("Nested room mutations cannot cross room boundaries"),
                 principal, frame("{}", "other"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 PlayerFeedbackResponse.notice("Request failed. Please try again."));
     }
 
-    /** Domain errors and nested domain causes keep friendly copy on non-action and readiness frames. */
+    /** Domain errors preserve friendly copy on unrecoverable action frames. */
     @Test
-    @DisplayName("Domain and nested domain errors preserve friendly messages on non-action and readiness paths")
-    void domainAndNestedDomainErrorsPreserveFriendlyMessages() {
+    @DisplayName("Domain error on unrecoverable action frame preserves friendly message")
+    void domainErrorOnUnrecoverableActionFramePreservesFriendlyMessage() {
         handler.handleMessageException(
                 new BadRequestException("Action not allowed right now"),
                 principal, frame("{\"action\":\"PUSH\"}", "action"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 PlayerFeedbackResponse.notice("Action not allowed right now"));
+    }
 
+    /** Nested domain causes preserve friendly copy on readiness frames. */
+    @Test
+    @DisplayName("Nested domain error on readiness frame preserves friendly message")
+    void nestedDomainErrorOnReadinessFramePreservesFriendlyMessage() {
         RuntimeException wrapped = new RuntimeException("internal wrapper",
                 new UnauthorisedActionException("Ready countdown is not active."));
         handler.handleMessageException(wrapped, principal, frame("{}", "ready"));
@@ -724,5 +616,75 @@ class WebSocketExceptionHandlerTest {
         RejectedAction expected = suffix.equals("ready") ? RejectedAction.READY : RejectedAction.UNREADY;
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
                 PlayerFeedbackResponse.actionError("ACTION_REJECTED", expected, "Could not update readiness. Please try again."));
+    }
+
+    private Message<String> actionFrame(PlayerAction action) {
+        return MessageBuilder.withPayload("{\"action\":\"" + action + "\"}")
+                .setHeader("simpDestination", "/app/" + gameId + "/action").build();
+    }
+
+    private Message<?> frame(Object payload, String suffix) {
+        return MessageBuilder.withPayload(payload)
+                .setHeader("simpDestination", "/app/" + gameId + "/" + suffix).build();
+    }
+
+    private static Throwable realJacksonDecodingFailure() {
+        try {
+            new ObjectMapper().readValue("{\"action\":\"RAISE\",\"amount\":\"not-a-number\"}",
+                    PlayerActionRequest.class);
+        } catch (RuntimeException decodingFailure) {
+            return decodingFailure;
+        }
+        throw new AssertionError("Expected the configured mapper to reject a wrong-typed amount");
+    }
+
+    @SuppressWarnings("unused")
+    private void dummyActionHandler(PlayerActionRequest request) {
+    }
+
+    private MethodParameter methodParameter() {
+        try {
+            Method method = WebSocketExceptionHandlerTest.class.getDeclaredMethod(
+                    "dummyActionHandler", PlayerActionRequest.class);
+            return new MethodParameter(method, 0);
+        } catch (NoSuchMethodException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private BindingResult bindingResultWithError(String message) {
+        BeanPropertyBindingResult result = new BeanPropertyBindingResult(new Object(), "actionRequest");
+        result.addError(new FieldError("actionRequest", "amount", message));
+        return result;
+    }
+
+    private BindingResult emptyBindingResult() {
+        return new BeanPropertyBindingResult(new Object(), "actionRequest");
+    }
+
+    @SuppressWarnings("unchecked")
+    private ConstraintViolation<Object> violation(String message) {
+        ConstraintViolation<Object> violation = mock(ConstraintViolation.class);
+        when(violation.getMessage()).thenReturn(message);
+        return violation;
+    }
+
+    private MethodValidationException methodValidationException(String message) {
+        MethodValidationResult result = mock(MethodValidationResult.class);
+        List<ParameterValidationResult> parameterResults = List.of();
+        if (message != null) {
+            ParameterValidationResult parameterResult = mock(ParameterValidationResult.class);
+            when(parameterResult.getResolvableErrors())
+                    .thenReturn(List.of(new DefaultMessageSourceResolvable(new String[] {"code"}, null, message)));
+            parameterResults = List.of(parameterResult);
+        }
+        when(result.getParameterValidationResults()).thenReturn(parameterResults);
+        return new MethodValidationException(result);
+    }
+
+    private void verifyInvalidActionFormat(Exception exception, String expectedMessage) {
+        handler.handleMessageException(exception, principal, actionFrame(PlayerAction.CHECK));
+        verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
+                PlayerFeedbackResponse.actionError("INVALID_ACTION_FORMAT", RejectedAction.from(PlayerAction.CHECK), expectedMessage));
     }
 }

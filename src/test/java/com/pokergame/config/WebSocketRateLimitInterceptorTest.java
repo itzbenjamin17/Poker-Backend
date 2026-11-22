@@ -1,7 +1,15 @@
 package com.pokergame.config;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import com.pokergame.security.PlayerPrincipal;
 import com.pokergame.security.RateLimitService;
+import java.security.Principal;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -15,13 +23,6 @@ import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.MessageBuilder;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
 /**
  * Unit tests for {@link WebSocketRateLimitInterceptor}.
  */
@@ -30,17 +31,17 @@ import static org.mockito.Mockito.when;
 @DisplayName("WebSocketRateLimitInterceptor")
 class WebSocketRateLimitInterceptorTest {
 
+    private static final String USERNAME = "Alice";
+    private static final PlayerPrincipal PRINCIPAL = new PlayerPrincipal(USERNAME, "room-123", "mem-1");
+
     @Mock
     private RateLimitService rateLimitService;
 
     @InjectMocks
     private WebSocketRateLimitInterceptor interceptor;
 
-    private static final String USERNAME = "Alice";
-    private static final PlayerPrincipal PRINCIPAL = new PlayerPrincipal(USERNAME, "room-123");
-
     @Test
-    @DisplayName("should consume rate limit token on STOMP SEND command and allow message when under limit")
+    @DisplayName("should consume rate limit token keyed by playerName:roomId on STOMP SEND command and allow message when under limit")
     void givenSendCommandUnderLimit_whenPreSend_thenConsumesTokenAndAllowsMessage() {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
         accessor.setUser(PRINCIPAL);
@@ -51,6 +52,22 @@ class WebSocketRateLimitInterceptorTest {
         Message<?> result = interceptor.preSend(message, null);
 
         verify(rateLimitService).tryConsumeWs(PRINCIPAL.playerName() + ":" + PRINCIPAL.roomId());
+        assertThat(result).isSameAs(message);
+    }
+
+    @Test
+    @DisplayName("should fall back to Principal.getName() when user is not a PlayerPrincipal")
+    void givenSendCommandWithPlainPrincipal_whenPreSend_thenConsumesTokenByPrincipalName() {
+        Principal plainPrincipal = () -> "custom-user-key";
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
+        accessor.setUser(plainPrincipal);
+        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+
+        when(rateLimitService.tryConsumeWs("custom-user-key")).thenReturn(true);
+
+        Message<?> result = interceptor.preSend(message, null);
+
+        verify(rateLimitService).tryConsumeWs("custom-user-key");
         assertThat(result).isSameAs(message);
     }
 
