@@ -1,22 +1,32 @@
 package com.pokergame.persistence;
 
-import com.pokergame.persistence.RoomAggregates;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import static com.pokergame.testutil.TestRoomLocks.runWithRoomLock;
+import static com.pokergame.testutil.TestRoomLocks.withRoomLock;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+
 import com.pokergame.dto.request.CreateRoomRequest;
 import com.pokergame.dto.request.JoinRoomRequest;
 import com.pokergame.dto.request.PlayerActionRequest;
 import com.pokergame.enums.PlayerAction;
-import com.pokergame.model.Game;
+import com.pokergame.model.Room;
 import com.pokergame.persistence.config.PersistenceProperties;
 import com.pokergame.persistence.transaction.DurableMutationAspect;
 import com.pokergame.persistence.wal.EncryptedWalStore;
 import com.pokergame.persistence.wal.EncryptionKeyring;
 import com.pokergame.service.GameLifecycleService;
-import com.pokergame.util.RoomCoordinator;
 import com.pokergame.service.RoomService;
-import com.pokergame.util.LockLease;
-import org.awaitility.Awaitility;
+import com.pokergame.util.RoomCoordinator;
+import java.lang.reflect.Type;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.Base64;
+import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,7 +51,6 @@ import org.springframework.messaging.converter.StringMessageConverter;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler;
-import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompFrameHandler;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
@@ -55,19 +64,8 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
-
-import java.lang.reflect.Type;
-import java.nio.file.Path;
-import java.time.Duration;
-import java.util.Base64;
-import java.util.List;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import static org.assertj.core.api.Assertions.assertThat;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Verifies live HTTP REST and WebSocket STOMP gameplay remain available during a transient
@@ -77,12 +75,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("Persistence availability HTTP/STOMP integration tests")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@TestPropertySource(
-        properties = {
-                "spring.main.allow-bean-definition-overriding=true",
-                "poker.game.game-end-display-delay-ms=60000",
-                "poker.game.ready-countdown-ms=60000"
-        })
+@TestPropertySource(properties = "spring.main.allow-bean-definition-overriding=true")
 @Import(PersistenceAvailabilityTransportIT.FaultyStorageConfig.class)
 class PersistenceAvailabilityTransportIT {
 
@@ -130,7 +123,9 @@ class PersistenceAvailabilityTransportIT {
     @Qualifier("pokerPersistenceHealth")
     private HealthIndicator pokerPersistenceHealth;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Autowired
+    private ObjectMapper objectMapper;
+
     private RestClient restClient;
     private WebSocketStompClient stompClient;
     private StompSession session;
@@ -157,10 +152,15 @@ class PersistenceAvailabilityTransportIT {
         }
         awaitPendingSavesFlushed();
         if (createdRoomId != null) {
-            try (LockLease _ = roomCoordinator.acquire(createdRoomId)) {
-                roomService.destroyRoom(createdRoomId);
-                roomAggregates.remove(createdRoomId);
-                walStore.delete(createdRoomId);
+            String roomId = createdRoomId;
+            try {
+                runWithRoomLock(roomCoordinator, roomId, () -> {
+                    roomService.destroyRoom(roomId);
+                    roomAggregates.remove(roomId);
+                    walStore.delete(roomId);
+                });
+            } catch (RuntimeException ignored) {
+                // Best-effort room cleanup so a teardown failure does not hide the test result.
             }
             createdRoomId = null;
         }
@@ -168,7 +168,7 @@ class PersistenceAvailabilityTransportIT {
     }
 
     private void awaitPendingSavesFlushed() {
-        Awaitility.await().atMost(TIMEOUT).untilAsserted(() -> {
+        await().atMost(TIMEOUT).untilAsserted(() -> {
             durableMutationAspect.retryPendingSaves();
             assertThat(walStore.isHealthy()).isTrue();
             assertThat(walStore.unsavedRoomCount()).isZero();
@@ -182,13 +182,13 @@ class PersistenceAvailabilityTransportIT {
 
         JsonNode createData = postJson("/api/room/create", null,
                 new CreateRoomRequest(roomName, "Alice", 6, 5, 10, 1000, null));
-        String roomId = createData.path("roomId").asText();
+        String roomId = createData.path("roomId").asString();
         createdRoomId = roomId;
-        String aliceToken = createData.path("token").asText();
+        String aliceToken = createData.path("token").asString();
 
         JsonNode joinData = postJson("/api/room/join", null,
                 new JoinRoomRequest(roomName, "Bob", null));
-        String bobToken = joinData.path("token").asText();
+        String bobToken = joinData.path("token").asString();
 
         restClient.post()
                 .uri("/api/room/" + roomId + "/start-game")
@@ -218,22 +218,17 @@ class PersistenceAvailabilityTransportIT {
             }
         });
         awaitBrokerSubscription("/game/" + roomId);
-        Awaitility.await().atMost(TIMEOUT).until(() -> {
-            try (LockLease _ = roomCoordinator.acquire(roomId)) {
-                var room = roomService.getRoom(roomId);
-                return room != null && room.isPlayerConnected("Alice") && room.isPlayerConnected("Bob");
-            }
-        });
+        await().atMost(TIMEOUT).until(() -> withRoomLock(roomCoordinator, roomId, () -> {
+            Room room = roomService.getRoom(roomId);
+            return room != null && room.isPlayerConnected("Alice") && room.isPlayerConnected("Bob");
+        }));
 
         UNAVAILABLE_STORAGE.set(true);
 
-        String actorName;
-        long revisionBefore;
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            Game game = gameLifecycleService.getGame(roomId);
-            actorName = game.getCurrentPlayer().getName();
-            revisionBefore = game.getStateRevision();
-        }
+        String actorName = withRoomLock(roomCoordinator, roomId,
+                () -> gameLifecycleService.getGame(roomId).getCurrentPlayer().getName());
+        long revisionBefore = withRoomLock(roomCoordinator, roomId,
+                () -> gameLifecycleService.getGame(roomId).getStateRevision());
         StompSession actorSession = "Alice".equals(actorName) ? session : bobSession;
 
         JsonNode httpState = getJson("/api/game/" + roomId + "/state", aliceToken);
@@ -241,7 +236,7 @@ class PersistenceAvailabilityTransportIT {
 
         actorSession.send("/app/" + roomId + "/action", new PlayerActionRequest(PlayerAction.CALL, 0));
 
-        Awaitility.await().atMost(TIMEOUT).until(() -> !messages.isEmpty());
+        await().atMost(TIMEOUT).until(() -> !messages.isEmpty());
         assertThat(walStore.isHealthy()).isFalse();
 
         Health degraded = pokerPersistenceHealth.health();
@@ -249,12 +244,15 @@ class PersistenceAvailabilityTransportIT {
         assertThat(degraded.getStatus().getCode()).isEqualTo("UP");
         assertThat(degraded.getDetails()).containsEntry("mode", "MEMORY_ONLY");
 
-        try (LockLease _ = roomCoordinator.acquire(roomId)) {
-            assertThat(gameLifecycleService.getGame(roomId).getStateRevision()).isGreaterThan(revisionBefore);
-        }
+        runWithRoomLock(roomCoordinator, roomId, () ->
+                assertThat(gameLifecycleService.getGame(roomId).getStateRevision()).isGreaterThan(revisionBefore));
 
         UNAVAILABLE_STORAGE.set(false);
         awaitPendingSavesFlushed();
+
+        Health healed = pokerPersistenceHealth.health();
+        assertThat(healed).isNotNull();
+        assertThat(healed.getDetails()).containsEntry("mode", "DURABLE");
     }
 
     private StompSession connectStomp(String token) throws Exception {
@@ -288,7 +286,7 @@ class PersistenceAvailabilityTransportIT {
         }
     }
 
-    private JsonNode getJson(String uri, String bearerToken) throws Exception {
+    private JsonNode getJson(String uri, String bearerToken) {
         String raw = restClient.get()
                 .uri(uri)
                 .header("Authorization", "Bearer " + bearerToken)
@@ -298,7 +296,7 @@ class PersistenceAvailabilityTransportIT {
         return objectMapper.readTree(raw);
     }
 
-    private JsonNode postJson(String uri, String bearerToken, Object body) throws Exception {
+    private JsonNode postJson(String uri, String bearerToken, Object body) {
         RestClient.RequestBodySpec spec = restClient.post().uri(uri).contentType(MediaType.APPLICATION_JSON);
         if (bearerToken != null) {
             spec.header("Authorization", "Bearer " + bearerToken);
@@ -312,7 +310,7 @@ class PersistenceAvailabilityTransportIT {
         SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
         headers.setDestination(destination);
         var probe = MessageBuilder.createMessage(new byte[0], headers.getMessageHeaders());
-        Awaitility.await().atMost(TIMEOUT)
+        await().atMost(TIMEOUT)
                 .until(() -> !broker.getSubscriptionRegistry().findSubscriptions(probe).isEmpty());
     }
 
