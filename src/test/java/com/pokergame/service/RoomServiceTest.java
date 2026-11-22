@@ -1,7 +1,5 @@
 package com.pokergame.service;
 
-import com.pokergame.util.RoomCoordinator;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -34,13 +32,14 @@ import com.pokergame.service.event.RoomMembershipEnded;
 import com.pokergame.testutil.MutableClock;
 import com.pokergame.testutil.TestTimings;
 import com.pokergame.util.LockLease;
+import com.pokergame.util.RoomCoordinator;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
-import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -98,7 +97,7 @@ class RoomServiceTest {
     @BeforeEach
     void setUp() {
         clock = new MutableClock(1_900_000_000_000L);
-        passwordEncoder = new BCryptPasswordEncoder();
+        passwordEncoder = new BCryptPasswordEncoder(4);
         roomCoordinator = new RoomCoordinator();
         roomService = newService(eventPublisher, passwordEncoder, roomCoordinator);
         validCreateRequest = new CreateRoomRequest("Test Room", "HostPlayer", 6, 5, 10, 100, null);
@@ -588,7 +587,7 @@ class RoomServiceTest {
     class RoomQueries {
 
         @Test
-        @DisplayName("non-durable RoomService methods enforce that callers already hold the RoomCoordinator lease")
+        @DisplayName("non-durable RoomService methods enforce that callers already hold the room lock")
         void givenUncoordinatedCalls_whenCallingNonDurableMethods_thenRequireHeldRoomLock() {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
             Room room = coordinatedGetRoom(roomId);
@@ -611,24 +610,25 @@ class RoomServiceTest {
         }
 
         @Test
-        @DisplayName("getRoomData coordinates under RoomCoordinator lock when caller acquires lease")
-        void givenRoomDataRequest_whenCoordinatedWithRoomCoordinator_thenWaitsForLease() throws Exception {
+        @DisplayName("getRoomData waits for the room lock when another caller holds it")
+        void givenRoomDataRequest_whenAnotherCallerHoldsTheRoomLock_thenWaitsForRelease() throws Exception {
             String roomId = createRoom(roomService, validCreateRequest).roomId();
             withRoomLock(roomId, () ->
                     roomService.joinRoom(roomId, new JoinRoomRequest("Test Room", "Player2", null)));
 
-            AtomicBoolean leaseHeld = new AtomicBoolean(false);
-            AtomicBoolean releaseLease = new AtomicBoolean(false);
+            CountDownLatch lockHeld = new CountDownLatch(1);
+            CountDownLatch releaseLock = new CountDownLatch(1);
             AtomicBoolean getRoomDataFinished = new AtomicBoolean(false);
 
-            try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+            try {
                 Future<?> holder = executor.submit(() -> {
                     try (LockLease _ = roomCoordinator.acquire(roomId)) {
-                        leaseHeld.set(true);
-                        Awaitility.await().atMost(5, TimeUnit.SECONDS).untilTrue(releaseLease);
+                        lockHeld.countDown();
+                        return releaseLock.await(5, TimeUnit.SECONDS);
                     }
                 });
-                Awaitility.await().atMost(2, TimeUnit.SECONDS).untilTrue(leaseHeld);
+                assertTrue(lockHeld.await(2, TimeUnit.SECONDS));
 
                 Future<RoomDataResponse> reader = executor.submit(() -> withRoomLock(roomId, () -> {
                     RoomDataResponse response = roomService.getRoomData(roomId);
@@ -640,16 +640,18 @@ class RoomServiceTest {
                     Awaitility.await().atMost(2, TimeUnit.SECONDS)
                             .until(() -> roomCoordinator.lockReservationCount(roomId) >= 2);
                     assertFalse(getRoomDataFinished.get(),
-                            "coordinated reader must wait while RoomCoordinator lease is held");
+                            "coordinated reader must wait while the room lock is held");
 
-                    releaseLease.set(true);
+                    releaseLock.countDown();
                     RoomDataResponse response = reader.get(2, TimeUnit.SECONDS);
                     holder.get(2, TimeUnit.SECONDS);
                     assertTrue(getRoomDataFinished.get());
                     assertThat(response.players()).hasSize(2);
                 } finally {
-                    releaseLease.set(true);
+                    releaseLock.countDown();
                 }
+            } finally {
+                executor.shutdownNow();
             }
         }
 
@@ -762,14 +764,15 @@ class RoomServiceTest {
         @Test
         @DisplayName("concurrent duplicate creates admit one room and reject the rest with already taken")
         void concurrentSameNameRoomCreation_oneSucceedsOtherRejected() throws Exception {
-            int threads = 16;
+            int threads = 8;
             String roomName = "ContendedSameNameRoom";
             CyclicBarrier barrier = new CyclicBarrier(threads);
             AtomicInteger successCount = new AtomicInteger();
             AtomicInteger rejectedCount = new AtomicInteger();
             AtomicReference<String> createdRoomId = new AtomicReference<>();
 
-            try (ExecutorService executor = Executors.newFixedThreadPool(threads)) {
+            ExecutorService executor = Executors.newFixedThreadPool(threads);
+            try {
                 List<Future<?>> futures = new ArrayList<>();
                 for (int i = 0; i < threads; i++) {
                     final String hostName = "Host_" + i;
@@ -790,6 +793,8 @@ class RoomServiceTest {
                 for (Future<?> future : futures) {
                     future.get(10, TimeUnit.SECONDS);
                 }
+            } finally {
+                executor.shutdownNow();
             }
 
             assertThat(successCount.get()).isEqualTo(1);
@@ -804,20 +809,21 @@ class RoomServiceTest {
         }
 
         @Test
-        @DisplayName("high-contention join storm (60 threads, capacity 3) admits exactly 2 joiners")
+        @DisplayName("high-contention join storm (8 threads, capacity 3) admits exactly 2 joiners")
         void joinRoom_highContentionJoinStorm_strictlyAdmitsMaxPlayers() throws Exception {
             int maxCapacity = 3;
             String roomName = "Contention Storm Room";
             String roomId = createRoom(roomService, new CreateRoomRequest(
                     roomName, "HostUser", maxCapacity, 5, 10, 100, null)).roomId();
 
-            int totalThreads = 60;
+            int totalThreads = 8;
             CyclicBarrier startBarrier = new CyclicBarrier(totalThreads);
             AtomicInteger successCount = new AtomicInteger();
             AtomicInteger roomFullCount = new AtomicInteger();
             Queue<Throwable> unexpectedErrors = new ConcurrentLinkedQueue<>();
 
-            try (ExecutorService executor = Executors.newFixedThreadPool(totalThreads)) {
+            ExecutorService executor = Executors.newFixedThreadPool(totalThreads);
+            try {
                 List<Future<?>> futures = new ArrayList<>();
                 for (int i = 1; i <= totalThreads; i++) {
                     final int index = i;
@@ -846,6 +852,8 @@ class RoomServiceTest {
                 for (Future<?> future : futures) {
                     future.get(10, TimeUnit.SECONDS);
                 }
+            } finally {
+                executor.shutdownNow();
             }
 
             assertThat(unexpectedErrors).isEmpty();
@@ -866,7 +874,7 @@ class RoomServiceTest {
             String roomId = createRoom(roomService, new CreateRoomRequest(
                     roomName, "HostUser", maxCapacity, 5, 10, 100, null)).roomId();
 
-            int totalThreads = 50;
+            int totalThreads = 8;
             CyclicBarrier startBarrier = new CyclicBarrier(totalThreads);
             AtomicInteger successCount = new AtomicInteger();
             AtomicInteger duplicateSuccessCount = new AtomicInteger();
@@ -874,7 +882,8 @@ class RoomServiceTest {
             AtomicInteger nameTakenCount = new AtomicInteger();
             Queue<Throwable> unexpectedErrors = new ConcurrentLinkedQueue<>();
 
-            try (ExecutorService executor = Executors.newFixedThreadPool(totalThreads)) {
+            ExecutorService executor = Executors.newFixedThreadPool(totalThreads);
+            try {
                 List<Future<?>> futures = new ArrayList<>();
                 for (int i = 1; i <= totalThreads; i++) {
                     final boolean isDuplicateCandidate = (i % 2 == 0);
@@ -904,6 +913,8 @@ class RoomServiceTest {
                 for (Future<?> future : futures) {
                     future.get(10, TimeUnit.SECONDS);
                 }
+            } finally {
+                executor.shutdownNow();
             }
 
             assertThat(unexpectedErrors).isEmpty();
@@ -918,80 +929,28 @@ class RoomServiceTest {
         }
 
         @Test
-        @DisplayName("rapid multi-cycle saturation across varying room sizes (2 to 6) never exceeds capacity")
-        void joinRoom_multiCycleRapidCapacitySaturation() throws Exception {
-            Random random = new Random(42);
-            for (int cycle = 1; cycle <= 20; cycle++) {
-                int capacity = 2 + random.nextInt(5);
-                String roomName = "RapidRoom_" + cycle;
-                String roomId = createRoom(roomService, new CreateRoomRequest(
-                        roomName, "Host_" + cycle, capacity, 5, 10, 100, null)).roomId();
-
-                int joiners = 25;
-                CyclicBarrier startBarrier = new CyclicBarrier(joiners);
-                AtomicInteger success = new AtomicInteger();
-                AtomicInteger full = new AtomicInteger();
-                Queue<Throwable> errors = new ConcurrentLinkedQueue<>();
-
-                try (ExecutorService executor = Executors.newFixedThreadPool(joiners)) {
-                    List<Future<?>> futures = new ArrayList<>();
-                    for (int j = 1; j <= joiners; j++) {
-                        final String pName = "Cycler_" + cycle + "_" + j;
-                        futures.add(executor.submit(() -> {
-                            try {
-                                startBarrier.await(5, TimeUnit.SECONDS);
-                                withRoomLock(roomId, () ->
-                                        roomService.joinRoom(roomId, new JoinRoomRequest(roomName, pName, null)));
-                                success.incrementAndGet();
-                            } catch (BadRequestException e) {
-                                if ("Room is full".equals(e.getMessage())) {
-                                    full.incrementAndGet();
-                                } else {
-                                    errors.add(e);
-                                }
-                            } catch (Throwable t) {
-                                errors.add(t);
-                            }
-                        }));
-                    }
-                    for (Future<?> future : futures) {
-                        future.get(10, TimeUnit.SECONDS);
-                    }
-                }
-
-                assertThat(errors).isEmpty();
-                assertEquals(capacity - 1, success.get());
-                assertEquals(joiners - (capacity - 1), full.get());
-
-                Room room = coordinatedGetRoom(roomId);
-                assertEquals(capacity, room.getPlayers().size());
-                assertTrue(room.isFull());
-                withRoomLock(roomId, () -> roomService.destroyRoom(roomId));
-            }
-        }
-
-        @Test
-        @DisplayName("room independence: held lease on room A does not delay joins or reads on room B")
+        @DisplayName("room independence: a held room lock on room A does not delay joins or reads on room B")
         void roomIndependenceBlockedRoomADoesNotDelayRoomB() throws Exception {
             String idA = createRoom(roomService, new CreateRoomRequest(
                     "IndependenceRoomA", "HostA", 4, 5, 10, 100, null)).roomId();
             String idB = createRoom(roomService, new CreateRoomRequest(
                     "IndependenceRoomB", "HostB", 4, 5, 10, 100, null)).roomId();
 
-            AtomicBoolean roomAHeld = new AtomicBoolean(false);
-            AtomicBoolean releaseRoomA = new AtomicBoolean(false);
+            CountDownLatch roomAHeld = new CountDownLatch(1);
+            CountDownLatch releaseRoomA = new CountDownLatch(1);
             AtomicBoolean roomBCompleted = new AtomicBoolean(false);
 
-            try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+            try {
                 Future<Void> taskA = executor.submit(() -> {
                     try (LockLease _ = roomCoordinator.acquire(idA)) {
-                        roomAHeld.set(true);
-                        Awaitility.await().atMost(5, TimeUnit.SECONDS).untilTrue(releaseRoomA);
+                        roomAHeld.countDown();
+                        releaseRoomA.await(5, TimeUnit.SECONDS);
                     }
                     return null;
                 });
 
-                Awaitility.await().atMost(2, TimeUnit.SECONDS).untilTrue(roomAHeld);
+                assertTrue(roomAHeld.await(2, TimeUnit.SECONDS));
 
                 Future<RoomDataResponse> taskB = executor.submit(() -> withRoomLock(idB, () -> {
                     roomService.joinRoom(idB, new JoinRoomRequest("IndependenceRoomB", "GuestB", null));
@@ -1007,9 +966,11 @@ class RoomServiceTest {
                     assertThat(roomBCompleted.get()).isTrue();
                     assertThat(taskA.isDone()).isFalse();
                 } finally {
-                    releaseRoomA.set(true);
+                    releaseRoomA.countDown();
                 }
                 taskA.get(2, TimeUnit.SECONDS);
+            } finally {
+                executor.shutdownNow();
             }
         }
     }

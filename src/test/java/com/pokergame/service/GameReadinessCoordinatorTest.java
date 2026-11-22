@@ -1,8 +1,22 @@
 package com.pokergame.service;
 
-import com.pokergame.util.RoomCoordinator;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import com.pokergame.config.GameTimingProperties;
+import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.exception.BadRequestException;
@@ -15,6 +29,10 @@ import com.pokergame.model.TurnOutcome;
 import com.pokergame.testutil.MutableClock;
 import com.pokergame.testutil.TestTimings;
 import com.pokergame.util.LockLease;
+import com.pokergame.util.RoomCoordinator;
+import java.time.Instant;
+import java.util.List;
+import java.util.concurrent.ScheduledFuture;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -25,14 +43,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.TaskScheduler;
-
-import java.time.Instant;
-import java.util.List;
-import java.util.concurrent.ScheduledFuture;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for {@link GameReadinessCoordinator} ready-gate transitions, readiness validation,
@@ -251,48 +261,68 @@ class GameReadinessCoordinatorTest {
         }
 
         @Test
-        @DisplayName("rejects mark/unmark when countdown closed, player unknown, out, disconnected, or zero chips")
+        @DisplayName("rejects mark/unmark with the exact reason when countdown closed, player unknown, out, disconnected, or zero chips")
         void validationRejectsIneligibleRequestsWithoutMutatingState() {
             Player host = new Player("Host", "host", 1000);
             Player p2 = new Player("Player2", "p2", 1000);
             Player p3 = new Player("Player3", "p3", 0);
-            Game game = createShowdownGame(List.of(host, p2, p3));
+            Player p4 = new Player("Player4", "p4", 1000);
+            Game game = createShowdownGame(List.of(host, p2, p3, p4));
+            clearInvocations(gameStateService);
 
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
-                // Gate closed
-                assertThrows(UnauthorisedActionException.class,
-                        () -> readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Host"));
-                assertThrows(UnauthorisedActionException.class,
+                // Gate closed: a rejected request leaves the stored readiness untouched
+                host.setReadyForNextHand(true);
+                assertRejected("Ready countdown is not active.",
                         () -> readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Host"));
+                assertTrue(host.isReadyForNextHand());
+                host.setReadyForNextHand(false);
+                assertRejected("Ready countdown is not active.",
+                        () -> readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Host"));
+                assertFalse(host.isReadyForNextHand());
+                assertFalse(game.isReadyCountdownActive());
 
                 readinessCoordinator.openReadyGate(game);
+                clearInvocations(gameStateService);
 
                 // Unknown player
-                assertThrows(UnauthorisedActionException.class,
+                assertRejected("You are no longer part of this game.",
                         () -> readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Stranger"));
-                assertThrows(UnauthorisedActionException.class,
+                assertRejected("You are no longer part of this game.",
                         () -> readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Stranger"));
 
-                // Zero chips
-                assertThrows(UnauthorisedActionException.class,
-                        () -> readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Player3"));
-                assertThrows(UnauthorisedActionException.class,
-                        () -> readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Player3"));
+                // Zero chips but still seated
+                p4.doAction(PlayerAction.BET, p4.getChips());
+                assertRejected("Players without chips cannot mark ready.",
+                        () -> readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Player4"));
+                p4.setReadyForNextHand(true);
+                assertRejected("You are not eligible to change readiness.",
+                        () -> readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Player4"));
 
-                // Out player
-                p3.setIsOut();
-                assertThrows(UnauthorisedActionException.class,
+                // Out player (busted before the hand started)
+                assertRejected("You are out of this game.",
                         () -> readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Player3"));
-                assertThrows(UnauthorisedActionException.class,
+                p3.setReadyForNextHand(true);
+                assertRejected("You are out of this game.",
                         () -> readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Player3"));
 
                 // Disconnected player
                 p2.setDisconnected(true);
-                assertThrows(UnauthorisedActionException.class,
+                assertRejected("Reconnect before marking ready.",
                         () -> readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Player2"));
-                assertThrows(UnauthorisedActionException.class,
+                p2.setReadyForNextHand(true);
+                assertRejected("You are not eligible to change readiness.",
                         () -> readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Player2"));
+                assertTrue(p2.isReadyForNextHand());
             }
+
+            assertTrue(game.isReadyCountdownActive(), "A rejected ready change must leave the countdown open");
+            verifyNoInteractions(gameStateService);
+        }
+
+        private void assertRejected(String expectedMessage, Runnable action) {
+            UnauthorisedActionException ex = assertThrows(UnauthorisedActionException.class, action::run);
+            assertEquals(expectedMessage, ex.getMessage());
         }
 
         @Test

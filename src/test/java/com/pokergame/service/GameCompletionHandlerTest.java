@@ -1,6 +1,26 @@
 package com.pokergame.service;
 
-import com.pokergame.util.RoomCoordinator;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import com.pokergame.config.GameTimingProperties;
 import com.pokergame.dto.response.PublicGameStateResponse;
@@ -18,6 +38,12 @@ import com.pokergame.model.Room;
 import com.pokergame.testutil.MutableClock;
 import com.pokergame.testutil.TestTimings;
 import com.pokergame.util.LockLease;
+import com.pokergame.util.RoomCoordinator;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ScheduledFuture;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -31,19 +57,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
 
-import java.time.Instant;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ScheduledFuture;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
-
 /**
- * Unit tests for {@link GameCompletionHandler} terminal settlement, inactivity abandonment,
+ * Unit tests for {@link GameCompletionHandler} final settlement, inactivity abandonment,
  * post-game review recovery/authorization, and cleanup behavior.
  */
 @Tag("unit")
@@ -118,7 +133,7 @@ class GameCompletionHandlerTest {
 
     @Nested
     @DisplayName("handleGameEnd & handleGameEndWithForfeits")
-    class TerminalSettlementTests {
+    class FinalSettlementTests {
 
         @Test
         @DisplayName("handleGameEnd with missing game no-ops safely and empty roster throws IllegalStateException")
@@ -233,15 +248,15 @@ class GameCompletionHandlerTest {
         }
 
         @Test
-        @DisplayName("terminal carry-over flows once into frozen PublicGameStateResponse.GameEnd and repeat call is idempotent")
-        void terminalCarryOver_FlowsIntoFrozenGameEndDtoOnce() {
+        @DisplayName("final carry-over flows once into frozen PublicGameStateResponse.GameEnd and repeat call is idempotent")
+        void finalCarryOver_FlowsIntoFrozenGameEndDtoOnce() {
             Player winner = Player.restoreBuilder().name("Host").playerId("host").chips(1000).holeCards(List.of())
                     .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(false).allIn(false)
                     .out(false).disconnected(false).readyForNextHand(false).build();
             Player eliminated = Player.restoreBuilder().name("Player2").playerId("p2").chips(0).holeCards(List.of())
                     .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0).hasFolded(true).allIn(false)
                     .out(true).disconnected(false).readyForNextHand(false).build();
-            Game terminal = Game.restoreBuilder().gameId(ROOM_ID).players(List.of(winner, eliminated))
+            Game finishedGame = Game.restoreBuilder().gameId(ROOM_ID).players(List.of(winner, eliminated))
                     .activePlayerIds(List.of("host")).remainingDeck(List.of()).communityCards(List.of()).pot(10)
                     .dealerPlayerId("host").smallBlindPlayerId("host").bigBlindPlayerId("p2")
                     .currentPlayerId("host").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false).smallBlind(5).bigBlind(10)
@@ -249,7 +264,7 @@ class GameCompletionHandlerTest {
                     .lastHandPayout(new HandPayout(Map.of(), Map.of(), Set.of(), 10, false))
                     .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                     .scheduledTimes(Map.of()).build();
-            registerGame(terminal);
+            registerGame(finishedGame);
 
             clearInvocations(messagingTemplate);
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
@@ -264,7 +279,7 @@ class GameCompletionHandlerTest {
             assertEquals(0, result.pot());
             assertEquals(1010, result.players().stream()
                     .filter(PublicGameStateResponse.PlayerState::isWinner).findFirst().orElseThrow().chips());
-            assertTrue(terminal.isFinalPotSettled());
+            assertTrue(finishedGame.isFinalPotSettled());
 
             try (LockLease _ = roomCoordinator.acquire(ROOM_ID)) {
                 completionHandler.handleGameEnd(ROOM_ID);
@@ -458,14 +473,14 @@ class GameCompletionHandlerTest {
 
                 completionHandler.handleGameEndWithForfeits(
                         ROOM_ID, game.getPlayers().getFirst(), Set.of("Player2", "Player3"));
-                PublicGameStateResponse terminal = game.getGameEndResult();
-                assertNotNull(terminal);
+                PublicGameStateResponse gameEndResult = game.getGameEndResult();
+                assertNotNull(gameEndResult);
 
-                assertSame(terminal, completionHandler.getGameReview(ROOM_ID, "Host"));
-                assertSame(terminal, completionHandler.getGameReview(ROOM_ID, "Player2"));
+                assertSame(gameEndResult, completionHandler.getGameReview(ROOM_ID, "Host"));
+                assertSame(gameEndResult, completionHandler.getGameReview(ROOM_ID, "Player2"));
 
                 testRoom.removePlayer("Player3");
-                assertSame(terminal, completionHandler.getGameReview(ROOM_ID, "Player3"));
+                assertSame(gameEndResult, completionHandler.getGameReview(ROOM_ID, "Player3"));
 
                 assertThrows(UnauthorisedActionException.class,
                         () -> completionHandler.getGameReview(ROOM_ID, "Stranger"));

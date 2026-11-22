@@ -3,6 +3,7 @@ package com.pokergame.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -102,7 +103,7 @@ class RoomAggregateStoreTest {
             assertThat(activeGames.get(ROOM_ID)).isSameAs(game);
         }
         assertThat(room.isGameStarted()).isTrue();
-        verify(taskScheduler).schedule(any(Runnable.class), org.mockito.ArgumentMatchers.eq(Instant.ofEpochMilli(NOW + 60_000L)));
+        verify(taskScheduler).schedule(any(Runnable.class), eq(Instant.ofEpochMilli(NOW + 60_000L)));
     }
 
     @Test

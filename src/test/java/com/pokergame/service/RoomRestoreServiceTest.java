@@ -1,10 +1,22 @@
 package com.pokergame.service;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import com.pokergame.config.GameTimingProperties;
 import com.pokergame.config.WebSocketEventListener;
@@ -255,7 +267,7 @@ class RoomRestoreServiceTest {
     }
 
     @Test
-    void unexpiredTerminalGameSkipsGameInactivityAndResumesCleanupTimer() {
+    void unexpiredFinishedGameSkipsGameInactivityAndResumesCleanupTimer() {
         long cleanupDeadline = BASE_EPOCH_MS + 20_000L;
         Room room = createRoom(ROOM_ID, "Alice", "Bob");
         room.setInactivityDeadlineEpochMs(BASE_EPOCH_MS + 60_000L);

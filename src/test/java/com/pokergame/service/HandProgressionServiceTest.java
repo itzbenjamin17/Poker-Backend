@@ -1,9 +1,22 @@
 package com.pokergame.service;
 
-import com.pokergame.util.RoomCoordinator;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
-import com.pokergame.config.GameTimingProperties;
 import com.pokergame.enums.GamePhase;
+import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.Rank;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
@@ -13,7 +26,14 @@ import com.pokergame.model.HandPayout;
 import com.pokergame.model.Player;
 import com.pokergame.model.Room;
 import com.pokergame.model.TurnOutcome;
+import com.pokergame.testutil.TestTimings;
 import com.pokergame.util.LockLease;
+import com.pokergame.util.RoomCoordinator;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.concurrent.ScheduledFuture;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -25,18 +45,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.TaskScheduler;
-
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.util.List;
-import java.util.concurrent.ScheduledFuture;
-import com.pokergame.testutil.TestTimings;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for {@link HandProgressionService} hand initialization, turn-outcome transitions,
@@ -149,7 +157,7 @@ class HandProgressionServiceTest {
         }
 
         @Test
-        @DisplayName("guards missing game, paused for disconnected survivor, game over, unsettled hand, and terminal reset")
+        @DisplayName("guards missing game, paused for disconnected survivor, game over, unsettled hand, and a finished game")
         void startNewHand_GuardsNonStartableStates() {
             HandProgressionService progression = createProgression(4_000L);
 
@@ -290,6 +298,53 @@ class HandProgressionServiceTest {
 
             assertTrue(openGateNow);
             assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
+            verify(gameStateService).broadcastShowdownResults(game);
+        }
+
+        @Test
+        @DisplayName("SHOWDOWN with a display delay schedules READY_OPEN and leaves the ready gate to the timer")
+        void applyTurnOutcome_ShowdownWithDelay_SchedulesReadyOpen() {
+            HandProgressionService progression = createProgression(2_500L);
+            Game game = createStartedGame();
+            clearInvocations(gameStateService);
+
+            boolean openGateNow;
+            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                openGateNow = progression.applyTurnOutcome(
+                        game, new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null));
+            }
+
+            assertFalse(openGateNow);
+            assertEquals(FIXED_NOW.toEpochMilli() + 2_500L, game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_TIMEOUT));
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.GAME_END));
+            verify(gameStateService).broadcastShowdownResults(game);
+        }
+
+        @Test
+        @DisplayName("a SHOWDOWN that decides the game schedules GAME_END instead of the ready gate")
+        void applyTurnOutcome_FinalShowdown_SchedulesGameEnd() {
+            HandProgressionService progression = createProgression(0L);
+            Game game = createStartedGame();
+            game.dealFlop();
+            game.dealTurn();
+            game.dealRiver();
+            game.conductShowdown();
+            Player loser = game.getPlayers().getLast();
+            loser.doAction(PlayerAction.BET, loser.getChips());
+            assertTrue(game.isGameDecided());
+            clearInvocations(gameStateService);
+
+            boolean openGateNow;
+            try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
+                openGateNow = progression.applyTurnOutcome(
+                        game, new TurnOutcome(TurnOutcome.TurnOutcomeType.SHOWDOWN, null));
+            }
+
+            assertFalse(openGateNow);
+            assertNull(game.getScheduledTaskTime(ScheduledGameTask.READY_OPEN));
+            assertEquals(FIXED_NOW.toEpochMilli() + TestTimings.FINAL_SHOWDOWN_DISPLAY_DELAY_MS,
+                    game.getScheduledTaskTime(ScheduledGameTask.GAME_END));
             verify(gameStateService).broadcastShowdownResults(game);
         }
     }

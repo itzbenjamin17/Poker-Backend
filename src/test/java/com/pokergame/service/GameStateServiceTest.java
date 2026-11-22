@@ -1,25 +1,64 @@
 package com.pokergame.service;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
 import com.pokergame.dto.response.PlayerFeedbackResponse;
 import com.pokergame.dto.response.PrivatePlayerState;
 import com.pokergame.dto.response.PublicGameStateResponse;
-import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
+import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.Rank;
-import com.pokergame.enums.ReadyCountdownStartOutcome;
 import com.pokergame.enums.ReadyGateState;
 import com.pokergame.enums.RejectedAction;
 import com.pokergame.enums.ScheduledGameTask;
 import com.pokergame.enums.Suit;
 import com.pokergame.exception.ResourceNotFoundException;
-import com.pokergame.model.*;
+import com.pokergame.model.Card;
+import com.pokergame.model.Game;
+import com.pokergame.model.HandPayout;
+import com.pokergame.model.Player;
+import com.pokergame.model.Room;
+import com.pokergame.persistence.transaction.PostSaveQueueTestSupport;
 import com.pokergame.security.PlayerPrincipal;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -31,22 +70,6 @@ import org.springframework.messaging.simp.user.SimpSession;
 import org.springframework.messaging.simp.user.SimpUser;
 import org.springframework.messaging.simp.user.SimpUserRegistry;
 import org.springframework.messaging.support.MessageBuilder;
-
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.UUID;
-import java.util.Map;
-import java.util.Random;
-import java.util.Set;
-import java.util.stream.Collectors;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for the GameStateService class.
@@ -67,13 +90,12 @@ class GameStateServiceTest {
     private Room testRoom;
     private List<Player> testPlayers;
     private static final String GAME_ID = "test-game-id";
+    private static final Instant FIXED_INSTANT = Instant.parse("2026-01-01T00:00:00Z");
+    private static final Clock FIXED_CLOCK = Clock.fixed(FIXED_INSTANT, ZoneOffset.UTC);
 
     /**
      * Initializes the test fixtures before each scenario.
      */
-    private static final Instant FIXED_INSTANT = Instant.parse("2026-01-01T00:00:00Z");
-    private static final Clock FIXED_CLOCK = Clock.fixed(FIXED_INSTANT, ZoneOffset.UTC);
-
     @BeforeEach
     void setUp() {
         gameStateService = new GameStateService(roomService, messagingTemplate, FIXED_CLOCK);
@@ -217,7 +239,14 @@ class GameStateServiceTest {
         game.removePlayer(playerToRemove);
 
         assertDoesNotThrow(() -> gameStateService.broadcastGameState(game));
-        verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
+
+        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        PublicGameStateResponse response = captor.getValue();
+        assertEquals(game.getPlayers().stream().map(Player::getName).toList(),
+                response.players().stream().map(PublicGameStateResponse.PlayerState::name).toList());
+        assertEquals(game.getCurrentPlayer().getName(), response.currentPlayerName());
+        assertEquals(1L, response.stateRevision());
     }
 
     /**
@@ -227,7 +256,7 @@ class GameStateServiceTest {
     void broadcastGameState_WhenPlayerDisconnected_ShouldExposeDisconnectedStatus() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         testPlayers.get(1).setDisconnected(true);
-        long disconnectDeadlineEpochMs = System.currentTimeMillis() + 120_000;
+        long disconnectDeadlineEpochMs = FIXED_INSTANT.toEpochMilli() + 120_000;
         testPlayers.get(1).setDisconnectDeadlineEpochMs(disconnectDeadlineEpochMs);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
@@ -321,16 +350,22 @@ class GameStateServiceTest {
     }
 
     /**
-     * Protects the contract that broadcast showdown results with no room lookup still broadcasts.
+     * Protects the contract that the showdown broadcast never consults the room, so it still goes out when no room is registered.
      */
     @Test
     void broadcastShowdownResults_WithNoRoom_ShouldStillBroadcast() {
         Player winner = testPlayers.getFirst();
         Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 50), Set.of(winner.getPlayerId()));
 
+        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
         gameStateService.broadcastShowdownResults(settled);
 
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        PublicGameStateResponse response = captor.getValue();
+        assertEquals(List.of(winner.getName()), response.winners());
+        assertEquals(50, response.winningsPerPlayer());
+        assertTrue(response.handSettled());
+        verifyNoInteractions(roomService);
     }
 
     /**
@@ -377,8 +412,7 @@ class GameStateServiceTest {
         assertTrue(response.players().stream().noneMatch(PublicGameStateResponse.PlayerState::isCurrentPlayer));
     }
 
-    // ==================== broadcastGameStateWithAutoAdvance Tests
-    // ====================
+    // ==================== broadcastGameStateWithAutoAdvance Tests ====================
 
     /**
      * Protects the contract that broadcast game state with auto advance rejects a null game.
@@ -396,13 +430,20 @@ class GameStateServiceTest {
      */
     @Test
     void broadcastGameStateWithAutoAdvance_WithValidData_ShouldBroadcast() {
+        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+
         gameStateService.broadcastGameStateWithAutoAdvance(testGame, "Auto-advancing...");
 
-        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        PublicGameStateResponse response = captor.getValue();
+        assertTrue(response.isAutoAdvancing());
+        assertEquals("Auto-advancing...", response.autoAdvanceMessage());
+        assertNull(response.currentPlayerId());
+        assertTrue(response.legalActions().isEmpty());
+        assertEquals(1L, response.stateRevision());
     }
 
-    // ==================== broadcastAutoAdvanceNotification Tests
-    // ====================
+    // ==================== broadcastAutoAdvanceNotification Tests ====================
 
     /**
      * Protects the contract that broadcast auto advance notification rejects a null game.
@@ -589,28 +630,31 @@ class GameStateServiceTest {
 
     @Test
     void advanceRevisionAndBuildGameEnd_ForfeitDuringReadyCountdownAfterContestedShowdown_RevealsShowdownWinnerHoleCards() {
-        Player p1 = new Player("Player1", "p1", 100);
-        Player p2 = new Player("Player2", "p2", 100);
-        Game game = new Game(GAME_ID, List.of(p1, p2), 6, 5, 10);
-        game.dealHoleCards();
-        game.postBlinds();
-        Player firstActor = game.getCurrentPlayer();
-        game.processPlayerDecision(firstActor, PlayerAction.CALL, 0);
-        Player secondActor = game.getCurrentPlayer();
-        game.processPlayerDecision(secondActor, PlayerAction.CHECK, 0);
-        game.dealTurn();
-        game.dealRiver();
-
-        game.conductShowdown();
-        Set<String> winnerIds = game.getLastHandPayout().winnerIds();
-        assertFalse(winnerIds.isEmpty());
-        Player showdownWinner = game.getPlayers().stream()
-                .filter(p -> winnerIds.contains(p.getPlayerId()))
-                .findFirst()
-                .orElseThrow();
-        Player showdownLoser = showdownWinner.equals(p1) ? p2 : p1;
-        assertEquals(ReadyCountdownStartOutcome.OPENED,
-                game.openOrWaitReadyGate(FIXED_INSTANT.toEpochMilli() + 10_000L));
+        // Fixed cards and an explicit payout keep the showdown winner unambiguous (a random deal can tie).
+        List<Card> winnerCards = List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.ACE, Suit.HEARTS));
+        List<Card> loserCards = List.of(new Card(Rank.TWO, Suit.CLUBS), new Card(Rank.SEVEN, Suit.DIAMONDS));
+        Player showdownWinner = Player.restoreBuilder().name("Player1").playerId("p1").chips(100)
+                .holeCards(winnerCards).bestHand(winnerCards).handRank(HandRank.ONE_PAIR)
+                .currentBet(0).hasFolded(false).allIn(false).out(false).disconnected(false)
+                .readyForNextHand(false).build();
+        Player showdownLoser = Player.restoreBuilder().name("Player2").playerId("p2").chips(100)
+                .holeCards(loserCards).bestHand(loserCards).handRank(HandRank.HIGH_CARD)
+                .currentBet(0).hasFolded(false).allIn(false).out(false).disconnected(false)
+                .readyForNextHand(false).build();
+        Game game = Game.restoreBuilder().gameId(GAME_ID).players(List.of(showdownWinner, showdownLoser))
+                .activePlayerIds(List.of("p1", "p2")).remainingDeck(List.of())
+                .communityCards(List.of(
+                        new Card(Rank.NINE, Suit.CLUBS), new Card(Rank.JACK, Suit.DIAMONDS),
+                        new Card(Rank.KING, Suit.SPADES), new Card(Rank.FOUR, Suit.HEARTS),
+                        new Card(Rank.EIGHT, Suit.CLUBS)))
+                .pot(0).dealerPlayerId("p1").smallBlindPlayerId("p1").bigBlindPlayerId("p2")
+                .currentPlayerId("p1").currentHighestBet(0).currentPhase(GamePhase.SHOWDOWN).gameOver(false)
+                .smallBlind(5).bigBlind(10).handContributions(Map.of()).carryOverPot(0)
+                .lastHandPayout(new HandPayout(Map.of("p1", 20), Map.of(), Set.of("p1"), 0, true))
+                .readyGateState(ReadyGateState.COUNTING_DOWN)
+                .readyCountdownDeadlineEpochMs(FIXED_INSTANT.toEpochMilli() + 10_000L)
+                .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of()).scheduledTimes(Map.of())
+                .build();
         assertTrue(game.isReadyCountdownActive());
 
         Player gameWinner = game.settleGameEnd(showdownWinner, Set.of(showdownLoser.getName()));
@@ -625,7 +669,7 @@ class GameStateServiceTest {
                 .filter(p -> p.id().equals(showdownLoser.getPlayerId()))
                 .findFirst()
                 .orElseThrow();
-        assertEquals(showdownWinner.getHoleCards(), winnerState.holeCards());
+        assertEquals(winnerCards, winnerState.holeCards());
         assertNull(loserState.holeCards());
     }
 
@@ -670,7 +714,7 @@ class GameStateServiceTest {
     }
 
     @Test
-    void finalDtoCapturesTerminalCarryOverOnceWithWinnerStack1010AndEmptyPot() {
+    void finalDtoCapturesCarryOverOnceWithWinnerStack1010AndEmptyPot() {
         Player sb = Player.restoreBuilder().name("SB").playerId("sb").chips(0).holeCards(List.of())
                 .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0)
                 .hasFolded(true).allIn(false).out(true).disconnected(false).readyForNextHand(false).build();
@@ -678,7 +722,7 @@ class GameStateServiceTest {
                 .bestHand(List.of()).handRank(HandRank.NO_HAND).currentBet(0)
                 .hasFolded(false).allIn(false).out(false).disconnected(false).readyForNextHand(false).build();
         HandPayout settled = new HandPayout(Map.of(), Map.of(), Set.of(), 10, false);
-        Game terminal = Game.restoreBuilder().gameId(GAME_ID).players(List.of(sb, bb)).activePlayerIds(List.of("bb"))
+        Game finishedGame = Game.restoreBuilder().gameId(GAME_ID).players(List.of(sb, bb)).activePlayerIds(List.of("bb"))
                 .remainingDeck(List.of()).communityCards(List.of()).pot(10)
                 .dealerPlayerId("sb").smallBlindPlayerId("sb").bigBlindPlayerId("bb")
                 .currentPlayerId("bb").currentHighestBet(0)
@@ -686,9 +730,9 @@ class GameStateServiceTest {
                 .handContributions(Map.of()).carryOverPot(10).lastHandPayout(settled)
                 .allPlayersHadInitialTurn(true).actedPlayersInRound(Set.of())
                 .scheduledTimes(Map.of()).build();
-        terminal.settleGameEnd(bb, Set.of());
+        finishedGame.settleGameEnd(bb, Set.of());
 
-        PublicGameStateResponse result = gameStateService.advanceRevisionAndBuildGameEnd(terminal, bb, true);
+        PublicGameStateResponse result = gameStateService.advanceRevisionAndBuildGameEnd(finishedGame, bb, true);
         gameStateService.sendGameEnd(GAME_ID, result);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
@@ -700,7 +744,7 @@ class GameStateServiceTest {
         assertEquals(0, sent.pot());
         assertEquals(1010, sent.players().stream().filter(PublicGameStateResponse.PlayerState::isWinner)
                 .findFirst().orElseThrow().chips());
-        terminal.settleGameEnd(bb, Set.of());
+        finishedGame.settleGameEnd(bb, Set.of());
         assertEquals(1010, bb.getChips());
     }
 
@@ -935,7 +979,7 @@ class GameStateServiceTest {
                 .carryOverPot(0)
                 .lastHandPayout(null)
                 .readyGateState(ReadyGateState.COUNTING_DOWN)
-                .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
+                .readyCountdownDeadlineEpochMs(FIXED_INSTANT.toEpochMilli() + 5000)
                 .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTimes(Map.of())
@@ -972,7 +1016,7 @@ class GameStateServiceTest {
                 .carryOverPot(0)
                 .lastHandPayout(null)
                 .readyGateState(ReadyGateState.COUNTING_DOWN)
-                .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
+                .readyCountdownDeadlineEpochMs(FIXED_INSTANT.toEpochMilli() + 5000)
                 .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTimes(Map.of())
@@ -1038,7 +1082,7 @@ class GameStateServiceTest {
                 .handContributions(Map.of())
                 .carryOverPot(0)
                 .lastHandPayout(settlement)
-                .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 5000)
+                .readyCountdownDeadlineEpochMs(FIXED_INSTANT.toEpochMilli() + 5000)
                 .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTimes(Map.of())
@@ -1142,7 +1186,7 @@ class GameStateServiceTest {
                 .handContributions(Map.of())
                 .carryOverPot(0)
                 .lastHandPayout(settlement)
-                .readyCountdownDeadlineEpochMs(System.currentTimeMillis() + 6000)
+                .readyCountdownDeadlineEpochMs(FIXED_INSTANT.toEpochMilli() + 6000)
                 .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTimes(Map.of())
@@ -1274,9 +1318,12 @@ class GameStateServiceTest {
     void broadcastGameState_DuringPreflop_ShouldBroadcast() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
 
+        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+
         gameStateService.broadcastGameState(testGame);
 
-        verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        assertEquals(GamePhase.PRE_FLOP, captor.getValue().phase());
     }
 
     /**
@@ -1305,26 +1352,10 @@ class GameStateServiceTest {
     }
 
     /**
-     * Protects the contract that broadcast game state after dealing flop should broadcast.
+     * Protects the contract that the broadcast after dealing the flop carries the three community cards and keeps blind flags.
      */
     @Test
-    void broadcastGameState_AfterDealingFlop_ShouldBroadcast() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-        testGame.dealHoleCards();
-        testGame.postBlinds();
-        testGame.dealFlop();
-
-        gameStateService.broadcastGameState(testGame);
-
-        verify(messagingTemplate, atLeastOnce()).convertAndSend(eq("/game/" + GAME_ID), any(Object.class));
-        assertEquals(3, testGame.getCommunityCards().size());
-    }
-
-    /**
-     * Protects the contract that broadcast game state after dealing flop should keep blind flags.
-     */
-    @Test
-    void broadcastGameState_AfterDealingFlop_ShouldKeepBlindFlags() {
+    void broadcastGameState_AfterDealingFlop_ShouldCarryCommunityCardsAndKeepBlindFlags() {
         when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
         testGame.dealHoleCards();
         testGame.postBlinds();
@@ -1342,6 +1373,7 @@ class GameStateServiceTest {
         long smallBlindCount = response.players().stream().filter(PublicGameStateResponse.PlayerState::isSmallBlind).count();
         long bigBlindCount = response.players().stream().filter(PublicGameStateResponse.PlayerState::isBigBlind).count();
 
+        assertEquals(3, response.communityCards().size());
         assertEquals(1, smallBlindCount);
         assertEquals(1, bigBlindCount);
     }
@@ -1349,23 +1381,7 @@ class GameStateServiceTest {
     // ==================== Multiple Broadcast Tests ====================
 
     /**
-     * Protects the contract that multiple broadcasts should all succeed.
-     */
-    @Test
-    void multipleBroadcasts_ShouldAllSucceed() {
-        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
-
-        gameStateService.broadcastGameState(testGame);
-        gameStateService.broadcastGameState(testGame);
-        gameStateService.broadcastGameState(testGame);
-
-        // 3 public broadcasts via convertAndSend + 3*(2 name-private) via convertAndSendToUser
-        verify(messagingTemplate, times(3)).convertAndSend(anyString(), any(Object.class));
-        verify(messagingTemplate, times(6)).convertAndSendToUser(anyString(), anyString(), any(Object.class));
-    }
-
-    /**
-     * Protects the contract that broadcast game state increments stateRevision monotonically.
+     * Protects the contract that each broadcast increments stateRevision monotonically and sends one private state per player.
      */
     @Test
     void broadcastGameState_IncrementsStateRevisionMonotonically() {
@@ -1380,6 +1396,8 @@ class GameStateServiceTest {
         assertEquals(1, responses.get(0).stateRevision());
         assertEquals(2, responses.get(1).stateRevision());
         assertEquals(2, testGame.getStateRevision());
+        // Every broadcast also reaches each of the two players privately.
+        verify(messagingTemplate, times(4)).convertAndSendToUser(anyString(), eq("/queue/private"), any(PrivatePlayerState.class));
     }
 
     /**
@@ -1674,29 +1692,85 @@ class GameStateServiceTest {
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), eq(recorded));
     }
 
+    @ParameterizedTest(name = "Alice ready={0}, Bob ready={1}")
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    @DisplayName("Showdown snapshot shows the settled hand whichever players have marked ready")
+    void showdownSnapshot_isUnaffectedByReadyFlags(boolean aliceReady, boolean bobReady) {
+        SettledShowdown showdown = settledShowdown();
+        showdown.alice().setReadyForNextHand(aliceReady);
+        showdown.bob().setReadyForNextHand(bobReady);
+
+        PublicGameStateResponse snapshot = gameStateService.getPublicGameStateSnapshot(showdown.game());
+
+        assertNull(snapshot.currentPlayerName(), "currentPlayerName must be null during showdown countdown");
+        assertNull(snapshot.currentPlayerId(), "currentPlayerId must be null during showdown countdown");
+        assertTrue(snapshot.legalActions().isEmpty(), "legalActions must be empty");
+
+        assertTrue(snapshot.handSettled(), "handSettled must remain true");
+        assertEquals(List.of("Alice"), snapshot.winners(), "winners must remain [Alice]");
+        assertEquals(450, snapshot.winningsPerPlayer(), "winningsPerPlayer must remain 450");
+
+        PublicGameStateResponse.PlayerState pubP1 = publicPlayer(snapshot, "p-1");
+        PublicGameStateResponse.PlayerState pubP2 = publicPlayer(snapshot, "p-2");
+        PublicGameStateResponse.PlayerState pubP3 = publicPlayer(snapshot, "p-3");
+
+        assertFalse(pubP1.isCurrentPlayer());
+        assertFalse(pubP2.isCurrentPlayer());
+        assertFalse(pubP3.isCurrentPlayer());
+
+        assertTrue(pubP1.isWinner());
+        assertEquals(450, pubP1.chipsWon());
+        assertNotNull(pubP1.holeCards(), "Winner holeCards must be revealed");
+
+        assertFalse(pubP2.isWinner());
+        assertEquals(0, pubP2.chipsWon());
+        assertNotNull(pubP2.holeCards(), "Contender holeCards must be revealed");
+
+        assertFalse(pubP3.isWinner());
+        assertNull(pubP3.holeCards(), "Folded player holeCards must NEVER be revealed");
+    }
+
     @Test
-    @DisplayName("Repeated ready/unready toggling during showdown retains settlement and suppresses currentPlayer")
-    void readyFlapping_preservesSettlementIntegrity() {
-        String roomAId = "room-alpha";
-        Room roomA = new Room(roomAId, "Room A", "Alice", 6, 5, 10, 100, null);
-        roomA.addPlayer("Alice");
-        roomA.addPlayer("Bob");
-        roomA.addPlayer("Charlie");
-        when(roomService.getRoom(roomAId)).thenReturn(roomA);
+    @DisplayName("Showdown snapshot returns immutable winners and best-hand lists")
+    void showdownSnapshot_returnsImmutableWinnersAndBestHands() {
+        SettledShowdown showdown = settledShowdown();
 
-        Player p1 = createIsolationPlayer("Alice", "p-1", 500, false);
-        Player p2 = createIsolationPlayer("Bob", "p-2", 300, false);
-        Player p3Folded = createIsolationPlayer("Charlie", "p-3", 200, true);
-        p1.setHandRank(HandRank.FULL_HOUSE);
-        p2.setHandRank(HandRank.FLUSH);
-        p3Folded.setHandRank(HandRank.NO_HAND);
+        PublicGameStateResponse snapshot = gameStateService.getPublicGameStateSnapshot(showdown.game());
 
-        HandPayout settlement = new HandPayout(
-                Map.of("p-1", 450), Map.of(), Set.of("p-1"), 0, true);
+        assertEquals(List.of("Alice"), snapshot.winners());
+        assertThrows(UnsupportedOperationException.class, () -> snapshot.winners().clear());
+        for (String contenderId : List.of("p-1", "p-2")) {
+            PublicGameStateResponse.PlayerState contender = publicPlayer(snapshot, contenderId);
+            assertNotNull(contender.bestHand(), contender.name() + " reached showdown, so has a best hand list");
+            assertThrows(UnsupportedOperationException.class, () -> contender.bestHand().clear());
+        }
+    }
+
+    private record SettledShowdown(Game game, Player alice, Player bob) {
+    }
+
+    /**
+     * Alice (full house) won 450 from Bob (flush) with Charlie folded; the hand is settled and the ready
+     * countdown is running.
+     */
+    private SettledShowdown settledShowdown() {
+        String roomId = "room-alpha";
+        Room room = new Room(roomId, "Room A", "Alice", 6, 5, 10, 100, null);
+        room.addPlayer("Alice");
+        room.addPlayer("Bob");
+        room.addPlayer("Charlie");
+        lenient().when(roomService.getRoom(roomId)).thenReturn(room);
+
+        Player alice = createIsolationPlayer("Alice", "p-1", 500, false);
+        Player bob = createIsolationPlayer("Bob", "p-2", 300, false);
+        Player charlieFolded = createIsolationPlayer("Charlie", "p-3", 200, true);
+        alice.setHandRank(HandRank.FULL_HOUSE);
+        bob.setHandRank(HandRank.FLUSH);
+        charlieFolded.setHandRank(HandRank.NO_HAND);
 
         Game game = Game.restoreBuilder()
-                .gameId(roomAId)
-                .players(List.of(p1, p2, p3Folded))
+                .gameId(roomId)
+                .players(List.of(alice, bob, charlieFolded))
                 .activePlayerIds(List.of("p-1", "p-2"))
                 .remainingDeck(List.of())
                 .communityCards(List.of(
@@ -1715,50 +1789,17 @@ class GameStateServiceTest {
                 .bigBlind(10)
                 .handContributions(Map.of())
                 .carryOverPot(0)
-                .lastHandPayout(settlement)
+                .lastHandPayout(new HandPayout(Map.of("p-1", 450), Map.of(), Set.of("p-1"), 0, true))
                 .readyCountdownDeadlineEpochMs(FIXED_INSTANT.toEpochMilli() + 10000)
                 .allPlayersHadInitialTurn(true)
                 .actedPlayersInRound(Set.of())
                 .scheduledTimes(Map.of())
-                
                 .build();
+        return new SettledShowdown(game, alice, bob);
+    }
 
-        gameStateService.broadcastShowdownResults(game);
-
-        Random rng = new Random(42);
-        for (int i = 0; i < 100; i++) {
-            p1.setReadyForNextHand(rng.nextBoolean());
-            p2.setReadyForNextHand(rng.nextBoolean());
-
-            PublicGameStateResponse snapshot = gameStateService.getPublicGameStateSnapshot(game);
-
-            assertNull(snapshot.currentPlayerName(), "Iteration " + i + ": currentPlayerName must be null during showdown countdown");
-            assertNull(snapshot.currentPlayerId(), "Iteration " + i + ": currentPlayerId must be null during showdown countdown");
-            assertTrue(snapshot.legalActions().isEmpty(), "Iteration " + i + ": legalActions must be empty");
-
-            assertTrue(snapshot.handSettled(), "Iteration " + i + ": handSettled must remain true");
-            assertEquals(List.of("Alice"), snapshot.winners(), "Iteration " + i + ": winners must remain [Alice]");
-            assertEquals(450, snapshot.winningsPerPlayer(), "Iteration " + i + ": winningsPerPlayer must remain 450");
-
-            PublicGameStateResponse.PlayerState pubP1 = snapshot.players().stream().filter(p -> p.id().equals("p-1")).findFirst().orElseThrow();
-            PublicGameStateResponse.PlayerState pubP2 = snapshot.players().stream().filter(p -> p.id().equals("p-2")).findFirst().orElseThrow();
-            PublicGameStateResponse.PlayerState pubP3 = snapshot.players().stream().filter(p -> p.id().equals("p-3")).findFirst().orElseThrow();
-
-            assertFalse(pubP1.isCurrentPlayer());
-            assertFalse(pubP2.isCurrentPlayer());
-            assertFalse(pubP3.isCurrentPlayer());
-
-            assertTrue(pubP1.isWinner());
-            assertEquals(450, pubP1.chipsWon());
-            assertNotNull(pubP1.holeCards(), "Winner holeCards must be revealed");
-
-            assertFalse(pubP2.isWinner());
-            assertEquals(0, pubP2.chipsWon());
-            assertNotNull(pubP2.holeCards(), "Contender holeCards must be revealed");
-
-            assertFalse(pubP3.isWinner());
-            assertNull(pubP3.holeCards(), "Folded player holeCards must NEVER be revealed");
-        }
+    private static PublicGameStateResponse.PlayerState publicPlayer(PublicGameStateResponse snapshot, String id) {
+        return snapshot.players().stream().filter(p -> p.id().equals(id)).findFirst().orElseThrow();
     }
 
     @Test
@@ -1944,6 +1985,276 @@ class GameStateServiceTest {
         }
         lenient().when(user.getSessions()).thenReturn(sessions);
         return user;
+    }
+
+    // ==================== PostSaveActions deferral Tests ====================
+
+    /** The six live send methods; each queues exactly one kind of message through {@code PostSaveActions}. */
+    private enum DeferredSend {
+        BROADCAST_GAME_STATE {
+            @Override
+            void queue(GameStateServiceTest test) {
+                test.testGame.dealHoleCards();
+                test.gameStateService.broadcastGameState(test.testGame);
+            }
+
+            @Override
+            void verifyDelivered(SimpMessagingTemplate template) {
+                verify(template).convertAndSend(eq("/game/" + GAME_ID), any(PublicGameStateResponse.class));
+                verify(template, times(2)).convertAndSendToUser(
+                        anyString(), eq("/queue/private"), any(PrivatePlayerState.class));
+            }
+        },
+        BROADCAST_SHOWDOWN_RESULTS {
+            @Override
+            void queue(GameStateServiceTest test) {
+                Player winner = test.testPlayers.getFirst();
+                test.gameStateService.broadcastShowdownResults(test.settledGame(
+                        GAME_ID, test.testPlayers, Map.of(winner.getPlayerId(), 50), Set.of(winner.getPlayerId())));
+            }
+
+            @Override
+            void verifyDelivered(SimpMessagingTemplate template) {
+                verify(template).convertAndSend(eq("/game/" + GAME_ID), any(PublicGameStateResponse.class));
+            }
+        },
+        BROADCAST_GAME_STATE_WITH_AUTO_ADVANCE {
+            @Override
+            void queue(GameStateServiceTest test) {
+                test.gameStateService.broadcastGameStateWithAutoAdvance(test.testGame, "Banner");
+            }
+
+            @Override
+            void verifyDelivered(SimpMessagingTemplate template) {
+                verify(template).convertAndSend(eq("/game/" + GAME_ID), any(PublicGameStateResponse.class));
+            }
+        },
+        SEND_GAME_END {
+            @Override
+            void queue(GameStateServiceTest test) {
+                test.gameStateService.sendGameEnd(GAME_ID, test.gameStateService.buildGameEndResponse(
+                        test.testGame, test.testPlayers.getFirst(), false));
+            }
+
+            @Override
+            void verifyDelivered(SimpMessagingTemplate template) {
+                verify(template).convertAndSend(eq("/game/" + GAME_ID), any(PublicGameStateResponse.class));
+            }
+        },
+        SEND_PRIVATE_PLAYER_NOTIFICATION {
+            @Override
+            void queue(GameStateServiceTest test) {
+                test.gameStateService.sendPrivatePlayerNotification(GAME_ID, "Player1", "Hello");
+            }
+
+            @Override
+            void verifyDelivered(SimpMessagingTemplate template) {
+                verify(template).convertAndSendToUser(
+                        anyString(), eq("/queue/private"), any(PlayerFeedbackResponse.class));
+            }
+        },
+        SEND_ACTION_ERROR {
+            @Override
+            void queue(GameStateServiceTest test) {
+                test.gameStateService.sendActionError(
+                        new PlayerPrincipal("Player1", GAME_ID, "membership"), "CODE", RejectedAction.BET, "Nope");
+            }
+
+            @Override
+            void verifyDelivered(SimpMessagingTemplate template) {
+                verify(template).convertAndSendToUser(
+                        anyString(), eq("/queue/private"), any(PlayerFeedbackResponse.class));
+            }
+        };
+
+        abstract void queue(GameStateServiceTest test);
+
+        abstract void verifyDelivered(SimpMessagingTemplate template);
+    }
+
+    /**
+     * Protects the contract that every send method waits for the post-save queue to run before
+     * anything reaches the broker, so a failed save never leaks a message.
+     */
+    @ParameterizedTest
+    @EnumSource(DeferredSend.class)
+    void sendMethods_AreDeferredUntilThePostSaveQueueRuns(DeferredSend send) {
+        lenient().when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        try (PostSaveQueueTestSupport queue = PostSaveQueueTestSupport.open(GAME_ID)) {
+            send.queue(this);
+
+            verifyNoInteractions(messagingTemplate);
+
+            queue.executeAll();
+
+            send.verifyDelivered(messagingTemplate);
+        }
+    }
+
+    /**
+     * Protects the contract that a discarded post-save queue (a failed mutation) sends nothing.
+     */
+    @ParameterizedTest
+    @EnumSource(DeferredSend.class)
+    void sendMethods_AreDiscardedWhenThePostSaveQueueIsCleared(DeferredSend send) {
+        lenient().when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        try (PostSaveQueueTestSupport queue = PostSaveQueueTestSupport.open(GAME_ID)) {
+            send.queue(this);
+        }
+
+        verifyNoInteractions(messagingTemplate);
+    }
+
+    /**
+     * Protects the contract that a deferred game-state broadcast delivers the state captured when it
+     * was queued, not the game as it looks after later mutations.
+     */
+    @Test
+    void broadcastGameState_QueuedPayloadsAreFrozenBeforeLaterGameMutations() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        testGame.dealHoleCards();
+        Player player1 = testPlayers.getFirst();
+        List<Card> cardsWhenQueued = List.copyOf(player1.getHoleCards());
+        String player1User = "Player1:" + GAME_ID + ":" + testRoom.getMembershipId("Player1");
+
+        try (PostSaveQueueTestSupport queue = PostSaveQueueTestSupport.open(GAME_ID)) {
+            gameStateService.broadcastGameState(testGame);
+            player1.addChips(50);
+            player1.setHoleCards(List.of());
+            testGame.incrementStateRevision();
+
+            queue.executeAll();
+        }
+
+        ArgumentCaptor<PublicGameStateResponse> publicCaptor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), publicCaptor.capture());
+        assertEquals(1L, publicCaptor.getValue().stateRevision());
+        assertEquals(100, publicCaptor.getValue().players().stream()
+                .filter(p -> p.name().equals("Player1")).findFirst().orElseThrow().chips());
+        ArgumentCaptor<PrivatePlayerState> privateCaptor = ArgumentCaptor.forClass(PrivatePlayerState.class);
+        verify(messagingTemplate).convertAndSendToUser(eq(player1User), eq("/queue/private"), privateCaptor.capture());
+        assertEquals(cardsWhenQueued, privateCaptor.getValue().holeCards());
+    }
+
+    /**
+     * Protects the contract that a deferred showdown broadcast delivers the settlement captured when
+     * it was queued.
+     */
+    @Test
+    void broadcastShowdownResults_QueuedPayloadIsFrozenBeforeLaterGameMutations() {
+        Player winner = testPlayers.getFirst();
+        Game settled = settledGame(GAME_ID, testPlayers, Map.of(winner.getPlayerId(), 50), Set.of(winner.getPlayerId()));
+        long revisionWhenQueued;
+
+        try (PostSaveQueueTestSupport queue = PostSaveQueueTestSupport.open(GAME_ID)) {
+            gameStateService.broadcastShowdownResults(settled);
+            revisionWhenQueued = settled.getStateRevision();
+            winner.addChips(500);
+            settled.incrementStateRevision();
+
+            queue.executeAll();
+        }
+
+        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        assertEquals(revisionWhenQueued, captor.getValue().stateRevision());
+        assertEquals(100, captor.getValue().players().getFirst().chips());
+        assertEquals(List.of("Player1"), captor.getValue().winners());
+    }
+
+    /**
+     * Protects the contract that a deferred auto-advance broadcast delivers the state captured when
+     * it was queued.
+     */
+    @Test
+    void broadcastGameStateWithAutoAdvance_QueuedPayloadIsFrozenBeforeLaterGameMutations() {
+        long revisionWhenQueued;
+
+        try (PostSaveQueueTestSupport queue = PostSaveQueueTestSupport.open(GAME_ID)) {
+            gameStateService.broadcastGameStateWithAutoAdvance(testGame, "Banner");
+            revisionWhenQueued = testGame.getStateRevision();
+            testPlayers.getFirst().addChips(500);
+            testGame.incrementStateRevision();
+
+            queue.executeAll();
+        }
+
+        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        assertEquals(revisionWhenQueued, captor.getValue().stateRevision());
+        assertEquals("Banner", captor.getValue().autoAdvanceMessage());
+        assertEquals(100, captor.getValue().players().getFirst().chips());
+    }
+
+    /**
+     * Protects the contract that a deferred game-end send delivers the snapshot that was built
+     * before queueing, even if the game changes afterwards.
+     */
+    @Test
+    void sendGameEnd_QueuedResponseIsFrozenBeforeLaterGameMutations() {
+        Player winner = testPlayers.getFirst();
+        PublicGameStateResponse built = gameStateService.advanceRevisionAndBuildGameEnd(testGame, winner, false);
+
+        try (PostSaveQueueTestSupport queue = PostSaveQueueTestSupport.open(GAME_ID)) {
+            gameStateService.sendGameEnd(GAME_ID, built);
+            winner.addChips(500);
+            testGame.incrementStateRevision();
+
+            queue.executeAll();
+        }
+
+        ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
+        verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
+        assertSame(built, captor.getValue());
+        assertEquals(100, captor.getValue().gameEnd().winnerChips());
+        assertEquals(1L, captor.getValue().stateRevision());
+    }
+
+    /**
+     * Protects the contract that a deferred private notification stays addressed to the membership
+     * that was active when it was queued, never to a replacement that joined under the same name.
+     */
+    @Test
+    void sendPrivatePlayerNotification_QueuedRecipientIsFrozenBeforeMembershipChanges() {
+        when(roomService.getRoom(GAME_ID)).thenReturn(testRoom);
+        String originalMembership = testRoom.getMembershipId("Player2");
+
+        try (PostSaveQueueTestSupport queue = PostSaveQueueTestSupport.open(GAME_ID)) {
+            gameStateService.sendPrivatePlayerNotification(GAME_ID, "Player2", "Welcome");
+            testRoom.removePlayer("Player2");
+            String replacementMembership = testRoom.addPlayer("Player2");
+            assertNotEquals(originalMembership, replacementMembership);
+
+            queue.executeAll();
+        }
+
+        verify(messagingTemplate).convertAndSendToUser(
+                eq("Player2:" + GAME_ID + ":" + originalMembership), eq("/queue/private"), any(PlayerFeedbackResponse.class));
+        verify(messagingTemplate, never()).convertAndSendToUser(
+                eq("Player2:" + GAME_ID + ":" + testRoom.getMembershipId("Player2")), anyString(), any());
+    }
+
+    /**
+     * Protects the contract that a deferred action error is delivered to the originating session
+     * with the code, rejected action and message it was queued with.
+     */
+    @Test
+    void sendActionError_QueuedFeedbackIsDeliveredToTheOriginSessionAfterThePostSaveQueueRuns() {
+        PlayerPrincipal origin = new PlayerPrincipal("Player1", GAME_ID, "origin-membership");
+
+        try (PostSaveQueueTestSupport queue = PostSaveQueueTestSupport.open(GAME_ID)) {
+            gameStateService.sendActionError(origin, "MIN_BET", RejectedAction.BET, "Minimum bet is 10");
+            verifyNoInteractions(messagingTemplate);
+
+            queue.executeAll();
+        }
+
+        ArgumentCaptor<PlayerFeedbackResponse> captor = ArgumentCaptor.forClass(PlayerFeedbackResponse.class);
+        verify(messagingTemplate).convertAndSendToUser(eq(origin.getName()), eq("/queue/private"), captor.capture());
+        assertEquals(PlayerFeedbackResponse.Type.ACTION_ERROR, captor.getValue().type());
+        assertEquals("MIN_BET", captor.getValue().code());
+        assertEquals(RejectedAction.BET, captor.getValue().action());
+        assertEquals("Minimum bet is 10", captor.getValue().message());
     }
 
     // ==================== Full public view characterization Tests ====================
