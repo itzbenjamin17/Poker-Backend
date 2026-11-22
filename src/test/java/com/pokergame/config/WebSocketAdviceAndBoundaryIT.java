@@ -210,7 +210,7 @@ class WebSocketAdviceAndBoundaryIT {
             assertThat(error.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
             assertThat(error.code()).isEqualTo("ACTION_REJECTED");
             assertThat(error.action()).isEqualTo(RejectedAction.READY);
-            assertThat(error.message()).isEqualTo("Ready countdown is not active.");
+            assertThat(error.message()).isEqualTo("The ready check has already closed.");
         }
     }
 
@@ -234,7 +234,7 @@ class WebSocketAdviceAndBoundaryIT {
             assertThat(error.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
             assertThat(error.code()).isEqualTo("NOT_YOUR_TURN");
             assertThat(error.action()).isEqualTo(RejectedAction.from(action));
-            assertThat(error.message()).isEqualTo("Wait for your turn");
+            assertThat(error.message()).isEqualTo("It's not your turn yet.");
             assertThat(readTable(game)).isEqualTo(tableBefore);
         }
 
@@ -253,7 +253,7 @@ class WebSocketAdviceAndBoundaryIT {
             assertThat(error.code()).isEqualTo("INSUFFICIENT_CHIPS");
             assertThat(error.action()).isEqualTo(RejectedAction.RAISE);
             int availableChips = tableBefore.chips().get(game.actingPlayer());
-            assertThat(error.message()).isEqualTo("Available: " + availableChips + "; yours: 2000");
+            assertThat(error.message()).isEqualTo("You only have " + availableChips + " chips (you entered 2000).");
             assertThat(readTable(game)).isEqualTo(tableBefore);
         }
 

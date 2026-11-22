@@ -451,7 +451,7 @@ class GameplayLifecycleE2E extends AbstractE2ESupport {
             assertThat(error.type()).isEqualTo(PlayerFeedbackResponse.Type.ACTION_ERROR);
             assertThat(error.code()).isEqualTo("HAND_COMPLETE");
             assertThat(error.action()).isEqualTo(RejectedAction.CHECK);
-            assertThat(error.message()).isEqualTo("Hand is complete");
+            assertThat(error.message()).isEqualTo("This hand is over. Wait for the next one.");
 
             JsonNode showdownState = readGameState(gameId, hostToken);
             assertThat(showdownState.path("phase").asString()).isEqualTo("SHOWDOWN");

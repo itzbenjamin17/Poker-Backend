@@ -227,11 +227,11 @@ class ReadyGateTest {
         private static Stream<Arguments> playerFacingReadyRuleErrors() {
             return Stream.of(
                     Arguments.of("closed gate ready=true", ReadyGateState.CLOSED, "Alice", true,
-                            "Ready countdown is not active."),
+                            "The ready check has already closed."),
                     Arguments.of("closed gate ready=false", ReadyGateState.CLOSED, "Alice", false,
-                            "Ready countdown is not active."),
+                            "The ready check has already closed."),
                     Arguments.of("waiting gate ready=true", ReadyGateState.WAITING_FOR_PLAYERS, "Alice", true,
-                            "Ready countdown is not active."),
+                            "The ready check has already closed."),
                     Arguments.of("unknown player", ReadyGateState.COUNTING_DOWN, "Unknown", true,
                             "You are no longer part of this game."),
                     Arguments.of("out player ready=true", ReadyGateState.COUNTING_DOWN, "Dave", true,
@@ -241,11 +241,11 @@ class ReadyGateTest {
                     Arguments.of("disconnected player ready=true", ReadyGateState.COUNTING_DOWN, "Carol", true,
                             "Reconnect before marking ready."),
                     Arguments.of("zero chips player ready=true", ReadyGateState.COUNTING_DOWN, "Bob", true,
-                            "Players without chips cannot mark ready."),
+                            "You have no chips left, so you can't ready up."),
                     Arguments.of("disconnected player ready=false", ReadyGateState.COUNTING_DOWN, "Carol", false,
-                            "You are not eligible to change readiness."),
+                            "You can't change your ready status right now."),
                     Arguments.of("zero chips player ready=false", ReadyGateState.COUNTING_DOWN, "Bob", false,
-                            "You are not eligible to change readiness."));
+                            "You can't change your ready status right now."));
         }
     }
 

@@ -111,10 +111,10 @@ class WebSocketExceptionHandlerTest {
     @EnumSource(PlayerAction.class)
     void eachRejectedActionCarriesCodeActionAndConciseMessage(PlayerAction action) {
         handler.handleMessageException(
-                new UnauthorisedActionException("old detail", "NOT_YOUR_TURN", "Wait for your turn"),
+                new UnauthorisedActionException("old detail", "NOT_YOUR_TURN", "It's not your turn yet."),
                 principal, actionFrame(action));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("NOT_YOUR_TURN", RejectedAction.from(action), "Wait for your turn"));
+                PlayerFeedbackResponse.actionError("NOT_YOUR_TURN", RejectedAction.from(action), "It's not your turn yet."));
     }
 
     /** The exact corrective values survive the handler without a generic length cap. */
@@ -132,10 +132,10 @@ class WebSocketExceptionHandlerTest {
     void readinessRejectionKeepsTheRequestedActionAndMessage() {
         Message<String> frame = MessageBuilder.withPayload("{}")
                 .setHeader("simpDestination", "/app/" + gameId + "/ready").build();
-        handler.handleMessageException(new UnauthorisedActionException("Ready countdown is not active."),
+        handler.handleMessageException(new UnauthorisedActionException("The ready check has already closed."),
                 principal, frame);
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.READY, "Ready countdown is not active."));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.READY, "The ready check has already closed."));
     }
 
     /** Readiness errors prefer actionErrorMessage() over getMessage() when both are present. */
@@ -166,11 +166,11 @@ class WebSocketExceptionHandlerTest {
                 .setHeader("simpDestination", "/app/spoofed-game-999/action").build();
 
         handler.handleMessageException(
-                new UnauthorisedActionException("old detail", "NOT_YOUR_TURN", "Wait for your turn"),
+                new UnauthorisedActionException("old detail", "NOT_YOUR_TURN", "It's not your turn yet."),
                 principal, spoofedFrame);
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("NOT_YOUR_TURN", RejectedAction.from(PlayerAction.BET), "Wait for your turn"));
+                PlayerFeedbackResponse.actionError("NOT_YOUR_TURN", RejectedAction.from(PlayerAction.BET), "It's not your turn yet."));
         verify(messagingTemplate, never()).convertAndSendToUser(
                 contains("spoofed-game-999"),
                 anyString(),
@@ -244,7 +244,7 @@ class WebSocketExceptionHandlerTest {
         handler.handleMessageException(new RuntimeException("processing failed"), principal, frame);
 
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.from(PlayerAction.FOLD), "Action unavailable"));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.from(PlayerAction.FOLD), "That move isn't available right now."));
     }
 
     @Test
@@ -387,7 +387,7 @@ class WebSocketExceptionHandlerTest {
         second.initCause(first);
         handler.handleMessageException(first, principal, actionFrame(PlayerAction.CALL));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.from(PlayerAction.CALL), "Action unavailable"));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.from(PlayerAction.CALL), "That move isn't available right now."));
     }
 
     /** Deeply nested missing games map to GAME_NOT_FOUND. */
@@ -398,7 +398,7 @@ class WebSocketExceptionHandlerTest {
                 new ResourceNotFoundException("Game not found")));
         handler.handleMessageException(chain, principal, actionFrame(PlayerAction.FOLD));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("GAME_NOT_FOUND", RejectedAction.from(PlayerAction.FOLD), "Game unavailable"));
+                PlayerFeedbackResponse.actionError("GAME_NOT_FOUND", RejectedAction.from(PlayerAction.FOLD), "This game is no longer available."));
     }
 
     /** A missing game outranks a validation failure in the same chain. */
@@ -409,7 +409,7 @@ class WebSocketExceptionHandlerTest {
                 new ResourceNotFoundException("Game not found"));
         handler.handleMessageException(wrapped, principal, actionFrame(PlayerAction.CHECK));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("GAME_NOT_FOUND", RejectedAction.from(PlayerAction.CHECK), "Game unavailable"));
+                PlayerFeedbackResponse.actionError("GAME_NOT_FOUND", RejectedAction.from(PlayerAction.CHECK), "This game is no longer available."));
     }
 
     /** The outermost action-feedback exception in the chain wins. */
@@ -457,7 +457,7 @@ class WebSocketExceptionHandlerTest {
     void rejectedActionIsRecoveredFromRawPayloads(Object payload) {
         handler.handleMessageException(new RuntimeException("boom"), principal, frame(payload, "action"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.from(PlayerAction.FOLD), "Action unavailable"));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.from(PlayerAction.FOLD), "That move isn't available right now."));
     }
 
     /** Payload shapes from which no action can be recovered. */
@@ -599,10 +599,10 @@ class WebSocketExceptionHandlerTest {
     @DisplayName("Nested domain error on readiness frame preserves friendly message")
     void nestedDomainErrorOnReadinessFramePreservesFriendlyMessage() {
         RuntimeException wrapped = new RuntimeException("internal wrapper",
-                new UnauthorisedActionException("Ready countdown is not active."));
+                new UnauthorisedActionException("The ready check has already closed."));
         handler.handleMessageException(wrapped, principal, frame("{}", "ready"));
         verify(messagingTemplate).convertAndSendToUser(principal.getName(), "/queue/private",
-                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.READY, "Ready countdown is not active."));
+                PlayerFeedbackResponse.actionError("ACTION_REJECTED", RejectedAction.READY, "The ready check has already closed."));
     }
 
     /** Persistence or deserialization text on readiness does not show action-amount copy or leak internals. */

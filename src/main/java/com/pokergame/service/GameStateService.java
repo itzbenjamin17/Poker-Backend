@@ -40,7 +40,7 @@ public class GameStateService {
     private static final String PRIVATE_QUEUE = "/queue/private";
 
     /** Status-banner text shown to clients while an all-in hand auto-advances to showdown. */
-    static final String AUTO_ADVANCE_MESSAGE = "Auto-advancing...";
+    static final String AUTO_ADVANCE_MESSAGE = "All in: dealing the remaining cards...";
 
     private final RoomService roomService;
     private final SimpMessagingTemplate messagingTemplate;

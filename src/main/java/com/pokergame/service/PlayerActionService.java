@@ -75,26 +75,26 @@ public class PlayerActionService {
         }
         if (game.isGameOver()) {
             logger.warn("Player {} attempted to act in game {} after it has finished", playerName, gameId);
-            throw new BadRequestException("This game has finished.", "GAME_FINISHED", "Game has finished");
+            throw new BadRequestException("This game has finished.", "GAME_FINISHED", "This game has already ended.");
         }
         if (game.getCurrentPhase() == GamePhase.SHOWDOWN) {
             logger.warn("Player {} attempted to act in game {} after the hand was resolved (phase=SHOWDOWN)",
                     playerName, gameId);
-            throw new BadRequestException("This hand is already complete.", "HAND_COMPLETE", "Hand is complete");
+            throw new BadRequestException("This hand is already complete.", "HAND_COMPLETE", "This hand is over. Wait for the next one.");
         }
         if (game.isAutoAdvancing()) {
             logger.warn("Player {} attempted to act in game {} while it is auto-advancing", playerName, gameId);
             throw new BadRequestException(
                     "Actions are not allowed while the game is auto-advancing.",
                     "HAND_ADVANCING",
-                    "Wait for the next turn");
+                    "The next cards are being dealt. Wait for your turn.");
         }
 
         Long turnDeadline = game.getScheduledTaskTime(ScheduledGameTask.TURN_TIMEOUT);
         if (turnDeadline != null && clock.millis() >= turnDeadline) {
             logger.warn("Player {} attempted to act in game {} at or after turn deadline (now={}, deadline={})",
                     playerName, gameId, clock.millis(), turnDeadline);
-            throw new BadRequestException("Turn deadline expired.", "TURN_EXPIRED", "Your turn has expired");
+            throw new BadRequestException("Turn deadline expired.", "TURN_EXPIRED", "Your time ran out for this turn.");
         }
 
         Player currentPlayer = game.getCurrentPlayer();
@@ -104,14 +104,14 @@ public class PlayerActionService {
             throw new UnauthorisedActionException(
                     "It's not your turn. Current player is: " + currentPlayer.getName(),
                     "NOT_YOUR_TURN",
-                    "Wait for your turn");
+                    "It's not your turn yet.");
         }
         if (currentPlayer.isDisconnected()) {
             logger.warn("Disconnected player {} attempted to act in game {}", playerName, gameId);
             throw new UnauthorisedActionException(
                     "You are disconnected. Reconnect to continue your turn.",
                     "DISCONNECTED",
-                    "Reconnect to act");
+                    "You're disconnected. Reconnect to take your turn.");
         }
 
         if (actionRequest.action() == null) {

@@ -192,6 +192,35 @@ class BettingRoundTest {
         assertEquals(expectedCode, error.actionErrorCode(), scenario);
     }
 
+    /** The concise message is what the player reads in the action dock, so it says what to do instead. */
+    @ParameterizedTest(name = "[{index}] {0}")
+    @MethodSource("playerFacingRuleMessages")
+    void explainsEachRejectedBettingDecisionInPlainWords(
+            String scenario, PlayerAction action, int amount, int highestBet, String expectedMessage) {
+        Player actor = new Player("Actor", "a", 100);
+        Player opponent = new Player("Opponent", "b", 100);
+        BettingRound round = new BettingRound(highestBet, false, Set.of(), 0, Map.of());
+        ActionFeedbackException error = assertThrows(ActionFeedbackException.class, () ->
+                round.validateDecision(actor, action, amount, List.of(actor, opponent), 20), scenario);
+        assertEquals(expectedMessage, error.actionErrorMessage(), scenario);
+    }
+
+    private static Stream<Arguments> playerFacingRuleMessages() {
+        return Stream.of(
+                Arguments.of("check with a bet owed", PlayerAction.CHECK, 0, 20,
+                        "You can't check: there's 20 to call. Call, raise or fold."),
+                Arguments.of("call with nothing owed", PlayerAction.CALL, 0, 0,
+                        "There's nothing to call. Check instead."),
+                Arguments.of("bet into an active bet", PlayerAction.BET, 40, 20,
+                        "There's already a bet of 20. Call or raise instead."),
+                Arguments.of("raise with no bet to raise", PlayerAction.RAISE, 40, 0,
+                        "There's no bet to raise. Bet instead."),
+                Arguments.of("bet below the big blind", PlayerAction.BET, 10, 0,
+                        "The minimum bet is 20 chips (you entered 10)."),
+                Arguments.of("bet more than the stack", PlayerAction.BET, 101, 0,
+                        "You only have 100 chips (you entered 101)."));
+    }
+
     private static Stream<Arguments> playerFacingRuleErrors() {
         Player eligibleActor = new Player("Actor", "a", 100);
         Player opponent = new Player("Opponent", "b", 100);

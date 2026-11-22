@@ -280,7 +280,7 @@ class HandProgressionServiceTest {
                 assertFalse(progression.applyTurnOutcome(
                         game, new TurnOutcome(TurnOutcome.TurnOutcomeType.AUTO_ADVANCING, null), false));
             }
-            verify(gameStateService).broadcastGameStateWithAutoAdvance(game, "Auto-advancing...");
+            verify(gameStateService).broadcastGameStateWithAutoAdvance(game, "All in: dealing the remaining cards...");
         }
 
         @Test

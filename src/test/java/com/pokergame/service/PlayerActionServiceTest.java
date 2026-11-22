@@ -359,7 +359,7 @@ class PlayerActionServiceTest {
                 : "Raise amount cannot exceed available chips";
         assertEquals(expectedMessage, exception.getMessage());
         assertEquals("INSUFFICIENT_CHIPS", exception.actionErrorCode());
-        assertEquals("Available: " + chips + "; yours: " + (chips + 1), exception.actionErrorMessage());
+        assertEquals("You only have " + chips + " chips (you entered " + (chips + 1) + ").", exception.actionErrorMessage());
         assertEquals(chips, currentPlayer.getChips());
         verifyNoInteractions(readinessCoordinator, gameStateService);
     }

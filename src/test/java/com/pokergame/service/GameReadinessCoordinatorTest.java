@@ -273,11 +273,11 @@ class GameReadinessCoordinatorTest {
             try (LockLease _ = roomCoordinator.acquire(GAME_ID)) {
                 // Gate closed: a rejected request leaves the stored readiness untouched
                 host.setReadyForNextHand(true);
-                assertRejected("Ready countdown is not active.",
+                assertRejected("The ready check has already closed.",
                         () -> readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Host"));
                 assertTrue(host.isReadyForNextHand());
                 host.setReadyForNextHand(false);
-                assertRejected("Ready countdown is not active.",
+                assertRejected("The ready check has already closed.",
                         () -> readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Host"));
                 assertFalse(host.isReadyForNextHand());
                 assertFalse(game.isReadyCountdownActive());
@@ -293,10 +293,10 @@ class GameReadinessCoordinatorTest {
 
                 // Zero chips but still seated
                 p4.doAction(PlayerAction.BET, p4.getChips());
-                assertRejected("Players without chips cannot mark ready.",
+                assertRejected("You have no chips left, so you can't ready up.",
                         () -> readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Player4"));
                 p4.setReadyForNextHand(true);
-                assertRejected("You are not eligible to change readiness.",
+                assertRejected("You can't change your ready status right now.",
                         () -> readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Player4"));
 
                 // Out player (busted before the hand started)
@@ -311,7 +311,7 @@ class GameReadinessCoordinatorTest {
                 assertRejected("Reconnect before marking ready.",
                         () -> readinessCoordinator.markPlayerReadyForNextHand(GAME_ID, "Player2"));
                 p2.setReadyForNextHand(true);
-                assertRejected("You are not eligible to change readiness.",
+                assertRejected("You can't change your ready status right now.",
                         () -> readinessCoordinator.unmarkPlayerReadyForNextHand(GAME_ID, "Player2"));
                 assertTrue(p2.isReadyForNextHand());
             }

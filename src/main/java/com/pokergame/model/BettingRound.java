@@ -115,7 +115,7 @@ final class BettingRound {
         }
         if (player == null || !player.canAct()) {
             throw new UnauthorisedActionException(
-                    "Player cannot act in the current hand", "ACTION_NOT_AVAILABLE", "Player is not eligible to act");
+                    "Player cannot act in the current hand", "ACTION_NOT_AVAILABLE", "You can't act in this hand.");
         }
         return switch (action) {
             case FOLD -> new ValidatedDecision(PlayerAction.FOLD, 0, null);
@@ -280,7 +280,7 @@ final class BettingRound {
         if (owed > 0) {
             throw new UnauthorisedActionException(
                     "Cannot check when there is an active bet. You must call, raise, or fold.",
-                    "CHECK_NOT_AVAILABLE", "To call: " + owed);
+                    "CHECK_NOT_AVAILABLE", "You can't check: there's " + owed + " to call. Call, raise or fold.");
         }
         return new ValidatedDecision(PlayerAction.CHECK, 0, null);
     }
@@ -288,7 +288,8 @@ final class BettingRound {
     private ValidatedDecision validateCall(Player player) {
         int owed = amountOwed(player);
         if (owed == 0) {
-            throw new UnauthorisedActionException("There is no call amount owed", "CALL_NOT_AVAILABLE", "Call amount: 0");
+            throw new UnauthorisedActionException("There is no call amount owed", "CALL_NOT_AVAILABLE",
+                    "There's nothing to call. Check instead.");
         }
         if (owed > player.getChips()) {
             logger.info("Player {} attempted CALL for {} with only {} chips. Converting to ALL_IN",
@@ -304,18 +305,19 @@ final class BettingRound {
         if (currentHighestBet > 0) {
             throw new UnauthorisedActionException(
                     "Cannot bet when there is an active bet. You must call, raise, or fold.",
-                    "BET_NOT_AVAILABLE", "Active bet: " + currentHighestBet + "; call or raise");
+                    "BET_NOT_AVAILABLE", "There's already a bet of " + currentHighestBet + ". Call or raise instead.");
         }
         if (amount == 0) {
-            throw new BadRequestException("Bet amount must be greater than 0", "BET_AMOUNT_REQUIRED", "Bet must be positive; yours: 0");
+            throw new BadRequestException("Bet amount must be greater than 0", "BET_AMOUNT_REQUIRED",
+                    "Enter a bet greater than 0.");
         }
         if (amount > player.getChips()) {
             throw new BadRequestException("Bet amount cannot exceed available chips", "INSUFFICIENT_CHIPS",
-                    "Available: " + player.getChips() + "; yours: " + amount);
+                    insufficientChipsMessage(player, amount));
         }
         if (amount < bigBlind && amount < player.getChips()) {
             throw new BadRequestException("Bet amount must be at least the big blind of " + bigBlind,
-                    "MIN_BET", "Min bet: " + bigBlind + "; yours: " + amount);
+                    "MIN_BET", "The minimum bet is " + bigBlind + " chips (you entered " + amount + ").");
         }
         return new ValidatedDecision(PlayerAction.BET, amount, null);
     }
@@ -323,16 +325,17 @@ final class BettingRound {
     private ValidatedDecision validateRaise(Player player, int amount, List<Player> activePlayers, int bigBlind) {
         if (currentHighestBet == 0) {
             throw new UnauthorisedActionException(
-                    "There is no active wager to raise", "RAISE_NOT_AVAILABLE", "Use BET when no wager is active");
+                    "There is no active wager to raise", "RAISE_NOT_AVAILABLE", "There's no bet to raise. Bet instead.");
         }
         requireOpponentWhoCanAct(player, activePlayers, PlayerAction.RAISE);
         requirePlayerAllowedToRaise(player, bigBlind);
         if (amount == 0) {
-            throw new BadRequestException("Raise amount must be greater than 0", "RAISE_AMOUNT_REQUIRED", "Raise must be positive; yours: 0");
+            throw new BadRequestException("Raise amount must be greater than 0", "RAISE_AMOUNT_REQUIRED",
+                    "Enter a raise greater than 0.");
         }
         if (amount > player.getChips()) {
             throw new BadRequestException("Raise amount cannot exceed available chips", "INSUFFICIENT_CHIPS",
-                    "Available: " + player.getChips() + "; yours: " + amount);
+                    insufficientChipsMessage(player, amount));
         }
         int totalBetAfterRaise = player.getCurrentBet() + amount;
         int minimumRaise = getMinimumRaiseAmount(player, bigBlind);
@@ -343,14 +346,14 @@ final class BettingRound {
                     "Raise amount must result in a bet higher than current highest bet of " + currentHighestBet
                             + ". Your current bet is " + player.getCurrentBet()
                             + ", so the minimum incremental raise is " + minimumRaise,
-                    "MIN_RAISE", "Min raise: " + minimumRaise + "; yours: " + amount);
+                    "MIN_RAISE", minimumRaiseMessage(minimumRaise, amount));
         }
         int raiseIncrement = totalBetAfterRaise - currentHighestBet;
         int fullRaise = fullRaiseSize(bigBlind);
         if (raiseIncrement < fullRaise && amount < player.getChips()) {
             throw new BadRequestException(
                     "Raise increment must be at least " + fullRaise + ". You tried to raise by " + raiseIncrement,
-                    "MIN_RAISE", "Min raise: " + minimumRaise + "; yours: " + amount);
+                    "MIN_RAISE", minimumRaiseMessage(minimumRaise, amount));
         }
         return new ValidatedDecision(PlayerAction.RAISE, amount, null);
     }
@@ -370,7 +373,9 @@ final class BettingRound {
             return;
         }
         String errorCode = (action == PlayerAction.BET) ? "BET_NOT_AVAILABLE" : "RAISE_NOT_AVAILABLE";
-        String allowedActionsHint = (amountOwed(player) > 0) ? "Call or fold" : "Check or fold";
+        String allowedActionsHint = (amountOwed(player) > 0)
+                ? "Everyone else is all in. Call or fold."
+                : "Everyone else is all in. Check or fold.";
         throw new UnauthorisedActionException(
                 "No other player can contest an additional wager", errorCode, allowedActionsHint);
     }
@@ -378,8 +383,19 @@ final class BettingRound {
     private void requirePlayerAllowedToRaise(Player player, int bigBlind) {
         if (!canPlayerRaise(player, bigBlind)) {
             throw new UnauthorisedActionException(
-                    "Betting has not reopened for this player", "RAISE_NOT_REOPENED", "Call or fold");
+                    "Betting has not reopened for this player", "RAISE_NOT_REOPENED",
+                    "Betting hasn't reopened for you. Call or fold.");
         }
+    }
+
+    // Player-facing copy shown in the action dock when a bet or raise exceeds the stack.
+    private static String insufficientChipsMessage(Player player, int amount) {
+        return "You only have " + player.getChips() + " chips (you entered " + amount + ").";
+    }
+
+    // Player-facing copy shown in the action dock when a raise is below the minimum.
+    private static String minimumRaiseMessage(int minimumRaise, int amount) {
+        return "The minimum raise is " + minimumRaise + " chips (you entered " + amount + ").";
     }
 
     // Chips player must add to match the highest bet in this round.

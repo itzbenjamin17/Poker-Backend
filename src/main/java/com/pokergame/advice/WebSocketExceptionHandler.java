@@ -125,14 +125,14 @@ public class WebSocketExceptionHandler {
                 e -> e.actionErrorCode() != null);
         if (feedback != null) {
             String displayMessage = firstNonBlank(feedback.actionErrorMessage(), feedback.getMessage(),
-                    "Action unavailable");
+                    "That move isn't available right now.");
             gameStateService.sendActionError(playerPrincipal, feedback.actionErrorCode(),
                     RejectedAction.from(action), displayMessage);
             return;
         }
         if (findCause(causes, ResourceNotFoundException.class) != null) {
             gameStateService.sendActionError(playerPrincipal, "GAME_NOT_FOUND",
-                    RejectedAction.from(action), "Game unavailable");
+                    RejectedAction.from(action), "This game is no longer available.");
             return;
         }
         if (causes.stream().anyMatch(this::isValidationOrConversionFailure)) {
@@ -142,7 +142,7 @@ public class WebSocketExceptionHandler {
             return;
         }
         gameStateService.sendActionError(playerPrincipal, "ACTION_REJECTED",
-                RejectedAction.from(action), "Action unavailable");
+                RejectedAction.from(action), "That move isn't available right now.");
     }
 
     private boolean isValidationOrConversionFailure(Throwable throwable) {

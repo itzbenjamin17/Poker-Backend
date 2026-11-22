@@ -816,7 +816,7 @@ class LifecycleCoordinationIT {
                     try {
                         gameLifecycleService.markPlayerReadyForNextHand(roomId, "Alice");
                     } catch (UnauthorisedActionException alreadyAdvanced) {
-                        assertThat(alreadyAdvanced).hasMessage("Ready countdown is not active.");
+                        assertThat(alreadyAdvanced).hasMessage("The ready check has already closed.");
                     }
                     return null;
                 });

@@ -57,7 +57,7 @@ final class ReadyGate {
      */
     void setPlayerReady(String playerName, boolean ready) {
         if (!isCountdownActive()) {
-            throw new UnauthorisedActionException("Ready countdown is not active.");
+            throw new UnauthorisedActionException("The ready check has already closed.");
         }
         Player player = Game.findPlayerByName(players, playerName);
         if (player == null) {
@@ -220,11 +220,11 @@ final class ReadyGate {
             throw new UnauthorisedActionException("You are out of this game.");
         }
         if (!ready) {
-            throw new UnauthorisedActionException("You are not eligible to change readiness.");
+            throw new UnauthorisedActionException("You can't change your ready status right now.");
         }
         if (player.isDisconnected()) {
             throw new UnauthorisedActionException("Reconnect before marking ready.");
         }
-        throw new UnauthorisedActionException("Players without chips cannot mark ready.");
+        throw new UnauthorisedActionException("You have no chips left, so you can't ready up.");
     }
 }

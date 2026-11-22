@@ -420,7 +420,7 @@ class GameStateServiceTest {
     @Test
     void broadcastGameStateWithAutoAdvance_WithNullGame_ThrowsNullPointerException() {
         assertThrows(NullPointerException.class,
-                () -> gameStateService.broadcastGameStateWithAutoAdvance(null, "Auto-advancing..."));
+                () -> gameStateService.broadcastGameStateWithAutoAdvance(null, "All in: dealing the remaining cards..."));
 
         verify(messagingTemplate, never()).convertAndSend(anyString(), any(Object.class));
     }
@@ -432,12 +432,12 @@ class GameStateServiceTest {
     void broadcastGameStateWithAutoAdvance_WithValidData_ShouldBroadcast() {
         ArgumentCaptor<PublicGameStateResponse> captor = ArgumentCaptor.forClass(PublicGameStateResponse.class);
 
-        gameStateService.broadcastGameStateWithAutoAdvance(testGame, "Auto-advancing...");
+        gameStateService.broadcastGameStateWithAutoAdvance(testGame, "All in: dealing the remaining cards...");
 
         verify(messagingTemplate).convertAndSend(eq("/game/" + GAME_ID), captor.capture());
         PublicGameStateResponse response = captor.getValue();
         assertTrue(response.isAutoAdvancing());
-        assertEquals("Auto-advancing...", response.autoAdvanceMessage());
+        assertEquals("All in: dealing the remaining cards...", response.autoAdvanceMessage());
         assertNull(response.currentPlayerId());
         assertTrue(response.legalActions().isEmpty());
         assertEquals(1L, response.stateRevision());
@@ -2313,7 +2313,7 @@ class GameStateServiceTest {
                                 null, null, null, null, null),
                         viewState("b", "Bob", 80, 20, "ALL_IN", true, false, false, false, true,
                                 null, null, null, null, null)),
-                null, null, null, null, true, "Auto-advancing...", false, null, false, null, false, null,
+                null, null, null, null, true, "All in: dealing the remaining cards...", false, null, false, null, false, null,
                 List.of(), null, null, 3L, ReadyGateState.CLOSED, VIEW_NOW_MS, game.getStateRevision(), null,
                 9_000L, null), actual);
     }

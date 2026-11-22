@@ -562,7 +562,7 @@ class GameTest {
             BadRequestException exception = assertThrows(BadRequestException.class, () ->
                     game.processPlayerDecision(player, PlayerAction.RAISE, 1));
             assertEquals("MIN_RAISE", exception.actionErrorCode());
-            assertEquals("Min raise: 40; yours: 1", exception.actionErrorMessage());
+            assertEquals("The minimum raise is 40 chips (you entered 1).", exception.actionErrorMessage());
         }
 
         @Test
@@ -867,7 +867,7 @@ class GameTest {
                     smallRaiseGame.processPlayerDecision(raiser, PlayerAction.RAISE, 30));
             assertTrue(smallRaise.getMessage().contains("Raise increment must be at least 20"));
             assertEquals("MIN_RAISE", smallRaise.actionErrorCode());
-            assertEquals("Min raise: 40; yours: 30", smallRaise.actionErrorMessage());
+            assertEquals("The minimum raise is 40 chips (you entered 30).", smallRaise.actionErrorMessage());
 
             Game shortBetGame = createGame("short-bet-allin", List.of(
                     new Player("P1", "p1", 15),
