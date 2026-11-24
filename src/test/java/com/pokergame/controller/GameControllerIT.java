@@ -175,7 +175,7 @@ class GameControllerIT extends AbstractControllerSliceIT {
     @DisplayName("Live game state endpoints - Game that cannot be loaded returns 404")
     void liveGameEndpoint_GameCannotBeLoaded_ReturnsNotFound(GameEndpoint endpoint) throws Exception {
         when(gameLifecycleService.gameExists(GAME_ID)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(GAME_ID, PLAYER)).thenReturn(true);
+        when(gameLifecycleService.canViewGame(GAME_ID, PLAYER)).thenReturn(true);
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(null);
 
         mockMvc.perform(endpoint.request(GAME_ID).principal(auth))
@@ -204,7 +204,7 @@ class GameControllerIT extends AbstractControllerSliceIT {
     @DisplayName("Live game state endpoints - Player no longer in the game returns 403")
     void liveGameEndpoint_PlayerNoLongerInGame_ReturnsForbidden(GameEndpoint endpoint) throws Exception {
         when(gameLifecycleService.gameExists(GAME_ID)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(GAME_ID, PLAYER)).thenReturn(false);
+        when(gameLifecycleService.canViewGame(GAME_ID, PLAYER)).thenReturn(false);
 
         mockMvc.perform(endpoint.request(GAME_ID).principal(auth))
                 .andExpect(status().isForbidden())
@@ -431,7 +431,7 @@ class GameControllerIT extends AbstractControllerSliceIT {
     private Game stubLiveGameWithPlayer() {
         Game game = mock(Game.class);
         when(gameLifecycleService.gameExists(GAME_ID)).thenReturn(true);
-        when(gameLifecycleService.playerExistsInGame(GAME_ID, PLAYER)).thenReturn(true);
+        when(gameLifecycleService.canViewGame(GAME_ID, PLAYER)).thenReturn(true);
         when(gameLifecycleService.getGame(GAME_ID)).thenReturn(game);
         return game;
     }

@@ -424,7 +424,7 @@ class RoomControllerIT extends AbstractControllerSliceIT {
         when(roomService.getRoom(ROOM_ID)).thenReturn(room);
         RoomDataResponse roomData = new RoomDataResponse(
                 ROOM_ID, "Room1", 6, 1000, 10, 20,
-                List.of(new RoomDataResponse.RoomPlayer(HOST, true)), true, false, null, null, null);
+                List.of(new RoomDataResponse.RoomPlayer(HOST, true)), true, false, false, null, null, null);
         when(roomService.getRoomData(ROOM_ID)).thenAnswer(recordingLockHeld(ROOM_ID, lockHeldDuringService, roomData));
 
         mockMvc.perform(get("/api/room/{roomId}", ROOM_ID)
@@ -432,6 +432,7 @@ class RoomControllerIT extends AbstractControllerSliceIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.roomId").value(ROOM_ID))
                 .andExpect(jsonPath("$.roomName").value("Room1"))
+                .andExpect(jsonPath("$.gameFinished").value(false))
                 .andExpect(jsonPath("$.players[0].name").value(HOST))
                 .andExpect(jsonPath("$.players[0].isHost").value(true));
 

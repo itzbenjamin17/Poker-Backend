@@ -233,7 +233,7 @@ public class GameController {
             throw new ResourceNotFoundException("Game not found");
         }
 
-        if (!gameLifecycleService.playerExistsInGame(gameId, playerName)) {
+        if (!gameLifecycleService.canViewGame(gameId, playerName)) {
             throw new UnauthorisedActionException("You are no longer part of this game.");
         }
 

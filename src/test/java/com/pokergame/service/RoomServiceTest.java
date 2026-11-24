@@ -543,6 +543,24 @@ class RoomServiceTest {
                     .singleElement()
                     .extracting(player -> player.isHost())
                     .isEqualTo(true);
+            assertThat(roomData.gameFinished()).isFalse();
+        }
+
+        @Test
+        @DisplayName("getRoomData reflects gameFinished once a room finishes")
+        void getRoomData_ReflectsFinishedFlag() {
+            String roomId = createRoom(roomService, validCreateRequest).roomId();
+
+            RoomDataResponse active = withRoomLock(roomId, () -> roomService.getRoomData(roomId));
+            assertThat(active.gameFinished()).isFalse();
+
+            withRoomLock(roomId, () -> {
+                coordinatedGetRoom(roomId).setFinished(true);
+                return null;
+            });
+
+            RoomDataResponse finished = withRoomLock(roomId, () -> roomService.getRoomData(roomId));
+            assertThat(finished.gameFinished()).isTrue();
         }
 
         @Test
