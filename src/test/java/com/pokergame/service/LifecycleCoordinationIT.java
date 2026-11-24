@@ -962,6 +962,46 @@ class LifecycleCoordinationIT {
                 assertThat(roomCoordinator.lockReservationCount(roomId)).isZero();
             });
         }
+
+        @Test
+        @DisplayName("busted room member can still read public and private game snapshots with empty hole cards, while departed player cannot")
+        void bustedPlayerCanReadGameSnapshotsWhileDepartedPlayerIsRejected() {
+            String roomId = roomFixtures.createAndConnectRoom("Spectate Room", "Host", 100, "Alice", "Bob");
+            gameLifecycleService.createGameFromRoom(roomId);
+
+            // Force Alice to 0 chips so Hand 2 marks her OUT while Host and Bob play on
+            withRoomLock(roomCoordinator, roomId, () -> {
+                Game game = gameLifecycleService.getGame(roomId);
+                Player alice = game.findPlayerByName("Alice");
+                alice.doAction(PlayerAction.ALL_IN, 0);
+                game.resetForNewHand();
+                game.beginHand();
+                game.dealHoleCards();
+                game.postBlinds();
+                return null;
+            });
+
+            PlayerPrincipal alicePrincipal = roomFixtures.principalFor(roomId, "Alice");
+            PublicGameStateResponse publicState = gameController.getGameState(roomId, alicePrincipal).getBody();
+            PrivatePlayerState privateState = gameController.getPrivateState(roomId, alicePrincipal).getBody();
+
+            assertThat(publicState).isNotNull();
+            assertThat(publicState.players())
+                    .filteredOn(p -> "Alice".equals(p.name()))
+                    .singleElement()
+                    .satisfies(p -> {
+                        assertThat(p.status()).isEqualTo("OUT");
+                        assertThat(p.chips()).isZero();
+                    });
+            assertThat(privateState).isNotNull();
+            assertThat(privateState.holeCards()).isEmpty();
+
+            // Explicitly leaving removes Bob from both room and game, rejecting future reads
+            PlayerPrincipal bobPrincipal = roomFixtures.principalFor(roomId, "Bob");
+            roomController.leaveRoom(roomId, bobPrincipal);
+            assertThatThrownBy(() -> gameController.getGameState(roomId, bobPrincipal))
+                    .isInstanceOf(RuntimeException.class);
+        }
     }
 
     // Game revision, cleanup deadline, seated players and the player's room membership, read under the room lock.

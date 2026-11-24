@@ -258,6 +258,24 @@ public class GameLifecycleService {
     }
 
     /**
+     * Returns whether {@code playerName} is on the roster of {@code gameId} and permitted to read
+     * table snapshots, including busted ({@code isOut}) players spectating the rest of the match.
+     * Caller must hold the room lock.
+     *
+     * @param gameId     the unique ID of the game
+     * @param playerName the player name to check
+     * @return {@code true} if the player is present on the game roster
+     */
+    public boolean canViewGame(String gameId, String playerName) {
+        if (gameId == null || playerName == null) {
+            return false;
+        }
+        roomCoordinator.assertHeldByCurrentThread(gameId);
+        Game game = activeGames.get(gameId);
+        return game != null && game.findPlayerByName(playerName) != null;
+    }
+
+    /**
      * Verifies that {@code membershipId} matches the active session membership for
      * {@code playerName} in {@code gameId}.
      * Caller must hold the room lock.

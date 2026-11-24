@@ -443,12 +443,15 @@ class GameLifecycleServiceTest {
             assertThrows(IllegalStateException.class, () -> gameLifecycleService.getGame("missing"));
             assertThrows(IllegalStateException.class, () -> gameLifecycleService.gameExists("missing"));
             assertThrows(IllegalStateException.class, () -> gameLifecycleService.playerExistsInGame("missing", "Host"));
+            assertThrows(IllegalStateException.class, () -> gameLifecycleService.canViewGame("missing", "Host"));
             assertThrows(IllegalStateException.class, () -> gameLifecycleService.getGameReview("missing", "Host"));
             assertThrows(IllegalStateException.class,
                     () -> gameLifecycleService.validatePlayerMembership("missing", "Host", "mem-1"));
             assertFalse(withRoomLock("missing", () -> gameLifecycleService.gameExists("missing")));
             assertFalse(gameLifecycleService.playerExistsInGame(null, "Host"));
             assertFalse(gameLifecycleService.playerExistsInGame(ROOM_ID, null));
+            assertFalse(gameLifecycleService.canViewGame(null, "Host"));
+            assertFalse(gameLifecycleService.canViewGame(ROOM_ID, null));
 
 
             Player active = new Player("Alice", "p1", 100);
@@ -470,11 +473,16 @@ class GameLifecycleServiceTest {
             Game lockedGame = mock(Game.class);
             when(lockedGame.getGameId()).thenReturn("mock-locked");
             when(lockedGame.getPlayers()).thenReturn(verifiedList);
+            when(lockedGame.findPlayerByName("Alice")).thenReturn(active);
+            when(lockedGame.findPlayerByName("Bob")).thenReturn(out);
             withRoomLock("mock-locked", () -> {
                 activeGames.replace(lockedGame);
                 assertTrue(gameLifecycleService.playerExistsInGame("mock-locked", "Alice"));
                 assertFalse(gameLifecycleService.playerExistsInGame("mock-locked", "Bob"));
                 assertFalse(gameLifecycleService.playerExistsInGame("mock-locked", "Charlie"));
+                assertTrue(gameLifecycleService.canViewGame("mock-locked", "Alice"));
+                assertTrue(gameLifecycleService.canViewGame("mock-locked", "Bob"));
+                assertFalse(gameLifecycleService.canViewGame("mock-locked", "Charlie"));
             });
         }
 

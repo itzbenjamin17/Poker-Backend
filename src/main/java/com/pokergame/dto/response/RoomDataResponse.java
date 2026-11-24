@@ -16,6 +16,7 @@ import java.util.List;
  * @param players                   seated lobby members and host flag
  * @param canStartGame              whether the room meets start requirements
  * @param gameStarted               whether the match has started
+ * @param gameFinished              whether the match has finished
  * @param inactivityDeadlineEpochMs lobby or game inactivity deadline in UTC epoch ms, or {@code null}
  * @param serverTimeEpochMs         current server time in UTC epoch ms
  * @param closedReason              non-null closure reason (e.g. {@code "HOST_LEFT"}, {@code "INACTIVITY"})
@@ -31,6 +32,7 @@ public record RoomDataResponse(
         List<RoomPlayer> players,
         boolean canStartGame,
         boolean gameStarted,
+        boolean gameFinished,
         Long inactivityDeadlineEpochMs,
         Long serverTimeEpochMs,
         @JsonInclude(JsonInclude.Include.NON_NULL) String closedReason) {

@@ -496,6 +496,7 @@ public class RoomService {
                 playerObjects,
                 !room.isGameStarted() && playerObjects.size() >= Room.MIN_PLAYERS,
                 room.isGameStarted(),
+                room.isFinished(),
                 room.getInactivityDeadlineEpochMs(),
                 clock.millis(),
                 closedReason);

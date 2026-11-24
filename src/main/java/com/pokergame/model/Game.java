@@ -198,7 +198,7 @@ public class Game {
         finalPotSettled = false;
         closeReadyCountdown();
 
-        activePlayers.forEach(Player::resetAttributes);
+        players.forEach(Player::resetAttributes);
         seating.advancePositions(activePlayers);
         logger.debug("Hand reset complete for game {} | contributions cleared", gameId);
         return false;

@@ -473,6 +473,24 @@ class GameTest {
             assertFalse(game.resetForNewHand());
             assertTrue(game.toSnapshot().actedPlayerIds().isEmpty());
         }
+
+        @Test
+        void resetForNewHand_ClearsPerHandAttributesOnBustedPlayers() {
+            Player busted = game.getActivePlayers().getFirst();
+            busted.setHoleCards(List.of(new Card(Rank.ACE, Suit.SPADES), new Card(Rank.KING, Suit.SPADES)));
+            busted.doAction(PlayerAction.ALL_IN, 0);
+            busted.setHandRank(HandRank.ONE_PAIR);
+            busted.setBestHand(List.of(new Card(Rank.ACE, Suit.SPADES)));
+
+            assertFalse(game.resetForNewHand());
+            assertTrue(busted.isOut());
+            assertEquals(0, busted.getChips());
+            assertTrue(busted.getHoleCards().isEmpty());
+            assertEquals(0, busted.getCurrentBet());
+            assertFalse(busted.isAllIn());
+            assertEquals(HandRank.NO_HAND, busted.getHandRank());
+            assertTrue(busted.getBestHand().isEmpty());
+        }
     }
 
     @Nested
