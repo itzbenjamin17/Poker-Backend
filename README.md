@@ -65,10 +65,10 @@ java -jar target/Poker-0.0.1-SNAPSHOT.jar
 
 The engine follows a **Layered Architecture** with explicit concurrency and durability boundaries:
 
-- **Controller Layer (`controller/`, `advice/`):** REST and STOMP endpoints for lobby and game interaction, acquiring per-room lock leases before membership validation, paired with centralized RFC 7807 / `ApiResponse` exception advice.
-- **Service Layer (`service/`):** Orchestrates room registries (`RoomService`), active game lifecycles and deadline scheduling (`GameLifecycleService`), betting validation (`PlayerActionService`), post-commit projections (`GameStateService`), and 7-card hand evaluation (`HandEvaluatorService`).
-- **Model Layer (`model/`):** Pure domain aggregate (`Game`, `Room`, `Player`, `Deck`) supported by package-private domain collaborators (`BettingRound`, `TableSeating`, `PotCalculator`, `ShowdownResolver`, `GameScheduling`, `ReadyGate`) and `GameRestoreBuilder`.
-- **Persistence Layer (`persistence/`):** `@DurableMutation` Spring AOP aspect, versioned state-image snapshots, per-room AES-256-GCM write-ahead logs (WAL), startup `PersistenceRecovery`, and an HTTP `503` recovery traffic gate (`persistenceRecoveryTrafficGate`) that blocks non-health requests until restoration completes.
+- **Controller Layer (`controller/`, `advice/`):** REST and STOMP endpoints for lobby and game interaction, acquiring per-room lock leases before membership validation, paired with centralized RFC 9457 `ProblemDetail` (`application/problem+json`) REST exception advice (`ControllerExceptionHandler`) and STOMP error handling (`WebSocketExceptionHandler`).
+- **Service Layer (`service/`):** Orchestrates room registries (`RoomService`), active game lifecycles and package-private lifecycle collaborators (`GameLifecycleService`, `GameReadinessCoordinator`, `HandProgressionService`, `PlayerDepartureHandler`, `GameCompletionHandler`, `GameTaskScheduler`, `GameTimerRegistry`, `LobbyInactivityScheduler`), betting validation (`PlayerActionService`), and post-save projections (`GameStateService`).
+- **Model Layer (`model/`):** Pure domain aggregate (`Game`, `Room`, `Player`, `Deck`) supported by `HandEvaluator` (7-card hand evaluation), package-private domain collaborators (`BettingRound`, `TableSeating`, `PotCalculator`, `ShowdownResolver`, `GameScheduling`, `ReadyGate`), and `GameRestoreBuilder`.
+- **Persistence & Concurrency (`persistence/`, `util/`):** `RoomCoordinator` single-boundary per-room concurrency lock, `@DurableMutation` Spring AOP aspect with in-memory aggregate rollback on mutation failure, strictly parsed unversioned immutable state-image snapshots (`RoomSnapshot`), per-room AES-256-GCM write-ahead logs (WAL), startup `PersistenceRecovery`, and an HTTP `503` recovery traffic gate (`RecoveryTrafficGate`) that blocks non-health requests until restoration completes.
 - **Security Layer (`security/`, `config/`):** Stateless JWT filters, STOMP CONNECT and SEND authorization interceptors, rate limiters, and payload size guards.
 
 ## ✨ Key Features
@@ -121,70 +121,77 @@ All required runtime settings in [`application.properties`](src/main/resources/a
 
 ## 📡 API Reference
 
-### Response Envelope Convention
+### Response & Error Conventions
 
-- **Commands (`POST` mutations & `/room/{roomId}` broadcasts):** Return `ApiResponse<T>` (`{ message, data }`).
-- **Queries (`GET` snapshots):** Return the resource DTO directly without an envelope.
-- **Errors:** Standardized error responses (including `application/problem+json`) via controller advice.
+- **REST success responses:** Return bare resource DTOs directly (`TokenResponse`, `RoomDataResponse`, `PublicGameStateResponse`, `PrivatePlayerState`) or `204 No Content` for void commands (`/start-game`, `/leave`).
+- **WebSocket broadcasts:** `/room/{roomId}` sends bare `RoomDataResponse` (with `closedReason` set on closure); `/game/{gameId}` sends bare `PublicGameStateResponse` (with `(handNumber, stateRevision)` for client ordering and `gameEnd` set on completion); `/user/queue/private` sends `PrivatePlayerState` and `PlayerFeedbackResponse`.
+- **HTTP errors:** Standardized RFC 9457 `ProblemDetail` (`application/problem+json`) via `ControllerExceptionHandler`.
 
 ### REST Endpoints
 
 | Method | Endpoint | Auth | Response | Purpose |
 | --- | --- | --- | --- | --- |
-| `POST` | `/api/room/create` | Public | `ApiResponse<TokenResponse>` | Create a room (2–10 players, optional password) and issue a room-bound JWT |
-| `POST` | `/api/room/join` | Public | `ApiResponse<TokenResponse>` | Join an existing room by name and issue a room-bound JWT |
+| `POST` | `/api/room/create` | Public | `TokenResponse` | Create a room (2–10 players, optional password) and issue a room-bound JWT |
+| `POST` | `/api/room/join` | Public | `TokenResponse` | Join an existing room by name and issue a room-bound JWT |
 | `GET` | `/api/room/{roomId}` | Bearer JWT | `RoomDataResponse` | Fetch current lobby/room snapshot |
-| `POST` | `/api/room/{roomId}/start-game` | Bearer JWT (Host) | `ApiResponse<String>` | Start the poker game for the room |
-| `POST` | `/api/room/{roomId}/leave` | Bearer JWT | `ApiResponse<Void>` | Leave a lobby room (transfers host if needed) |
+| `POST` | `/api/room/{roomId}/start-game` | Bearer JWT (Host) | `204 No Content` | Start the poker game for the room |
+| `POST` | `/api/room/{roomId}/leave` | Bearer JWT | `204 No Content` | Leave a lobby or active game (transfers host in lobby or auto-folds active hand) |
 | `GET` | `/api/game/{gameId}/state` | Bearer JWT | `PublicGameStateResponse` | Fetch current public table snapshot |
 | `GET` | `/api/game/{gameId}/private-state` | Bearer JWT | `PrivatePlayerState` | Fetch authenticated player's hole cards |
-| `GET` | `/api/game/{gameId}/review` | Bearer JWT | `GameEndResponse` | Fetch frozen terminal result after game completion |
-| `POST` | `/api/game/{gameId}/leave` | Bearer JWT | `ApiResponse<Void>` | Leave an active game (auto-folds active hand) |
-| `POST` | `/api/game/{gameId}/claim-win` | Bearer JWT | `ApiResponse<GameEndResponse>` | Claim victory when all remaining opponents are disconnected |
+| `GET` | `/api/game/{gameId}/review` | Bearer JWT | `PublicGameStateResponse` | Fetch frozen terminal result (`gameEnd` populated) after game completion |
+| `POST` | `/api/game/{gameId}/claim-win` | Bearer JWT | `PublicGameStateResponse` | Claim victory (`gameEnd` populated) when all remaining opponents are disconnected |
 | `GET` | `/actuator/health` | Public | Actuator JSON | Server readiness and `pokerPersistenceHealth` details (`mode`: `DURABLE` / `MEMORY_ONLY` / `RECOVERING`, `unsavedRoomCount`, `activeWalCount`) |
 
 ### WebSocket / STOMP Channels
 
 - **Handshake Endpoint:** `/ws` (Bearer JWT supplied in STOMP `CONNECT` headers)
 - **Client Publish (`SEND`):**
-  - `/app/{gameId}/action` — Submit betting action (`FOLD`, `CHECK`, `CALL`, `RAISE`, `ALL_IN`)
+  - `/app/{gameId}/action` — Submit betting action (`FOLD`, `CHECK`, `CALL`, `BET`, `RAISE`, `ALL_IN`)
   - `/app/{gameId}/ready` — Mark player ready during post-hand countdown
   - `/app/{gameId}/unready` — Unmark player ready during post-hand countdown
 - **Client Subscribe (`SUBSCRIBE`):**
-  - `/room/{roomId}` — Room membership, host transfer, and game-start events
-  - `/game/{gameId}` — Public game state snapshots, notifications, and game-end events
-  - `/user/queue/private` — Authenticated player's private hole cards and action errors
+  - `/room/{roomId}` — `RoomDataResponse` snapshots for membership, host transfer, game start, and room closure (`closedReason`)
+  - `/game/{gameId}` — `PublicGameStateResponse` snapshots (with `handNumber`/`stateRevision` and optional `gameEnd`)
+  - `/user/queue/private` — Authenticated player's `PrivatePlayerState` hole cards and `PlayerFeedbackResponse` errors/notices
 
 ## ✅ Build & Verification
 
 ### Domain-Driven & Behavior-Focused Testing
 
-The test suite verifies the mathematical correctness of the poker rules engine, concurrency invariants, and real-time contract integrity:
+The test suite verifies the mathematical correctness of the poker rules engine, concurrency invariants, and real-time contract integrity across three Maven tiers (`*Test`, `*IT`, `*E2E`):
 
 - **Rules & Chip Conservation Assertions:** Tests verify concrete domain outcomes (side-pot splits, blind posting, uncalled bet refunds, action legality, and total chip conservation) rather than internal implementation details.
 - **Client-Centric STOMP & REST Validation:** Integration tests simulate real client flows and assert on REST and STOMP payloads consumed by the React frontend.
 - **Deterministic Async & Recovery Suites:** Concurrency, scheduled deadlines, and encrypted WAL crash-recovery flows are tested using Awaitility and isolated temporary storage without brittle sleeps.
 
 ```bash
-# Run full suite (Unit + Integration)
+# Run unit tests (*Test.java)
 .\mvnw.cmd test
 
-# Run a single test class
-.\mvnw.cmd test "-Dtest=GameLifecycleIntegrationTest"
+# Run full verification suite (unit *Test, integration *IT, and *E2E)
+.\mvnw.cmd verify
+
+# Run a single unit test class
+.\mvnw.cmd test "-Dtest=HandEvaluatorTest"
+
+# Run a single integration or E2E test class
+.\mvnw.cmd verify "-Dtest=None" "-Dsurefire.failIfNoSpecifiedTests=false" "-Dit.test=GameplayLifecycleE2E"
 ```
 
 ### Key Verification Areas
 
-- `SecurityHardeningIntegrationTest` & `WebSocketSecurityTest`: Identity isolation, membership-bound tokens, STOMP destination guards, and private queue protection.
-- `ResiliencyIntegrationTest`: Disconnect grace windows, multi-session tracking, reconnect state restoration, and win claiming.
-- `GameLifecycleIntegrationTest`: End-to-end deal, betting rounds, showdown, ready gates, and game completion.
-- `HandEvaluatorServiceTest`: Mathematical evaluation of 7-card combinations down to the best 5-card hand.
-- `PersistenceRecoveryIntegrationTest`: Encrypted state-image WAL commits, torn-tail recovery, and deadline rescheduling across restarts.
+- `HttpSecurityIT`, `WebSocketSecurityAndRateLimitIT`, & `WebSocketAdviceAndBoundaryIT`: Identity isolation, membership-bound JWTs, STOMP destination guards, rate limiting, and private queue protection.
+- `PlayerReconnectE2E` & `TimingAndInactivityIT`: Disconnect grace windows, multi-session tracking, reconnect state restoration, inactivity expiry, and win claiming.
+- `GameplayLifecycleE2E`, `RoomLobbyE2E`, & `LifecycleCoordinationIT`: End-to-end lobby lifecycle, deal, betting rounds, showdown, ready gates, concurrency coordination, and game completion.
+- `HandEvaluatorTest`: Mathematical evaluation of 7-card combinations down to the best 5-card hand.
+- `PersistenceRecoveryTest`, `PersistenceRestartIT`, `PersistenceCoordinationIT`, & `PersistenceAvailabilityTransportIT`: Encrypted state-image WAL commits, torn-tail recovery, quarantine, `MEMORY_ONLY` runtime degradation, and deadline rescheduling across restarts.
 
 ## 🐳 Docker & CI/CD
 
 - **Container Build ([`Dockerfile`](Dockerfile)):** Multi-stage build using `maven:3.9-eclipse-temurin-25` for compilation and `eclipse-temurin:25-jre-alpine` for runtime. Declares `/var/lib/poker/wal` and `/app/logs` volumes, exposes port `8080`, and configures a `HEALTHCHECK` against `http://localhost:8080/actuator/health`.
-- **CI/CD Workflow ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)):** Runs `./mvnw clean test` on Java 25 for all pushes and pull requests to `main`. Passing pushes to `main` build and push multi-architecture (`linux/amd64`, `linux/arm64`) Docker images (`suame/poker-backend:latest` and `:<sha>`).
+- **CI/CD Workflows:**
+  - [`.github/workflows/dev-tests.yml`](.github/workflows/dev-tests.yml): Runs `./mvnw -B test` (unit tests) on Java 25 for pushes and pull requests to `dev`.
+  - [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml): Runs `./mvnw clean verify` (full unit, integration, and E2E suite) on Java 25 for pushes and pull requests to `main`; passing pushes to `main` build and push multi-architecture (`linux/amd64`, `linux/arm64`) Docker images (`suame/poker-backend:latest` and `:<sha>`).
 
 ```bash
 # Build local Docker image
@@ -197,9 +204,10 @@ docker run --rm -p 8080:8080 --env-file .env poker-backend
 ## 📚 Documentation
 
 - [AI & Project Context](docs/ai/PROJECT.md) — Canonical architecture, concurrency model, and developer guide.
+- [Domain Glossary](GLOSSARY.md) — Plain-English definitions of room, game, betting, and recovery terms.
 - [Persistence Operations](docs/persistence-operations.md) — WAL encryption keys, rotation, health checks, and recovery drills.
 - [Backend Logging Guide](docs/ai/LOGGING.md) — MDC correlation, log levels, redaction rules, and diagnostic recipes.
-- [Architecture Decision Records](docs/adr/) — ADRs covering encrypted state-image WAL, JWT session-membership validation, and STOMP authorization.
+- [Architecture Decision Records](docs/adr/) — ADRs covering `RoomCoordinator` single-boundary concurrency, encrypted state-image WAL & in-memory rollback, JWT session-membership validation, epoch-deadline scheduling, and multi-session disconnect grace.
 
 ## 🗺️ Future Roadmap
 
