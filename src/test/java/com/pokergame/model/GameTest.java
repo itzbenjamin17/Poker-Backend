@@ -672,7 +672,7 @@ class GameTest {
                     Map.of("exact", 20, "leader", 100, "other", 100), 100, Map.of());
 
             List<PlayerAction> exactActions = exactCall.getLegalActionsFor(exactCaller);
-            assertTrue(exactActions.contains(PlayerAction.CALL));
+            assertFalse(exactActions.contains(PlayerAction.CALL));
             assertTrue(exactActions.contains(PlayerAction.ALL_IN));
             assertFalse(exactActions.contains(PlayerAction.RAISE));
             exactCall.processPlayerDecision(exactCaller, PlayerAction.ALL_IN, 0);
@@ -936,8 +936,7 @@ class GameTest {
             Player shortCaller = shortCallGame.getCurrentPlayer();
             TurnOutcome callOutcome = shortCallGame.processPlayerDecision(
                     shortCaller, PlayerAction.CALL, 0);
-            assertNotNull(callOutcome.playerActionNotice());
-            assertTrue(callOutcome.playerActionNotice().contains("converted to all-in"));
+            assertEquals("Not enough chips to call — you're all in.", callOutcome.playerActionNotice());
             assertEquals(0, shortCaller.getChips());
             assertTrue(shortCaller.isAllIn());
         }
@@ -1555,7 +1554,7 @@ class GameTest {
             assertEquals(200, capGenuine.getCurrentHighestBet());
             assertEquals(100, capGenuine.getCurrentHighestBet() - retained2.getCurrentBet());
             assertEquals(TurnOutcome.TurnOutcomeType.NEXT_PLAYER, nextTurn.type());
-            assertEquals(List.of(PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.ALL_IN), capGenuine.getLegalActionsFor(retained2));
+            assertEquals(List.of(PlayerAction.FOLD, PlayerAction.ALL_IN), capGenuine.getLegalActionsFor(retained2));
             capGenuine.processPlayerDecision(retained2, PlayerAction.ALL_IN, 0);
             assertEquals(200, retained2.getCurrentBet());
             assertEquals(Map.of("s", 200, "a", 200, "b", 300), capGenuine.toSnapshot().handContributions());

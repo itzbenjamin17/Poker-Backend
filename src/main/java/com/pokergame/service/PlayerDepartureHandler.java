@@ -134,8 +134,10 @@ class PlayerDepartureHandler {
 
                 if (game.isPausedForDisconnectedSurvivor() && game.countContenders() == 1
                         && game.isContender(player)) {
+                    List<String> forfeitedPlayers = game.getPendingForfeitedPlayers();
+                    ForfeitReason reason = game.getPendingForfeitReason();
                     game.clearPausedForDisconnectedSurvivor();
-                    completionHandler.handleGameEndWithForfeits(gameId, player, List.of(), null);
+                    completionHandler.handleGameEndWithForfeits(gameId, player, forfeitedPlayers, reason);
                     markRoomMemberConnected(room, playerName);
                     return;
                 }
@@ -404,7 +406,7 @@ class PlayerDepartureHandler {
             Player survivor,
             ForfeitReason reason) {
         if (survivor.isDisconnected()) {
-            game.pauseForDisconnectedSurvivor(departingGamePlayers);
+            game.pauseForDisconnectedSurvivor(departingGamePlayers, reason);
             timerRegistry.cancelAllForGame(roomId, false);
             detachRoomMembers(roomId, room, game, departingRoomMembers);
             if (roomService.getRoom(roomId) != null) {

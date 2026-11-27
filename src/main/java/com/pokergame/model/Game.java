@@ -1,6 +1,7 @@
 package com.pokergame.model;
 
 import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.enums.ForfeitReason;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.PlayerAction;
 import com.pokergame.enums.ReadyCountdownStartOutcome;
@@ -52,6 +53,8 @@ public class Game {
     private boolean gameOver;
     private boolean finalPotSettled;
     private boolean pausedForDisconnectedSurvivor;
+    private ForfeitReason pendingForfeitReason;
+    private List<String> pendingForfeitedPlayers = List.of();
     private PublicGameStateResponse gameEndResult;
 
     /**
@@ -132,6 +135,10 @@ public class Game {
         this.lastHandPayout = builder.lastHandPayout;
         this.finalPotSettled = builder.finalPotSettled;
         this.pausedForDisconnectedSurvivor = builder.pausedForDisconnectedSurvivor;
+        this.pendingForfeitReason = builder.pendingForfeitReason;
+        this.pendingForfeitedPlayers = builder.pendingForfeitedPlayers != null
+                ? List.copyOf(builder.pendingForfeitedPlayers)
+                : List.of();
         this.handNumber = builder.handNumber;
         this.stateRevision = builder.stateRevision;
         this.gameEndResult = builder.gameEndResult;
@@ -508,18 +515,27 @@ public class Game {
     }
 
     /**
-     * Pauses the game after its other contenders leave, because the only contender left is
-     * disconnected. Marks {@code leavingPlayers} out, moves readiness to waiting state until
-     * the survivor reconnects or their grace period ends, and drops queued hand tasks. The cleanup
-     * task is kept.
+     * Pauses the game for a disconnected sole survivor without a forfeit reason.
      *
-     * @param leavingPlayers the players who are leaving the game
+     * @see #pauseForDisconnectedSurvivor(List, ForfeitReason)
      */
     public void pauseForDisconnectedSurvivor(List<Player> leavingPlayers) {
+        pauseForDisconnectedSurvivor(leavingPlayers, null);
+    }
+
+    /**
+     * Marks {@code leavingPlayers} out and pauses progression while the sole remaining contender is
+     * disconnected, recording any forfeit reason and departing names while keeping the cleanup task.
+     */
+    public void pauseForDisconnectedSurvivor(List<Player> leavingPlayers, ForfeitReason reason) {
         for (Player leavingPlayer : leavingPlayers) {
             leavingPlayer.setIsOut();
         }
-        pausedForDisconnectedSurvivor = true;
+        this.pausedForDisconnectedSurvivor = true;
+        this.pendingForfeitReason = reason;
+        this.pendingForfeitedPlayers = leavingPlayers.stream()
+                .map(Player::getName)
+                .toList();
         readyGate.waitForPlayers();
         scheduling.invalidateProgressionTasks();
     }
@@ -529,6 +545,18 @@ public class Game {
      */
     public void clearPausedForDisconnectedSurvivor() {
         this.pausedForDisconnectedSurvivor = false;
+        this.pendingForfeitReason = null;
+        this.pendingForfeitedPlayers = List.of();
+    }
+
+    /** Returns the forfeit reason recorded when the game paused for a disconnected survivor, or {@code null}. */
+    public ForfeitReason getPendingForfeitReason() {
+        return pendingForfeitReason;
+    }
+
+    /** Returns the departing player names recorded when the game paused for a disconnected survivor. */
+    public List<String> getPendingForfeitedPlayers() {
+        return pendingForfeitedPlayers;
     }
 
     /**
@@ -1122,6 +1150,8 @@ public class Game {
         private String bigBlindPlayerId;
         private boolean finalPotSettled;
         private boolean pausedForDisconnectedSurvivor;
+        private ForfeitReason pendingForfeitReason;
+        private List<String> pendingForfeitedPlayers = List.of();
         private Long readyCountdownDeadlineEpochMs;
         private ReadyGateState readyGateState = ReadyGateState.CLOSED;
         private long handNumber;
@@ -1252,6 +1282,16 @@ public class Game {
 
         public GameRestoreBuilder pausedForDisconnectedSurvivor(boolean value) {
             this.pausedForDisconnectedSurvivor = value;
+            return this;
+        }
+
+        public GameRestoreBuilder pendingForfeitReason(ForfeitReason value) {
+            this.pendingForfeitReason = value;
+            return this;
+        }
+
+        public GameRestoreBuilder pendingForfeitedPlayers(List<String> value) {
+            this.pendingForfeitedPlayers = value != null ? List.copyOf(value) : List.of();
             return this;
         }
 

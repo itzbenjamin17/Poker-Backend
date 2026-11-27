@@ -1,6 +1,7 @@
 package com.pokergame.persistence.snapshot;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.pokergame.enums.ForfeitReason;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
@@ -96,6 +97,8 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
      * @param handNumber                    authoritative completed-hand count
      * @param timerVersions                 timer version tokens protecting asynchronous task executions
      * @param pausedForDisconnectedSurvivor whether the game is paused awaiting a disconnected survivor, preserving out standings
+     * @param pendingForfeitReason          forfeit reason recorded when pausing for a disconnected survivor, or {@code null}
+     * @param pendingForfeitedPlayers       departing player names recorded when pausing for a disconnected survivor
      * @param stateRevision                 monotonically increasing public state revision
      * @param gameEndResult                 frozen immutable game result retained across post-game review
      */
@@ -109,8 +112,9 @@ public record RoomSnapshot(boolean deleted, RoomState room, GameState game) {
             List<String> handSeatOrder, String dealerPlayerId, String smallBlindPlayerId,
             String bigBlindPlayerId, String currentPlayerId, HandPayoutState lastHandPayout,
             boolean finalPotSettled, ReadyGateState readyGateState, long handNumber,
-            Map<ScheduledGameTask, Long> timerVersions, boolean pausedForDisconnectedSurvivor, long stateRevision,
-            FinalGameState gameEndResult) {
+            Map<ScheduledGameTask, Long> timerVersions, boolean pausedForDisconnectedSurvivor,
+            ForfeitReason pendingForfeitReason, List<String> pendingForfeitedPlayers,
+            long stateRevision, FinalGameState gameEndResult) {
     }
 
     /** Plain persisted form of the immutable hand payout. */

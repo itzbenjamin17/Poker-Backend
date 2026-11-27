@@ -112,6 +112,8 @@
       "CLEANUP" : 1
     },
     "pausedForDisconnectedSurvivor" : false,
+    "pendingForfeitReason" : null,
+    "pendingForfeitedPlayers" : [ ],
     "stateRevision" : 42,
     "gameEndResult" : {
       "maxPlayers" : 6,

@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.pokergame.dto.response.PublicGameStateResponse;
+import com.pokergame.enums.ForfeitReason;
 import com.pokergame.enums.GamePhase;
 import com.pokergame.enums.HandRank;
 import com.pokergame.enums.PlayerAction;
@@ -269,12 +270,14 @@ class RoomSnapshotMapperTest {
                 .smallBlind(5)
                 .bigBlind(10)
                 .build();
-        game.pauseForDisconnectedSurvivor(List.of(departing));
+        game.pauseForDisconnectedSurvivor(List.of(departing), ForfeitReason.TURN_TIMEOUT);
 
         RoomSnapshotMapper mapper = newMapper();
         RecoveredRoom recovered = mapper.deserialize(mapper.serialize(mapper.captureSnapshot(room, game)));
 
         assertTrue(recovered.game().isPausedForDisconnectedSurvivor());
+        assertEquals(ForfeitReason.TURN_TIMEOUT, recovered.game().getPendingForfeitReason());
+        assertEquals(List.of("Departing"), recovered.game().getPendingForfeitedPlayers());
         assertTrue(recovered.game().getPlayers().stream()
                 .anyMatch(player -> "Departing".equals(player.getName()) && player.isOut()));
         assertFalse(recovered.room().hasPlayer("Departing"));

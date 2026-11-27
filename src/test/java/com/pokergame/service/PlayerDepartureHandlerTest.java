@@ -1043,6 +1043,35 @@ class PlayerDepartureHandlerTest {
                 assertEquals(end, game.getGameEndResult().gameEnd(), "the review keeps the reason for " + ending);
             }
         }
+
+        @Test
+        void pausedForDisconnectedSurvivorPreservesTurnTimeoutForfeitReasonAndPlayersOnReconnect() {
+            String gameId = ROOM_ID + "-paused-timeout";
+            Room room = new Room(gameId, "Paused Timeout", "Host", 2, 10, 20, 1000, null);
+            room.addPlayer("Host");
+            room.addPlayer("Player2");
+            when(roomService.getRoom(gameId)).thenReturn(room);
+            reset(messagingTemplate);
+            wireLifecycle();
+
+            withRoomLock(gameId, () -> gameLifecycleService.createGameFromRoom(gameId));
+            Game game = getGameLocked(gameId);
+            String departing = game.getCurrentPlayer().getName();
+            String survivor = departing.equals("Host") ? "Player2" : "Host";
+
+            withRoomLock(gameId, () -> {
+                departureHandler.markPlayerDisconnected(gameId, survivor, BASE_EPOCH_MS + 60_000L);
+                departureHandler.handleTurnTimeout(game);
+            });
+            assertTrue(game.isPausedForDisconnectedSurvivor());
+
+            withRoomLock(gameId, () -> departureHandler.markPlayerReconnected(gameId, survivor));
+            PublicGameStateResponse.GameEnd end = fixture.gameEndBroadcasts(gameId).getFirst().gameEnd();
+            assertEquals(survivor, end.winner());
+            assertTrue(end.isForfeit());
+            assertEquals("TURN_TIMEOUT", end.reason());
+            assertEquals(List.of(departing), end.forfeitedPlayers());
+        }
     }
 
     // ==================== Disconnected Grace Period Guards ====================
