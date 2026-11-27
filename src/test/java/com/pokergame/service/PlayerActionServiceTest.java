@@ -573,7 +573,8 @@ class PlayerActionServiceTest {
         assertEquals(0, currentPlayer.getChips());
         assertTrue(currentPlayer.isAllIn());
         verify(gameStateService).sendPrivatePlayerNotification(
-                eq("short-stack-game"), eq(currentPlayer.getName()), contains("converted to all-in"));
+                eq("short-stack-game"), eq(currentPlayer.getName()),
+                eq("Not enough chips to call — you're all in."));
     }
 
     @Test

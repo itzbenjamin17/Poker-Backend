@@ -63,7 +63,7 @@ class BettingRoundTest {
         BettingRound shortRaiseRound = new BettingRound(
                 30, false, Set.of("a"), 0, Map.of("a", 20));
 
-        assertEquals(List.of(PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.ALL_IN),
+        assertEquals(List.of(PlayerAction.FOLD, PlayerAction.ALL_IN),
                 shortRaiseRound.legalActionsFor(shortAlice, players, players, seating, GamePhase.FLOP, 20));
         var allInResult = shortRaiseRound.validateDecision(shortAlice, PlayerAction.ALL_IN, 0, players, 20);
         assertEquals(PlayerAction.ALL_IN, allInResult.action());
@@ -438,10 +438,10 @@ class BettingRoundTest {
                         PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.RAISE, PlayerAction.ALL_IN),
                 scenario("call exceeds stack", shortStack, List.of(shortStack, b),
                         roundOnFlop(20, 0, Set.of(), Map.of()),
-                        PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.ALL_IN),
+                        PlayerAction.FOLD, PlayerAction.ALL_IN),
                 scenario("stack equals call", exactStack, List.of(exactStack, b),
                         roundOnFlop(20, 0, Set.of(), Map.of()),
-                        PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.ALL_IN),
+                        PlayerAction.FOLD, PlayerAction.ALL_IN),
                 scenario("big blind option", bigBlind, List.of(bigBlind, b),
                         roundOnFlop(20, 0, Set.of(), Map.of()),
                         PlayerAction.FOLD, PlayerAction.CHECK, PlayerAction.RAISE, PlayerAction.ALL_IN),
@@ -478,7 +478,12 @@ class BettingRoundTest {
         assertEquals(state.expectedLegal(), legal, name);
 
         for (PlayerAction action : PlayerAction.values()) {
-            assertEquals(legal.contains(action), isAcceptedForSomeAmount(state, action),
+            boolean legacyAllInCallBackstop = action == PlayerAction.CALL
+                    && !legal.isEmpty()
+                    && !legal.contains(PlayerAction.CHECK)
+                    && state.actor().getChips() <= state.round().getCurrentHighestBet() - state.actor().getCurrentBet();
+            boolean expectedAccepted = legal.contains(action) || legacyAllInCallBackstop;
+            assertEquals(expectedAccepted, isAcceptedForSomeAmount(state, action),
                     name + ": " + action + " offered=" + legal.contains(action));
         }
     }
@@ -550,5 +555,32 @@ class BettingRoundTest {
 
         round.resetForNewRound(players);
         assertEquals(20, round.getMinimumRaiseAmount(other, 20));
+    }
+
+    @Test
+    void shortAndExactStackLegalActionsOmitCallAndKeepAllInWithShortConversionNotice() {
+        Player shortStack = playerWhoPosted("Short", "s", 10, 0);
+        Player exactStack = playerWhoPosted("Exact", "e", 30, 0);
+        Player deeper = playerWhoPosted("Deep", "d", 31, 0);
+        List<Player> players = List.of(shortStack, exactStack, deeper);
+        TableSeating seating = new TableSeating(players, players);
+        BettingRound round = roundOnFlop(30, 0, Set.of(), Map.of());
+
+        assertEquals(List.of(PlayerAction.FOLD, PlayerAction.ALL_IN),
+                round.legalActionsFor(shortStack, players, players, seating, GamePhase.FLOP, 20));
+
+        List<Player> exactFirst = List.of(exactStack, shortStack, deeper);
+        TableSeating exactSeating = new TableSeating(exactFirst, exactFirst);
+        assertEquals(List.of(PlayerAction.FOLD, PlayerAction.ALL_IN),
+                round.legalActionsFor(exactStack, exactFirst, exactFirst, exactSeating, GamePhase.FLOP, 20));
+
+        List<Player> deeperFirst = List.of(deeper, shortStack, exactStack);
+        TableSeating deeperSeating = new TableSeating(deeperFirst, deeperFirst);
+        assertEquals(List.of(PlayerAction.FOLD, PlayerAction.CALL, PlayerAction.RAISE, PlayerAction.ALL_IN),
+                round.legalActionsFor(deeper, deeperFirst, deeperFirst, deeperSeating, GamePhase.FLOP, 20));
+
+        var converted = round.validateDecision(shortStack, PlayerAction.CALL, 0, players, 20);
+        assertEquals(PlayerAction.ALL_IN, converted.action());
+        assertEquals("Not enough chips to call — you're all in.", converted.playerActionNotice());
     }
 }

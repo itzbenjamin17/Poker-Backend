@@ -251,7 +251,11 @@ final class BettingRound {
         }
         List<PlayerAction> actions = new ArrayList<>(List.of(PlayerAction.FOLD));
         int owed = amountOwed(player);
-        actions.add(owed == 0 ? PlayerAction.CHECK : PlayerAction.CALL);
+        if (owed == 0) {
+            actions.add(PlayerAction.CHECK);
+        } else if (player.getChips() > owed) {
+            actions.add(PlayerAction.CALL);
+        }
         if (hasOpponentWhoCanAct(activePlayers, player)
                 && canPlayerRaise(player, bigBlind)
                 && player.getChips() > owed) {
@@ -295,7 +299,7 @@ final class BettingRound {
             logger.info("Player {} attempted CALL for {} with only {} chips. Converting to ALL_IN",
                     player.getName(), owed, player.getChips());
             return new ValidatedDecision(PlayerAction.ALL_IN, 0,
-                    "Your call was converted to all-in because the call amount exceeded your available chips.");
+                    "Not enough chips to call — you're all in.");
         }
         return new ValidatedDecision(PlayerAction.CALL, owed, null);
     }
