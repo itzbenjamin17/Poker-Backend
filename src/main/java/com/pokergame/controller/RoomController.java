@@ -143,7 +143,8 @@ public class RoomController {
     }
 
     /**
-     * Removes a player from a poker room. Host privileges transfer if needed.
+     * Removes a player from a poker room. In a lobby, the host leaving closes the room; in an active
+     * game, host privileges transfer if needed.
      * SECURED ENDPOINT - Requires JWT token.
      *
      * @param roomId    room identifier
